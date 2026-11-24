@@ -252,10 +252,26 @@ crypto donation.
 0xB35276e57bfb8c028d918d0FE1Fb04c516E97A35
 ```
 
+<details><summary>QR code</summary>
+
+<img src="docs/media/donate/qr-evm.svg" width="180" alt="QR code for the Ethereum or Polygon donation address">
+
+Scan with your wallet app. Send on Ethereum or Polygon only.
+
+</details>
+
 <img src="docs/media/donate/btc.svg" width="22" height="22" alt="Bitcoin"> &nbsp;**Bitcoin**: BTC
 
 ```text
 bc1q224lcfaleml634u7h5wq7ltwdazprshlqcyvx8
 ```
+
+<details><summary>QR code</summary>
+
+<img src="docs/media/donate/qr-btc.svg" width="180" alt="QR code for the Bitcoin donation address">
+
+Scan with your wallet app or phone camera.
+
+</details>
 
 The coin logos come from the CC0 [cryptocurrency-icons](https://github.com/spothq/cryptocurrency-icons) set.
