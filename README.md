@@ -240,3 +240,22 @@ available from the author. Third-party components keep their own licences; see
 [`THIRD-PARTY-NOTICES.txt`](THIRD-PARTY-NOTICES.txt).
 
 Copyright © 2026 Dan Zunder.
+
+## Support the project
+
+Agent Studio is free and open source. If it saves you time, you can support its development with a
+crypto donation.
+
+<img src="docs/media/donate/eth.svg" width="22" height="22" alt="Ethereum"> <img src="docs/media/donate/polygon.svg" width="22" height="22" alt="Polygon"> <img src="docs/media/donate/usdt.svg" width="22" height="22" alt="USDT"> <img src="docs/media/donate/usdc.svg" width="22" height="22" alt="USDC"> <img src="docs/media/donate/dai.svg" width="22" height="22" alt="DAI"> &nbsp;**Ethereum or Polygon**: ETH, USDT, USDC or DAI
+
+```text
+0xB35276e57bfb8c028d918d0FE1Fb04c516E97A35
+```
+
+<img src="docs/media/donate/btc.svg" width="22" height="22" alt="Bitcoin"> &nbsp;**Bitcoin**: BTC
+
+```text
+bc1q224lcfaleml634u7h5wq7ltwdazprshlqcyvx8
+```
+
+The coin logos come from the CC0 [cryptocurrency-icons](https://github.com/spothq/cryptocurrency-icons) set.
