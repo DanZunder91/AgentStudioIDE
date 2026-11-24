@@ -232,6 +232,7 @@ describe("planSteps — what runs, what is skipped, what fails without running",
   const WINCHECK = "Windows: the Rust core compiles and lints for Windows (Docker)";
   const E2E = "E2E: the real app on Ubuntu (Docker)";
   const E2E_EXT = "E2E (external): example.com in the real app on Ubuntu (Docker)";
+  const LINUX_INSTALL = "Linux installer: .deb / .rpm / AppImage installs (Docker)";
   // The cfg-gated steps (`onlyOn`): on any other OS cargo would run 0 tests and print `ok`.
   const SHIM = "real curl --noproxy in a PTY captured by the curl shim";
   const WIN_PS = "Windows: a real PowerShell terminal captured by Network";
@@ -313,7 +314,7 @@ describe("planSteps — what runs, what is skipped, what fails without running",
   it("🔴 without Docker, every Docker step FAILS with the reason — it is never skipped", () => {
     // The class semantics: a missing tool must not turn a blocking gate green.
     const plan = planSteps({ groups: GROUPS, platform: "win32", docker: NO_DOCKER });
-    expect(byAction(plan, "fail")).toEqual([DB, E2E, E2E_EXT]);
+    expect(byAction(plan, "fail")).toEqual([DB, E2E, E2E_EXT, LINUX_INSTALL]);
     for (const e of flat(plan).filter((x) => x.action === "fail")) {
       expect(e.reason).toBe(
         "Docker is not available on this machine — the `docker` command is not installed (not found on PATH)",
@@ -323,13 +324,13 @@ describe("planSteps — what runs, what is skipped, what fails without running",
     expect(byAction(plan, "skip")).toEqual([SHIM, MAC_LOG, NETTOP, TASKS, WINCHECK]);
     // Everything that does not need Docker still runs.
     expect(byAction(plan, "run")).toEqual(
-      everyStep.filter((n) => ![DB, WINCHECK, E2E, E2E_EXT, ...GATED_OFF.win32].includes(n)),
+      everyStep.filter((n) => ![DB, WINCHECK, E2E, E2E_EXT, LINUX_INSTALL, ...GATED_OFF.win32].includes(n)),
     );
   });
 
   it("without Docker on a Mac, the cross-compile FAILS too — it is only redundant on Windows", () => {
     const plan = planSteps({ groups: GROUPS, platform: "darwin", docker: NO_DOCKER });
-    expect(byAction(plan, "fail")).toEqual([DB, WINCHECK, E2E, E2E_EXT]);
+    expect(byAction(plan, "fail")).toEqual([DB, WINCHECK, E2E, E2E_EXT, LINUX_INSTALL]);
     expect(byAction(plan, "skip")).toEqual(GATED_OFF.darwin);
   });
 
@@ -345,7 +346,7 @@ describe("planSteps — what runs, what is skipped, what fails without running",
     const v = classify(results);
     expect(v.ok).toBe(false);
     expect(v.failedBlocking).toEqual([DB, E2E]);
-    expect(v.failedExternal).toEqual([E2E_EXT]);
+    expect(v.failedExternal).toEqual([E2E_EXT, LINUX_INSTALL]);
     expect(v.skipped).toEqual([SHIM, MAC_LOG, NETTOP, TASKS, WINCHECK]);
   });
 

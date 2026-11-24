@@ -369,6 +369,16 @@ const EXTERNAL = [
     blocking: false,
     needsDocker: true,
   },
+  {
+    // The one-command Linux installer piped into bash in Ubuntu and Fedora containers: the .deb,
+    // the .rpm and the AppImage routes, each run twice. External: it installs the latest
+    // published release, from GitHub and the distributions' mirrors.
+    name: "Linux installer: .deb / .rpm / AppImage installs (Docker)",
+    cmd: "node",
+    args: ["scripts/install-linux-check.mjs"],
+    blocking: false,
+    needsDocker: true,
+  },
 ];
 
 /** `spawnSync`, spelled for this host (`npm` → `npm.cmd` through a shell on Windows). */

@@ -66,8 +66,8 @@ describe("build.yml — the macOS app opens", () => {
     expect(job("bundle")).toContain('if [ -n "${!name}" ]; then');
   });
 
-  it("the one-command macOS installer is valid bash", () => {
-    const res = spawnSync("bash", ["-n", path.join(here, "install-macos.sh")], { encoding: "utf8" });
+  it.each(["install-macos.sh", "install-linux.sh"])("the one-command installer %s is valid bash", (script) => {
+    const res = spawnSync("bash", ["-n", path.join(here, script)], { encoding: "utf8" });
     expect(res.stderr).toBe("");
     expect(res.status).toBe(0);
   });
