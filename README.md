@@ -28,6 +28,14 @@ curl -fsSL https://raw.githubusercontent.com/DanZunder91/AgentStudioIDE/main/scr
 ```
 
 It downloads the latest release, checks it, installs Agent Studio into Applications and opens it.
+
+**Or install the `.dmg`**: download it from the [latest release](https://github.com/DanZunder91/AgentStudioIDE/releases/latest),
+drag Agent Studio into Applications, then run this once so macOS does not show the "Move to Trash" window:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Agent Studio.app"
+```
+
 Windows and Linux installers are on the [releases page](https://github.com/DanZunder91/AgentStudioIDE/releases/latest).
 
 <p align="center">
