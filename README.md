@@ -18,6 +18,19 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/DanZunder91/AgentStudioIDE/releases/latest"><b>⬇ Download the latest release</b></a>
+</p>
+
+**Install on macOS (Apple Silicon)** — paste this into Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DanZunder91/AgentStudioIDE/main/scripts/install-macos.sh | bash
+```
+
+It downloads the latest release, checks it, installs Agent Studio into Applications and opens it.
+Windows and Linux installers are on the [releases page](https://github.com/DanZunder91/AgentStudioIDE/releases/latest).
+
+<p align="center">
   <img src="docs/media/tour.gif" alt="Agent Studio tour: an agent orchestrating sub-agents, a sub-agent's activity, a permission prompt, and the Network view" width="900">
 </p>
 
