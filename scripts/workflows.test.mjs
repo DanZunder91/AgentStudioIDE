@@ -1,12 +1,14 @@
 /**
  * `.github/workflows/build.yml` — the two facts that keep release builds from filling the
  * account's Actions artifact storage (at 7 days for every build it filled, and every bundle upload
- * then failed).
+ * then failed), and the facts that keep a macOS build macOS refuses to open from being published
+ * (an unsigned bundle is reported as "damaged", with no way to open it).
  *
  * Read as text: the repo has no YAML parser, and these are one-line facts. Literal expectations,
  * never read back from the file under test.
  */
 
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,5 +43,32 @@ describe("build.yml — bundle retention", () => {
       .split("\n")
       .filter((l) => l.trim().startsWith("retention-days:"));
     expect(retention).toEqual([`          retention-days: \${{ (${RELEASE}) && 1 || 7 }}`]);
+  });
+});
+
+describe("build.yml — the macOS app opens", () => {
+  it("tauri.conf.json ad-hoc signs the bundle, so it is never published unsigned", () => {
+    const conf = JSON.parse(readFileSync(path.join(here, "../src-tauri/tauri.conf.json"), "utf8"));
+    expect(conf.bundle.macOS.signingIdentity).toBe("-");
+  });
+
+  it("the bundle job verifies the signature of the built app and of the app inside the .dmg", () => {
+    const bundle = job("bundle");
+    expect(bundle).toContain('codesign --verify --deep --strict --verbose=2 "$app"');
+    expect(bundle).toContain('codesign --verify --deep --strict --verbose=2 "$mnt/Agent Studio.app"');
+  });
+
+  it("a failed check publishes nothing: the release job needs the bundle job", () => {
+    expect(job("release")).toContain("    needs: bundle\n");
+  });
+
+  it("Apple secrets reach `tauri build` only when set: an empty identity would replace the ad-hoc one", () => {
+    expect(job("bundle")).toContain('if [ -n "${!name}" ]; then');
+  });
+
+  it("the one-command macOS installer is valid bash", () => {
+    const res = spawnSync("bash", ["-n", path.join(here, "install-macos.sh")], { encoding: "utf8" });
+    expect(res.stderr).toBe("");
+    expect(res.status).toBe(0);
   });
 });
