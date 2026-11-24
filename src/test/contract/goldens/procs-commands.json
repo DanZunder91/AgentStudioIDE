@@ -1,0 +1,27 @@
+{
+  "tailApp": {
+    "key": "file:/work/gazelle/gazelle.log",
+    "source": "gazelle · gazelle.log"
+  },
+  "tailDocker": {
+    "key": "docker:3f2a9c1b0d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4",
+    "source": "db-fixtures-postgres-1 · docker"
+  },
+  "restartPrepare": {
+    "token": "rs-01J0000000000000000000000",
+    "summary": {
+      "name": "gazelle",
+      "cwd": "/work/gazelle",
+      "argv": [
+        "target/debug/gazelle",
+        "--db-password=••••",
+        "--port",
+        "3000"
+      ]
+    }
+  },
+  "restartInIde": {
+    "terminalId": "01J00000000000000000000000"
+  },
+  "untail": true
+}

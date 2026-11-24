@@ -1,0 +1,65 @@
+{
+  "linux-no-ss": {
+    "available": true,
+    "backend": "linux-proc",
+    "reason": "Other users' connections are listed without a process, and byte counts need `ss` (iproute2), which isn't installed.",
+    "running": false,
+    "hasBytes": false
+  },
+  "linux-partial-running": {
+    "available": true,
+    "backend": "linux-proc",
+    "reason": "Other users' connections are listed without a process — naming them needs root.",
+    "running": true,
+    "hasBytes": true
+  },
+  "macos-died": {
+    "available": true,
+    "backend": "macos-nettop",
+    "reason": "nettop stopped unexpectedly (exit status: 1).",
+    "running": false,
+    "hasBytes": true
+  },
+  "macos-idle": {
+    "available": true,
+    "backend": "macos-nettop",
+    "reason": null,
+    "running": false,
+    "hasBytes": true
+  },
+  "macos-nettop-missing": {
+    "available": false,
+    "backend": "macos-nettop",
+    "reason": "/usr/bin/nettop is missing, so connections can't be listed.",
+    "running": false,
+    "hasBytes": false
+  },
+  "macos-running": {
+    "available": true,
+    "backend": "macos-nettop",
+    "reason": null,
+    "running": true,
+    "hasBytes": true
+  },
+  "other-os-unavailable": {
+    "available": false,
+    "backend": null,
+    "reason": "Whole-computer connections aren't supported on this system yet.",
+    "running": false,
+    "hasBytes": false
+  },
+  "windows-idle": {
+    "available": true,
+    "backend": "windows-iphlpapi",
+    "reason": "Byte counts aren't shown on Windows: the system only keeps them per connection after an administrator turns them on.",
+    "running": false,
+    "hasBytes": false
+  },
+  "windows-running": {
+    "available": true,
+    "backend": "windows-iphlpapi",
+    "reason": "Byte counts aren't shown on Windows: the system only keeps them per connection after an administrator turns them on.",
+    "running": true,
+    "hasBytes": false
+  }
+}

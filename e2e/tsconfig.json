@@ -1,0 +1,23 @@
+{
+  // Standalone tsconfig for the E2E harness (not part of the app's build). It is
+  // deliberately NOT wired into the root tsconfig's project references: the specs
+  // run under WebdriverIO's own TS loader, never `vite build`, and pull WDIO's
+  // ambient globals (mocha describe/it, the `browser`/`$`/`expect` types) that the
+  // app compilation must not see.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node", "@wdio/globals/types", "@wdio/mocha-framework", "expect-webdriverio"],
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noEmit": true
+  },
+  "include": ["**/*.ts"]
+}

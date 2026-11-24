@@ -1,0 +1,314 @@
+/* Split-pane / tabs — M1 (ARCHITECTURE §4).
+   Owned by src/components/**. Reuses the CSS vars declared in src/App.css
+   (--bg-app, --bg-surface, --bg-elev, --text, --text-dim, --border, --accent,
+   --mono); declares no palette of its own so theming stays in one place.
+   Class names are `pane`-prefixed to avoid colliding with App.css's shell. */
+
+/* ── allotment overrides ───────────────────────────────────────────────── */
+/* allotment ships its own sash colors; retint them to the app palette. */
+.split {
+  --focus-border: var(--accent);
+  --separator-border: var(--border);
+  --sash-size: 8px;
+  --sash-hover-size: 2px;
+  height: 100%;
+}
+
+/* ── pane ──────────────────────────────────────────────────────────────── */
+.pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0; /* lets the body shrink so xterm can measure/fit */
+  min-width: 0;
+  background: var(--bg-app);
+  overflow: hidden;
+}
+
+.pane__header {
+  flex: 0 0 34px;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  /* Focused-pane accent. Reserved as a transparent inset so focus changes
+     never shift layout. */
+  box-shadow: inset 0 2px 0 transparent;
+}
+.pane--focused .pane__header {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.pane__body {
+  flex: 1 1 auto;
+  min-height: 0; /* the flex-child rule terminals depend on to size correctly */
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* The active view (terminal/editor) fills the body. */
+.pane__body > * {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* ── tab bar ───────────────────────────────────────────────────────────── */
+.pane__tabbar {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.pane__tabbar::-webkit-scrollbar {
+  display: none;
+}
+
+.pane-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  max-width: 220px;
+  padding: 0 8px 0 12px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  /* Reserved so the active accent never shifts the label. */
+  box-shadow: inset 0 -2px 0 transparent;
+}
+.pane-tab:hover {
+  color: var(--text);
+  background: var(--bg-elev);
+}
+.pane-tab--active {
+  color: var(--text);
+  background: var(--bg-app);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.pane-tab--dragging {
+  opacity: 0.45;
+}
+
+/**
+ * Reorder insertion line: where the dragged tab will land.
+ *
+ * Drawn as an inset shadow on the neighbouring tab's edge rather than as a
+ * positioned element — it lands on exactly the same pixel boundary, needs no
+ * measurement to render, and cannot shift the strip by its own width the way
+ * an in-flow element would. `--insert-after` is only ever the last tab (the
+ * append case); every other position is the next tab's `--insert-before`.
+ */
+.pane-tab--insert-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.pane-tab--insert-after {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+/* An active tab already owns its inset shadow (the bottom accent) — keep both:
+   the drop line must stay visible on the tab you happen to be dropping onto. */
+.pane-tab--active.pane-tab--insert-before {
+  box-shadow: inset 2px 0 0 var(--accent), inset 0 -2px 0 var(--accent);
+}
+.pane-tab--active.pane-tab--insert-after {
+  box-shadow: inset -2px 0 0 var(--accent), inset 0 -2px 0 var(--accent);
+}
+
+.pane-tab__icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  opacity: 0.75;
+}
+/* The "Resumed after restart" glyph on a restored agent's tab — the row carries the
+   words; the tab only points at them (same tooltip). */
+.pane-tab__restored {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1;
+}
+.pane-tab__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-tab__dirty {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.pane-tab__close,
+.pane-icon-button {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.pane-tab__close:hover,
+.pane-icon-button:hover {
+  background: var(--bg-elev);
+  color: var(--text);
+}
+.pane-tab__close:focus-visible,
+.pane-icon-button:focus-visible,
+.pane-tab:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+/* Keep the × from stealing width until hovered/active (VS Code behaviour). */
+.pane-tab__close {
+  visibility: hidden;
+}
+.pane-tab:hover .pane-tab__close,
+.pane-tab--active .pane-tab__close {
+  visibility: visible;
+}
+/* A dirty tab shows its dot instead of the ×, until hovered. */
+.pane-tab--dirty .pane-tab__close {
+  visibility: hidden;
+}
+.pane-tab--dirty:hover .pane-tab__close {
+  visibility: visible;
+}
+.pane-tab--dirty:hover .pane-tab__dirty {
+  display: none;
+}
+
+.pane-tab__new {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 0 4px;
+}
+
+/* ── pane toolbar (top-right cluster) ───────────────────────────────────── */
+.pane__toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-left: 1px solid var(--border);
+}
+
+/* ── drop zones (drag a tab between panes / onto an edge to split) ─────── */
+.pane {
+  position: relative;
+}
+
+/**
+ * The layout root: the pane tree, plus the drop preview drawn over all of it.
+ *
+ * Mirrors `.center`'s flex rules so <PaneTree>'s `height: 100%` child (a `.split`
+ * or a lone `.pane`) still resolves against a definite box, and establishes the
+ * containing block the preview is positioned in.
+ */
+.pane-tree {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.pane-tree > * {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/**
+ * The landing preview: exactly the box the dragged tab will occupy.
+ *
+ * Positioned against `.pane-tree` (the whole work area) rather than inside the
+ * hovered pane, and sized from percentages the component computes by running
+ * the REAL drop against a copy of the tree — see PaneTree.tsx. A drop can prune
+ * the source leaf and collapse a split, so the landing box is frequently LARGER
+ * than the pane under the cursor; drawn per-pane it could never show that (and
+ * `.pane` is `overflow: hidden` anyway).
+ */
+.pane__dropzone {
+  position: absolute;
+  z-index: 5;
+  /* Must never eat the dragover events that keep this element alive — with
+     pointer-events on, the overlay under the cursor would fire dragleave on
+     the pane and flicker the preview out of existence. */
+  pointer-events: none;
+  background: var(--accent-soft, rgba(59, 130, 246, 0.14));
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+}
+
+/* ── placeholders (empty leaf / non-terminal tab kinds) ────────────────── */
+.pane__placeholder {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: center;
+}
+.pane__placeholder-hint {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.pane__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.pane__button:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.pane__button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Inline rename field — sits where the tab title was, borrowing its metrics. */
+.pane-tab__title-input {
+  min-width: 4ch;
+  max-width: 24ch;
+  font: inherit;
+  color: var(--text, #c9d1d9);
+  background: var(--bg-app, #0d1117);
+  border: 1px solid var(--accent, #3b82f6);
+  border-radius: 3px;
+  padding: 0 4px;
+  outline: none;
+}

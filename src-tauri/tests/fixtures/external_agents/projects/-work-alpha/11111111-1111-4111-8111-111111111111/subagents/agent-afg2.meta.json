@@ -1,0 +1,7 @@
+{
+  "agentType": "general-purpose",
+  "description": "never shown",
+  "toolUseId": "toolu_fg2",
+  "spawnDepth": 1,
+  "requestShape": "foreground"
+}

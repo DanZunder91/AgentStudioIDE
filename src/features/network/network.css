@@ -1,0 +1,553 @@
+/* Network view — Proxelar's palette on the app's dark theme (App.css :root).
+   Tones are declared locally (no load-order dependency on another
+   feature's :root). All clear 4.5:1 on --bg-app (#0d1117). */
+:root {
+  --net-green: #3fb950;
+  --net-yellow: #d29922;
+  --net-red: #f85149;
+  --net-cyan: #39c5cf;
+  --net-magenta: #db61a2;
+  --net-row-h: 20px;
+  --net-head-h: 22px;
+}
+
+.net {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.net-head,
+.net-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.net-head__title { font-weight: 600; color: var(--text); }
+.net-head__meta, .net-head__note { color: var(--text-dim); }
+.net-head__warn { color: var(--net-yellow); }
+.net-head__err { color: var(--net-red); }
+
+.net-switch-wrap { display: inline-flex; }
+.net-switch,
+.net-btn,
+.net-chip {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.net-switch::before { content: "○ "; color: var(--text-dim); }
+.net-switch[aria-checked="true"] { border-color: var(--net-green); }
+.net-switch[aria-checked="true"]::before { content: "● "; color: var(--net-green); }
+.net-chip[aria-pressed="true"],
+.net-btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.net-switch:disabled,
+.net-btn:disabled { opacity: 0.45; cursor: default; }
+
+.net-bar__filter {
+  font: inherit;
+  flex: 1 1 260px;
+  min-width: 160px;
+  color: var(--text);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+.net-bar__invalid { color: var(--net-yellow); }
+/* "Hide AI providers": pushed to the header's right corner. */
+.net-head__hide {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.net-head__hide > input { margin: 0; cursor: pointer; }
+.net-head__hide > .net-chip__count { margin-left: 0; }
+.net-bar__paused { color: var(--net-yellow); }
+.net-chips { display: inline-flex; gap: 4px; }
+
+/* Body: the table takes the space; the detail splits in below it. One explicit
+   floor, min-height: 0 below. */
+.net-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.net-area__err { color: var(--net-red); padding: 4px 10px; flex: none; }
+.net-scroll {
+  flex: 1 1 0;
+  min-height: 120px;
+  overflow: auto;
+  position: relative;
+  outline: none;
+}
+.net-area--split .net-scroll { flex: 1 1 50%; }
+.net-scroll:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+
+.net-table {
+  width: 100%;
+  /* With `table-layout: fixed` the auto-width Path column gets only what the fixed columns
+     leave — and in a 720px pane (default window, both rails open) that was 0px: Host → Status
+     with no Path at all. The floor is
+     an inline `min-width` computed from the visible columns (networkColumns.ts
+     `tableMinWidth`), so it follows resizes and hidden columns; narrower panes scroll sideways
+     instead of losing a column. Column widths are inline `<col style>` from the shared layout. */
+  table-layout: fixed;
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+.net-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: var(--net-head-h);
+  box-sizing: border-box;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 6px;
+}
+.net-table tbody tr { height: var(--net-row-h); }
+.net-table td {
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: var(--net-row-h);
+}
+/* Squeezed to fit a narrow pane (networkColumns.fitColumns step 4): the compact widths assume
+   3px + 3px, so Time / Proto / Method / Status / Source keep their common values whole. */
+.net-table--tight td { padding: 0 3px; }
+.net-table--tight thead th { padding: 0 6px 0 3px; }
+.net-row { cursor: default; }
+.net-row:hover { background: var(--bg-surface); }
+.net-row.is-selected { background: var(--accent-soft); }
+
+/* Header cells hold the column resizer (absolutely positioned on the right edge); sticky
+   already makes them a containing block. */
+.net-th { padding-right: 8px; }
+/* The shared resizer hangs 3px past its cell's edge (to straddle the border); on the LAST
+   header that overhang widened the scroller by 3px and gave the Whole Mac table a sideways
+   scrollbar at 880px (networkColumns.browser.test.tsx). */
+.net-table thead th:last-child .col-resizer { right: 0; }
+
+.net-c--time { color: var(--text-dim); }
+.net-c--proto { color: var(--net-green); }
+.net-method--get { color: var(--net-green); }
+.net-method--post { color: var(--net-yellow); }
+.net-method--delete { color: var(--net-red); }
+.net-c--host, .net-c--path, .net-c--size { color: var(--text); }
+.net-status--2xx { color: var(--net-green); }
+.net-status--1xx, .net-status--3xx { color: var(--net-cyan); }
+.net-status--4xx { color: var(--net-yellow); }
+.net-status--5xx { color: var(--net-magenta); font-weight: 700; }
+.net-status--pending, .net-status--none { color: var(--text-dim); }
+/* A tunnel's state: a live one pulses, a closed one is plain, never `—`. */
+.net-status--open { color: var(--net-cyan); animation: net-pulse 1.6s ease-in-out infinite; }
+.net-status--closed { color: var(--text-dim); }
+.net-status--bypass { color: var(--net-yellow); }
+@keyframes net-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .net-status--open { animation: none; }
+}
+.net-type--type { color: var(--net-cyan); }
+.net-type--dim { color: var(--text-dim); }
+.net-type--error { color: var(--net-red); }
+.net-type--note { color: var(--text-dim); font-style: italic; }
+.net-process--unknown { color: var(--text-dim); }
+.net-chip__count { margin-left: 5px; color: var(--text-dim); font-size: 11px; }
+.net-empty__why { margin: 0 0 10px; padding-left: 18px; }
+.net-empty__why li { margin: 2px 0; }
+.net-dur--fast { color: var(--net-green); }
+.net-dur--mid { color: var(--net-yellow); }
+.net-dur--slow { color: var(--net-magenta); }
+.net-dur--pending { color: var(--text-dim); }
+.net-source--named, .net-source--api-client { color: var(--text); }
+.net-source--external { color: var(--net-cyan); }
+.net-source--unattributed, .net-source--gone { color: var(--text-dim); }
+
+.net-empty { padding: 16px; color: var(--text-dim); max-width: 70ch; }
+.net-empty p { margin: 0 0 8px; }
+
+/* Detail */
+.net-detail {
+  flex: 1 1 50%;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
+  background: var(--bg-app);
+}
+.net-detail__head { margin-bottom: 4px; }
+.net-detail__close {
+  float: right; margin-left: 8px; font: inherit; font-size: 12px; color: var(--text);
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 8px; cursor: pointer;
+}
+.net-detail__close:hover { border-color: var(--accent); }
+.net-detail__url { color: var(--text); word-break: break-all; }
+.net-detail__meta { color: var(--text-dim); margin-left: 10px; }
+.net-detail__dim { color: var(--text-dim); }
+.net-detail__warn { color: var(--net-yellow); }
+.net-detail__explain { color: var(--text); margin: 4px 0; max-width: 90ch; }
+.net-detail__error { color: var(--net-red); margin: 4px 0; }
+.net-detail__status { color: var(--text); }
+.net-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0; }
+.net-actions__ok { color: var(--net-green); }
+.net-actions__err { color: var(--net-red); }
+.net-actions__note { color: var(--text-dim); }
+.net-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-top: 6px; }
+.net-tab {
+  font: inherit;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.net-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.net-headers__title { margin: 8px 0 2px; font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+.net-headers__table { border-collapse: collapse; }
+.net-headers__table th { text-align: left; color: var(--net-cyan); font-weight: 400; padding: 0 12px 0 0; vertical-align: top; white-space: nowrap; }
+.net-headers__table td { color: var(--text); word-break: break-all; }
+.net-bodyview { margin-top: 8px; }
+.net-bodyview__text { margin: 0; white-space: pre-wrap; word-break: break-all; color: var(--text); }
+
+/* Proxelar's key-hint bar. */
+.net-keys {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 3px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-dim);
+}
+.net-keys kbd { font: inherit; color: var(--net-green); }
+
+/* Mode switch: IDE traffic | Whole Mac. */
+.net-mode {
+  display: flex;
+  gap: 2px;
+  padding: 4px 10px 0;
+  flex: none;
+}
+.net-mode__btn {
+  font: inherit;
+  color: var(--text-dim);
+  background: none;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.net-mode__btn[aria-pressed="true"] { color: var(--text); border-bottom-color: var(--accent); }
+
+/* Whole-computer table. Column widths come from the shared layout (networkColumns.ts
+   MACHINE_COLUMNS) as inline `<col style>`; the numeric defaults fit `1023.0KB/s`
+   (networkColumns.browser.test.tsx). */
+.netm-table th.netm-h--num,
+.netm-c--conns, .netm-c--rate, .netm-c--total, .netm-c--pid { text-align: right; }
+.netm-c--pid, .netm-caret { color: var(--text-dim); }
+.netm-c--rate, .netm-c--total { color: var(--net-cyan); }
+.netm-na { color: var(--text-dim) !important; }
+.netm-row { cursor: pointer; }
+.netm-row--other { opacity: 0.6; }
+.netm-sort {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.netm-table thead th[aria-sort="ascending"],
+.netm-table thead th[aria-sort="descending"] { color: var(--text); }
+.netm-conns-row > td { padding: 0 0 4px 22px; line-height: normal; }
+.netm-conns-row:hover { background: none; }
+.netm-conns {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+.netm-conns th { text-align: left; font-weight: 400; color: var(--text-dim); padding: 0 6px; }
+.netm-conns td { padding: 0 6px; overflow: hidden; text-overflow: ellipsis; line-height: var(--net-row-h); }
+.netm-ccol--proto { width: calc(4ch + 16px); }
+.netm-ccol--local { width: 28%; }
+.netm-ccol--remote { width: auto; }
+.netm-ccol--state { width: calc(11ch + 16px); }
+.netm-ccol--bytes { width: calc(8ch + 16px); }
+.netm-cc--proto { color: var(--net-green); }
+.netm-cc--state { color: var(--text-dim); }
+.netm-cc--bytes { text-align: right; color: var(--net-cyan); }
+.netm-conns__none { color: var(--text-dim); padding: 2px 6px; }
+
+/* Request/Response tabs on the left, the Mask secrets toggle on the right. */
+.net-tabs-row { display: flex; align-items: center; gap: 8px; }
+.net-tabs-row .net-tabs { flex: 1; min-width: 0; }
+.net-mask { flex: none; }
+
+/* The request line leads the Request tab, the way the status line leads the Response tab. */
+.net-detail__reqline { font-family: var(--mono); }
+
+/* What is known about a connection with no request to show (tunnel / failed handshake). */
+.net-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 6px 0; font-size: 12px; }
+.net-facts__row { display: contents; }
+.net-facts dt { color: var(--text-dim); }
+.net-facts dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+
+/* The tunnel / bypass card: what the proxy could and could not see, and how to see more. */
+.net-card {
+  margin: 6px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-width: 100ch;
+  min-width: 0;
+}
+.net-card__title { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
+.net-card__h { margin: 10px 0 4px; font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.net-card p { margin: 4px 0; overflow-wrap: anywhere; }
+.net-card__ways { margin: 4px 0; padding-left: 20px; }
+.net-card__ways li { margin: 6px 0; overflow-wrap: anywhere; }
+.net-card__warn { color: var(--net-yellow); }
+/* One sentence per bypass reason (	unnelExplain.BYPASS_REASON_TEXT). */
+.net-card__reasons { margin: 4px 0; padding-left: 18px; }
+.net-card__code {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 4px 0;
+  min-width: 0;
+}
+.net-card__code pre {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 6px;
+  background: var(--bg-elev, rgba(255, 255, 255, 0.04));
+  border-radius: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* "Capture this app's requests…" — inline under an expanded Whole Mac app row. */
+.netm-guide__toggle { margin: 4px 0 2px; }
+.netm-guide {
+  margin: 4px 0 8px;
+  padding: 6px 10px;
+  max-width: 90ch;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  white-space: normal;
+  line-height: 1.4;
+}
+.netm-guide__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.netm-guide__path { color: var(--text); overflow-wrap: anywhere; }
+.netm-guide__section { margin-top: 6px; }
+.netm-guide__steps { margin: 2px 0 0; padding-left: 20px; }
+.netm-guide__steps li { margin: 2px 0; }
+.netm-guide__code {
+  margin: 2px 0 4px;
+  padding: 3px 6px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.netm-guide__outcome { margin: 8px 0 0; color: var(--text-dim); }
+
+/* The moved-port warning, the guide's live routing line and per-app decrypt switch. */
+.net-portmoved {
+  padding: 3px 10px;
+  color: var(--net-yellow);
+  border-bottom: 1px solid var(--border);
+}
+.net-uncaptured {
+  padding: 3px 10px;
+  color: var(--net-yellow);
+  border-bottom: 1px solid var(--border);
+}
+.net-uncaptured__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.net-uncaptured__btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.net-uncaptured__btn:hover { text-decoration: underline; }
+.net-uncaptured__error { color: var(--red, #f85149); }
+.netm-guide .net-portmoved { border: 1px solid var(--net-yellow); border-radius: 4px; margin: 4px 0; }
+.netm-guide__routing { margin: 4px 0 6px; font-weight: 600; }
+.netm-guide__routing--ok { color: var(--net-green); }
+.netm-guide__routing--direct { color: var(--net-yellow); }
+.netm-guide__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.netm-guide__dim { color: var(--text-dim); }
+.netm-guide__decrypt { margin: 2px 0 4px 18px; }
+
+/* ── IDE traffic: the Apps sidebar beside the table (networkApps) ── */
+.net-ide {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* The toolbar never clips a control (the bug: with the Apps sidebar the Source / Process /
+   Host pickers fell off the right edge). Two rules: the bar wraps (`.net-bar` above —
+   flex-wrap, no overflow: hidden, the filter shrinks to its min-width), and the main column's
+   width is the space LEFT by the sidebar, never its content's: the table's column floor
+   (`tableMinWidth`) is wider than a narrow pane, and without `contain: inline-size` that floor
+   became the column's min-content, the column outgrew the pane and the bar laid its controls out
+   past the visible edge. The table scrolls inside `.net-scroll` instead. */
+.net-ide {
+  min-width: 0;
+}
+.net-ide__main {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  contain: inline-size;
+}
+.net-bar > * { min-width: 0; max-width: 100%; }
+.net-bar > .net-bar__filter { min-width: 160px; }
+/* The sidebar: the Logs sidebar's width (280, dragged by its edge — width inline from the store). */
+.net-apps {
+  position: relative;
+  flex: 0 0 280px;
+  width: 280px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  font-family: var(--mono);
+}
+.net-apps__list { flex: 1 1 0; min-height: 0; overflow: auto; padding-bottom: 8px; }
+.net-side__resizer {
+  position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 3;
+  touch-action: none;
+}
+.net-side__resizer:hover, .net-side__resizer:focus-visible { background: var(--accent-soft); outline: none; }
+/* Terminals / Agents / Other — the Logs sidebar's rows (`.alog-side__*`), restated here
+   (no cross-feature CSS dependency). */
+.net-side__heading {
+  padding: 8px 10px 2px;
+  color: var(--text-dim);
+  font: 600 10px system-ui, sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.net-side__line { display: flex; align-items: center; min-width: 0; }
+.net-side__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 10px 2px 4px;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  color: var(--text);
+  font: 11px var(--mono);
+  text-align: left;
+  cursor: pointer;
+}
+.net-side__all { padding-left: 10px; margin-top: 4px; }
+.net-side__row:hover { background: var(--bg-elev); }
+.net-side__row[aria-pressed="true"] { background: var(--accent-soft); border-left-color: var(--accent); }
+.net-side__name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.net-side__sub { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.net-side__count { flex: 0 0 auto; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.net-apps__check { margin: 0 2px 0 8px; flex: 0 0 auto; }
+.net-apps__all { width: 100%; }
+.net-apps__gone { padding: 2px 4px; color: var(--text-dim); }
+.net-apps__cap { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
+.net-apps__cap--on { color: var(--net-green); }
+.net-apps__cap--off { color: var(--net-yellow); }
+.net-apps__act {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.net-apps__act:hover { text-decoration: underline; }
+
+/* ── an IDE app's capture (IdeAppCapture) ── */
+.net-idecap { margin: 4px 0; font-family: var(--mono); font-size: 11px; }
+.net-idecap p { margin: 2px 0; }
+.net-idecap__why { color: var(--net-yellow); }
+.net-idecap__ok { color: var(--net-green); font-weight: 600; }
+.net-idecap__where, .net-idecap__dim { color: var(--text-dim); }
+.net-idecap__caveat { color: var(--text-dim); font-style: italic; }
+.net-idecap__primary {
+  margin: 2px 0 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--bg-app);
+  font: inherit;
+  cursor: pointer;
+}
+.net-idecap__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.net-idecap__link:hover { text-decoration: underline; }
+.net-idecap__subhead { margin-top: 4px; color: var(--text-dim); text-transform: uppercase; font-size: 10px; }
+.net-idecap__table { border-collapse: collapse; }
+.net-idecap__table td { padding: 0 8px 0 0; white-space: nowrap; }

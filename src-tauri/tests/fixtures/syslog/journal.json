@@ -1,0 +1,9 @@
+-- No entries --
+{"__CURSOR":"s=0;i=1","__REALTIME_TIMESTAMP":"1767268800250500","__MONOTONIC_TIMESTAMP":"1","_BOOT_ID":"0","PRIORITY":"6","_UID":"1000","_GID":"1000","_COMM":"example-daemon","_EXE":"/usr/bin/example-daemon","_PID":"4242","_SYSTEMD_UNIT":"example.service","SYSLOG_IDENTIFIER":"example-daemon","MESSAGE":"listening on port 8080"}
+{"__REALTIME_TIMESTAMP":"1767268801000000","PRIORITY":"3","_COMM":"example-daemon","_PID":"4242","MESSAGE":"connection refused"}
+{"__REALTIME_TIMESTAMP":"1767268801100000","PRIORITY":"4","SYSLOG_IDENTIFIER":"example-cron","MESSAGE":"job took longer than expected"}
+{"__REALTIME_TIMESTAMP":"1767268801200000","PRIORITY":"7","_COMM":"example-daemon","_PID":"4242","MESSAGE":[98,121,116,101,115,32,226,156,147,10,115,101,99,111,110,100,32,108,105,110,101]}
+{"__REALTIME_TIMESTAMP":"1767268801300000","PRIORITY":"0","_COMM":"kernelish","MESSAGE":"emergency"}
+{"__REALTIME_TIMESTAMP":"1767268801400000","PRIORITY":"5","_COMM":"example-daemon","MESSAGE":null}
+{"__REALTIME_TIMESTAMP":"1767268801500000","MESSAGE":"no priority, no comm"}
+{"truncated":

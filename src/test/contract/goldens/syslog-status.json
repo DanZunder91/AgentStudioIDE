@@ -1,0 +1,205 @@
+{
+  "linux-no-journald": {
+    "available": false,
+    "backend": null,
+    "reason": "journald isn't running on this machine (a container?), so there are no system logs to read.",
+    "running": false,
+    "filter": {
+      "enabled": false,
+      "apps": null,
+      "subsystem": null,
+      "minLevel": "default",
+      "simulator": false,
+      "simulatorApps": null
+    },
+    "simulator": {
+      "available": false,
+      "reason": "The iOS Simulator is only available on macOS.",
+      "running": false
+    },
+    "linesPerSec": 0,
+    "droppedPerSec": 0
+  },
+  "linux-partial": {
+    "available": true,
+    "backend": "linux-journald",
+    "reason": "Only your own journal is visible — add yourself to the `systemd-journal` group to see every app's logs.",
+    "running": true,
+    "filter": {
+      "enabled": true,
+      "apps": [
+        "nginx"
+      ],
+      "subsystem": "nginx.service",
+      "minLevel": "error",
+      "simulator": false,
+      "simulatorApps": null
+    },
+    "simulator": {
+      "available": false,
+      "reason": "The iOS Simulator is only available on macOS.",
+      "running": false
+    },
+    "linesPerSec": 3,
+    "droppedPerSec": 0
+  },
+  "macos-all-apps": {
+    "available": true,
+    "backend": "macos-unified-log",
+    "reason": null,
+    "running": true,
+    "filter": {
+      "enabled": true,
+      "apps": null,
+      "subsystem": null,
+      "minLevel": "default",
+      "simulator": false,
+      "simulatorApps": null
+    },
+    "simulator": {
+      "available": false,
+      "reason": "No iOS Simulator is booted.",
+      "running": false
+    },
+    "linesPerSec": 212,
+    "droppedPerSec": 0
+  },
+  "macos-child-exited": {
+    "available": true,
+    "backend": "macos-unified-log",
+    "reason": "System apps log stream stopped (exit code 64): log: Cannot open the log store: Operation not permitted",
+    "running": false,
+    "filter": {
+      "enabled": true,
+      "apps": null,
+      "subsystem": null,
+      "minLevel": "default",
+      "simulator": false,
+      "simulatorApps": null
+    },
+    "simulator": {
+      "available": false,
+      "reason": "No iOS Simulator is booted.",
+      "running": false
+    },
+    "linesPerSec": 0,
+    "droppedPerSec": 0
+  },
+  "macos-running-picked": {
+    "available": true,
+    "backend": "macos-unified-log",
+    "reason": null,
+    "running": true,
+    "filter": {
+      "enabled": true,
+      "apps": [
+        "Safari",
+        "Mail"
+      ],
+      "subsystem": "com.example.app",
+      "minLevel": "info",
+      "simulator": false,
+      "simulatorApps": null
+    },
+    "simulator": {
+      "available": false,
+      "reason": "No iOS Simulator is booted.",
+      "running": false
+    },
+    "linesPerSec": 500,
+    "droppedPerSec": 7
+  },
+  "macos-simulator-exited": {
+    "available": true,
+    "backend": "macos-unified-log",
+    "reason": null,
+    "running": false,
+    "filter": {
+      "enabled": false,
+      "apps": null,
+      "subsystem": null,
+      "minLevel": "default",
+      "simulator": true,
+      "simulatorApps": [
+        "SpringBoard",
+        "ExampleApp"
+      ]
+    },
+    "simulator": {
+      "available": true,
+      "reason": "iOS Simulator log stream stopped (exit code 64): log: Cannot open the log store: Operation not permitted",
+      "running": false
+    },
+    "linesPerSec": 0,
+    "droppedPerSec": 0
+  },
+  "macos-simulator-streaming": {
+    "available": true,
+    "backend": "macos-unified-log",
+    "reason": null,
+    "running": false,
+    "filter": {
+      "enabled": false,
+      "apps": null,
+      "subsystem": null,
+      "minLevel": "default",
+      "simulator": true,
+      "simulatorApps": [
+        "SpringBoard",
+        "ExampleApp"
+      ]
+    },
+    "simulator": {
+      "available": true,
+      "reason": null,
+      "running": true
+    },
+    "linesPerSec": 0,
+    "droppedPerSec": 0
+  },
+  "other-os-unavailable": {
+    "available": false,
+    "backend": null,
+    "reason": "System app logs aren't supported on this operating system.",
+    "running": false,
+    "filter": {
+      "enabled": false,
+      "apps": null,
+      "subsystem": null,
+      "minLevel": "default",
+      "simulator": false,
+      "simulatorApps": null
+    },
+    "simulator": {
+      "available": false,
+      "reason": "The iOS Simulator is only available on macOS.",
+      "running": false
+    },
+    "linesPerSec": 0,
+    "droppedPerSec": 0
+  },
+  "windows-eventlog": {
+    "available": true,
+    "backend": "windows-eventlog",
+    "reason": null,
+    "running": true,
+    "filter": {
+      "enabled": true,
+      "apps": [
+        "MsiInstaller",
+        "Application Error"
+      ],
+      "subsystem": "Microsoft-Windows-PowerShell/Operational",
+      "minLevel": "error",
+      "simulator": false,
+      "simulatorApps": null
+    },
+    "simulator": {
+      "available": false,
+      "reason": "The iOS Simulator is only available on macOS.",
+      "running": false
+    },
+    "linesPerSec": 2,
+    "droppedPerSec": 0
+  }
+}

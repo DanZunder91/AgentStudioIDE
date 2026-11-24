@@ -1,0 +1,153 @@
+{
+  "tabs": [
+    {
+      "tab": {
+        "kind": "terminal",
+        "terminalId": "01J9TERM",
+        "title": "gazelle",
+        "customTitle": "build"
+      },
+      "key": "terminal:01J9TERM"
+    },
+    {
+      "tab": {
+        "kind": "agent-terminal",
+        "terminalId": "01J9AGENT",
+        "agentId": "01J9AGENT",
+        "title": "gazelle",
+        "customTitle": null
+      },
+      "key": "terminal:01J9AGENT"
+    },
+    {
+      "tab": {
+        "kind": "editor",
+        "path": "/Users/me/gazelle/src/main.rs",
+        "title": "main.rs",
+        "customTitle": null,
+        "buffer": {
+          "text": "fn main() {}\n// unsaved\n",
+          "baseline": "fn main() {}\n",
+          "state": "{\"doc\":\"fn main() {}\\n// unsaved\\n\",\"history\":{\"done\":[],\"undone\":[]}}",
+          "stamp": {
+            "mtimeMs": 1760000000000,
+            "size": 13
+          },
+          "stale": false
+        }
+      },
+      "key": "editor:/Users/me/gazelle/src/main.rs"
+    },
+    {
+      "tab": {
+        "kind": "editor",
+        "path": "/Users/me/gazelle/README.md",
+        "title": "README.md",
+        "customTitle": "notes",
+        "buffer": null
+      },
+      "key": "editor:/Users/me/gazelle/README.md"
+    },
+    {
+      "tab": {
+        "kind": "diff",
+        "path": "/Users/me/gazelle/src/main.rs",
+        "title": "main.rs ↔ HEAD"
+      },
+      "key": "diff:/Users/me/gazelle/src/main.rs"
+    },
+    {
+      "tab": {
+        "kind": "metrics",
+        "cwd": "/Users/me/gazelle"
+      },
+      "key": "metrics"
+    },
+    {
+      "tab": {
+        "kind": "agent-logs"
+      },
+      "key": "agent-logs"
+    },
+    {
+      "tab": {
+        "kind": "network"
+      },
+      "key": "network"
+    },
+    {
+      "tab": {
+        "kind": "village"
+      },
+      "key": "village"
+    }
+  ],
+  "mail": [
+    {
+      "t": "adopt",
+      "tabs": [
+        {
+          "kind": "agent-terminal",
+          "terminalId": "01J9AGENT",
+          "agentId": "01J9AGENT",
+          "title": "gazelle",
+          "customTitle": null
+        },
+        {
+          "kind": "village"
+        }
+      ]
+    },
+    {
+      "t": "focus",
+      "key": "terminal:01J9AGENT"
+    },
+    {
+      "t": "close",
+      "key": "terminal:01J9AGENT"
+    },
+    {
+      "t": "dismissed",
+      "agentId": "01J9AGENT"
+    },
+    {
+      "t": "give",
+      "tabId": "tab-3f2a",
+      "to": "tearoff-1"
+    },
+    {
+      "t": "renamed",
+      "agentId": "01J9AGENT",
+      "name": "reviewer"
+    }
+  ],
+  "claim": {
+    "tabs": [
+      {
+        "kind": "editor",
+        "path": "/Users/me/gazelle/src/main.rs",
+        "title": "main.rs",
+        "customTitle": null,
+        "buffer": {
+          "text": "fn main() {}\n// unsaved\n",
+          "baseline": "fn main() {}\n",
+          "state": "{\"doc\":\"fn main() {}\\n// unsaved\\n\",\"history\":{\"done\":[],\"undone\":[]}}",
+          "stamp": {
+            "mtimeMs": 1760000000000,
+            "size": 13
+          },
+          "stale": false
+        }
+      }
+    ],
+    "mail": []
+  },
+  "holdings": [
+    {
+      "label": "tearoff-1",
+      "keys": [
+        "editor:/Users/me/gazelle/src/main.rs"
+      ]
+    }
+  ]
+}

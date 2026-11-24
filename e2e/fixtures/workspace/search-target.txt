@@ -1,0 +1,9 @@
+E2E fixture text file (seam S8) — the "Find in files" target.
+
+find.e2e.ts searches the workspace for the unique token on the next line and
+then clicks the resulting match to open THIS file in the editor:
+
+TURINGFINDME_UNIQUE_E2E_TOKEN
+
+The token is deliberately a single, unlikely-to-collide word so the search
+returns exactly one match in exactly one file — a deterministic assertion.

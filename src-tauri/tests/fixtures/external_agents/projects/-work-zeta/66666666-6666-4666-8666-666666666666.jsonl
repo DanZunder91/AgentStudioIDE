@@ -1,0 +1,2 @@
+{"sessionId":"66666666-6666-4666-8666-666666666666","cwd":"/work/zeta","gitBranch":"","version":"2.1.296","timestamp":"2026-10-14T10:00:00.000Z","type":"user","message":{"role":"user","content":"try"}}
+{"sessionId":"66666666-6666-4666-8666-666666666666","cwd":"/work/zeta","gitBranch":"","version":"2.1.296","timestamp":"2026-10-14T10:00:00.000Z","type":"assistant","message":{"role":"assistant","model":"claude-opus-5","stop_reason":"stop_sequence","content":[{"type":"text","text":"API Error: 500"}]},"isApiErrorMessage":true,"error":"server_error"}

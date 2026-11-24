@@ -1,0 +1,57 @@
+/* ── git blame: annotate gutter + commit popover ─────────────── */
+
+/* The toggle lives in the editor's right-click menu (not a header
+   button) — no button styles here anymore. */
+
+/* The transient "No git history" / "(out of date)" notes in the header. */
+.code-editor__feedback--blame {
+  color: var(--text-dim, #8b949e);
+  font-style: italic;
+}
+
+/* The annotation column (left of the line numbers). */
+.code-editor .cm-blame-gutter {
+  border-right: 1px solid var(--border, #21262d);
+}
+.cm-blame-line {
+  display: inline-block;
+  padding: 0 10px 0 8px;
+  font-size: 11px;
+  color: var(--text-dim, #8b949e);
+  white-space: nowrap;
+  cursor: default;
+}
+.cm-blame-line--none {
+  opacity: 0.45;
+}
+
+/* The rich commit popover ("step on the name → see the commit"). */
+.blame-popover {
+  position: fixed;
+  z-index: 60;
+  max-width: 640px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  background: var(--bg-surface, #161b22);
+  color: var(--text, #c9d1d9);
+  box-shadow: 0 12px 40px rgba(1, 4, 9, 0.5);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.blame-popover__hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--accent, #3b82f6);
+  margin-bottom: 6px;
+  word-break: break-all;
+}
+.blame-popover__meta {
+  color: var(--text-dim, #8b949e);
+}
+.blame-popover__message {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  color: var(--text, #c9d1d9);
+}

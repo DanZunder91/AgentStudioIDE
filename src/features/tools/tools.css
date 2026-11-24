@@ -1,0 +1,327 @@
+/* ── Tools rail panel: the epoch ⇄ date converter ─────────────────────────────
+   Theme variables come from App.css, with the same literal fallbacks `db.css` uses so
+   this renders sanely if it is ever mounted before the theme.
+
+   ⚠️ THE RAIL IS NARROW AND IT CLIPS. `RAIL_MIN_W` is 180px, the default is 300px, and
+   `.rail` is `overflow-x: hidden` — over-wide content is not scrolled, it is silently
+   CUT OFF, and nothing on screen says so. This repo has shipped that bug twice (the
+   Vault's fixed 200px input; the clipped "Collections" label), so every rule below is
+   written against it:
+
+     * no fixed pixel width anywhere — the only `width` is `100%`;
+     * `min-width: 0` on every flex child, because the flex default (`auto`) refuses to
+       shrink below the content's min-content size and pushes the overflow out of the
+       rail rather than wrapping it;
+     * `overflow-wrap: anywhere` on every VALUE, because the values are exactly the
+       unbreakable strings — `1700000000123456789`, `2023-11-14T22:13:20.123456789Z` —
+       that have no space to break at;
+     * label ABOVE value, never a two-column row. At 180px a side-by-side layout leaves
+       ~100px for an ISO timestamp, and the honest options are ellipsis (hides the digits
+       that are the whole point) or clipping (hides them AND lies about it).
+
+   Values are monospace so digits line up column-wise between the four epoch rows —
+   comparing `1700000000` with `1700000000123` by eye is most of what this tool is for. */
+
+.tools-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  padding: 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+  color: var(--text, #c9d1d9);
+  font-size: 12px;
+}
+
+.tools-panel__title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim, #8b949e);
+}
+
+.tools-panel__tool {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tools-panel__toolname {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text, #c9d1d9);
+}
+
+/* ── the converter ─────────────────────────────────────────────────────────── */
+
+.epoch-tool {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* The live clock row. Its value is a BUTTON (clicking fills the box) rather than a span
+   with a separate "use" control: one value, one affordance, and half of why anyone opens
+   an epoch tool is to grab this number. */
+.epoch-now {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 5px;
+  background: var(--bg-elev, #1c2128);
+}
+
+.epoch-now__value {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent, #3b82f6);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.epoch-now__value:hover {
+  text-decoration: underline;
+}
+
+.epoch-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.epoch-input {
+  flex: 1 1 auto;
+  /* Not a `width` — an input's default `size` attribute gives it an intrinsic width of
+     ~20 characters, which is wider than the rail's minimum. Without this floor of zero
+     the flex item refuses to shrink to it. */
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 5px;
+  background: var(--bg-app, #0d1117);
+  color: var(--text, #c9d1d9);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  outline: none;
+}
+
+.epoch-input:focus {
+  border-color: var(--accent, #3b82f6);
+}
+
+.epoch-clear {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-dim, #8b949e);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.epoch-clear:hover {
+  color: var(--text, #c9d1d9);
+}
+
+/* ── result blocks ─────────────────────────────────────────────────────────── */
+
+.epoch-hint,
+.epoch-because,
+.epoch-ambiguity {
+  margin: 0;
+  color: var(--text-dim, #8b949e);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* The ambiguous case is the one place the panel needs the user to make a choice, so it
+   is set apart — not as a warning (nothing is wrong), just as a question. */
+.epoch-ambiguity {
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent, #3b82f6);
+  background: var(--bg-elev, #1c2128);
+}
+
+/* `unknown` is calm on purpose: the message already names what WOULD have worked, and a
+   red block for "I don't recognise this yet" reads as a failure the user caused. */
+.epoch-unknown {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 5px;
+  background: var(--bg-elev, #1c2128);
+  color: var(--text-dim, #8b949e);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.epoch-result,
+.epoch-reading {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* A second reading needs a visible boundary — the ambiguous case renders two of these
+   and they must not read as one long answer. */
+.epoch-reading + .epoch-reading {
+  padding-top: 8px;
+  border-top: 1px solid var(--border, #30363d);
+}
+
+.epoch-verdict {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.epoch-verdict__how {
+  color: var(--text-dim, #8b949e);
+  font-size: 10px;
+}
+
+.epoch-subhead {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim, #8b949e);
+}
+
+/* ── label-above-value rows ────────────────────────────────────────────────── */
+
+.epoch-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.epoch-row,
+.epoch-alt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.epoch-row__label {
+  color: var(--text-dim, #8b949e);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.epoch-row__line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.epoch-row__value {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text, #c9d1d9);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.tools-copy {
+  flex: 0 0 auto;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-dim, #8b949e);
+  font-size: 10px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.tools-copy:hover {
+  color: var(--accent, #3b82f6);
+}
+
+/* ── "also reads as" ───────────────────────────────────────────────────────── */
+
+.epoch-others {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.epoch-other {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.epoch-other__unit {
+  color: var(--text-dim, #8b949e);
+  font-size: 10px;
+}
+
+.epoch-other__lines {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.epoch-other__utc,
+.epoch-other__iso {
+  min-width: 0;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.epoch-other__iso {
+  color: var(--text-dim, #8b949e);
+}
+
+/* Out of range is a NORMAL reading of a nanosecond stamp, not an error — dim, not red. */
+.epoch-void,
+.epoch-other__void {
+  margin: 0;
+  color: var(--text-dim, #8b949e);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}

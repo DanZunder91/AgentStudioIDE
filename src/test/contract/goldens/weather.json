@@ -1,0 +1,62 @@
+{
+  "clear": {
+    "kind": "clear",
+    "intensity": 0.0,
+    "temperatureC": 24.1,
+    "wind": -0.235,
+    "sunriseMs": 1790229480000,
+    "sunsetMs": 1790273280000,
+    "place": "Madrid",
+    "fetchedAtMs": 1790251200000
+  },
+  "fog": {
+    "kind": "fog",
+    "intensity": 1.0,
+    "temperatureC": 11.2,
+    "wind": 0.0,
+    "sunriseMs": 1790229060000,
+    "sunsetMs": 1790272800000,
+    "place": "London",
+    "fetchedAtMs": 1790251200000
+  },
+  "rain": {
+    "kind": "rain",
+    "intensity": 0.686,
+    "temperatureC": 12.0,
+    "wind": 0.265,
+    "sunriseMs": 1790258400000,
+    "sunsetMs": 1790301600000,
+    "place": "Vancouver",
+    "fetchedAtMs": 1790251200000
+  },
+  "snow": {
+    "kind": "snow",
+    "intensity": 0.62,
+    "temperatureC": -2.3,
+    "wind": 0.0,
+    "sunriseMs": 1790218320000,
+    "sunsetMs": 1790260860000,
+    "place": "Oslo",
+    "fetchedAtMs": 1790251200000
+  },
+  "sparse": {
+    "kind": "drizzle",
+    "intensity": 0.24,
+    "temperatureC": null,
+    "wind": 0.0,
+    "sunriseMs": null,
+    "sunsetMs": null,
+    "place": "Sydney",
+    "fetchedAtMs": 1790251200000
+  },
+  "storm": {
+    "kind": "storm",
+    "intensity": 1.0,
+    "temperatureC": 27.9,
+    "wind": 1.0,
+    "sunriseMs": 1790247660000,
+    "sunsetMs": 1790291400000,
+    "place": "New York",
+    "fetchedAtMs": 1790251200000
+  }
+}

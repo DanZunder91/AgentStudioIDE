@@ -1,0 +1,74 @@
+[
+  {
+    "id": 1,
+    "tsMs": 1790251200000,
+    "terminalId": null,
+    "agentId": null,
+    "source": "gazelle · gazelle.log",
+    "kind": "system",
+    "level": "info",
+    "text": "app log started · gazelle · gazelle.log",
+    "detail": "/work/gazelle/gazelle.log",
+    "toolUseId": null
+  },
+  {
+    "id": 2,
+    "tsMs": 1790251200250,
+    "terminalId": null,
+    "agentId": null,
+    "source": "gazelle · gazelle.log",
+    "kind": "app",
+    "level": "info",
+    "text": "2026-09-28T10:00:00.000Z  INFO gazelle::server: listening on 0.0.0.0:3000",
+    "detail": "/work/gazelle/gazelle.log",
+    "toolUseId": null
+  },
+  {
+    "id": 3,
+    "tsMs": 1790251200500,
+    "terminalId": null,
+    "agentId": null,
+    "source": "gazelle · gazelle.log",
+    "kind": "app",
+    "level": "warn",
+    "text": "2026-09-28T10:00:01.000Z  WARN gazelle::db: slow query (812 ms)",
+    "detail": "/work/gazelle/gazelle.log",
+    "toolUseId": null
+  },
+  {
+    "id": 4,
+    "tsMs": 1790251200750,
+    "terminalId": null,
+    "agentId": null,
+    "source": "gazelle · gazelle.log",
+    "kind": "app",
+    "level": "error",
+    "text": "2026-09-28T10:00:02.000Z ERROR gazelle::upstream: geo refused: 429",
+    "detail": "/work/gazelle/gazelle.log",
+    "toolUseId": null
+  },
+  {
+    "id": 5,
+    "tsMs": 1790251201000,
+    "terminalId": null,
+    "agentId": null,
+    "source": "gazelle · gazelle.log",
+    "kind": "app",
+    "level": "debug",
+    "text": "2026-09-28T10:00:03.000Z DEBUG gazelle::health: GET /health 200",
+    "detail": "/work/gazelle/gazelle.log",
+    "toolUseId": null
+  },
+  {
+    "id": 6,
+    "tsMs": 1790251201250,
+    "terminalId": null,
+    "agentId": null,
+    "source": "gazelle · gazelle.log",
+    "kind": "system",
+    "level": "info",
+    "text": "app log stopped · gazelle · gazelle.log — stopped",
+    "detail": "/work/gazelle/gazelle.log",
+    "toolUseId": null
+  }
+]

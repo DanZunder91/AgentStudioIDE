@@ -1,0 +1,353 @@
+/**
+ * Layer 5 (testing-strategy §1, §7.5) — the drop preview, in real pixels.
+ *
+ * ── The bug ─────────────────────────────────────────────────────────────────
+ *
+ *   With the screen split vertically or horizontally, dragging a terminal toward
+ *   any edge previewed only half of the screen. It happened only when exactly
+ *   two terminals were open; with more, the preview was fine.
+ *
+ * The drop RESULT was always correct — verified exhaustively in real Chromium
+ * across both orientations, all four edges, 2 and 3 panes, six container sizes,
+ * the WebGL renderer, StrictMode, and both synthetic and native drags. What lied
+ * was the **preview**: it drew the naive "split the hovered pane in half"
+ * rectangle, while the real mutation also prunes the emptied source leaf, which
+ * collapses the now-single-child parent, so the survivor expands to fill the
+ * whole container.
+ *
+ * ── Why exactly 2 panes ─────────────────────────────────────────────────────
+ *
+ *   | panes | after pruning the source        | preview vs result       |
+ *   |-------|---------------------------------|-------------------------|
+ *   | 2     | parent has ONE child → collapse | mismatch (preview half) |
+ *   | 3+    | parent keeps ≥2 → no collapse   | close enough to pass    |
+ *
+ * The 2→1 collapse is the only case where the survivor escapes the hovered
+ * pane's bounds entirely — hence the half-screen preview, and hence only with two panes.
+ *
+ * ── Why this test must live here ────────────────────────────────────────────
+ *
+ * The assertion is "two rectangles are equal in CSS pixels". jsdom has no
+ * layout engine: every `getBoundingClientRect()` is 0x0, so both rectangles are
+ * 0x0 and the assertion is vacuously true — it would pass just as happily
+ * against the bug. Real Chromium is the only place this fact exists.
+ *
+ * ── And the bug THIS suite shipped ──────────────────────────────────────────
+ *
+ * The first version of the fix made every no-op drop preview nothing, and the
+ * first version of this suite only ever hovered the TARGET pane — so it was
+ * 12/12 green while, in the real app, the overlay never appeared: the blue drop
+ * highlight no longer showed while dragging.
+ *
+ * A real hand crosses the dragged tab's OWN pane before reaching the target,
+ * and over there every drop is a no-op. Being in a real browser bought nothing;
+ * the gesture was simply never driven through the state the user is actually in.
+ * Hence `keeps the preview alive across the WHOLE drag` below: assert the path,
+ * not just the destination.
+ */
+
+import { act, render } from "@testing-library/react";
+import { StrictMode } from "react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import App from "../App";
+import { useAppStore } from "../app/store";
+import { disposeAll } from "../features/terminal";
+import type { PaneId, TabId } from "../app/types";
+import { installTauriMock, type TauriMock } from "../test/tauri-mock";
+import {
+  bodyOf,
+  DragGesture,
+  dropPreview,
+  geometryOf,
+  leafPaneIds,
+  paneOfTab,
+  panes,
+  tabElement,
+  type Edge,
+  type Geometry,
+} from "../test/layout-browser";
+import { resetStore } from "../test/store-harness";
+
+/**
+ * Let the browser lay out and let every async consequence land: rAF (style +
+ * layout) → ResizeObserver delivery → allotment's `layout()` → the terminal
+ * registry's own RO → its 50ms fit debounce.
+ */
+async function settle(ms = 250): Promise<void> {
+  await act(async () => {
+    const deadline = performance.now() + ms;
+    while (performance.now() < deadline) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    }
+    await new Promise<void>((r) => setTimeout(r, 0));
+  });
+}
+
+function openTab(paneId?: PaneId): TabId {
+  let id!: TabId;
+  act(() => {
+    id = useAppStore.getState().layoutActions.openTerminalTab(paneId ? { paneId } : undefined);
+  });
+  return id;
+}
+
+function splitPane(paneId: PaneId, orientation: "row" | "column"): PaneId {
+  let id!: PaneId;
+  act(() => {
+    id = useAppStore.getState().layoutActions.splitPane(paneId, orientation);
+  });
+  return id;
+}
+
+/** Drag over the centre of `body` — the "join this group" zone. */
+async function hoverCentre(gesture: DragGesture, body: HTMLElement): Promise<void> {
+  const r = body.getBoundingClientRect();
+  await act(async () => {
+    body.dispatchEvent(
+      new DragEvent("dragover", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: gesture.dataTransfer,
+        clientX: r.left + r.width / 2,
+        clientY: r.top + r.height / 2,
+      }),
+    );
+  });
+}
+
+/** Two rects agree to within a pixel of rounding. */
+function expectSameBox(actual: Geometry, expected: Geometry, what: string): void {
+  for (const k of ["left", "top", "width", "height"] as const) {
+    expect(
+      actual[k],
+      `${what}: ${k} — preview ${JSON.stringify(actual)} vs result ${JSON.stringify(expected)}`,
+    ).toBeCloseTo(expected[k], 0);
+  }
+}
+
+describe("drop preview — what you see is what you get", () => {
+  let ipc: TauriMock;
+
+  beforeEach(() => {
+    resetStore();
+    ipc = installTauriMock();
+    ipc
+      .handle("terminal_open", (args) => ({
+        id: args.terminalId,
+        kind: "terminal",
+        title: "sh",
+        cwd: args.cwd,
+        cols: args.cols,
+        rows: args.rows,
+        status: "live",
+      }))
+      .handle("terminal_write", () => null)
+      .handle("terminal_resize", () => null)
+      .handle("terminal_close", () => null);
+  });
+
+  afterEach(() => {
+    disposeAll();
+    ipc.reset();
+  });
+
+  /** N panes side by side, one terminal tab each, laid out and fitted. */
+  async function build(n: number): Promise<TabId[]> {
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+    await settle(150);
+
+    let leaf = leafPaneIds()[0];
+    const tabs = [openTab(leaf)];
+    for (let i = 1; i < n; i++) {
+      leaf = splitPane(leaf, "row");
+      tabs.push(openTab(leaf));
+    }
+    await settle();
+    expect(leafPaneIds()).toHaveLength(n);
+    return tabs;
+  }
+
+  /**
+   * THE INVARIANT: the rectangle the user is shown mid-drag is exactly the
+   * rectangle the dragged terminal lands in.
+   *
+   * Asserted for 2 AND 3 panes, and for every edge. 2 is the broken case;
+   * 3 is the case that looked fine — and it is only *approximately* fine, since
+   * pruning the source still redistributes its share among the survivors, so
+   * the target grows there too. Pinning both stops a fix that special-cases the
+   * collapse and leaves the 3-pane stretch wrong.
+   */
+  describe.each([2, 3])("%i panes", (n) => {
+    describe.each<Edge>(["left", "right", "top", "bottom"])("drop on the %s edge", (edge) => {
+      it("previews exactly the box the tab lands in", async () => {
+        const tabs = await build(n);
+        const [dragged, target] = tabs;
+
+        const targetBody = bodyOf(paneOfTab(target));
+        const gesture = await new DragGesture(tabElement(dragged)).start();
+        await gesture.over(targetBody, edge);
+
+        const overlay = dropPreview();
+        expect(overlay, "a drag over a pane edge must preview where the tab lands").not.toBeNull();
+        const previewBox = geometryOf(overlay!);
+        expect(previewBox.width, "preview must have real geometry").toBeGreaterThan(0);
+        expect(previewBox.height, "preview must have real geometry").toBeGreaterThan(0);
+
+        await gesture.drop(targetBody, edge);
+        await settle();
+
+        // Where the dragged tab actually ended up.
+        const landedBox = geometryOf(paneOfTab(dragged));
+        expectSameBox(previewBox, landedBox, `${n} panes, ${edge} edge`);
+      });
+    });
+  });
+
+  /**
+   * The exact failing case, spelled out in absolute numbers rather than a
+   * relation — so the failure message names the bug instead of just "not
+   * equal", and so a fix cannot satisfy the test by making BOTH wrong.
+   */
+  it("2 panes, drop on the bottom edge: the preview spans the FULL width, not the hovered pane's half", async () => {
+    const [dragged, target] = await build(2);
+
+    const container = geometryOf(document.querySelector(".center .split-view")!);
+    const targetPaneBox = geometryOf(paneOfTab(target));
+    // Precondition: the panes really are side by side, each half the width.
+    expect(targetPaneBox.width).toBeCloseTo(container.width / 2, 0);
+
+    const targetBody = bodyOf(paneOfTab(target));
+    const gesture = await new DragGesture(tabElement(dragged)).start();
+    await gesture.over(targetBody, "bottom");
+
+    const previewBox = geometryOf(dropPreview()!);
+
+    // The drop prunes the emptied source leaf, the root split collapses to its
+    // one surviving child, and the survivor fills the container — so the tab
+    // lands in the bottom half of the WHOLE work area, not of the hovered pane.
+    expect(
+      previewBox.width,
+      "preview drew the hovered pane's half-width — the half-screen preview bug",
+    ).toBeCloseTo(container.width, 0);
+    expect(previewBox.height).toBeCloseTo(container.height / 2, 0);
+    expect(previewBox.top).toBeCloseTo(container.top + container.height / 2, 0);
+
+    await gesture.drop(targetBody, "bottom");
+    await settle();
+    expectSameBox(previewBox, geometryOf(paneOfTab(dragged)), "2-pane bottom-edge case");
+  });
+
+  /**
+   * A centre drop collapses the tree the same way, so it has the same bug: with
+   * 2 panes the survivor fills the container, and `inset: 0` on the hovered pane
+   * is half of it.
+   */
+  it("2 panes, centre drop: the preview spans the full container", async () => {
+    const [dragged, target] = await build(2);
+
+    const container = geometryOf(document.querySelector(".center .split-view")!);
+    const targetBody = bodyOf(paneOfTab(target));
+
+    const gesture = await new DragGesture(tabElement(dragged)).start();
+    await hoverCentre(gesture, targetBody);
+
+    const previewBox = geometryOf(dropPreview()!);
+    expect(previewBox.width).toBeCloseTo(container.width, 0);
+    expect(previewBox.height).toBeCloseTo(container.height, 0);
+  });
+
+  /**
+   * THE REGRESSION TEST.
+   *
+   * A hand does not teleport the cursor onto the target pane: it crosses the
+   * dragged tab's OWN pane first, and with two panes holding one tab each that
+   * is half the screen and the first half of every gesture. Over there every
+   * drop is a no-op — and previewing a no-op as "nothing" made the box vanish
+   * for that whole stretch, which showed as the blue drop highlight missing
+   * mid-drag.
+   *
+   * The first version of this suite only ever hovered the TARGET pane, so it
+   * was green while the app was visibly broken. Assert the whole path.
+   */
+  it("keeps the preview alive across the WHOLE drag, including over the source pane", async () => {
+    const [dragged, target] = await build(2);
+
+    const sourceBody = bodyOf(paneOfTab(dragged));
+    const targetBody = bodyOf(paneOfTab(target));
+    const gesture = await new DragGesture(tabElement(dragged)).start();
+
+    const path: Array<[string, HTMLElement, Edge | "centre"]> = [
+      ["source pane, centre", sourceBody, "centre"],
+      ["source pane, left edge", sourceBody, "left"],
+      ["source pane, bottom edge", sourceBody, "bottom"],
+      ["target pane, centre", targetBody, "centre"],
+      ["target pane, bottom edge", targetBody, "bottom"],
+    ];
+
+    for (const [where, body, edge] of path) {
+      if (edge === "centre") await hoverCentre(gesture, body);
+      else await gesture.over(body, edge);
+
+      const overlay = dropPreview();
+      expect(overlay, `${where}: the drag went dark — no preview`).not.toBeNull();
+
+      // Present is not enough: it must be a real, visible box.
+      const box = geometryOf(overlay!);
+      expect(box.width, `${where}: preview has no width`).toBeGreaterThan(0);
+      expect(box.height, `${where}: preview has no height`).toBeGreaterThan(0);
+
+      const styles = getComputedStyle(overlay!);
+      expect(styles.visibility, `${where}: preview is not visible`).toBe("visible");
+      expect(Number(styles.opacity), `${where}: preview is transparent`).toBeGreaterThan(0);
+      // The blue wash of the drop preview the user looks for — a box painted in
+      // nothing is the same as no box.
+      expect(styles.backgroundColor, `${where}: preview has no fill`).not.toBe("rgba(0, 0, 0, 0)");
+    }
+  });
+
+  /**
+   * Dropping a pane's only tab on its own edge changes nothing in the store (it
+   * would split, empty, prune and collapse straight back). The preview must
+   * still answer the question honestly: the terminal ends up exactly where it
+   * already is. Showing a SPLIT there would promise something the drop will not
+   * deliver; showing NOTHING reads as a dead app mid-drag.
+   */
+  it("previews a no-op drop as the box the tab already occupies", async () => {
+    const [dragged] = await build(2);
+
+    const ownPane = paneOfTab(dragged);
+    const paneBox = geometryOf(ownPane);
+    const gesture = await new DragGesture(tabElement(dragged)).start();
+    await gesture.over(bodyOf(ownPane), "left");
+
+    const overlay = dropPreview();
+    expect(overlay, "a no-op still has an answer: the tab stays here").not.toBeNull();
+    // NOT half the pane (that would promise a split), and not nothing.
+    expectSameBox(geometryOf(overlay!), paneBox, "no-op drop");
+
+    // And the drop really is a no-op, so what was previewed is what happened.
+    await gesture.drop(bodyOf(ownPane), "left");
+    await settle();
+    expectSameBox(geometryOf(paneOfTab(dragged)), paneBox, "no-op drop result");
+  });
+
+  /** The preview is transient: it must not survive the gesture. */
+  it("clears the preview on drop and on drag end", async () => {
+    const [dragged, target] = await build(2);
+    const targetBody = bodyOf(paneOfTab(target));
+
+    const gesture = await new DragGesture(tabElement(dragged)).start();
+    await gesture.over(targetBody, "right");
+    expect(dropPreview()).not.toBeNull();
+
+    await gesture.drop(targetBody, "right");
+    await settle(60);
+    expect(dropPreview(), "the preview must not outlive the drop").toBeNull();
+    expect(panes()).toHaveLength(2);
+  });
+});

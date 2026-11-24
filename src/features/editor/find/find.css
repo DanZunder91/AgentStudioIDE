@@ -1,0 +1,107 @@
+/* ── in-file find bar ────────────────────────────────────────
+   The IntelliJ-style search bar docked at the top of the code editor.
+   Uses the same CSS custom properties (with the same dark fallbacks) as
+   src/features/editor/editor.css so it follows the app theme. */
+
+.cm-editor .cm-panels.cm-panels-top {
+  background: var(--bg-surface, #161b22);
+  border-bottom: 1px solid var(--border, #21262d);
+  color: var(--text, #c9d1d9);
+}
+
+.cm-editor .find-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text, #c9d1d9);
+}
+
+.find-bar__input {
+  flex: 0 1 260px;
+  min-width: 120px;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-app, #0d1117);
+  color: var(--text, #c9d1d9);
+  outline: none;
+}
+.find-bar__input::placeholder {
+  color: var(--text-dim, #8b949e);
+}
+.find-bar__input:focus {
+  border-color: var(--accent, #3b82f6);
+}
+/* IntelliJ's "no matches" state: the field itself goes red. */
+.find-bar__input--error,
+.find-bar__input--error:focus {
+  border-color: var(--red, #f85149);
+}
+
+/* Cc / W / .* toggles. */
+.find-bar__toggle {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim, #8b949e);
+  cursor: pointer;
+}
+.find-bar__toggle:hover {
+  color: var(--text, #c9d1d9);
+  border-color: var(--border, #30363d);
+}
+.find-bar__toggle[aria-pressed="true"] {
+  background: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+  color: #fff;
+}
+
+/* The live "k/N" / "N results" readout. */
+.find-bar__count {
+  margin: 0 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--text-dim, #8b949e);
+}
+
+/* ↑ ↓ and ✕. */
+.find-bar__nav,
+.find-bar__close {
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim, #8b949e);
+  cursor: pointer;
+}
+.find-bar__nav:hover,
+.find-bar__close:hover {
+  color: var(--text, #c9d1d9);
+  border-color: var(--border, #30363d);
+}
+
+.find-bar__spacer {
+  flex: 1 1 auto;
+}
+
+/* Match highlights — tuned for the dark chrome (the extension's defaults are
+   a light-theme yellow). The selected match reads hotter than the rest. */
+.cm-editor .cm-searchMatch {
+  background: rgba(59, 130, 246, 0.22);
+  outline: 1px solid rgba(59, 130, 246, 0.35);
+}
+.cm-editor .cm-searchMatch.cm-searchMatch-selected {
+  background: rgba(255, 184, 108, 0.4);
+  outline: 1px solid rgba(255, 184, 108, 0.6);
+}

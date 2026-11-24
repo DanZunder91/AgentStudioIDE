@@ -1,0 +1,75 @@
+{
+  "rootId": "root",
+  "note": "Depths are OUR reconstructed depths: a workflow node sits one below its launcher and its sub-agents one below that. The sidecars' own spawnDepth is relative to the run (measured: 1 for 519 of 524 real ones).",
+  "agents": [
+    {
+      "agentId": "agent00",
+      "parentId": "root",
+      "spawnDepth": 1,
+      "agentType": "general-purpose",
+      "title": "Flat depth-1 agent",
+      "status": "Done"
+    },
+    {
+      "agentId": "wf_alpha11111-aaa",
+      "parentId": "root",
+      "spawnDepth": 1,
+      "agentType": "workflow",
+      "title": "Read the parser stage by stage and report what each one does",
+      "status": "Running"
+    },
+    {
+      "agentId": "wfa11",
+      "parentId": "wf_alpha11111-aaa",
+      "spawnDepth": 2,
+      "agentType": "workflow-subagent",
+      "title": "Read the tokenizer and list every state it can be in.",
+      "status": "Done"
+    },
+    {
+      "agentId": "wfa12",
+      "parentId": "wf_alpha11111-aaa",
+      "spawnDepth": 2,
+      "agentType": "pr-reviewer",
+      "title": "Read the emitter and list every node type it can produce.",
+      "status": "Running"
+    },
+    {
+      "agentId": "wf_beta22222-bbb",
+      "parentId": "agent00",
+      "spawnDepth": 2,
+      "agentType": "workflow",
+      "title": "Cross-check the parser report against the fixtures",
+      "status": "Done"
+    },
+    {
+      "agentId": "wfa21",
+      "parentId": "wf_beta22222-bbb",
+      "spawnDepth": 3,
+      "agentType": "Explore",
+      "title": "wfa21",
+      "status": "Done"
+    },
+    {
+      "agentId": "wf_gamma3333-ccc",
+      "parentId": "root",
+      "spawnDepth": 1,
+      "agentType": "workflow",
+      "title": "Workflow wf_gamma3333-ccc (launcher unknown)",
+      "status": "Running"
+    },
+    {
+      "agentId": "wfa31",
+      "parentId": "wf_gamma3333-ccc",
+      "spawnDepth": 2,
+      "agentType": "Explore",
+      "title": "Summarise the orphan-handling rules.",
+      "status": "Running"
+    }
+  ],
+  "notEmitted": {
+    "wf_delta4444-ddd": "a run directory with no sidecars yet \u2014 a node that can never gain a child is a phantom",
+    "notwf_ignoreme": "not a wf_ run directory",
+    "wfa99": "its sidecar is inside notwf_ignoreme"
+  }
+}

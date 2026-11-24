@@ -1,0 +1,173 @@
+/* ── Find Usages (references tool window) ────────────────────────────────────
+   The IntelliJ/VS Code "Find Usages" placement: docked to the BOTTOM of the
+   editor area (distinct from the top-docked Find-in-Files overlay), so the code
+   stays visible above it. Theme variables from App.css. */
+
+.refs-panel {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 40;
+  width: min(760px, calc(100vw - 48px));
+  max-height: 42vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* ── header ─────────────────────────────────────────────────────────────── */
+.refs-panel__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.refs-panel__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.refs-panel__symbol {
+  font-family: var(--mono);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.refs-panel__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.refs-panel__close:hover {
+  background: var(--bg-app);
+  color: var(--text);
+}
+
+/* ── status / body ──────────────────────────────────────────────────────── */
+.refs-panel__status {
+  padding: 14px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.refs-groups,
+.refs-group__hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.refs-groups {
+  overflow-y: auto;
+  padding: 6px 0 8px;
+}
+
+/* ── grouped results (mirrors Find-in-Files rows) ───────────────────────── */
+.refs-group__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 12px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.refs-group__header:hover {
+  background: var(--bg-elev);
+}
+.refs-group__caret {
+  display: inline-flex;
+  color: var(--text-dim);
+  transition: transform 0.1s ease;
+  flex: 0 0 auto;
+}
+.refs-group__caret.is-open {
+  transform: rotate(90deg);
+}
+.refs-group__name {
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.refs-group__dir {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.refs-group__badge {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 0 7px;
+}
+
+.refs-hit {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 2px 12px 2px 30px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: pre;
+  overflow: hidden;
+}
+.refs-hit:hover {
+  background: var(--bg-elev);
+  color: var(--text);
+}
+.refs-hit__ln {
+  flex: 0 0 auto;
+  min-width: 30px;
+  text-align: right;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+.refs-hit__code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.refs-hit__mark {
+  background: rgba(240, 200, 80, 0.28);
+  color: inherit;
+  border-radius: 2px;
+}

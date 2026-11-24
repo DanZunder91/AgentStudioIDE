@@ -1,0 +1,30 @@
+.col-resizer {
+  position: absolute; top: 0; right: -3px; width: 7px; height: 100%;
+  cursor: col-resize; z-index: 2; touch-action: none;
+}
+/* The last header's handle stays inside the table, or it widens the scroll box by 3px. */
+th:last-child > .col-resizer, [role="columnheader"]:last-child > .col-resizer { right: 0; }
+.col-resizer::after {
+  content: ""; position: absolute; top: 20%; bottom: 20%; left: 3px; width: 1px;
+  background: var(--border);
+}
+.col-resizer:hover::after, .col-resizer:focus-visible::after { background: var(--accent); width: 2px; }
+.col-resizer:focus-visible { outline: none; }
+.cols-menu { position: relative; display: inline-block; }
+.cols-menu__trigger {
+  font: inherit; font-size: 12px; color: var(--text); background: var(--bg-elev);
+  border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; cursor: pointer;
+}
+.cols-menu__pop {
+  position: absolute; z-index: 50; top: calc(100% + 4px); left: 0; min-width: 180px;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); padding: 4px 0; display: flex; flex-direction: column;
+}
+.cols-menu__row { display: flex; align-items: center; gap: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.cols-menu__row:hover { background: var(--accent-soft); }
+.cols-menu__reset {
+  margin: 4px 8px 2px; font: inherit; font-size: 12px; color: var(--accent);
+  background: none; border: none; text-align: left; cursor: pointer; padding: 2px;
+}
+
+.cols-menu__pop--flip { left: auto; right: 0; }

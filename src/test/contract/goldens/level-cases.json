@@ -1,0 +1,282 @@
+[
+  {
+    "line": "2026-01-01 12:00:00.250 E  Demo[1234:5678] [com.app:net] request failed",
+    "level": "error"
+  },
+  {
+    "line": "2026-01-01 12:00:00.250 Fa Demo[1:2] fault",
+    "level": "error"
+  },
+  {
+    "line": "2026-01-01 12:00:00.250 F  Demo[1:2] fault",
+    "level": "error"
+  },
+  {
+    "line": "2026-01-01 12:00:00.250 Df Demo[1234:5678] retrying after error",
+    "level": "debug"
+  },
+  {
+    "line": "2026-01-01 12:00:00.250 Db Demo[1:2] noise",
+    "level": "debug"
+  },
+  {
+    "line": "2026-01-01 12:00:00.250 D  Demo[1:2] noise",
+    "level": "debug"
+  },
+  {
+    "line": "2026-01-01 12:00:00.250 I  Demo[1:2] all good",
+    "level": "info"
+  },
+  {
+    "line": "2026-01-01 12:00:00.250 A  Demo[1:2] activity",
+    "level": "info"
+  },
+  {
+    "line": "2026-01-01 12:00:00.250-0700 E  Demo[1:2] tz offset form",
+    "level": "error"
+  },
+  {
+    "line": "2026-01-01 12:00:00 E no millis so not compact",
+    "level": "info"
+  },
+  {
+    "line": "2026-01-01T12:00:05.152Z  INFO gazelle: listening on 0.0.0.0:8080",
+    "level": "info"
+  },
+  {
+    "line": "2026-01-01T12:00:05.152Z  INFO gazelle::retry: recovered from error after 2 attempts",
+    "level": "info"
+  },
+  {
+    "line": "2026-01-01T12:00:05.152345Z  WARN gazelle::db: pool at 90%",
+    "level": "warn"
+  },
+  {
+    "line": "2026-01-01T12:00:05.152Z ERROR gazelle: upstream closed the connection",
+    "level": "error"
+  },
+  {
+    "line": "2026-01-01T12:00:05.152Z DEBUG hyper::proto::h1: flushed 212 bytes",
+    "level": "debug"
+  },
+  {
+    "line": "2026-01-01T12:00:05.152Z TRACE gazelle: tick, no error",
+    "level": "debug"
+  },
+  {
+    "line": "[2026-01-01 12:00:05 WARN foo] disk slow",
+    "level": "warn"
+  },
+  {
+    "line": "[2026-01-01T12:00:05Z INFO  gazelle] fatal flag is off",
+    "level": "info"
+  },
+  {
+    "line": "[2026-01-01T12:00:05Z ERROR gazelle::api] 500 on /health",
+    "level": "error"
+  },
+  {
+    "line": "2026-01-01 12:00:05,152 WARNING root: low memory",
+    "level": "warn"
+  },
+  {
+    "line": "2026-01-01 12:00:05,152 CRITICAL root: out of memory",
+    "level": "error"
+  },
+  {
+    "line": "2026-01-01T12:00:05-05:00 INFO svc: tick 1",
+    "level": "info"
+  },
+  {
+    "line": "WARN gazelle::health: upstream error rate 2%",
+    "level": "warn"
+  },
+  {
+    "line": "INFO gazelle: started, error budget 0",
+    "level": "info"
+  },
+  {
+    "line": "ERROR: relation \"users\" does not exist",
+    "level": "error"
+  },
+  {
+    "line": "[DEBUG] connecting",
+    "level": "debug"
+  },
+  {
+    "line": "INF server started port=8080",
+    "level": "info"
+  },
+  {
+    "line": "WRN retrying",
+    "level": "warn"
+  },
+  {
+    "line": "DBG cache miss",
+    "level": "debug"
+  },
+  {
+    "line": "NOTICE: table created",
+    "level": "info"
+  },
+  {
+    "line": "  WARN indented still leads",
+    "level": "warn"
+  },
+  {
+    "line": "time=2026-01-01T12:00:05Z level=error msg=\"db down\"",
+    "level": "error"
+  },
+  {
+    "line": "ts=1 level=info msg=\"error count reset\"",
+    "level": "info"
+  },
+  {
+    "line": "level=WARN msg=x",
+    "level": "warn"
+  },
+  {
+    "line": "{\"level\":\"debug\",\"msg\":\"panic handler installed\"}",
+    "level": "debug"
+  },
+  {
+    "line": "{\"ts\":1,\"level\": \"error\",\"msg\":\"boom\"}",
+    "level": "error"
+  },
+  {
+    "line": "releveled=error",
+    "level": "error"
+  },
+  {
+    "line": "error[E0308]: mismatched types",
+    "level": "error"
+  },
+  {
+    "line": "thread 'main' panicked at src/lib.rs:1:1",
+    "level": "error"
+  },
+  {
+    "line": "Traceback (most recent call last):",
+    "level": "error"
+  },
+  {
+    "line": "test result: FAILED. 1 passed; 2 failed",
+    "level": "error"
+  },
+  {
+    "line": "✗ 3 tests failed",
+    "level": "error"
+  },
+  {
+    "line": "warning: unused variable `x`",
+    "level": "warn"
+  },
+  {
+    "line": "npm WARN deprecated left-pad@1.0.0",
+    "level": "warn"
+  },
+  {
+    "line": "the build has a warning and an error",
+    "level": "error"
+  },
+  {
+    "line": "TRACE hyper::proto",
+    "level": "debug"
+  },
+  {
+    "line": "the INFO panel shows an error",
+    "level": "error"
+  },
+  {
+    "line": "DeprecationWarning is not a whole word",
+    "level": "info"
+  },
+  {
+    "line": "errorless run, terrors none",
+    "level": "info"
+  },
+  {
+    "line": "forewarned",
+    "level": "info"
+  },
+  {
+    "line": "INFORMATION about the build",
+    "level": "info"
+  },
+  {
+    "line": "ERRORS: 0",
+    "level": "info"
+  },
+  {
+    "line": "Compiling agentstudio v0.1.0",
+    "level": "info"
+  },
+  {
+    "line": "",
+    "level": "info"
+  },
+  {
+    "line": "⚠ warning: disk almost full",
+    "level": "warn"
+  },
+  {
+    "line": "❌ error: build failed",
+    "level": "error"
+  },
+  {
+    "line": "échec: error — réessayer",
+    "level": "error"
+  },
+  {
+    "line": "ошибка error ошибка",
+    "level": "error"
+  },
+  {
+    "line": "naïve warnings only",
+    "level": "info"
+  },
+  {
+    "line": "日本語のログ 情報",
+    "level": "info"
+  },
+  {
+    "line": "✓ 12 passed",
+    "level": "info"
+  },
+  {
+    "line": "éerror in a word",
+    "level": "info"
+  },
+  {
+    "line": "日本error",
+    "level": "info"
+  },
+  {
+    "line": "エラー: error happened",
+    "level": "error"
+  },
+  {
+    "line": "level=érror",
+    "level": "info"
+  },
+  {
+    "line": "2026-01-01 12:00:00.250 E  Demo[1:2] nbsp before the type column, fine",
+    "level": "error"
+  },
+  {
+    "line": "2026-01-01 12:00:00.250 Df Demo[1:2] nbsp, error in the message",
+    "level": "debug"
+  },
+  {
+    "line": "٢٠٢٦-٠١-٠١ ١٢:٠٠:٠٠.٢٥٠ Df Demo[1:2] arabic-indic digits, error",
+    "level": "debug"
+  },
+  {
+    "line": "٢٠٢٦-٠١-٠١T12:00:05Z WARN svc: arabic-indic date, error",
+    "level": "warn"
+  },
+  {
+    "line": " WARN nbsp-led, error",
+    "level": "warn"
+  }
+]

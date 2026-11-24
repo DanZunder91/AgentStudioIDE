@@ -1,0 +1,416 @@
+/* ── workspace file tree (right rail) ───────────────────────────────────── */
+.workspace-tree {
+  padding: 8px 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+/* Empty state: no agents, no browse roots → an "Open a folder" CTA,
+   never a dead end. */
+.workspace-tree--empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px 12px;
+}
+.workspace-tree__hint {
+  margin: 0;
+  color: var(--text-dim);
+  font-style: italic;
+}
+.workspace-tree__open {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.workspace-tree__open:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.workspace-tree__open:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* ── panel toolbar (the reveal-active-file crosshair) ───────────────────── */
+.workspace-tree__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 2px 4px;
+}
+/* The crosshair's tooltip host. A disabled button is inert to the pointer, so its
+   own `title` may never surface; this wrapper is never disabled, so the reason
+   the button is greyed out is always one hover away. `display: inline-flex` keeps
+   it exactly the button's box — it adds no layout of its own. */
+.workspace-tree__tool-slot {
+  display: inline-flex;
+}
+.workspace-tree__tool {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.workspace-tree__tool:hover:not(:disabled) {
+  background: var(--bg-elev);
+  color: var(--text);
+}
+.workspace-tree__tool:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.workspace-tree__tool:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* One collapsible root per unique folder path (multi-root). */
+.workspace-root + .workspace-root {
+  margin-top: 2px;
+}
+.workspace-root__header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.workspace-root__header:hover {
+  background: var(--bg-elev);
+}
+/* Folder drag: a calm accent cue on the hovered drop target — the
+   dragged folder will land immediately before this one. Theme-aware via the shared
+   --accent / --bg-elev tokens, so it reads in both light and dark. */
+.workspace-root__header.is-drop-target {
+  background: var(--bg-elev);
+  box-shadow: inset 0 2px 0 -1px var(--accent);
+}
+.workspace-root__caret {
+  display: inline-flex;
+  color: var(--text-dim);
+  transition: transform 0.1s ease;
+  flex: 0 0 auto;
+}
+.workspace-root__caret.is-open {
+  transform: rotate(90deg);
+}
+.workspace-root__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Right-aligned cluster of header affordances (New file / New folder / ✕). */
+.workspace-root__actions {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.workspace-root__action,
+.workspace-root__close {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+}
+/* Reveal the header affordances on hover / keyboard focus — same discipline as ✕. */
+.workspace-root__header:hover .workspace-root__action,
+.workspace-root__header:hover .workspace-root__close,
+.workspace-root__action:focus-visible,
+.workspace-root__close:focus-visible {
+  opacity: 1;
+}
+.workspace-root__action:hover,
+.workspace-root__close:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+.workspace-root__action:focus-visible,
+.workspace-root__close:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.workspace-tree__list,
+.workspace-node__children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.workspace-tree__note {
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 3px 8px 3px 22px;
+  white-space: nowrap;
+}
+/* A calm inline error (a rejected mutation): muted, never a native dialog. */
+.workspace-tree__note--error {
+  color: var(--danger, #e06c75);
+  font-style: normal;
+  white-space: normal;
+}
+/* The same note used at SHELL level (a reveal for a path under no open root), where
+   it is a <p> rather than an <li> in the listing — so it needs the browser's default
+   paragraph margin cleared and the list's 22px glyph gutter dropped. */
+p.workspace-tree__note {
+  margin: 0 0 4px;
+  padding: 3px 8px;
+}
+/* The root list is a drop target for an entry move to the top level. */
+.workspace-tree__list.is-drop-target {
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.workspace-node {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+}
+.workspace-node:hover {
+  background: var(--bg-elev);
+}
+.workspace-node--file {
+  color: var(--text-dim);
+}
+.workspace-node--file .workspace-node__icon {
+  /* files have no caret, so pad to line their icon up under a folder's icon */
+  margin-left: 16px;
+}
+
+/* ── semantic folder roles + git-status row colors ─────────────────────────
+   Every rule in this block is DELIBERATELY (0,2,0) specificity and sits BEFORE
+   the `.workspace-node.is-selected` rules below: the selected row's white
+   (0,2,0 on the row, 0,3,0 on its parts) must always win, by specificity AND
+   by source order — belt and braces, so neither a refactor of one nor the
+   other silently paints color onto a selected row. Tokens carry literal
+   fallbacks (house idiom) so they read even where the theme vars are absent. */
+.workspace-tree {
+  --vcs-added: var(--green, #3fb950); /* added AND untracked (both green) */
+  --vcs-modified: #4da3ff;
+  /* Unused in the tree (a deleted file has no row here — it lives in the Git
+     panel); defined so the sibling panel's palette has one canonical source. */
+  --vcs-deleted: var(--danger, #e06c75);
+  --role-src: #6cb6ff;
+  --role-test: var(--green, #3fb950);
+  --role-generated: #d29922;
+}
+
+/* Folder roles (file-icons.md §8: state styling via classes, never new icon
+   assets): color the name + icon, leave caret/actions alone. */
+.workspace-node--role-src .workspace-node__name,
+.workspace-node--role-src .workspace-node__icon {
+  color: var(--role-src);
+}
+.workspace-node--role-test .workspace-node__name,
+.workspace-node--role-test .workspace-node__icon {
+  color: var(--role-test);
+}
+.workspace-node--role-generated .workspace-node__name,
+.workspace-node--role-generated .workspace-node__icon {
+  color: var(--role-generated);
+}
+/* Generated additionally dims (IntelliJ's "excluded" feel) — but never the
+   selected row, which must stay fully legible on the accent. */
+.workspace-node--role-generated:not(.is-selected) {
+  opacity: 0.75;
+}
+
+/* Git status overlay on FILE rows (file-icons.md §8: a row-level color
+   composed with the icon, never part of icon resolution). Green for both
+   added and untracked, blue for edited; deleted never reaches a live row. */
+.workspace-node--git-added .workspace-node__name,
+.workspace-node--git-added .workspace-node__icon,
+.workspace-node--git-untracked .workspace-node__name,
+.workspace-node--git-untracked .workspace-node__icon {
+  color: var(--vcs-added);
+}
+.workspace-node--git-modified .workspace-node__name,
+.workspace-node--git-modified .workspace-node__icon {
+  color: var(--vcs-modified);
+}
+
+/* "This subtree has edits" dot on a folder row, after the name. Blue (the
+   modified token): the role class colors the NAME, the dot carries the git
+   signal — two channels, no precedence fight. */
+.workspace-node__vcs-dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--vcs-modified);
+}
+/* ── end semantic roles + git colors ─────────────────────────────────────── */
+
+.workspace-node.is-selected {
+  background: var(--accent);
+  color: #fff;
+}
+.workspace-node__caret {
+  display: inline-flex;
+  color: var(--text-dim);
+  transition: transform 0.1s ease;
+  flex: 0 0 auto;
+}
+.workspace-node__caret.is-open {
+  transform: rotate(90deg);
+}
+.workspace-node__icon {
+  display: inline-flex;
+  color: var(--text-dim);
+  flex: 0 0 auto;
+}
+/* The name is in this white-override list because the role/git rules above
+   color it DIRECTLY (a direct rule beats the row's inherited #fff) — without
+   this line a selected modified file would stay blue. (0,3,0) beats their
+   (0,2,0) regardless of order; order matches anyway. */
+.workspace-node.is-selected .workspace-node__icon,
+.workspace-node.is-selected .workspace-node__caret,
+.workspace-node.is-selected .workspace-node__name {
+  color: #fff;
+}
+.workspace-node__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── row affordances (create / rename / delete / move) ───────────────────── */
+
+/* Hover-revealed action buttons on an entry row (New file/folder on dirs,
+   Rename + Delete on every entry). Hidden until row hover / keyboard focus. */
+.workspace-node__actions {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-left: 4px;
+}
+.workspace-node__action {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+}
+.workspace-node:hover .workspace-node__action,
+.workspace-node:focus-within .workspace-node__action,
+.workspace-node__action:focus-visible {
+  opacity: 1;
+}
+.workspace-node__action:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+.workspace-node__action:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+/* On the selected (accent) row the dim actions must still read. */
+.workspace-node.is-selected .workspace-node__action {
+  color: #fff;
+}
+
+/* A dir row is a drop target for an entry move INTO it — reuse the calm accent
+   ring the root-list drop target uses. */
+.workspace-node--dir.is-drop-target {
+  background: var(--bg-elev);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* The inline create / rename field: a compact input that sits in the row flow. */
+.workspace-node__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 2px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.workspace-node__input:focus-visible {
+  outline: none;
+}
+.workspace-node--create {
+  cursor: default;
+}
+
+/* The inline delete-confirm that swaps the row (no native dialog). */
+.workspace-node--confirm {
+  gap: 6px;
+  cursor: default;
+  color: var(--text);
+}
+.workspace-node__confirm-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-node__confirm-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.workspace-node__confirm-btn + .workspace-node__confirm-btn {
+  margin-left: 0;
+}
+.workspace-node__confirm-btn:hover {
+  border-color: var(--accent);
+}
+.workspace-node__confirm-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.workspace-node__confirm-btn.is-danger {
+  border-color: var(--danger, #e06c75);
+  color: var(--danger, #e06c75);
+}
+.workspace-node__confirm-btn.is-danger:hover {
+  background: var(--danger, #e06c75);
+  color: #fff;
+}

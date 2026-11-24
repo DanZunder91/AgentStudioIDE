@@ -1,0 +1,74 @@
+{
+  "decrypt-passthrough": {
+    "running": true,
+    "port": 51234,
+    "enabled": true,
+    "decrypt": true,
+    "caPath": null,
+    "skippedReason": null,
+    "passthroughHosts": [
+      "localhost"
+    ],
+    "flowCount": 11,
+    "decryptApps": [],
+    "portChanged": null,
+    "strictAgentCapture": true
+  },
+  "default": {
+    "running": true,
+    "port": 51234,
+    "enabled": true,
+    "decrypt": false,
+    "caPath": null,
+    "skippedReason": null,
+    "passthroughHosts": [],
+    "flowCount": 0,
+    "decryptApps": [],
+    "portChanged": null,
+    "strictAgentCapture": true
+  },
+  "port-changed-app-decrypt": {
+    "running": true,
+    "port": 51234,
+    "enabled": true,
+    "decrypt": true,
+    "caPath": "/cfg/netcap/ca.pem",
+    "skippedReason": null,
+    "passthroughHosts": [],
+    "flowCount": 0,
+    "decryptApps": [
+      "Postman"
+    ],
+    "portChanged": {
+      "from": 8877,
+      "to": 51234
+    },
+    "strictAgentCapture": true
+  },
+  "skipped-with-ca": {
+    "running": true,
+    "port": 51234,
+    "enabled": true,
+    "decrypt": false,
+    "caPath": "/cfg/netcap/ca.pem",
+    "skippedReason": "HTTPS_PROXY already set in your environment",
+    "passthroughHosts": [],
+    "flowCount": 0,
+    "decryptApps": [],
+    "portChanged": null,
+    "strictAgentCapture": true
+  },
+  "stopped": {
+    "running": false,
+    "port": null,
+    "enabled": true,
+    "decrypt": false,
+    "caPath": null,
+    "skippedReason": null,
+    "passthroughHosts": [],
+    "flowCount": 0,
+    "decryptApps": [],
+    "portChanged": null,
+    "strictAgentCapture": true
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "tearoff",
+  "description": "Capability for torn-off tab windows (docs/design/tab-tearoff.md). core:default only: event listen/emit (the mailbox doorbell, agent telemetry, Cmd+W) and the read-only window queries a drag hit-test needs (cursor/outer position, outer size, scale factor, primary monitor). No dialog, and no window mutation from the page — opening, focusing and closing windows go through the app's own tearoff_* commands in Rust. Local content only: no remote URLs are granted anything.",
+  "windows": ["tearoff-*"],
+  "permissions": ["core:default"]
+}

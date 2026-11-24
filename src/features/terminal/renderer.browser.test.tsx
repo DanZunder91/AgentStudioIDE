@@ -1,0 +1,306 @@
+/**
+ * Layer 5 (testing-strategy §1, §7.5) — the renderer degrade path: WebGL -> DOM.
+ *
+ * ## Why this file exists
+ *
+ * §7.5 names two tests that had no home in the repo:
+ *   - `renderer_falls_back_webgl_to_dom` — "Feature detection needs a real WebGL
+ *     context."
+ *   - `dispose_releases_instance` — "No leak in `TerminalRegistry` across
+ *     open/close cycles."
+ * This is the file that closes that gap, and it also pins the two adjacent
+ * decisions renderer.ts owns: the `setRendererPreference` override and the
+ * WebGL-context-loss self-heal.
+ *
+ * ## Why it must be the browser tier (and not jsdom)
+ *
+ * `renderer.ts`'s `webgl2Available()` probe is a *real* `canvas.getContext(
+ * "webgl2")` call. jsdom has no canvas and no WebGL, so the probe there is
+ * always null and the "WebGL is available -> pick WebGL" branch is unreachable —
+ * every assertion about it would be vacuously green. Only real Chromium reports
+ * a real WebGL2 context, so only here can the webgl branch even be entered. That
+ * is exactly §7.5's rationale.
+ *
+ * ## The seams, stated up front (so no assertion is accidentally vacuous)
+ *
+ *  1. **Feature detection** — `webgl2Available()` calls
+ *     `HTMLCanvasElement.prototype.getContext("webgl2")`. We toggle availability
+ *     by surgically stubbing that method to return `null` for GL context types
+ *     only (delegating "2d" etc. to the real implementation). This is the exact
+ *     input the real probe reads — not a mock of the probe.
+ *  2. **The addon boundary** — `renderer.ts` does `await import(
+ *     "@xterm/addon-webgl")` then `new WebglAddon()` + `term.loadAddon(gl)`, and
+ *     registers `gl.onContextLoss(...)`. `@xterm/addon-webgl` is third-party
+ *     (anti-pattern #1: we do not test xterm's addons — we test *our decision to
+ *     mount/dispose one*). So the addon is replaced with a faithful fake that
+ *     records `activate`/`dispose`/`onContextLoss`, letting us observe *which
+ *     renderer renderer.ts actually mounted and disposed* — the real decision,
+ *     which is what the test bar requires. The WebGL2 probe stays real.
+ *
+ * A regression in renderer.ts's decision logic flips one of these observations:
+ * choose-dom-when-webgl-available, choose-webgl-when-unavailable, fail-to-
+ * dispose, or ignore-the-preference all turn a green assertion red here.
+ */
+
+import { Terminal } from "@xterm/xterm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  getRendererPreference,
+  mountRenderer,
+  setRendererPreference,
+} from "./renderer";
+
+/* ── The fake addon: hoisted so `vi.mock`'s factory can see it ── */
+const glMock = vi.hoisted(() => {
+  interface FakeInstance {
+    activated: boolean;
+    disposed: boolean;
+    contextLossCb: (() => void) | null;
+  }
+  const instances: FakeInstance[] = [];
+  const state = { activateThrows: false };
+
+  class FakeWebglAddon implements FakeInstance {
+    activated = false;
+    disposed = false;
+    contextLossCb: (() => void) | null = null;
+    constructor() {
+      instances.push(this);
+    }
+    // xterm's AddonManager calls activate() synchronously from loadAddon(); a
+    // throw here is exactly how a real un-creatable GL context surfaces.
+    activate(): void {
+      if (state.activateThrows) throw new Error("simulated WebGL context failure");
+      this.activated = true;
+    }
+    onContextLoss(cb: () => void): void {
+      this.contextLossCb = cb;
+    }
+    dispose(): void {
+      this.disposed = true;
+    }
+  }
+  return { instances, state, FakeWebglAddon };
+});
+
+vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: glMock.FakeWebglAddon }));
+
+/* ── The feature-detection seam: real getContext, toggled per test ── */
+const realGetContext = HTMLCanvasElement.prototype.getContext;
+
+/** Make `webgl2Available()` see no GL context — the real probe's null branch. */
+function forceWebglUnavailable(): void {
+  HTMLCanvasElement.prototype.getContext = function (
+    this: HTMLCanvasElement,
+    type: string,
+    ...args: unknown[]
+  ) {
+    if (type === "webgl2" || type === "webgl" || type === "experimental-webgl") {
+      return null;
+    }
+    // Delegate everything else (2d, bitmaprenderer, …) to the real engine.
+    return (realGetContext as (...a: unknown[]) => unknown).call(this, type, ...args);
+  } as typeof HTMLCanvasElement.prototype.getContext;
+}
+
+/** Run the real probe against real Chromium — used to prove availability. */
+function realWebgl2Available(): boolean {
+  const canvas = document.createElement("canvas");
+  const gl = canvas.getContext("webgl2");
+  const available = gl !== null;
+  (gl as WebGL2RenderingContext | null)
+    ?.getExtension("WEBGL_lose_context")
+    ?.loseContext();
+  return available;
+}
+
+/**
+ * Poll until `pred()` holds or a deadline passes. renderer.ts loads the addon
+ * via a lazy `await import()`, and the *first* such import in the suite pays a
+ * one-time module-load cost longer than a couple of microtasks — a fixed flush
+ * is racy, polling is not. Returns without asserting; the caller asserts the
+ * final state so a timeout surfaces as a precise, legible failure.
+ */
+async function waitFor(pred: () => boolean, timeoutMs = 3000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    if (pred()) return;
+    await new Promise<void>((r) => setTimeout(r, 5));
+  }
+}
+
+/** Let the lazy import settle for the negative case (kind must STAY dom). */
+async function settle(): Promise<void> {
+  await waitFor(() => false, 60);
+}
+
+describe("terminal renderer — WebGL selection and the DOM degrade path", () => {
+  const hosts: HTMLElement[] = [];
+
+  /** A real, opened xterm terminal in a real host — as TerminalRegistry does. */
+  function openTerminal(): Terminal {
+    const host = document.createElement("div");
+    host.style.width = "400px";
+    host.style.height = "200px";
+    document.body.appendChild(host);
+    hosts.push(host);
+    const term = new Terminal({ allowProposedApi: true });
+    term.open(host);
+    return term;
+  }
+
+  beforeEach(() => {
+    glMock.instances.length = 0;
+    glMock.state.activateThrows = false;
+    setRendererPreference("auto");
+  });
+
+  afterEach(() => {
+    HTMLCanvasElement.prototype.getContext = realGetContext;
+    setRendererPreference("auto");
+    for (const h of hosts.splice(0)) h.remove();
+  });
+
+  // A canary, not a feature test: every "WebGL is available" branch below is
+  // premised on real Chromium actually giving us GL. If this line goes red, the
+  // failures beneath it are environmental, not renderer.ts regressions.
+  it("(premise) real Chromium exposes a WebGL2 context", () => {
+    expect(realWebgl2Available()).toBe(true);
+  });
+
+  it("auto + WebGL available → mounts the WebGL renderer", async () => {
+    expect(realWebgl2Available()).toBe(true); // premise, made local & explicit
+    expect(getRendererPreference()).toBe("auto");
+
+    const handle = mountRenderer(openTerminal());
+    await waitFor(() => handle.kind === "webgl");
+
+    // The decision renderer.ts made: it constructed and activated exactly one
+    // WebGL addon, and reports the webgl kind.
+    expect(handle.kind).toBe("webgl");
+    expect(glMock.instances).toHaveLength(1);
+    expect(glMock.instances[0].activated).toBe(true);
+  });
+
+  it("auto + WebGL2 probe returns null → falls back to the DOM renderer (no throw)", async () => {
+    forceWebglUnavailable();
+    expect(realWebgl2Available()).toBe(false); // the probe now reports unavailable
+
+    // mountRenderer itself must never throw — the whole point of the degrade path.
+    const handle = mountRenderer(openTerminal());
+    await settle();
+
+    expect(handle.kind).toBe("dom");
+    // resolveKind() short-circuits to dom, so the addon is never even imported.
+    expect(glMock.instances).toHaveLength(0);
+  });
+
+  it("addon activation throws → falls back to DOM and disposes the dead addon", async () => {
+    // A distinct branch from the probe-null case: here the probe says "yes",
+    // renderer.ts commits to WebGL, and the *addon* fails on loadAddon()
+    // (real-world: the GL context can't actually be created). renderer.ts must
+    // catch, dispose the half-built addon, and land on DOM.
+    expect(realWebgl2Available()).toBe(true);
+    glMock.state.activateThrows = true;
+
+    const handle = mountRenderer(openTerminal());
+    await waitFor(() => glMock.instances[0]?.disposed === true);
+
+    expect(handle.kind).toBe("dom");
+    expect(glMock.instances).toHaveLength(1); // it was constructed…
+    expect(glMock.instances[0].activated).toBe(false); // …activate threw…
+    expect(glMock.instances[0].disposed).toBe(true); // …and the catch disposed it.
+  });
+
+  it("setRendererPreference('dom') is honored even when WebGL IS available", async () => {
+    // Non-vacuous: prove WebGL really is available first, so a dom result can
+    // only be the override winning — not an absent GL context.
+    expect(realWebgl2Available()).toBe(true);
+    setRendererPreference("dom");
+    expect(getRendererPreference()).toBe("dom");
+
+    const handle = mountRenderer(openTerminal());
+    await settle();
+
+    expect(handle.kind).toBe("dom");
+    // Forced DOM must not even attempt to construct a WebGL addon.
+    expect(glMock.instances).toHaveLength(0);
+  });
+
+  it("setRendererPreference('webgl') bypasses the probe (mounts WebGL despite an unavailable probe)", async () => {
+    // The strong form of "override honored": make the probe say NO, then force
+    // WebGL. Under 'auto' this would be DOM; the forced kind proves the override
+    // skips feature detection entirely.
+    forceWebglUnavailable();
+    expect(realWebgl2Available()).toBe(false);
+    setRendererPreference("webgl");
+
+    const handle = mountRenderer(openTerminal());
+    await waitFor(() => handle.kind === "webgl");
+
+    expect(handle.kind).toBe("webgl");
+    expect(glMock.instances).toHaveLength(1);
+    expect(glMock.instances[0].activated).toBe(true);
+  });
+
+  it("self-heals on WebGL context loss: degrades to DOM and disposes the addon", async () => {
+    const handle = mountRenderer(openTerminal());
+    await waitFor(() => handle.kind === "webgl");
+
+    // Precondition: we are actually on WebGL, with a context-loss handler wired.
+    expect(handle.kind).toBe("webgl");
+    const addon = glMock.instances[0];
+    expect(addon.contextLossCb).toBeTypeOf("function");
+    expect(addon.disposed).toBe(false);
+
+    // Drive the seam renderer.ts owns: xterm translates a real `webglcontextlost`
+    // DOM event into this callback (after a ~3s grace that is xterm's, not ours),
+    // so invoking it directly is the faithful, deterministic simulation.
+    addon.contextLossCb!();
+
+    expect(handle.kind).toBe("dom"); // degraded, permanently
+    expect(addon.disposed).toBe(true); // the dead GL addon was released
+  });
+
+  it("dispose releases the addon instance, and a second mount works", async () => {
+    const first = mountRenderer(openTerminal());
+    await waitFor(() => first.kind === "webgl");
+    expect(first.kind).toBe("webgl");
+    const firstAddon = glMock.instances[0];
+    expect(firstAddon.disposed).toBe(false);
+
+    first.dispose();
+
+    // The instance is released — this is the leak §7.5's `dispose_releases_instance`
+    // guards against across TerminalRegistry open/close cycles.
+    expect(firstAddon.disposed).toBe(true);
+
+    // A fresh mount is unaffected by the disposed one: distinct instance, live.
+    const second = mountRenderer(openTerminal());
+    await waitFor(() => second.kind === "webgl");
+    expect(second.kind).toBe("webgl");
+    expect(glMock.instances).toHaveLength(2);
+    expect(glMock.instances[1]).not.toBe(firstAddon);
+    expect(glMock.instances[1].activated).toBe(true);
+    expect(glMock.instances[1].disposed).toBe(false);
+
+    second.dispose();
+    expect(glMock.instances[1].disposed).toBe(true);
+  });
+
+  it("dispose during the async addon load never mounts a leaked addon", async () => {
+    // dispose() can land before the lazy `await import()` resolves. renderer.ts's
+    // `if (disposed) return` guards must ensure we neither mount nor leak.
+    const handle = mountRenderer(openTerminal());
+    handle.dispose(); // synchronous, before the lazy import can resolve
+    await settle();
+
+    expect(handle.kind).toBe("dom");
+    // Either the addon was never constructed, or if it was, it was disposed —
+    // never left live.
+    for (const inst of glMock.instances) {
+      expect(inst.activated && !inst.disposed).toBe(false);
+    }
+  });
+});

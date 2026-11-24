@@ -1,0 +1,700 @@
+{
+  "grpc-trailers": {
+    "summary": {
+      "id": 8,
+      "startedMs": 1790251207000,
+      "proto": "grpc",
+      "method": "POST",
+      "host": "localhost",
+      "port": 8443,
+      "path": "/pkg.Greeter/SayHello",
+      "status": 200,
+      "grpcStatus": 3,
+      "contentType": "application/grpc",
+      "reqBytes": 8,
+      "resBytes": 7,
+      "durationMs": 88,
+      "state": "done",
+      "error": null,
+      "terminalId": "term-agent",
+      "httpVersion": "HTTP/2",
+      "wsMessages": null,
+      "client": {
+        "pid": 4242,
+        "name": "claude",
+        "path": "/Users/dev/.local/share/claude/versions/2.1.0"
+      },
+      "note": null
+    },
+    "requestHeaders": [
+      [
+        "content-type",
+        "application/grpc"
+      ],
+      [
+        "te",
+        "trailers"
+      ],
+      [
+        "content-length",
+        "8"
+      ]
+    ],
+    "responseHeaders": [
+      [
+        "content-type",
+        "application/grpc"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 12:00:00 GMT"
+      ]
+    ],
+    "responseTrailers": [
+      [
+        "grpc-status",
+        "3"
+      ],
+      [
+        "grpc-message",
+        "bad name"
+      ]
+    ],
+    "requestBody": {
+      "size": 8,
+      "truncated": false,
+      "text": "\u0000\u0000\u0000\u0000\u0003\n\u0001x",
+      "base64": null
+    },
+    "responseBody": {
+      "size": 7,
+      "truncated": false,
+      "text": "\u0000\u0000\u0000\u0000\u0002\b\u0001",
+      "base64": null
+    }
+  },
+  "http-binary-base64": {
+    "summary": {
+      "id": 2,
+      "startedMs": 1790251201000,
+      "proto": "http",
+      "method": "POST",
+      "host": "127.0.0.1",
+      "port": 8080,
+      "path": "/binary",
+      "status": 200,
+      "grpcStatus": null,
+      "contentType": "application/octet-stream",
+      "reqBytes": 6,
+      "resBytes": 6,
+      "durationMs": 45,
+      "state": "done",
+      "error": null,
+      "terminalId": "term-agent",
+      "httpVersion": "HTTP/1.1",
+      "wsMessages": null,
+      "client": {
+        "pid": 4242,
+        "name": "claude",
+        "path": "/Users/dev/.local/share/claude/versions/2.1.0"
+      },
+      "note": null
+    },
+    "requestHeaders": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "proxy-authorization",
+        "Basic dC10ZXJtLWFnZW50Ong="
+      ],
+      [
+        "accept-encoding",
+        "gzip,deflate,br"
+      ],
+      [
+        "host",
+        "127.0.0.1:8080"
+      ],
+      [
+        "content-length",
+        "6"
+      ]
+    ],
+    "responseHeaders": [
+      [
+        "content-type",
+        "application/octet-stream"
+      ],
+      [
+        "content-length",
+        "6"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 12:00:00 GMT"
+      ]
+    ],
+    "responseTrailers": [],
+    "requestBody": {
+      "size": 6,
+      "truncated": false,
+      "text": null,
+      "base64": "//4AAYB/"
+    },
+    "responseBody": {
+      "size": 6,
+      "truncated": false,
+      "text": null,
+      "base64": "//4AAYB/"
+    }
+  },
+  "http-json-gzip-credentials": {
+    "summary": {
+      "id": 1,
+      "startedMs": 1790251200000,
+      "proto": "http",
+      "method": "POST",
+      "host": "127.0.0.1",
+      "port": 8080,
+      "path": "/api/v1/items?x=1",
+      "status": 201,
+      "grpcStatus": null,
+      "contentType": "application/json",
+      "reqBytes": 4,
+      "resBytes": 45,
+      "durationMs": 120,
+      "state": "done",
+      "error": null,
+      "terminalId": "term-agent",
+      "httpVersion": "HTTP/1.1",
+      "wsMessages": null,
+      "client": {
+        "pid": 4242,
+        "name": "claude",
+        "path": "/Users/dev/.local/share/claude/versions/2.1.0"
+      },
+      "note": null
+    },
+    "requestHeaders": [
+      [
+        "authorization",
+        "Bearer sk-live-SECRET"
+      ],
+      [
+        "content-type",
+        "text/plain"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "proxy-authorization",
+        "Basic dC10ZXJtLWFnZW50Ong="
+      ],
+      [
+        "accept-encoding",
+        "gzip,deflate,br"
+      ],
+      [
+        "host",
+        "127.0.0.1:8080"
+      ],
+      [
+        "content-length",
+        "4"
+      ]
+    ],
+    "responseHeaders": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "set-cookie",
+        "session=COOKIE-SECRET"
+      ],
+      [
+        "content-length",
+        "45"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 12:00:00 GMT"
+      ]
+    ],
+    "responseTrailers": [],
+    "requestBody": {
+      "size": 4,
+      "truncated": false,
+      "text": "ping",
+      "base64": null
+    },
+    "responseBody": {
+      "size": 45,
+      "truncated": false,
+      "text": "{\"ok\":true,\"items\":[1,2]}",
+      "base64": null
+    }
+  },
+  "http-truncated-request": {
+    "summary": {
+      "id": 3,
+      "startedMs": 1790251202000,
+      "proto": "http",
+      "method": "POST",
+      "host": "127.0.0.1",
+      "port": 8080,
+      "path": "/upload",
+      "status": 413,
+      "grpcStatus": null,
+      "contentType": "text/plain; charset=utf-8",
+      "reqBytes": 1048586,
+      "resBytes": 33,
+      "durationMs": 980,
+      "state": "done",
+      "error": null,
+      "terminalId": "term-shell",
+      "httpVersion": "HTTP/1.1",
+      "wsMessages": null,
+      "client": {
+        "pid": 5151,
+        "name": "curl",
+        "path": "/usr/bin/curl"
+      },
+      "note": null
+    },
+    "requestHeaders": [
+      [
+        "content-type",
+        "text/plain"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "proxy-authorization",
+        "Basic dC10ZXJtLXNoZWxsOng="
+      ],
+      [
+        "accept-encoding",
+        "gzip,deflate,br"
+      ],
+      [
+        "host",
+        "127.0.0.1:8080"
+      ],
+      [
+        "content-length",
+        "1048586"
+      ]
+    ],
+    "responseHeaders": [
+      [
+        "content-type",
+        "text/plain; charset=utf-8"
+      ],
+      [
+        "content-length",
+        "33"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 12:00:00 GMT"
+      ]
+    ],
+    "responseTrailers": [],
+    "requestBody": {
+      "size": 1048586,
+      "truncated": true,
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "base64": null
+    },
+    "responseBody": {
+      "size": 33,
+      "truncated": false,
+      "text": "payload too large (1048586 bytes)",
+      "base64": null
+    }
+  },
+  "https-decrypted-json": {
+    "summary": {
+      "id": 7,
+      "startedMs": 1790251206000,
+      "proto": "https",
+      "method": "POST",
+      "host": "localhost",
+      "port": 8443,
+      "path": "/v1/messages",
+      "status": 200,
+      "grpcStatus": null,
+      "contentType": "application/json",
+      "reqBytes": 80,
+      "resBytes": 97,
+      "durationMs": 640,
+      "state": "done",
+      "error": null,
+      "terminalId": "term-agent",
+      "httpVersion": "HTTP/1.1",
+      "wsMessages": null,
+      "client": {
+        "pid": 4242,
+        "name": "claude",
+        "path": "/Users/dev/.local/share/claude/versions/2.1.0"
+      },
+      "note": null
+    },
+    "requestHeaders": [
+      [
+        "x-api-key",
+        "sk-ant-SECRET-KEY"
+      ],
+      [
+        "anthropic-version",
+        "2023-06-01"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "accept-encoding",
+        "gzip,deflate,br"
+      ],
+      [
+        "host",
+        "localhost:8443"
+      ],
+      [
+        "content-length",
+        "80"
+      ]
+    ],
+    "responseHeaders": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "content-length",
+        "97"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 12:00:00 GMT"
+      ]
+    ],
+    "responseTrailers": [],
+    "requestBody": {
+      "size": 80,
+      "truncated": false,
+      "text": "{\"model\":\"claude-x\",\"max_tokens\":16,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}",
+      "base64": null
+    },
+    "responseBody": {
+      "size": 97,
+      "truncated": false,
+      "text": "{\"id\":\"msg_01\",\"type\":\"message\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"stop_reason\":\"end_turn\"}",
+      "base64": null
+    }
+  },
+  "ide-api-client": {
+    "summary": {
+      "id": 11,
+      "startedMs": 1790251210000,
+      "proto": "http",
+      "method": "POST",
+      "host": "127.0.0.1",
+      "port": 8080,
+      "path": "/v1/messages",
+      "status": 200,
+      "grpcStatus": null,
+      "contentType": "application/json",
+      "reqBytes": 36,
+      "resBytes": 97,
+      "durationMs": 310,
+      "state": "done",
+      "error": null,
+      "terminalId": "ide-api-client",
+      "httpVersion": "HTTP/1.1",
+      "wsMessages": null,
+      "client": {
+        "pid": 3131,
+        "name": "Agent Studio",
+        "path": "/Applications/Agent Studio.app/Contents/MacOS/agent-studio-scaffold"
+      },
+      "note": null
+    },
+    "requestHeaders": [
+      [
+        "x-api-key",
+        "sk-ant-SECRET-KEY"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "accept-encoding",
+        "gzip,deflate,br"
+      ],
+      [
+        "host",
+        "127.0.0.1:8080"
+      ],
+      [
+        "content-length",
+        "36"
+      ]
+    ],
+    "responseHeaders": [
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "content-length",
+        "97"
+      ],
+      [
+        "date",
+        "Thu, 24 Sep 2026 12:00:00 GMT"
+      ]
+    ],
+    "responseTrailers": [],
+    "requestBody": {
+      "size": 36,
+      "truncated": false,
+      "text": "{\"model\":\"claude-x\",\"max_tokens\":16}",
+      "base64": null
+    },
+    "responseBody": {
+      "size": 97,
+      "truncated": false,
+      "text": "{\"id\":\"msg_01\",\"type\":\"message\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"stop_reason\":\"end_turn\"}",
+      "base64": null
+    }
+  },
+  "tls-rejected": {
+    "summary": {
+      "id": 9,
+      "startedMs": 1790251208000,
+      "proto": "https",
+      "method": "CONNECT",
+      "host": "localhost",
+      "port": 8443,
+      "path": "",
+      "status": null,
+      "grpcStatus": null,
+      "contentType": null,
+      "reqBytes": 0,
+      "resBytes": 0,
+      "durationMs": 12,
+      "state": "error",
+      "error": "tls rejected → passthrough",
+      "terminalId": "term-shell",
+      "httpVersion": "",
+      "wsMessages": null,
+      "client": {
+        "pid": 5151,
+        "name": "curl",
+        "path": "/usr/bin/curl"
+      },
+      "note": null
+    },
+    "requestHeaders": [],
+    "responseHeaders": [],
+    "responseTrailers": [],
+    "requestBody": null,
+    "responseBody": null
+  },
+  "tunnel": {
+    "summary": {
+      "id": 5,
+      "startedMs": 1790251204000,
+      "proto": "tunnel",
+      "method": "CONNECT",
+      "host": "localhost",
+      "port": 8443,
+      "path": "",
+      "status": null,
+      "grpcStatus": null,
+      "contentType": null,
+      "reqBytes": 2048,
+      "resBytes": 6144,
+      "durationMs": 1500,
+      "state": "done",
+      "error": null,
+      "terminalId": "term-shell",
+      "httpVersion": "",
+      "wsMessages": null,
+      "client": {
+        "pid": 6161,
+        "name": "gazelle",
+        "path": "/Users/dev/gazelle/target/debug/gazelle"
+      },
+      "note": null
+    },
+    "requestHeaders": [],
+    "responseHeaders": [],
+    "responseTrailers": [],
+    "requestBody": null,
+    "responseBody": null
+  },
+  "tunnel-not-decrypted": {
+    "summary": {
+      "id": 10,
+      "startedMs": 1790251209000,
+      "proto": "tunnel",
+      "method": "CONNECT",
+      "host": "localhost",
+      "port": 8443,
+      "path": "",
+      "status": null,
+      "grpcStatus": null,
+      "contentType": null,
+      "reqBytes": 2048,
+      "resBytes": 6144,
+      "durationMs": 1100,
+      "state": "done",
+      "error": null,
+      "terminalId": "term-shell",
+      "httpVersion": "",
+      "wsMessages": null,
+      "client": {
+        "pid": 6161,
+        "name": "gazelle",
+        "path": "/Users/dev/gazelle/target/debug/gazelle"
+      },
+      "note": "not decrypted: gazelle doesn't read the IDE's CA"
+    },
+    "requestHeaders": [],
+    "responseHeaders": [],
+    "responseTrailers": [],
+    "requestBody": null,
+    "responseBody": null
+  },
+  "upstream-refused": {
+    "summary": {
+      "id": 6,
+      "startedMs": 1790251205000,
+      "proto": "tunnel",
+      "method": "CONNECT",
+      "host": "127.0.0.1",
+      "port": 9,
+      "path": "",
+      "status": null,
+      "grpcStatus": null,
+      "contentType": null,
+      "reqBytes": 0,
+      "resBytes": 0,
+      "durationMs": 3,
+      "state": "error",
+      "error": "upstream: Connection refused (os error N)",
+      "terminalId": null,
+      "httpVersion": "",
+      "wsMessages": null,
+      "client": null,
+      "note": null
+    },
+    "requestHeaders": [],
+    "responseHeaders": [],
+    "responseTrailers": [],
+    "requestBody": null,
+    "responseBody": null
+  },
+  "ws-echo": {
+    "summary": {
+      "id": 4,
+      "startedMs": 1790251203000,
+      "proto": "ws",
+      "method": "GET",
+      "host": "127.0.0.1",
+      "port": 8081,
+      "path": "/chat",
+      "status": 101,
+      "grpcStatus": null,
+      "contentType": null,
+      "reqBytes": 30,
+      "resBytes": 14,
+      "durationMs": 5200,
+      "state": "done",
+      "error": null,
+      "terminalId": "term-agent",
+      "httpVersion": "HTTP/1.1",
+      "wsMessages": {
+        "up": 3,
+        "down": 3
+      },
+      "client": {
+        "pid": 4242,
+        "name": "claude",
+        "path": "/Users/dev/.local/share/claude/versions/2.1.0"
+      },
+      "note": null
+    },
+    "requestHeaders": [
+      [
+        "host",
+        "127.0.0.1:8081"
+      ],
+      [
+        "upgrade",
+        "websocket"
+      ],
+      [
+        "connection",
+        "Upgrade"
+      ],
+      [
+        "sec-websocket-key",
+        "dGhlIHNhbXBsZSBub25jZQ=="
+      ],
+      [
+        "sec-websocket-version",
+        "13"
+      ],
+      [
+        "proxy-authorization",
+        "Basic dC10ZXJtLWFnZW50Ong="
+      ]
+    ],
+    "responseHeaders": [
+      [
+        "connection",
+        "Upgrade"
+      ],
+      [
+        "upgrade",
+        "websocket"
+      ],
+      [
+        "sec-websocket-accept",
+        "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+      ]
+    ],
+    "responseTrailers": [],
+    "requestBody": {
+      "size": 0,
+      "truncated": false,
+      "text": null,
+      "base64": null
+    },
+    "responseBody": null
+  }
+}

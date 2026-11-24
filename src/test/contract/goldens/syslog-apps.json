@@ -1,0 +1,60 @@
+[
+  {
+    "name": "Mail",
+    "pids": [
+      640
+    ],
+    "path": "/System/Applications/Mail.app/Contents/MacOS/Mail",
+    "isApp": true
+  },
+  {
+    "name": "Safari",
+    "pids": [
+      501,
+      502
+    ],
+    "path": "/Applications/Safari.app/Contents/MacOS/Safari",
+    "isApp": true
+  },
+  {
+    "name": "Xcode",
+    "pids": [
+      733
+    ],
+    "path": "/Applications/Xcode.app/Contents/MacOS/Xcode",
+    "isApp": true
+  },
+  {
+    "name": "bash",
+    "pids": [
+      15
+    ],
+    "path": "/bin/bash",
+    "isApp": false
+  },
+  {
+    "name": "exampled",
+    "pids": [
+      407
+    ],
+    "path": "/usr/libexec/exampled",
+    "isApp": false
+  },
+  {
+    "name": "launchd_sim",
+    "pids": [
+      9001
+    ],
+    "path": null,
+    "isApp": false
+  },
+  {
+    "name": "zsh",
+    "pids": [
+      811,
+      812
+    ],
+    "path": "/bin/zsh",
+    "isApp": false
+  }
+]

@@ -1,0 +1,260 @@
+/* ── Usage limits — the left rail's status strip ─────────────────────────────
+   A distilled version of Claude Code's own "Your usage limits" dialog: one row
+   per window, the label on the left, a colour-coded "N% used" chip on the right,
+   and the reset time revealed on hover/focus. **No progress bars** — the number
+   IS the signal.
+
+   Lives above the AGENTS list, so everything here is sized to read as chrome,
+   not as a dialog: 10–11px type, 20px rows, one hairline rule at the bottom.
+   Every horizontal box is `min-width: 0` + ellipsis: the rail is ~260px, is
+   user-resizable, and clips (`overflow-x: hidden`) — nothing in here may be able
+   to force a horizontal scrollbar. */
+
+/* ── the tone ramp ──────────────────────────────────────────────────────────
+   The single place the three bands' colours are defined (usageTone() picks the
+   band; CSS picks the paint). Overriding these three pairs re-themes the panel.
+
+   Chosen for a red-green colourblind reader, not just for hue. The app's own
+   trio (--green #3fb950, #d29922, #f85149) is unusable here: measured on the
+   rail (#161b22) its green sits at L* 66.8 and its amber at L* 67.0 — IDENTICAL
+   lightness, so under deuteranopia they collapse into one khaki. These three
+   move lightness monotonically with severity instead:
+
+     tone     hex        L*     contrast on --bg-elev (the chip's fill)
+     ok       #2ea043    58.2   4.80:1   (WCAG AA)
+     warn     #dea82c    72.0   7.51:1
+     danger   #ffb3ab    79.9   9.47:1
+
+   Simulated (Machado 2009, severity 1.0) the ordering survives intact —
+   deuteranopia: L* 52.2 / 73.7 / 80.6; protanopia: 58.2 / 68.4 / 75.9. So the
+   band is readable from lightness alone. The chip's font-weight (500/600/700)
+   and size (10/10.5/11px) ramp with it as a third, non-colour channel. */
+:root {
+  --usage-ok: #2ea043;
+  --usage-warn: #dea82c;
+  --usage-danger: #ffb3ab;
+  --usage-ok-border: rgba(46, 160, 67, 0.45);
+  --usage-warn-border: rgba(222, 168, 44, 0.45);
+  --usage-danger-border: rgba(255, 179, 171, 0.45);
+}
+
+/* The rail's FOOTER (an earlier build had it
+   at the top, hence the `border-top`: the rule separates the strip from the agent
+   list ABOVE it, not from content below, and there is none below).
+
+   `margin-top: auto` is belt-and-braces. The strip already lands at the bottom
+   because `.fleet-tree`/`.fleet-empty` take the column's slack (`flex: 1 1 auto`
+   in fleet.css), but that makes the footer's position depend on a SIBLING's
+   growth: the day the rail grows a third child that doesn't grow, the strip would
+   quietly float up mid-rail. Declaring it here makes the intent local and
+   independent, and `usageFooter.browser.test.tsx` measures the result in real
+   pixels (jsdom has no layout engine, so it cannot). */
+.usage {
+  margin-top: auto;
+  flex: 0 0 auto;
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+}
+
+/* ── header: "USAGE" · freshness/staleness · refresh ─────────────────────── */
+.usage__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 20px;
+}
+.usage__title {
+  flex: 0 0 auto;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+/* Both freshness markers share the flexible middle slot, right-aligned against
+   the button, and both ellipsize rather than push the button off the rail. */
+.usage__updated,
+.usage__stale {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.usage__updated {
+  opacity: 0.75;
+}
+/* The stale marker is deliberately colourless — a failed refresh over good data
+   is not an error state, it is an "unverified" state. The dashed underline is
+   the same "not live" idiom the chips take on below. */
+.usage__stale {
+  flex: 0 0 auto;
+  border-bottom: 1px dashed currentcolor;
+  line-height: 1.2;
+  cursor: default;
+}
+
+/* Same idiom as the rail's other header actions (`.rail__action`), restated here
+   so this feature owns its own paint. */
+.usage__refresh {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.usage__refresh:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-elev);
+}
+.usage__refresh:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.usage__refresh:disabled {
+  cursor: progress;
+}
+.usage__refresh--busy svg {
+  animation: usage-spin 900ms linear infinite;
+}
+
+/* ── the rows ───────────────────────────────────────────────────────────── */
+.usage__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+/* `position: relative` anchors the reset tooltip to its own row. */
+.usage__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 18px;
+}
+.usage__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.usage__chip {
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: default;
+}
+.usage__chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.usage__chip[data-tone="ok"] {
+  color: var(--usage-ok);
+  border-color: var(--usage-ok-border);
+  font-size: 10px;
+  font-weight: 500;
+}
+.usage__chip[data-tone="warn"] {
+  color: var(--usage-warn);
+  border-color: var(--usage-warn-border);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.usage__chip[data-tone="danger"] {
+  color: var(--usage-danger);
+  border-color: var(--usage-danger-border);
+  font-size: 11px;
+  font-weight: 700;
+}
+/* Numbers we could not re-verify: dashed, so "stale" is legible without dimming
+   the text (an opacity fade would push the ok tone under 4.5:1). */
+.usage--stale .usage__chip {
+  border-style: dashed;
+}
+
+/* ── the reset tooltip ──────────────────────────────────────────────────────
+   A styled popover rather than `title=""`: no 1–2s browser delay, and it can be
+   linked to the chip with aria-describedby. `pointer-events: none` keeps it from
+   ever sitting under the cursor and flickering the hover it depends on. It is
+   right-anchored and clamped to the row so it cannot widen the rail. */
+.usage__tip {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* ── the two data-free states ───────────────────────────────────────────────
+   Never a zero, never a fake number: either a breathing placeholder or one
+   short, true sentence. Both wrap (no `nowrap`) so a long sentence grows
+   downward, never sideways. */
+.usage__placeholder,
+.usage__error {
+  margin: 5px 0 1px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.usage__placeholder {
+  animation: usage-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes usage-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes usage-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .usage__refresh--busy svg,
+  .usage__placeholder {
+    animation: none;
+  }
+}

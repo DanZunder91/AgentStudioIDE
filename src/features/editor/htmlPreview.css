@@ -1,0 +1,154 @@
+/* ── Rendered HTML preview ──────────────────────────────────────
+ *
+ * The chrome only. Everything below the bar is the previewed document, which
+ * lives in a cross-origin iframe and styles itself — not one rule here can
+ * reach inside it, which is exactly the point (see HtmlPreview.tsx's header).
+ *
+ * Palette: the shared cockpit tokens from App.css (--bg-app, --bg-surface,
+ * --bg-elev, --text, --text-dim, --border, --accent, --mono), each with the
+ * same self-contained fallback markdownPreview.css uses, so the chrome stays
+ * legible if it is ever rendered outside those variables. No hard-coded palette.
+ *
+ * Deliberately quiet: this bar sits directly under `.code-editor__bar`, and two
+ * loud strips stacked on top of a page is worse chrome than one. It borrows the
+ * editor bar's exact metrics (4px/10px padding, 11px text, 1px --border rule)
+ * so the two read as one header rather than as a header plus a warning.
+ */
+.html-preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-app, #0d1117);
+}
+
+/* ── The one quiet line of chrome ─────────────────────────────────────────── */
+.html-preview__bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border, #21262d);
+  background: var(--bg-surface, #161b22);
+  color: var(--text-dim, #8b949e);
+  font-size: 11px;
+}
+
+/* The limitations note. A <button> because it toggles the details — and a
+   button inherits neither font nor colour and brings its own chrome, so all of
+   it is reset (same treatment as `.rail__tab` in App.css). */
+.html-preview__note {
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 1px 0;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.html-preview__note:hover,
+.html-preview__note[aria-expanded="true"] {
+  color: var(--text, #c9d1d9);
+}
+
+/* A hairline ⓘ drawn from currentColor, so it dims and brightens with the row
+   instead of needing its own colour (and its own dark/light story). */
+.html-preview__glyph {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace);
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.75;
+}
+
+/* The bar is the narrowest thing in the app when both rails are open, so the
+   sentence truncates rather than wrapping the row to two lines. The full text
+   is one click away in the details below. */
+.html-preview__note-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.html-preview__caret {
+  flex: 0 0 auto;
+  opacity: 0.6;
+}
+
+/* Pushed right by `margin-left: auto` rather than by a spacer element: the note
+   is allowed to shrink (min-width: 0 above), so a flexible spacer would fight
+   it for the leftover pixels. */
+.html-preview__reload {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 9px;
+  border: 1px solid var(--border, #2a2a33);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim, #8b949e);
+  cursor: pointer;
+}
+.html-preview__reload:hover {
+  color: var(--text, #c9d1d9);
+  border-color: var(--accent, #3b82f6);
+}
+
+/* ── The expanded explanation ─────────────────────────────────────────────── */
+.html-preview__details {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 9px 12px 11px;
+  border-bottom: 1px solid var(--border, #21262d);
+  background: var(--bg-elev, #1c2128);
+  color: var(--text-dim, #8b949e);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.html-preview__details dt {
+  color: var(--text, #c9d1d9);
+  font-weight: 600;
+}
+.html-preview__details dd {
+  margin: 1px 0 0;
+}
+.html-preview__details dd + dt {
+  margin-top: 8px;
+}
+.html-preview__details code {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--bg-app, #0d1117);
+  font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace);
+  font-size: 0.95em;
+}
+
+/* ── The frame ────────────────────────────────────────────────────────────── */
+.html-preview__frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: block;
+  border: 0;
+  /* White, on purpose, in a dark cockpit. A page that sets no background of its
+     own gets the UA default — and an iframe with a transparent canvas would
+     show the app's #0d1117 through it and render the author's default black
+     text invisibly. A browser shows an unstyled page on white; the preview's
+     job is to disagree with a browser as little as possible, so it does too. */
+  background: #ffffff;
+}

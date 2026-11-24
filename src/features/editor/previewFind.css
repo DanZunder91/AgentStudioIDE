@@ -1,0 +1,94 @@
+/* ── Find in the rendered Markdown preview ───────────────────────────────────
+ *
+ * Two parts, and they are styled by two different mechanisms on purpose:
+ *
+ *   1. `.preview-find` — the bar. An ordinary element, a direct child of
+ *      `.markdown-preview` and therefore a SIBLING of `.markdown-preview__body`.
+ *      That placement is load-bearing: the body carries the inline `zoom`, so a
+ *      bar inside it would be 4x its design size at 400%.
+ *   2. `::highlight(...)` — the matches. Painted by the CSS Custom Highlight
+ *      API over live `Range`s, so nothing is inserted into the
+ *      `innerHTML`-owned body (see previewFind.ts's header for why that is not
+ *      negotiable). `::highlight()` accepts only a small property set —
+ *      colour, background-color, text-decoration, text-shadow — which is all a
+ *      match needs.
+ *
+ * Colours reuse the `--mdp-*` tokens `markdownPreview.css` declares on
+ * `.markdown-preview`, with the same self-contained fallbacks, so the bar
+ * follows the cockpit theme without introducing a second palette. The highlight
+ * rules are document-global (highlight names are, too) and cannot inherit those
+ * tokens, so they carry the literal values the other two match lists use —
+ * identical to `.response-body__hit`, so a hit looks the same wherever the user
+ * finds one.
+ */
+
+.preview-find {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* A block-level box pushed to the right edge of the scroll container. */
+  width: fit-content;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--mdp-border, #30363d);
+  border-radius: 6px;
+  background: var(--mdp-surface, #161b22);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 35%);
+  font-family:
+    system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 12px;
+}
+
+.preview-find__input {
+  width: 190px;
+  min-width: 0; /* a split pane measures narrow; the input must be allowed to shrink */
+  padding: 3px 7px;
+  border: 1px solid var(--mdp-border, #30363d);
+  border-radius: 4px;
+  background: var(--mdp-bg, #0d1117);
+  color: var(--mdp-fg, #c9d1d9);
+  font: inherit;
+}
+.preview-find__input:focus-visible {
+  outline: 1px solid var(--mdp-accent, #3b82f6);
+  outline-offset: -1px;
+}
+
+.preview-find__count {
+  color: var(--mdp-dim, #8b949e);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.preview-find__btn {
+  padding: 2px 7px;
+  border: 1px solid var(--mdp-border, #30363d);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mdp-dim, #8b949e);
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.preview-find__btn:hover:not(:disabled) {
+  color: var(--mdp-fg, #c9d1d9);
+  border-color: var(--mdp-accent, #3b82f6);
+}
+.preview-find__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Every match … */
+::highlight(markdown-preview-find) {
+  background-color: rgb(229 192 123 / 28%);
+  color: inherit;
+}
+/* … and the one the cursor is on, painted on top (Highlight.priority = 1). */
+::highlight(markdown-preview-find-current) {
+  background-color: #3b82f6;
+  color: #0d1117;
+}

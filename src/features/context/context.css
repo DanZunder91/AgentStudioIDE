@@ -1,0 +1,350 @@
+/* ── Context window — the Metrics panel's per-agent card ─────────────────────
+
+   A dark card: header row, a full-width stacked
+   bar (or the /context grid), a wrapping legend, a quiet footer. Built on the app's
+   own tokens (`--bg-elev`, `--border`, `--text`, `--text-dim` from App.css) so it
+   sits in the dashboard rather than on top of it.
+
+   Narrow panes are a requirement, not a nicety: every row here wraps, nothing has a
+   fixed width larger than its content, and the grid's cells SHRINK (minmax(0, …))
+   rather than pushing the card wider than its pane. `context.browser.test.tsx`
+   measures that in real Chromium.
+
+   ── the category palette ────────────────────────────────────────────────────
+   Declared here rather than borrowed from `metrics.css` / `usage.css` so this card has
+   no CSS load-order dependency on another feature (the same reasoning metrics.css
+   gives for re-declaring its tones). The hues follow /context's own
+   (greys for the system, cyan for MCP, orange memory, yellow skills, purple
+   messages); the orange is `--metrics-series-2`'s validated #d97430, not a brighter
+   one, for the dark-lightness-band reason recorded in metrics.css. The system greys
+   step in lightness so three adjacent grey segments stay distinguishable without a
+   hue. Unknown keys hash into the six `--context-extra-N` slots. */
+:root {
+  --context-system-prompt: #a1a1aa;
+  --context-system-tools: #71717a;
+  --context-system-tools-deferred: #52525b;
+  --context-mcp-tools: #22b8cf;
+  --context-mcp-server-instructions: #138a9c;
+  --context-memory-files: #d97430;
+  --context-skills: #d4b83a;
+  --context-agents: #4cae6b;
+  --context-messages: #a371f7;
+  --context-free-space: #262c36;
+  --context-autocompact-buffer: #5b6472;
+  --context-extra-0: #f778ba;
+  --context-extra-1: #79c0ff;
+  --context-extra-2: #ffa198;
+  --context-extra-3: #7ee787;
+  --context-extra-4: #d2a8ff;
+  --context-extra-5: #e3b341;
+
+  /* The chip's three tones — the same values metrics.css re-declares from usage.css,
+     re-declared once more for the same no-load-order reason. */
+  --context-ok: #2ea043;
+  --context-warn: #dea82c;
+  --context-danger: #ffb3ab;
+
+  /* The track the bar sits in, and the colour of the compaction marker. */
+  --context-track: #161b22;
+  --context-marker: #e6edf3;
+}
+
+.context-card {
+  flex: 0 0 auto;
+  /* A safety valve, not a layout: in a very short pane the card yields to the
+     dashboard below it instead of pushing the body to zero height. */
+  max-height: 55%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+  padding: 10px 16px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+/* A failed refresh over a good reading dims the drawing a notch — the same "stale"
+   signal metrics.css and usage.css use. The footer and the reason stay full-strength. */
+.context-card--stale .context-card__drawing,
+.context-card--stale .context-legend {
+  opacity: 0.72;
+}
+
+/* ── header ─────────────────────────────────────────────────────────────────── */
+.context-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+.context-card__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.context-card__diamond {
+  color: var(--context-messages);
+  font-size: 11px;
+}
+.context-card__head-right {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 8px;
+  min-width: 0;
+}
+.context-card__summary {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.context-card__chip {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.context-card__chip[data-tone="ok"] {
+  color: var(--context-ok);
+  border-color: rgba(46, 160, 67, 0.45);
+}
+.context-card__chip[data-tone="warn"] {
+  color: var(--context-warn);
+  border-color: rgba(222, 168, 44, 0.45);
+  font-weight: 600;
+}
+.context-card__chip[data-tone="danger"] {
+  color: var(--context-danger);
+  border-color: rgba(255, 179, 171, 0.45);
+  font-weight: 700;
+}
+
+/* Bar | Grid — a two-button segmented control. */
+.context-card__views {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.context-card__view {
+  padding: 1px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.context-card__view + .context-card__view {
+  border-left: 1px solid var(--border);
+}
+.context-card__view--on {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.context-card__view:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* ── the stacked bar ────────────────────────────────────────────────────────── */
+.context-card__drawing {
+  min-width: 0;
+}
+.context-bar {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 12px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--context-track);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.context-bar__seg {
+  /* Never grow or shrink: the width IS the measurement. */
+  flex: 0 0 auto;
+  height: 100%;
+  min-width: 0;
+  background: var(--seg-colour, transparent);
+}
+.context-bar__seg--free {
+  background: transparent;
+}
+.context-bar__seg--buffer {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--seg-colour) 0 2px,
+    transparent 2px 5px
+  );
+}
+/* The compaction point: a thin bright line where the buffer starts. Overhangs the
+   bar by a pixel each way so it reads as a marker, not as another segment edge. */
+.context-bar__marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--context-marker);
+  opacity: 0.85;
+}
+
+/* ── the /context grid ──────────────────────────────────────────────────────── */
+.context-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--grid-columns, 20), minmax(0, 12px));
+  gap: 3px;
+  max-width: 100%;
+}
+.context-grid__cell {
+  aspect-ratio: 1;
+  min-width: 0;
+  border-radius: 2px;
+  background: var(--seg-colour);
+}
+.context-grid__cell--free {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--context-free-space);
+}
+/* Crossed: two diagonals in the buffer colour over the empty cell outline. */
+.context-grid__cell--buffer {
+  background:
+    linear-gradient(45deg, transparent calc(50% - 0.75px), var(--seg-colour) calc(50% - 0.75px), var(--seg-colour) calc(50% + 0.75px), transparent calc(50% + 0.75px)),
+    linear-gradient(-45deg, transparent calc(50% - 0.75px), var(--seg-colour) calc(50% - 0.75px), var(--seg-colour) calc(50% + 0.75px), transparent calc(50% + 0.75px));
+  box-shadow: inset 0 0 0 1px var(--context-free-space);
+}
+
+/* ── legend ─────────────────────────────────────────────────────────────────── */
+.context-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  min-width: 0;
+}
+.context-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11px;
+}
+.context-legend__swatch {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--seg-colour);
+}
+.context-legend__swatch--free {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--context-autocompact-buffer);
+}
+.context-legend__swatch--buffer {
+  background: repeating-linear-gradient(135deg, var(--seg-colour) 0 1.5px, transparent 1.5px 3px);
+  box-shadow: inset 0 0 0 1px var(--seg-colour);
+}
+.context-legend__label {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.context-legend__tokens {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.context-legend__pct {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+/* ── states + footer ────────────────────────────────────────────────────────── */
+.context-card__note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.context-card__note--error {
+  color: var(--context-warn);
+}
+.context-card__stale {
+  margin: 0;
+  font-size: 11px;
+  color: var(--context-warn);
+}
+.context-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.context-card__meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.context-card__model {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.context-card__refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.context-card__refresh:hover:not(:disabled) {
+  color: var(--text);
+}
+.context-card__refresh:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.context-card__refresh--busy svg {
+  animation: context-spin 0.9s linear infinite;
+}
+@keyframes context-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .context-card__refresh--busy svg {
+    animation: none;
+  }
+}
+.context-card__caveat {
+  flex: 1 1 220px;
+  min-width: 0;
+  opacity: 0.85;
+}

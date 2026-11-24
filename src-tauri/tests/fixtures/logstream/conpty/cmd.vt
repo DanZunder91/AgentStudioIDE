@@ -1,0 +1,86 @@
+# cmd through ConPTY
+# recorded by tests/logstream_conpty.rs::record_conpty_fixtures
+# spawn cmd.exe 24x80 in C:\
+< \x1b[?9001h\x1b[?1004h
+< \x1b[?25l\x1b[2J\x1b[m\x1b[HMicrosoft Windows [Version 10.0.26300.9974]\x1b]0;C:\\WINDOWS\\system32\\cmd.exe\x07\x1b[?25h
+< \x1b[?25l\x0d\x0a(c) Microsoft Corporation. All rights reserved.\x1b[4;1HC:\\>\x1b]0;Administrator: C:\\WINDOWS\\system32\\cmd.exe\x07\x1b[?25h
+# quiet
+# type 'e'
+< e
+# type 'c'
+< c
+# type 'h'
+< h
+# type 'o'
+< o
+# type ' '
+<  
+# type 'h'
+< h
+# type 'e'
+< e
+# type 'l'
+< l
+# type 'l'
+< l
+# type 'o'
+< o
+# type Enter
+< \x0d\x0a
+< \x1b[?25lhello\x1b[7;1HC:\\>\x1b[?25h
+# quiet
+# type 'p'
+< p
+# type 'i'
+< i
+# type 'n'
+< n
+# type 'g'
+< g
+# type ' '
+<  
+# type '-'
+< -
+# type 'n'
+< n
+# type ' '
+<  
+# type '2'
+< 2
+# type ' '
+<  
+# type '1'
+< 1
+# type '2'
+< 2
+# type '7'
+< 7
+# type '.'
+< .
+# type '0'
+< 0
+# type '.'
+< .
+# type '0'
+< 0
+# type '.'
+< .
+# type '1'
+< 1
+# type Enter
+< \x0d\x0a
+< \x1b]0;Administrator: C:\\WINDOWS\\system32\\cmd.exe - ping  -n 2 127.0.0.1\x07
+< \x0d\x0aPinging 127.0.0.1 with 32 bytes of data:\x0d\x0aReply from 127.0.0.1: bytes=32 time<1ms TTL=128\x0d\x0a
+# resize 20x40
+< \x1b[?25l\x1b[8;20;40t\x1b[HMicrosoft Windows [Version 10.0.26300.9974]\x1b[K\x0d\x0a(c) Microsoft Corporation. All rights reserved.\x1b[K\x0d\x0a\x1b[K\x0d\x0aC:\\>echo hello\x1b[K\x0d\x0ahello\x1b[K\x0d\x0a\x1b[K\x0d\x0aC:\\>ping -n 2 127.0.0.1\x1b[K\x0d\x0a\x1b[K\x0d\x0aPinging 127.0.0.1 with 32 bytes of data:\x0d\x0aReply from 127.0.0.1: bytes=32 time<1ms TTL=128\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x1b[14;1H\x1b[?25h
+# quiet
+# resize 30x100
+< \x1b[?25l\x1b[HMicrosoft Windows [Version 10.0.26300.9974]\x1b[K\x0d\x0a(c) Microsoft Corporation. All rights reserved.\x1b[K\x0d\x0a\x1b[K\x0d\x0aC:\\>echo hello\x1b[K\x0d\x0ahello\x1b[K\x0d\x0a\x1b[K\x0d\x0aC:\\>ping -n 2 127.0.0.1\x1b[K\x0d\x0a\x1b[K\x0d\x0aPinging 127.0.0.1 with 32 bytes of data:\x1b[K\x0d\x0aReply from 127.0.0.1: bytes=32 time<1ms TTL=128\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x1b[11;1H\x1b[?25h
+< R
+< \x1b[?25leply from 127.0.0.1: bytes=32 time<1ms TTL=128\x1b[13;1HPing statistics for 127.0.0.1:\x0d\x0a    Packets: Sent = 2, Received = 2, Lost = 0 (0% loss),\x0d\x0aApproximate round trip times in milli-seconds:\x0d\x0a    Minimum = 0ms, Maxim\x1b[?25h
+< \x1b[?25lum = 0ms, Average = 0ms\x1b[18;1HC:\\>\x1b]0;Administrator: C:\\WINDOWS\\system32\\cmd.exe\x07\x1b[?25h
+# quiet
+# type exit + Enter
+< exit\x0d\x0a
+< \x1b]0;C:\\WINDOWS\\system32\\cmd.exe\x07
+< \x1b[?9001l\x1b[?1004l

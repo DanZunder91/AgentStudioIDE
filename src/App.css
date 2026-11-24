@@ -1,0 +1,272 @@
+/* Agent Studio — M0 shell. Dark, monospace, terminal aesthetic.
+   Full 3-tier theming + light mode come later (ARCHITECTURE §4). */
+:root {
+  color-scheme: dark;
+  --bg-app: #0d1117;
+  --bg-surface: #161b22;
+  --bg-elev: #1c2128;
+  --text: #c9d1d9;
+  --text-dim: #8b949e;
+  --border: #21262d;
+  --accent: #3b82f6;
+  --accent-soft: rgba(59, 130, 246, 0.14);
+  --green: #3fb950;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+/* Title bar */
+.titlebar {
+  flex: 0 0 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.titlebar__dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+.titlebar__hint { color: var(--text-dim); font-weight: 400; font-size: 11px; }
+
+/* Right-aligned cluster of titlebar controls. `margin-left: auto` lives here
+   (not on `.titlebar__hint`, which is omitted entirely with no workspace
+   open) so the cluster stays pinned right regardless. */
+.titlebar__actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+
+/* Titlebar icon buttons (panel toggles, etc.) */
+.titlebar__icon-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  padding: 4px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.titlebar__icon-btn:hover { color: var(--text); }
+.titlebar__icon-btn[aria-pressed="false"] { opacity: 0.55; }
+
+/* 3-column shell — CSS variables so the left/right collapse modifiers compose
+   independently (either, both, or neither). */
+.app-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  /* The rail columns are driven by `--left-col`/`--right-col`, set inline from
+     the store's rail widths (0 when collapsed). The fallbacks match the defaults. */
+  grid-template-columns: var(--left-col, 260px) 1fr var(--right-col, 300px);
+  /* Anchor the absolutely-positioned rail resizers to the shell. */
+  position: relative;
+}
+.app-shell--left-collapsed .rail--left { display: none; }
+.app-shell--right-collapsed .rail--right { display: none; }
+
+/* Drag handles that resize the rails — thin strips centered on each rail/center
+   seam, above the panes. The seam x is exactly the rail column width. */
+.rail-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 5;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* While a rail drag is in flight, no text anywhere may be selected and the whole
+   window shows the resize cursor. WKWebView honors ONLY the -webkit- prefix here,
+   so set both; `!important` + the descendant `*` beat any local user-select. */
+body.is-resizing,
+body.is-resizing * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  cursor: col-resize !important;
+}
+/* Same treatment while a ctrl/cmd+drag pans the markdown preview — no text may
+   be selected mid-pan and the grabbing cursor holds everywhere. */
+body.is-panning,
+body.is-panning * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  cursor: grabbing !important;
+}
+.rail-resizer--left {
+  left: var(--left-col, 260px);
+  transform: translateX(-3px);
+}
+.rail-resizer--right {
+  right: var(--right-col, 300px);
+  transform: translateX(3px);
+}
+.rail-resizer:hover,
+.rail-resizer:active {
+  background: var(--accent);
+  opacity: 0.5;
+}
+/* A collapsed rail has no seam to drag. */
+.app-shell--left-collapsed .rail-resizer--left { display: none; }
+.app-shell--right-collapsed .rail-resizer--right { display: none; }
+
+.rail { background: var(--bg-surface); overflow-y: auto; overflow-x: hidden; }
+/* PIN each pane to its own grid column. Without this, collapsing a rail with
+   `display:none` REMOVES it from the grid, so the remaining items auto-shift left —
+   the center pane would slide into the (now 0px) left column and vanish (the bug:
+   the center console ended up attached to the left panel and was hidden). Explicit columns
+   keep the center in column 2 whether or not a rail is collapsed. */
+.rail--left { grid-column: 1; border-right: 1px solid var(--border); }
+.rail--right { grid-column: 3; border-left: 1px solid var(--border); }
+
+.rail__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+.rail__add { background: none; border: none; color: var(--text-dim); font-size: 15px; cursor: pointer; line-height: 1; }
+.rail__add:hover { color: var(--text); }
+
+/* Agent tree */
+.agent-tree { list-style: none; margin: 0; padding: 0 8px; }
+.agent-tree--nested { padding: 4px 0 0 10px; border-left: 1px solid var(--border); margin: 6px 0 0 6px; }
+.agent { padding: 8px 10px; border-radius: 6px; margin-bottom: 4px; cursor: pointer; }
+.agent:hover { background: var(--bg-elev); }
+.agent--selected { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.agent--child { padding: 5px 8px; }
+.agent__title { font-weight: 600; }
+.agent--child .agent__title { font-weight: 400; color: var(--text); }
+.agent__meta { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
+.agent__status { margin-top: 4px; }
+.pill {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.pill--running { color: var(--green); border-color: rgba(63, 185, 80, 0.4); }
+
+/* Center work area — hosts <PaneTreeRoot/>. min-height:0 is load-bearing: without
+   it the flex child can't shrink and xterm's fit() computes a runaway height. */
+.center { grid-column: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+          overflow: hidden; background: var(--bg-app); }
+.center > * { flex: 1 1 auto; min-height: 0; }
+.tabbar {
+  display: flex;
+  gap: 2px;
+  height: 36px;
+  align-items: stretch;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 6px;
+}
+.tab {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab--active { color: var(--text); background: var(--bg-app); box-shadow: inset 0 -2px 0 var(--accent); }
+
+.workarea { flex: 1 1 auto; display: grid; place-items: center; }
+.workarea__placeholder { text-align: center; color: var(--text-dim); }
+.workarea__logo { font-size: 34px; color: var(--border); margin-bottom: 10px; letter-spacing: 4px; }
+.workarea__placeholder p { margin: 4px 0; }
+.muted { font-size: 11px; opacity: 0.7; }
+
+/* Right rail — the Files / Vault / History / Collections / DB / Tools / Git tab strip.
+   ICON-ONLY, label in the tooltip: four icon+label pairs run ~271px, which fits the
+   default 300px rail but not the RAIL_MIN_W = 180px drag-min — and since `.rail` is
+   `overflow-x: hidden`, over-wide content is silently CLIPPED rather than scrolled
+   ("Collections" lost its tail at the rail edge), so the words live in the tooltip.
+
+   ⚠️ The budget. Seven glyphs do not fit at the drag-min either, and shaving the gap
+   again is not an answer — so the strip shows only as many tabs as the width affords
+   and folds the rest behind a tab-sized "⋯" trigger with a menu. The arithmetic:
+
+       available = rightRailWidth − 1px .rail--right border − 2×10px padding
+                   (= 159px at RAIL_MIN_W 180)
+       one tab   = 13px glyph + 2×2px .rail__tab padding                =  17px
+       seven     = 7×17 + 6×10                                          = 179px > 159px
+       at the drag-min: 5 tabs + the tab-sized ⋯ trigger
+                 = 5×17 + 4×10 + 10 + 17                                = 152px ≤ 159px
+
+   The constants live in `src/features/workspace/railTabsLayout.ts` (TAB_W 17,
+   TAB_GAP 10, STRIP_CHROME 21, TRIGGER_W 17) — its `visibleTabCount()` is the ONE
+   place the sum is computed, driven by the store's `rightRailWidth` (no
+   ResizeObserver: the rail's width only ever changes through the store). If a pixel
+   here changes, change it THERE, and `src/e2e/railChrome.browser.test.tsx`
+   re-derives needed-vs-available from the live boxes so the drift turns red.
+
+   `flex-wrap` is nowrap, ON PURPOSE. The wrap was a safety net that turned an
+   over-budget strip into a silent second row — a failure mode nobody sees. With the
+   math preventing overflow, nowrap makes a budget bug VISIBLE as clipping, which the browser test catches by number, not by squinting. The
+   trigger + menu styling is feature-local: `src/features/workspace/railTabs.css`
+   (which also gives `.rail__tabs` the `position: relative` the menu anchors to). */
+.rail__tabs {
+  display: flex;
+  flex-wrap: nowrap; /* deliberate — see the budget comment above */
+  /* Roomier than the 6px the labels forced: with no text, the gap is the only thing
+     separating adjacent hit targets, and 13px glyphs 6px apart read as one smear.
+     10px is the gap the budget above is computed with. */
+  column-gap: 10px;
+  padding: 10px 10px;
+  border-bottom: 1px solid var(--border);
+}
+/* A <button> inherits neither font-family nor colour, and brings its own UA
+   background/border/padding — which here would put a native grey chip behind
+   every tab and hide the active underline. Reset all of it explicitly. */
+.rail__tab {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  font-family: inherit;
+  line-height: 1;
+  color: var(--text-dim);
+  cursor: pointer;
+  /* Vertical padding widens the hit target beyond the 13px glyph — an icon-only
+     control is easy to make technically correct and physically hard to hit. The
+     bottom 2px is where the active underline lands. */
+  padding: 3px 2px 4px;
+}
+/* The icon inherits the tab's colour state (it strokes `currentColor`). */
+.rail__tab > svg { flex: 0 0 auto; }
+.rail__tab--active { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.rail__tab:hover { color: var(--text); }
+
+.tree { padding: 8px 6px; }
+.tree__root { color: var(--text-dim); font-size: 11px; padding: 2px 8px 8px; }
+.tree__row { padding: 3px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.tree__row:hover { background: var(--bg-elev); }
+.tree__row--dir { color: var(--text); }
+.tree__row--file { color: var(--text-dim); }
+.tree__row--indent { padding-left: 22px; }

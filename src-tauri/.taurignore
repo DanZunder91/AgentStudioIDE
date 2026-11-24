@@ -1,0 +1,13 @@
+# Tauri dev-watcher ignore list (paths relative to src-tauri/).
+#
+# Without this, EVERY write under src-tauri triggers a full rebuild + app
+# RESTART: while test files are being written, the window would close and reopen
+# every few seconds. Only real source changes (src/**) should rebuild the
+# running app.
+tests/
+target/
+gen/
+capabilities/
+**/*.tmp
+**/*.tmp.*
+.taurignore

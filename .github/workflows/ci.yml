@@ -1,0 +1,268 @@
+# CI — the "Definition of Done" gates, run on demand.
+#
+# Mirrors the gate commands that `npm run verify` (scripts/verify.mjs) runs. If you
+# change a gate command here, change it there too (and vice versa) — they are one
+# contract, not two.
+#
+# Deliberately NOT here: `tauri build` (bundling). It is slow (~10-20min/OS) and
+# proves nothing that `cargo test` + `cargo clippy` don't already prove on a
+# push. It lives in `.github/workflows/build.yml`, run on demand.
+name: CI
+
+# Manual only: all of this runs locally and GitHub only creates the build. The gate is
+# `npm run verify` on the machine doing the work (scripts/verify.mjs); this workflow stays
+# available on demand.
+on:
+  workflow_dispatch:
+    inputs:
+      # `windows-rust` runs ONE job: clippy + cargo test on a real Windows machine. It exists
+      # because a Mac cannot run Windows (no KVM in Docker), so the `cfg(windows)` tests —
+      # the connection tables, the process lookup, the no-console spawn — can only execute
+      # here (some Windows-only bugs are invisible to every local gate).
+      # `scripts/windows-check.mjs` compiles and lints that code locally; this
+      # is the only place it RUNS. Still manual: nothing here adds a trigger.
+      scope:
+        description: "What to run"
+        type: choice
+        default: all
+        options:
+          - all
+          - windows-rust
+
+# One in-flight run per branch/PR. A new push supersedes the old run rather than
+# queueing behind it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # CI builds are throwaway: debug symbols cost cache space and time, and no one
+  # debugs from a CI artifact.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Frontend gates: typecheck -> lint -> tests + coverage.
+  # Pure JS/TS — no Rust, so no Tauri system deps needed on any OS.
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend (${{ matrix.os }})
+    if: inputs.scope != 'windows-rust'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      # One OS failing must not hide the state of the other two.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          # Matches the verified local toolchain (Node 22.20).
+          node-version: 22
+          cache: npm
+
+      # `npm ci` (not `install`): fails loudly on a package.json/lockfile
+      # mismatch instead of silently resolving a different tree than local.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test + coverage
+        run: npm run test:coverage
+
+      # Uploaded from one OS only: the report is identical on all three, and
+      # upload-artifact v4+ rejects duplicate artifact names.
+      # `!cancelled()` (not `always()`): a coverage report for a FAILING run is
+      # exactly when you want to read it, but a cancelled run has nothing to say.
+      - name: Upload coverage report
+        if: ${{ !cancelled() && matrix.os == 'ubuntu-latest' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Layer 5 — the real-browser tier (testing-strategy.md §1, §7.5, §9).
+  #
+  # Separate from `frontend`, and ubuntu-only, for two reasons the strategy
+  # spells out: it downloads a browser (so it must not triple that cost across
+  # the OS matrix), and what it tests — layout, ResizeObserver, xterm's fit — is
+  # OS-independent because it runs Chromium, not the platform WebView.
+  #
+  # This is the tier that can catch what jsdom structurally cannot: jsdom has no
+  # layout engine, so every rect there is 0x0 and every sizing/geometry
+  # assertion is vacuously green. Chromium only — Playwright's `webkit` is
+  # neither WKWebView nor WebKitGTK, so extra engines would buy false
+  # confidence, not coverage (§7.5).
+  # ---------------------------------------------------------------------------
+  browser:
+    name: Browser (layer 5)
+    if: inputs.scope != 'windows-rust'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `--with-deps`: the GitHub runner lacks the shared libraries Chromium
+      # needs. `--only-shell` is enough — we never drive a headed browser.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser tests
+        run: npm run test:browser
+
+  # ---------------------------------------------------------------------------
+  # Formatting. Split out from `rust` because `cargo fmt` only parses — it never
+  # compiles — so it needs neither the ~500MB of WebKitGTK dev packages nor a
+  # warm target/ cache. Fastest possible "you forgot to run cargo fmt" signal.
+  # ---------------------------------------------------------------------------
+  rustfmt:
+    name: Rust format
+    if: inputs.scope != 'windows-rust'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cargo fmt --check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+  # ---------------------------------------------------------------------------
+  # Rust gates: clippy -> tests, on all three OSes.
+  #
+  # Per-OS is not redundant here: the PTY layer is genuinely different per
+  # platform (ConPTY vs forkpty) and the code carries #[cfg(target_os)] arms
+  # that only that OS's compiler ever sees.
+  # ---------------------------------------------------------------------------
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # `scope: windows-rust` keeps only the Windows leg (see the input above).
+        os: ${{ fromJSON(inputs.scope == 'windows-rust' && '["windows-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Tauri v2 Linux build deps. Note **webkit2gtk-4.1** — v2 moved off 4.0,
+      # and the 4.0 packages do not satisfy it.
+      # Source: https://v2.tauri.app/start/prerequisites/
+      # Only Linux needs these; macOS (WKWebView) and Windows (WebView2) ship
+      # their webview with the OS.
+      - name: Install Tauri system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The crate lives in src-tauri/, not the repo root, so point the cache
+          # at src-tauri/target rather than the default ./target.
+          workspaces: src-tauri
+          # Keep the cache from a red run: the next push usually recompiles the
+          # same 400+ dependencies and only one crate changed.
+          cache-on-failure: true
+
+      - name: cargo clippy
+        # --all-targets is REQUIRED: without it, test code is never linted.
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  # ---------------------------------------------------------------------------
+  # Dependency vulnerabilities — a standing gate.
+  #
+  # One step, `npm run audit` -> `scripts/audit.mjs`, which applies a
+  # waiver-aware policy across BOTH ecosystems. The policy, in short:
+  #   * `npm audit --omit=dev` — the code that ships to users. ANY high/critical
+  #     fails, and no waiver applies here, ever.
+  #   * `npm audit` (dev included) — every distinct high/critical advisory id
+  #     must appear in the dated waiver list in scripts/audit.mjs, each with a
+  #     written "why it cannot be fixed" and "why the risk is acceptable". A new
+  #     advisory — including a second one in an already-waived package — fails.
+  #   * `cargo audit --file src-tauri/Cargo.lock` — run verbatim, exit code
+  #     propagated. It already fails on real vulnerabilities and only *warns* on
+  #     the allowed unmaintained/unsound Tauri-transitive set; the script never
+  #     counts those warnings (that number moves on every dependency bump).
+  #
+  # Why this replaced a bare `npm audit --audit-level=high`: that command had
+  # been red on every run since the WebDriver/E2E tier landed, over one
+  # unfixable DEV-ONLY advisory (brace-expansion GHSA-mh99-v99m-4gvg). A
+  # permanently-red gate gets waved through by hand — and the hand that waves
+  # the known finding waves the new one next to it. The waiver list makes the
+  # exception explicit, narrow (keyed on advisory id), dated, and reviewable.
+  #
+  # Fast and ubuntu-only: nothing here compiles the app. `npm audit` reads
+  # package-lock.json and `cargo audit` reads src-tauri/Cargo.lock, so no
+  # WebKitGTK deps and no `npm ci` are needed.
+  # ---------------------------------------------------------------------------
+  deps-audit:
+    name: Dependency audit
+    if: inputs.scope != 'windows-rust'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # `npm run audit` shells out to `cargo audit`, so it must be on PATH
+      # before the gate runs.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Dependency audit (npm prod + npm dev w/ waivers + cargo audit)
+        run: npm run audit

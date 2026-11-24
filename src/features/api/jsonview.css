@@ -1,0 +1,153 @@
+/* ── JSON tree viewer (reusable) ─────────────────────────────────────────────
+   Renders already-parsed JSON as a collapsible tree. Used for the API client's
+   response body, but self-contained: no `api-*` class dependency. Theme
+   variables come from App.css. */
+
+.jsonview {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-x: auto;
+}
+
+.jsonview__row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: pre;
+}
+
+.jsonview__children {
+  /* Indent one caret-width; a hairline guide echoes the tree structure. */
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+
+.jsonview__caret {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  align-self: center;
+}
+.jsonview__caret:hover {
+  color: var(--text);
+}
+
+.jsonview__key {
+  color: var(--accent);
+}
+
+/* ── A/B compare: clickable keys + cross-highlight ───────────────────────────
+   In interactive mode (JsonView given `onSelectKey`) the key is a real <button>
+   and the expand/collapse control shrinks to a caret-only button beside it — a
+   button must never nest inside another button. <button> inherits neither font
+   nor color and brings its own UA background/border/padding; reset all of it so
+   both modes read identically. */
+button.jsonview__key {
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+button.jsonview__key:hover {
+  text-decoration: underline;
+}
+.jsonview__toggle--caret {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Cross-highlight chip: every occurrence of the selected key name. Accent-soft
+   background + a 1px accent ring drawn with box-shadow — not padding or border,
+   so the mono column alignment of the two compare panes never shifts. The key
+   keeps its --accent color, which stays readable on the translucent
+   --accent-soft over the dark surfaces (same pairing as .agent--selected).
+   The `button.` variant is required, not belt-and-braces: the UA reset above
+   (`button.jsonview__key`, 0-1-1) outguns a bare class (0-1-0), so without it
+   a selected key in interactive mode kept the ring but lost the fill — pinned
+   by compare.browser.test.tsx's computed-style assertion. */
+.jsonview__key--selected,
+button.jsonview__key--selected {
+  background: var(--accent-soft);
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.jsonview__string {
+  color: var(--green, #3fb950);
+}
+.jsonview__number {
+  color: #d29922;
+}
+.jsonview__bool {
+  color: #a371f7;
+}
+.jsonview__null {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.jsonview__punct {
+  color: var(--text-dim);
+}
+.jsonview__summary {
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.jsonview__summary:hover {
+  color: var(--text);
+}
+
+/* ── JsonBodyEditor: an editable body that LOOKS like JSON ─────────────────────
+   A transparent <textarea> layered over a colored <pre>. Both MUST share the
+   `.api-body` metrics (font/size/line-height/padding) so the caret aligns with the
+   highlighted text; both wrap identically. The textarea is in-flow (drives height,
+   stays resizable); the highlight is absolute behind it. */
+.json-editor {
+  position: relative;
+}
+.json-editor__layer {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  box-sizing: border-box;
+  /* Neutralize the base border so the two layers occupy the exact same box; the
+     visible border is drawn by the textarea (which sits on top). */
+}
+.json-editor__highlight {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  border-color: transparent;
+  background: transparent;
+}
+.json-editor__input {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  color: transparent;
+  caret-color: var(--text);
+  background: transparent;
+}

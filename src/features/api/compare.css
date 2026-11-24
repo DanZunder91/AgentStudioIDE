@@ -1,0 +1,187 @@
+/* ── A/B compare (HTTP lane) ─────────────────────────────────────────────────
+   The second request bar (`CompareBar`) and the side-by-side response surface
+   (`ComparePanel`). Theme variables come from App.css; `api-bar` / `api-method`
+   / `api-url` / `api-status` / `api-error` / `api-add-header` styling is reused
+   from api.css so the B bar and the pills cannot drift from the A bar's.
+
+   ── The layout is load-bearing ──────────────────────────────
+   The whole surface lives inside `.api-view`, a flex column with
+   `overflow-y: auto`. The rule: put ONE explicit floor on ONE box
+   (`.compare-split`, `min-height: 280px`) and make everything below it
+   shrinkable (`min-height: 0` / `min-width: 0` all the way down), so each
+   pane's BODY is the box that scrolls — a wide or long response scrolls inside
+   its own pane, and the tab never scrolls horizontally because of one wide
+   value. Every rule here is asserted, in pixels, by
+   `compare.browser.test.tsx`; the jsdom tier cannot see any of it. */
+
+/* The panel root (`.api-response-panel.compare`). api.css already gives
+   `.api-response-panel` `flex: 1 1 auto; min-height: 0` inside `.api-view`;
+   the SAME values are restated here (plus the column direction the split
+   needs) so the compare surface is self-describing — the browser tier mounts
+   ComparePanel alone, without api.css, and must exercise the real chain.
+   Identical values, so the two files cannot fight. */
+.compare {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ── the B request bar ────────────────────────────────────────────────────── */
+.compare-bar {
+  /* Everything visual comes from `.api-bar`; the class exists as the seam for
+     compare-only tweaks (and so tests/devtools can tell the two bars apart). */
+}
+.compare-bar__hint {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+/* ── toolbar: sort toggle + selected-key chip ─────────────────────────────── */
+.compare-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+/* The pressed state styles off the SAME attribute the tests assert
+   (`aria-pressed`), so the visual state and the semantic state cannot drift —
+   and the JSX needs no conditional class. */
+.compare-toolbar [aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.compare-selected {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+.compare-selected:hover {
+  filter: brightness(1.15);
+}
+
+/* ── the split ────────────────────────────────────────────────────────────── */
+/* No `grid-template-rows: minmax(0, 1fr)` here, DELIBERATELY: it was tried as
+   a row-growth guard (auto rows are content-sized) and the browser tier stayed
+   green without it — in Chromium the pane's `overflow: hidden` already keeps
+   the implicit row from growing to a 400-key tree's height. A rule the tests
+   cannot distinguish is a silent safety net, so it is not
+   shipped; the internal-scroll test is the tripwire if an engine disagrees. */
+.compare-split {
+  flex: 1 1 auto;
+  min-height: 280px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  min-width: 0;
+}
+
+.compare-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+/* Head: side label, method+url echo, and (once landed) the status pill+stats.
+   `white-space: nowrap` + the url's ellipsis keep it to ONE line, so the body
+   below gets a stable share of the pane. Full url in `title`. */
+.compare-pane__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.compare-pane__side {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+}
+.compare-pane__method {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+.compare-pane__url {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.compare-pane__statustext {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
+.compare-pane__stat {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.compare-pane__truncated {
+  flex: 0 0 auto;
+  color: #d29922;
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* THE scroll box. One per pane, both axes — the horizontal bar always sits at
+   the pane's bottom edge, never `.jsonview`'s (see the override below). */
+.compare-pane__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+/* `.jsonview` (jsonview.css) is itself `overflow-x: auto`, which in a pane
+   would TRAP a wide value's scrollbar inside the tree — at the bottom of the
+   whole tree, hundreds of rows below the viewport (a scroll box as tall as its
+   content, one level down). Scoped override, not an edit to jsonview.css: inside a compare
+   pane the tree overflows VISIBLY and `.compare-pane__body` is the one box
+   that scrolls, both axes. Falsified: without this line the wide-
+   value assertion reads "expected 480 to be greater than 480". */
+.compare-pane__body .jsonview {
+  overflow-x: visible;
+}
+
+.compare-pane__raw {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  /* `pre`, not `pre-wrap`: a wide raw body scrolls in the pane body like a
+     wide JSON value does — same box, same bar. */
+  white-space: pre;
+}
+
+.compare-pane__empty {
+  color: var(--text-dim);
+  font-style: italic;
+}

@@ -1,0 +1,6 @@
+{
+  "agentType": "Explore",
+  "description": "Task tool01",
+  "toolUseId": "tool01",
+  "spawnDepth": 1
+}

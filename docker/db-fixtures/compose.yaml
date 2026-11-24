@@ -1,0 +1,306 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Agent Studio — database-client integration-test fixture
+#  See docker/db-fixtures/README.md.
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+#  ⚠️  TEST FIXTURE ONLY — THE CREDENTIALS BELOW ARE THROWAWAY.
+#
+#  Every user/password in this file is fake, published in the repo, bound to
+#  127.0.0.1, and exists so the opt-in `#[ignore]`d integration tier has a real
+#  server to talk to. **Never reuse any of them anywhere real.** They are named
+#  `*-test-pw` precisely so that a grep across a real deployment can find and
+#  reject them.
+#
+#  This fixture is a DEVELOPER TOOL. The shipped app never requires Docker — the
+#  zero-install principle applies to the product, not to this tier.
+#
+#  ── Why this stack is NOT in `cargo test` / `npm test` ────────────────────────
+#  Those gates are hermetic by rule: no network, no daemon, no developer
+#  environment. A Docker-dependent test in the default path turns a red gate into
+#  "probably just Docker again" — and a permanently-red gate is worse than no
+#  gate, because it gets waved through. So the Rust tests that use this
+#  stack are `#[ignore]`d and run on demand — the pattern already established by
+#  `usage.rs::live_smoke_reads_real_usage_from_the_cli` and the live TLS smokes
+#  in `http.rs` / `ws.rs` / `grpc.rs`.
+#
+#  ── Why the ports are weird ──────────────────────────────────────────────────
+#  Deliberately non-default, and bound to 127.0.0.1 only, so this fixture cannot
+#  collide with — or worse, be MISTAKEN FOR — a developer's own local database.
+#  That is not hypothetical: a development machine commonly already has a
+#  database listening on 5432, 3306, 27017 or 6379.
+#
+#      engine        host port -> container port
+#      ─────────────────────────────────────────
+#      postgres         55432 -> 5432
+#      mysql            53306 -> 3306
+#      clickhouse       58123 -> 8123   (HTTP interface — the client uses HTTP, not 9000)
+#      mongodb          57017 -> 27017
+#      redis            56379 -> 6379
+#
+#  ── Data is EPHEMERAL BY DESIGN ──────────────────────────────────────────────
+#  No named volumes are declared. Each image's own `VOLUME` becomes an anonymous
+#  volume, so `docker compose down -v` returns to a known-empty state and the next
+#  `up` re-runs every seed script. `down` WITHOUT `-v` keeps the anonymous volumes
+#  and the seeds will NOT re-run. Always use `-v` (`npm run db:fixtures:down`).
+#
+#  ── "healthy" means "seeded", on purpose ─────────────────────────────────────
+#  Every healthcheck queries the SEED DATA, not just the port. So
+#  `docker compose up --wait` returning means the stack is queryable *and* loaded,
+#  and no test ever needs a `sleep`. It also means a broken seed fails loudly at
+#  `up` instead of silently at assert time.
+#
+#  ── Note for anyone widening `src-tauri/tests/fixtures_no_secrets.rs` ────────
+#  That scanner walks `src-tauri/tests/fixtures/**` for `*.json` / `*.jsonl`.
+#  This tree is outside it on BOTH axes (different root, non-JSON extensions), so
+#  it needs no allowlist entry — always prefer that to teaching a secret-scanner
+#  to ignore something.
+#  Be aware, if you ever widen that scan, that this file legitimately matches its
+#  `secret kv` pattern (`(?i)(password|secret|api[_-]?key|token)\s*[:=]\s*\S{6,}`)
+#  and the README matches `conn string` (`(postgres|mysql|mongodb|redis)://`).
+#  The right response is to keep the scan narrow, not to shorten these passwords
+#  to dodge a regex — a fixture password you cannot recognise as fake is worse.
+#
+#  Credentials are declared ONCE here and referenced by YAML anchor. Healthchecks
+#  read them from the container environment via `$$VAR` (Compose escapes `$$` to a
+#  literal `$`), so no password string is duplicated anywhere below.
+#  They are NOT in a `.env` file on purpose: `.env*` is .gitignore'd, so a fresh
+#  clone would come up broken.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+x-fixture-credentials:
+  user: &fx_user agentstudio
+  password: &fx_pw agentstudio-test-pw
+  mysql_root_password: &fx_root_pw agentstudio-root-test-pw
+  database: &fx_db maestro
+
+name: agentstudio-db-fixtures
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  # 17.6 = the current 17.x patch line. Pinned to the patch, never `:latest` and
+  # never a bare `:17` — an unpinned tag makes a test that passes today fail
+  # tomorrow for reasons unrelated to our code. `-alpine` because it is the
+  # smallest official variant (≈390 MB vs ≈660 MB) and is multi-arch.
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: *fx_user
+      POSTGRES_PASSWORD: *fx_pw
+      POSTGRES_DB: *fx_db
+      # So `docker compose exec postgres psql -U agentstudio -d maestro` needs no prompt.
+      PGPASSWORD: *fx_pw
+      # UTC, explicitly. The client renders exactly what the server encoded and
+      # never reformats a timestamp, so the fixture must not let the host's TZ leak
+      # into the expected strings.
+      PGTZ: UTC
+    command:
+      - postgres
+      - -c
+      - timezone=UTC
+      - -c
+      - shared_buffers=32MB      # laptop footprint; the default is 128MB
+      - -c
+      - max_connections=50
+    ports: ["127.0.0.1:55432:5432"]
+    volumes:
+      - ./seed/postgres.sql:/docker-entrypoint-initdb.d/00-seed.sql:ro
+    # `-h 127.0.0.1` forces TCP: during init the entrypoint runs a temporary
+    # server on the unix socket only, so a socket-based probe would go green
+    # before the seed and the real listener existed.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'psql -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc "SELECT count(*) FROM tracks" | grep -qx 6'
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 3s
+    mem_limit: 256m
+    stop_grace_period: 5s
+
+  # ── MySQL ───────────────────────────────────────────────────────────────────
+  # 8.4.6 is the current 8.4 LTS patch. 8.4 (not 8.0) because it is the version
+  # whose defaults bite us: `caching_sha2_password` is the default auth plugin and
+  # `mysql_native_password` is DISABLED by default — exactly the situation the
+  # driver has to handle (caching_sha2 needs TLS for full auth, and sqlx's
+  # `mysql-rsa` cannot be enabled), so the fixture must reproduce it rather than a
+  # friendlier 8.0.
+  mysql:
+    image: mysql:8.4.6
+    environment:
+      MYSQL_ROOT_PASSWORD: *fx_root_pw
+      MYSQL_USER: *fx_user
+      MYSQL_PASSWORD: *fx_pw
+      MYSQL_DATABASE: *fx_db
+      # DO NOT add MYSQL_PWD here. The mysql *client* reads it,
+      # and the image's own entrypoint uses that client to run its root-level setup —
+      # so a service-wide MYSQL_PWD makes initialisation fail with
+      # `ERROR 1045 … Access denied for user 'root'@'localhost'`. Pass it per
+      # invocation instead: `MYSQL_PWD="$MYSQL_PASSWORD" mysql …` (see the
+      # healthcheck below and smoke.mjs).
+    command:
+      # ON so the seed can create a `mysql_native_password` account. The auth
+      # test needs BOTH: a caching_sha2 account (the default, TLS-only for full
+      # auth) and a native-password one (works over plaintext) to prove the two
+      # code paths and the error message between them.
+      - --mysql-native-password=ON
+      - --default-time-zone=+00:00   # same reason as PGTZ above
+      - --innodb-buffer-pool-size=64M
+      - --performance-schema=OFF
+    ports: ["127.0.0.1:53306:3306"]
+    volumes:
+      - ./seed/mysql.sql:/docker-entrypoint-initdb.d/00-seed.sql:ro
+    # `-h127.0.0.1` for the same reason as postgres: the init-phase server runs
+    # with --skip-networking.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'MYSQL_PWD="$$MYSQL_PASSWORD" mysql -h127.0.0.1 -u"$$MYSQL_USER" -N -B -e "SELECT count(*) FROM tracks" "$$MYSQL_DATABASE" | grep -qx 6'
+      interval: 2s
+      timeout: 5s
+      retries: 90        # MySQL's first-boot initialisation is the slowest here
+      start_period: 5s
+    mem_limit: 768m
+    stop_grace_period: 10s
+
+  # ── ClickHouse ──────────────────────────────────────────────────────────────
+  # 25.6-alpine: a pinned minor of the current line, alpine for size (≈600 MB vs
+  # ≈975 MB). Only the HTTP interface (8123) is published, because the client talks to
+  # ClickHouse over HTTP with the `reqwest` already in the tree — publishing 9000
+  # would invite a test to use a protocol the product does not speak.
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.6-alpine
+    environment:
+      CLICKHOUSE_USER: *fx_user
+      CLICKHOUSE_PASSWORD: *fx_pw
+      CLICKHOUSE_DB: *fx_db
+      # ClickHouse links jemalloc, which by default retains freed pages so RSS
+      # stays high long after a query. Returning them promptly costs throughput we
+      # do not care about on a 6-row fixture and buys back resident memory on a
+      # laptop that is also running the IDE. Measured effect is in the README.
+      MALLOC_CONF: background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0
+    ports: ["127.0.0.1:58123:8123"]
+    volumes:
+      - ./seed/clickhouse.sql:/docker-entrypoint-initdb.d/00-seed.sql:ro
+      - ./conf/clickhouse-footprint.xml:/etc/clickhouse-server/config.d/zz-footprint.xml:ro
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }   # the image warns loudly without this
+    # `--host clickhouse` (the container's own service name), NOT 127.0.0.1: this
+    # image's entrypoint starts a temporary loopback-only server to run the init
+    # scripts, so a 127.0.0.1 probe can go green during init. Dialling the service
+    # name goes over the bridge IP, which only the real server listens on — i.e.
+    # the healthcheck connects the same way a client does.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'clickhouse-client --host clickhouse --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --database "$$CLICKHOUSE_DB" --query "SELECT count() FROM tracks" | grep -qx 6'
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 3s
+    # 2g, not 1g: see the memory-cap note in conf/clickhouse-footprint.xml. The server cap is
+    # 1.25 GiB, and the gap is deliberate — the server must refuse a query with a readable error
+    # before the kernel OOM-kills the container at exit 137.
+    mem_limit: 2g
+    stop_grace_period: 10s
+
+  # ── MongoDB ─────────────────────────────────────────────────────────────────
+  # 8.0.15 — pinned patch on the current GA line. The `mongodb` 3.8 crate
+  # targets 8.x, and this image ships `mongosh`, which the connectivity smoke and
+  # the healthcheck both use.
+  mongo:
+    image: mongo:8.0.15
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: *fx_user
+      MONGO_INITDB_ROOT_PASSWORD: *fx_pw
+      MONGO_INITDB_DATABASE: *fx_db
+    command:
+      - --wiredTigerCacheSizeGB=0.25   # default is (RAM-1)/2 — far too greedy here
+    ports: ["127.0.0.1:57017:27017"]
+    volumes:
+      - ./seed/mongo.js:/docker-entrypoint-initdb.d/00-seed.js:ro
+    # Asserts the collection count the tree renders verbatim ("collections (6)")
+    # *and* that the seed ran. Safe against the init-phase server, which
+    # this image starts on a temporary port.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mongosh --quiet --host 127.0.0.1 -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin "$$MONGO_INITDB_DATABASE" --eval "quit(db.getCollectionNames().length === 6 ? 0:1)"'
+      interval: 2s
+      timeout: 10s
+      retries: 60
+      start_period: 3s
+    mem_limit: 512m
+    stop_grace_period: 10s
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  # 8.2.1-alpine — pinned patch, alpine (≈60 MB). The image has no
+  # /docker-entrypoint-initdb.d hook, so the seed is applied by a tiny wrapper
+  # (./seed/redis-entrypoint.sh) that starts the server, loads ./seed/redis.txt,
+  # and finally sets the `fixture:seeded` marker. The healthcheck tests that
+  # marker, so "healthy" means "seeded" here exactly as it does elsewhere.
+  redis:
+    image: redis:8.2.1-alpine
+    environment:
+      REDIS_PASSWORD: *fx_pw    # read by the wrapper for --requirepass
+      REDISCLI_AUTH: *fx_pw     # read by redis-cli; avoids the -a warning entirely
+    entrypoint: ["/bin/sh", "/seed/redis-entrypoint.sh"]
+    ports: ["127.0.0.1:56379:6379"]
+    volumes:
+      - ./seed/redis-entrypoint.sh:/seed/redis-entrypoint.sh:ro
+      - ./seed/redis.txt:/seed/redis.txt:ro
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli EXISTS fixture:seeded | grep -qx 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 1s
+    mem_limit: 128m
+    stop_grace_period: 5s
+
+  # ── DynamoDB Local ──────────────────────────────────────────────────────────
+  # `amazon/dynamodb-local` is AWS's own image. `-inMemory` because the fixture is
+  # ephemeral by design (see the header) and an in-memory table set makes
+  # `down -v` → `up` re-seed deterministically with no volume to forget.
+  #
+  # 🔴 **It does not verify signatures.** Any credentials are accepted, which is
+  # why `db/dynamodb.rs`'s SigV4 is pinned against AWS's PUBLISHED VECTORS rather
+  # than against this container: a green request here proves the request SHAPE and
+  # says nothing about the signing.
+  #
+  # The image ships no curl/shell tooling worth scripting and its entrypoint is the
+  # server, so seeding is a one-shot sidecar (`dynamodb-seed`) that talks HTTP.
+  dynamodb:
+    image: amazon/dynamodb-local:2.5.2
+    command: ["-jar", "DynamoDBLocal.jar", "-inMemory", "-port", "8000"]
+    ports: ["127.0.0.1:58000:8000"]
+    healthcheck:
+      # "healthy" means "seeded", as everywhere here: the seed sidecar creates
+      # `fixture_seeded` LAST and this greps for it in a real `ListTables` reply, so
+      # the tier can never run against a half-loaded fixture.
+      #
+      # `curl` is used because it is what this image actually has — measured, not
+      # assumed: `wget` and `nc` are both ABSENT (the first version of this line used
+      # wget and the container sat in `health: starting` forever, reporting
+      # `wget: command not found` in its health log).
+      test: ["CMD-SHELL", "curl -sS -X POST http://127.0.0.1:8000/ -H 'content-type: application/x-amz-json-1.0' -H 'x-amz-target: DynamoDB_20120810.ListTables' -H 'authorization: AWS4-HMAC-SHA256 Credential=fixture/x/eu-west-1/dynamodb/aws4_request, SignedHeaders=host, Signature=00' -d '{}' | grep -q fixture_seeded"]
+      interval: 2s
+      timeout: 5s
+      retries: 90
+      start_period: 2s
+    mem_limit: 512m
+    stop_grace_period: 5s
+
+  # The seed, as a one-shot. It exits 0 once every table and item is written; the
+  # server's healthcheck only goes green after the marker table it creates LAST
+  # exists, so `up --wait` returning still means "queryable AND loaded".
+  dynamodb-seed:
+    image: curlimages/curl:8.11.1
+    depends_on:
+      dynamodb:
+        condition: service_started
+    entrypoint: ["/bin/sh", "/seed/dynamodb-seed.sh"]
+    volumes:
+      - ./seed/dynamodb-seed.sh:/seed/dynamodb-seed.sh:ro
+    restart: "no"
+    mem_limit: 64m

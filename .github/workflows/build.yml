@@ -1,0 +1,147 @@
+# Bundling and releasing.
+#
+# GitHub only creates the build, and every merge to main produces a new release. So:
+#   * every push/merge to `main` builds installers on macOS, Linux and Windows and
+#     publishes them as a new GitHub release (`build-<run number>`, marked Latest);
+#   * doc-only changes don't build (paths-ignore) — they'd produce identical binaries;
+#   * a `v*` tag or a manual run builds artifacts only (no release).
+# Tests are NOT run here: `npm run verify` on the machine doing the work is the gate
+# (scripts/verify.mjs). Nothing is signed: macOS notarization and Windows signing need secrets
+# this repo does not have, and the release notes say so.
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
+
+# A newer push to main supersedes an in-flight build: only the newest main gets a release.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundle:
+    name: Bundle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Tauri system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Runs `npm run build` first via tauri.conf.json's `beforeBuildCommand`,
+      # so the frontend dist/ is produced as part of this step.
+      - name: Build the app
+        run: npm run tauri build
+
+      - name: Upload bundles
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-${{ matrix.os }}
+          path: |
+            src-tauri/target/release/bundle/**
+          if-no-files-found: warn
+          # 1 day when this run publishes a release: the release job below reads these bundles minutes
+          # later, in this same run, and the installers then live in the release. 7 days for a `v*` tag
+          # or a manual run, whose only output these artifacts are. At 7 days for every build the
+          # account's Actions artifact storage filled up and every bundle upload failed.
+          # Pinned by scripts/workflows.test.mjs.
+          retention-days: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 1 || 7 }}
+
+  release:
+    name: Publish release
+    needs: bundle
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the tag + release
+      actions: read # download this run's artifacts
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download this run's bundles
+        run: gh run download "${{ github.run_id }}" --dir bundles
+
+      - name: Collect installers
+        run: |
+          mkdir -p out
+          find bundles -type f \( -name '*.dmg' -o -name '*.msi' -o -name '*-setup.exe' \
+            -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) -exec cp {} out/ \;
+          ls -la out
+          test -n "$(ls out)"
+          (cd out && sha256sum * > SHA256SUMS.txt)
+
+      - name: Publish
+        run: |
+          short="${GITHUB_SHA::7}"
+          tag="build-${{ github.run_number }}"
+          subject="$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA" --jq '.commit.message' | head -1)"
+          version="$(gh api "repos/$GH_REPO/contents/src-tauri/tauri.conf.json?ref=$GITHUB_SHA" \
+            --jq '.content' | base64 -d | jq -r .version)"
+          cat > notes.md <<NOTES
+          Automatic build of \`main\` at [\`$short\`](https://github.com/$GH_REPO/commit/$GITHUB_SHA): $subject
+
+          | Platform | File |
+          |---|---|
+          | macOS (Apple Silicon) | \`.dmg\` |
+          | Windows | \`.msi\` or \`-setup.exe\` |
+          | Linux | \`.deb\`, \`.rpm\` or \`.AppImage\` |
+
+          ⚠️ Not code-signed yet. macOS: right-click the app → **Open** the first time (or
+          \`xattr -dr com.apple.quarantine "/Applications/Agent Studio.app"\`). Windows: SmartScreen →
+          **More info → Run anyway**. Needs the \`claude\` CLI on your PATH.
+
+          Checksums: \`SHA256SUMS.txt\`.
+          NOTES
+          gh release create "$tag" out/* --target "$GITHUB_SHA" \
+            --title "Agent Studio $version · build ${{ github.run_number }} ($short)" \
+            --notes-file notes.md --latest
+

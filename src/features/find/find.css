@@ -1,0 +1,382 @@
+/* ── Find in Files (project-wide search overlay) ────────────────────────────
+   IntelliJ "Find in Files" model: a floating panel, not a full-screen modal, so
+   the IDE stays visible behind it. Theme variables from App.css. */
+
+.find-panel {
+  position: fixed;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  width: min(680px, calc(100vw - 48px));
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* ── search bar ─────────────────────────────────────────────────────────── */
+.find-panel__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.find-panel__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 5px 9px;
+  outline: none;
+}
+.find-panel__input:focus {
+  border-color: var(--accent);
+}
+.find-panel__mask {
+  flex: 0 0 130px;
+  min-width: 0;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 5px 8px;
+  outline: none;
+}
+.find-panel__mask:focus {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.find-panel__toggles {
+  display: flex;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+.find-toggle {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1;
+}
+.find-toggle:hover {
+  color: var(--text);
+}
+.find-toggle.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.find-panel__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.find-panel__close:hover {
+  background: var(--bg-app);
+  color: var(--text);
+}
+
+/* ── scope selector (Workspace ▾ + Folder ▾) ─────────────────────────────── */
+.find-panel__scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.find-scope {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.find-scope__select {
+  flex: 1 1 0;
+  min-width: 0;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 7px;
+  outline: none;
+  cursor: pointer;
+}
+.find-scope__select:focus {
+  border-color: var(--accent);
+  color: var(--text);
+}
+/* Locked Folder box under "All workspaces" — nothing to pick across many repos. */
+.find-scope__select:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* ── find-files: a flat list of filename hits ───────────────────────────── */
+.find-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.find-file {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 12px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+.find-file:hover {
+  background: var(--bg-elev);
+  color: var(--text);
+}
+.find-file__name {
+  font-weight: 600;
+  color: var(--text);
+  flex: 0 0 auto;
+}
+.find-file__path {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ── status / body ──────────────────────────────────────────────────────── */
+.find-panel__status {
+  padding: 14px 14px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+.find-panel__status--error {
+  color: #f0776a;
+  font-style: normal;
+  white-space: pre-wrap;
+}
+
+/* ── in-flight row: spinner + "Searching…" + the Stop control ────────────────
+   A search must be killable. The control lives WITH the
+   spinner rather than in the toolbar, so it exists exactly while there is
+   something to stop and appears where the user is already looking. */
+.find-panel__status--busy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-style: normal;
+}
+.find-panel__busy-label {
+  font-style: italic;
+}
+.find-spinner {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: find-spin 0.7s linear infinite;
+}
+@keyframes find-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Motion is decoration here — the words carry the meaning, so drop the spin. */
+@media (prefers-reduced-motion: reduce) {
+  .find-spinner {
+    animation: none;
+  }
+}
+.find-stop {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 10px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.find-stop:hover {
+  border-color: #f0776a;
+  color: #f0776a;
+}
+.find-stop:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.find-panel__results {
+  overflow-y: auto;
+  padding: 6px 0 8px;
+}
+.find-panel__count {
+  padding: 6px 14px;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.find-panel__truncated {
+  margin: 0 10px 6px;
+  padding: 5px 9px;
+  background: var(--accent-soft);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+/* ── grouped results ────────────────────────────────────────────────────── */
+.find-groups,
+.find-group__matches {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.find-group__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 12px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.find-group__header:hover {
+  background: var(--bg-elev);
+}
+.find-group__caret {
+  display: inline-flex;
+  color: var(--text-dim);
+  transition: transform 0.1s ease;
+  flex: 0 0 auto;
+}
+.find-group__caret.is-open {
+  transform: rotate(90deg);
+}
+/* Per-repo tag (only under "All workspaces" with ≥2 roots): a dim,
+   accent-tinted label that names the source repo, with a trailing "›" chevron. */
+.find-group__repo,
+.find-file__repo {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 11px;
+  opacity: 0.85;
+}
+.find-group__repo::after,
+.find-file__repo::after {
+  content: " ›";
+  color: var(--text-dim);
+}
+.find-group__name {
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.find-group__dir {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.find-group__badge {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 0 7px;
+}
+
+.find-match {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 2px 12px 2px 30px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: pre;
+  overflow: hidden;
+}
+.find-match:hover {
+  background: var(--bg-elev);
+  color: var(--text);
+}
+.find-match__ln {
+  flex: 0 0 auto;
+  min-width: 30px;
+  text-align: right;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+.find-match__code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.find-match__hit {
+  background: rgba(240, 200, 80, 0.28);
+  color: inherit;
+  border-radius: 2px;
+}

@@ -1,0 +1,492 @@
+[package]
+name = "agent-studio-scaffold"
+version = "0.1.0"
+description = "Cockpit for orchestrating fleets of AI coding agents"
+authors = ["Dan Zunder"]
+license = "AGPL-3.0-only"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "agent_studio_scaffold_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# Native directory picker for choosing a workspace.
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+portable-pty = "0.9"
+bytes = "1"
+ulid = "1"
+# Project-wide "Find in Files" via the ripgrep libraries — the same
+# engine rg uses, in-process (never shelling out to `rg`): `ignore` walks the tree
+# respecting `.gitignore`/hidden defaults, `grep-regex` builds the matcher,
+# `grep-searcher` does line-oriented binary-aware search, `grep-matcher` is the
+# `Matcher` trait for per-line span lookup. `regex` (already compiled in-tree) gives
+# literal-search escaping.
+grep-searcher = "0.1"
+grep-regex = "0.1"
+grep-matcher = "0.1"
+ignore = "0.4"
+regex = "1"
+anyhow = "1"
+# NOTE: `thiserror` is deliberately NOT a dependency — nothing in `src-tauri` needs
+# it (commands return `Result<_, String>` on the wire, so a typed error enum never
+# earned its place). Least-privilege dependency hygiene, the same rationale as leaving
+# out an unused opener plugin. Add it deliberately if a module ever wants a real
+# error type; do not add it speculatively.
+# `net` added for the ad-hoc-detection hook listener: a single
+# localhost endpoint on an ephemeral port. Hand-rolled on `tokio::net::TcpListener`
+# rather than pulling `hyper`/`axum` — one POST shape on 127.0.0.1 needs tight
+# control over size limits, read timeouts and a constant-time token check, which is
+# more auditable as ~100 lines of tokio than as a general HTTP server, and adds no
+# new crate (just the feature flag).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "process", "time", "net"] }
+# Per-launch secret token for the hook listener: CSPRNG bytes so a
+# local process can't forge phantom agents. `rand` is already compiled in-tree (via
+# `ulid`), so this is a direct-dep declaration, not a new build.
+rand = "0.9"
+# ── TLS policy for the three network clients — ONE provider, ONE trust story ─────
+#
+# All three outbound clients — `reqwest` (http.rs), `tokio-tungstenite` (ws.rs) and
+# `tonic` (grpc.rs) — share the same rustls 0.23 stack, and the two axes that used to
+# diverge are now decided on purpose:
+#
+# 1. **Crypto provider: `ring`, and only `ring`.** `reqwest`'s plain `rustls` feature is
+#    an alias for `__rustls-aws-lc-rs`, which pulled `aws-lc-rs` + `aws-lc-sys` (a
+#    BoringSSL fork, C + asm) into the binary ALONGSIDE the `ring` that
+#    tokio-tungstenite and `tonic/tls-ring` pull — two C crypto stacks in one app, while
+#    this file claimed one. Fixed by `rustls-no-provider` (= `__rustls` + the platform
+#    verifier, WITHOUT a provider) plus an explicit process-wide install of `ring` in
+#    `src/tls.rs::install_crypto_provider()`. `aws-lc-sys` is gone from the graph;
+#    `tests/tls_provider.rs` fails if it ever comes back.
+#    Why `ring` and not `aws-lc-rs`: it is already what 2 of 3 clients use (smallest
+#    behavioural delta), it is a much smaller body of vendored C/asm — and vendored C is
+#    audit surface that no dependency scanner watches — and it builds
+#    without cmake/nasm on every target we ship (zero-install). Accepted cost: `ring` has
+#    no post-quantum hybrid key exchange, so `http_send` no longer offers
+#    X25519MLKEM768. Nothing else did, and no host we talk to is known to need it. If the
+#    track flips, `tls-aws-lc` + `rustls` (default) reverses it in three lines.
+#    `rustls` is declared directly (below) ONLY so the provider install is explicit code
+#    rather than a feature-flag side effect; it is already compiled in-tree, so this is a
+#    declaration, not a new build (same rationale as `rand`/`libc`/`futures-util`).
+#
+# 2. **Trust roots: whatever the operating system trusts, plus the bundled Mozilla set.**
+#    This is a desktop IDE whose users point the API client at *their* hosts: internal
+#    services behind a corporate CA, and laptops behind a TLS-inspecting proxy
+#    (Zscaler/Netskope) that MITMs every connection with a locally-installed root. With
+#    bundled webpki roots ONLY — the old ws/grpc behaviour — every such request fails
+#    "unknown issuer" with no UI to add a CA (grpc.rs still carries that TODO). So the OS
+#    store is the primary source of truth, exactly as the user's browser and `curl`
+#    behave, and the bundled Mozilla set is kept as a union so a machine with an empty or
+#    broken system store still reaches public hosts.
+#    Mechanism, stated honestly because it is not identical across the three:
+#      * `reqwest` delegates the whole decision to the OS via `rustls-platform-verifier`
+#        (macOS Security.framework / Windows CryptoAPI / OpenSSL-probe dirs on Linux), so
+#        OS revocation and trust *policy* apply too. This is not optional — BOTH `rustls`
+#        and `rustls-no-provider` pull `rustls-platform-verifier`, so it cannot be
+#        feature-flagged away; we now rely on it deliberately instead of by accident.
+#      * `tonic` and `tokio-tungstenite` expose no hook for a raw `rustls::ClientConfig`
+#        in 0.14 / 0.30, so they use their `*-native-roots` + `*-webpki-roots` features,
+#        which LOAD the OS anchor set (via `rustls-native-certs`) and union it with the
+#        Mozilla set, then verify with webpki. Same anchors, no OS revocation/policy.
+#        Net effect: `reqwest` is the strictest of the three, never the laxest, so there
+#        is no "works over gRPC but not over HTTP" cliff for a corporate CA.
+#    One asymmetry worth knowing, because it is in the crates and not in our code:
+#    `tokio-tungstenite` treats an EMPTY OS anchor set as non-fatal when webpki-roots is
+#    also on, but `tonic` returns `NativeCertsNotFound` regardless. So on a hypothetical
+#    Linux box with no `ca-certificates` installed, `grpcs://` would fail where `wss://`
+#    and `https://` still work. macOS and Windows always have a store, so this is a
+#    Linux-packaging note, not a live bug — revisit if we ever ship Linux.
+#    Note: `security-framework` is in the graph because of this, and that is fine —
+#    `rustls-platform-verifier`/`rustls-native-certs` read trust *anchors* (no ACL, no
+#    password prompt), never Keychain credentials.
+#
+# Built-in API client engine: the `http_send` command runs
+# requests in the Rust core, not the webview's `fetch`. `default-features = false` keeps
+# us off the system OpenSSL/native-tls (dependency hygiene, same rationale as the rest of
+# the tree); `gzip`/`brotli`/`deflate` decompress encoded responses so the returned body
+# is the real payload. Pinned to `0.13` to unify with the copy `tauri` already resolves
+# transitively rather than pulling a second, semver-incompatible one (which would double
+# the TLS/hyper/h2 stack in the tree). On 0.13 the rustls features are `rustls` /
+# `rustls-no-provider`; the 0.12 name `rustls-tls` no longer exists.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "gzip", "brotli", "deflate"] }
+# The single crypto provider, installed process-wide at startup (`src/tls.rs`). Declared
+# directly so the choice is auditable code instead of a transitive feature flag.
+# `default-features = false` is load-bearing: rustls's defaults are
+# `["aws_lc_rs", "logging", "prefer-post-quantum", "std", "tls12"]`, and two of those
+# would drag `aws-lc-sys` straight back in.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# WebSocket/WSS client for the API client: `ws_connect`/`ws_send`/
+# `ws_close` run a real WS session in the Rust core. Same TLS story as `reqwest` above —
+# `default-features = false` keeps us off native-tls/OpenSSL and reuses the rustls 0.23
+# stack (no second TLS/webpki copy in the tree). `connect` enables `connect_async` (the
+# client handshake). `rustls-tls-native-roots` + `rustls-tls-webpki-roots` together make
+# tungstenite's default root store the UNION of the OS anchors and the bundled Mozilla
+# set (see the TLS policy block above); with both on, an empty OS store is explicitly
+# non-fatal in tungstenite's own code.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots", "rustls-tls-webpki-roots"] }
+# Drives the WebSocket stream's `Sink`/`Stream` halves (`SinkExt::send`, `StreamExt::next`
+# + `split`) in `ws.rs`. Already compiled in-tree (reqwest pulls 0.3.x); declaring it direct
+# with only `sink`/`std` keeps the read + write tasks of one connection concurrent.
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+# Native, in-process gRPC engine for the API client (no `grpcurl` shell-out — no
+# external binary required). `tonic` is the gRPC/HTTP-2 client
+# transport; it unifies on the same hyper 1.x + h2 + tower stack the tree already resolves,
+# so it does NOT add a second HTTP/2 stack. `default-features = false` drops the server,
+# router (axum) and codegen defaults we don't use, keeping only the client `channel` plus
+# TLS. `tls-ring` is the same single provider the whole app installs (see the TLS policy
+# block above) — it is genuinely the only backend. `tls-native-roots` +
+# `tls-webpki-roots` are what `grpc.rs`'s `with_enabled_roots()` unions: the OS trust
+# anchors first (so an internal `grpcs://` behind a corporate CA verifies) and the bundled
+# Mozilla set as the floor. Still no native-tls/OpenSSL anywhere.
+# `prost` is the protobuf runtime (the `Message` trait our dynamic
+# codec drives). `prost-reflect` (with `serde`) gives the runtime `DescriptorPool` +
+# `DynamicMessage` ⇄ canonical-protobuf-JSON mapping that makes arbitrary services callable
+# without codegen. `prost-types` supplies `FileDescriptorProto` for assembling the pool from
+# reflection. `tonic-reflection` provides the generated gRPC server-reflection client stubs
+# (v1 + v1alpha) we use to pull descriptors at runtime. Versions pinned as a set verified
+# mutually compatible: tonic 0.14 ⇔ prost 0.14 ⇔ prost-reflect 0.16.
+tonic = { version = "0.14", default-features = false, features = ["channel", "tls-ring", "tls-native-roots", "tls-webpki-roots"] }
+prost = "0.14"
+prost-reflect = { version = "0.16", features = ["serde"] }
+prost-types = "0.14"
+tonic-reflection = { version = "0.14", default-features = false }
+
+# macOS-only: the terminal cwd-tracker reads a shell child's working
+# directory via `proc_pidinfo(PROC_PIDVNODEPATHINFO)` to install the ad-hoc hook at
+# each repo the user `cd`s into (workspace-scoped, never `~/.claude`).
+# `libc` is already compiled in-tree transitively (tokio/portable-pty/reqwest/…), so
+# this is a direct-dep DECLARATION, not a new build — same rationale as `rand` above —
+# and adds no new `cargo audit` surface. Preferred over the `libproc` crate (a new dep)
+# and over a hand-transcribed FFI struct: `libc` carries the maintained, correct
+# `proc_vnodepathinfo` layout, so there is zero struct-layout risk.
+# IntelliJ-style editor git blame. Blame needs real history traversal,
+# which is far beyond the hand-rolled `.git` reader in `git.rs` — and we never shell
+# out to `git` (GUI PATH; see git.rs's doc header). `default-features = false` drops
+# the network stack entirely (ssh/https via openssl) — blame is local-only, so none
+# of that attack/audit surface is compiled in. `vendored-libgit2` forces the bundled
+# libgit2 to be built from source with `cc`, so the build is self-contained and
+# deterministic on every platform (zero-install principle) instead of depending on
+# whether a system libgit2 happens to be present and ABI-compatible.
+# `>= 0.21` is a SECURITY FLOOR, not a routine bump: 0.20.4 carries
+# two `unsound` RustSec advisories, both fixed in 0.21.0 — RUSTSEC-2026-0183
+# (`Remote::list()` builds a slice from a null pointer; we never use remotes) and
+# RUSTSEC-2026-0184 (a `blame_buffer`-derived `BlameHunk` could build a `Signature` over
+# a NULL author/committer pointer). We use `blame_file`, so we were not exposed — but the
+# unsaved-buffer overlay that `git_blame.rs` contemplates would be, so the floor is pinned
+# and gated by `tests/git_blame.rs::blame_buffer_signatures_are_null_checked_options`.
+# `default-features = false` is now belt-and-braces: 0.21 also made `default = []`
+# (ssh/https/cred are opt-in), so the flag documents intent as much as it enforces it.
+# libgit2-sys stays at 0.18.7+1.9.6 (0.21 requires >= 0.18.4), so no C code moved.
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
+
+# ── Database client — src/db/ ─────────────────────────────────────────────────────
+#
+# `sqlx` is the driver for the **postgres and mysql families** (four of the eight engine
+# presets). Both are on: `postgres` serves Postgres and Aurora
+# PostgreSQL, `mysql` serves MySQL and Aurora MySQL, through the SAME generic code path in
+# `db/engine.rs` (`collect`/`columns_of`/`read_row` are generic over `sqlx::Database`, so the
+# two engines share the result-shaping rather than each keeping a copy of it).
+#
+# Every flag here is load-bearing:
+#
+# * `default-features = false` drops `macros` (compile-time-checked SQL we never use — a
+#   database *browser* has no queries known at compile time), `migrate`, `any`, `json`,
+#   and the `sqlx-sqlite` bundle (which would compile C again — the zero-install
+#   principle cuts the other way for SQLite).
+# * `runtime-tokio` reuses the app's single tokio runtime. There is no second reactor.
+# * **`tls-rustls-ring-native-roots` is the ONLY correct TLS flag for this tree, and the
+#   natural-looking alternatives are all wrong.** The whole binary is unified on
+#   `ring` and `tests/tls_provider.rs` FAILS if `aws-lc-sys`/`aws-lc-rs` reappears.
+#   `sqlx`'s plain `tls-rustls` is an alias for `tls-rustls-aws-lc-rs`, which would put a
+#   second C crypto stack (BoringSSL fork) back in the binary and turn that gate red;
+#   `tls-rustls-ring-webpki` would ignore the OS trust store, diverging from the TLS
+#   trust policy above (a desktop IDE points at internal hosts behind corporate CAs). The
+#   `-native-roots` variant loads the OS anchors via `rustls-native-certs`, exactly like
+#   `tonic`/`tokio-tungstenite` do. Verified after adding: `aws-lc-sys` and `aws-lc-rs`
+#   are absent from `Cargo.lock` and `ring` is still the one provider.
+# * **`mysql-rsa` is deliberately NOT enabled, and must never be**: it pulls
+#   `rsa 0.10.0-rc.18`, which carries RUSTSEC-2023-0071 (Marvin timing attack, potential
+#   private-key recovery) with an affected range of `>= 0.0.0-0` and **no fixed version at
+#   all**. `npm run audit` is zero-tolerance for production vulnerabilities, so
+#   enabling it would permanently red the audit gate. The consequence is a product
+#   decision, not a bug: MySQL 8's default `caching_sha2_password` can only complete full
+#   authentication inside a TLS tunnel, which is why the mysql/aurora-mysql presets default
+#   to `sslMode: "require"` (see `db/engines.rs`).
+#
+# sqlx sets the project's Rust floor to **MSRV 1.94** — the first dependency to raise it
+# above what `tauri` needs. Fine today (local 1.96, CI `dtolnay/rust-toolchain@stable`),
+# recorded because it is a real constraint now.
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "mysql", "tls-rustls-ring-native-roots"] }
+# Percent-encoding for connection-string build/parse. Encoding a password
+# containing `@ : / ? # [ ] %`, a quote, a space or an emoji is exactly where hand-rolled
+# URL code breaks, so THAT part is delegated to `percent-encoding`'s RFC 3986 sets rather
+# than written here.
+#
+# ⚠️ Delegating the *structure* to the `url` crate as well
+# (`Url::set_username` / `set_host` / `form_urlencoded`) does not survive contact
+# with the crate, and `db/url.rs`'s module doc explains why in full: WHATWG-"special"
+# schemes are only `http(s)`, `ws(s)`, `ftp` and `file`, so `postgresql://`, `mongodb://`,
+# `redis://` and `clickhouse://` all get an **opaque host** which `url` percent-encodes and
+# does not lowercase — it would rewrite a host, refuse a MongoDB seed list, and emit `+`
+# for spaces in the query. `url` is therefore NOT declared here: the splitting is ours
+# (~120 lines, exhaustively table- and property-tested), the escaping is the crate's.
+percent-encoding = "2"
+# The `DbEngine`/`DbSession` seam needs async methods on a `dyn` trait object, so
+# the engine registry can hold `Box<dyn DbEngine>` and adding an engine cannot reach into
+# the command layer. Native `async fn` in traits is not `dyn`-compatible. Already in
+# `Cargo.lock` (via `tauri`/`tonic`) — a declaration, not a new build.
+async-trait = "0.1"
+# ── MongoDB — src/db/mongo.rs ─────────────────────────────────────────────────────
+#
+# The official driver, and the only maintained pure-Rust one (`mongosh` is a shell-out, which
+# this app never does, so there is no alternative to discuss). Apache-2.0.
+# **This is a genuinely new crate family** — unlike `ring`/`base64`/`async-trait`, which are
+# declarations of things already compiled.
+#
+# Every flag is deliberate; the default feature set is WRONG for this tree twice over:
+#
+# * `default-features = false` — the defaults are `["compat-3-0-0", "rustls-tls",
+#   "dns-resolver"]`, and `compat-3-0-0` pins **bson 2**. We want bson 3, which is the current
+#   line and the one whose `Bson::into_relaxed_extjson` shape `db/mongo.rs` renders cells with.
+# * `compat-3-3-0` is NOT optional: the crate `compile_error!`s without one of the
+#   `compat-*` flags and without one of `bson-2`/`bson-3`. It is the "I have read the 3.3
+#   breaking changes" acknowledgement, not a feature.
+# * `bson-3` selects bson 3.x and re-exports it as `mongodb::bson`.
+# * 🔴 **`rustls-tls`, never `rustls-tls-aws-lc`.** The whole binary is unified on
+#   `ring` and `tests/tls_provider.rs` FAILS if `aws-lc-sys`/`aws-lc-rs` reappears.
+#   `mongodb`'s `rustls-tls` is `["rustls/ring", "tokio-rustls/ring", "webpki-roots"]` — the
+#   right provider, explicitly. The sibling `rustls-tls-aws-lc` would put a second C crypto
+#   stack back in the binary; `openssl-tls` would need a system OpenSSL.
+#   Verified after adding: `grep -c aws-lc src-tauri/Cargo.lock` = 0, `ring` still one copy.
+#   ⚠️ A divergence from the *trust* policy above, recorded rather than smoothed over:
+#   `rustls-tls` pulls **`webpki-roots` only** — the driver has no hook for a
+#   `rustls::ClientConfig`, so a MongoDB TLS connection does NOT consult the OS trust store
+#   the way `reqwest`/`tonic`/`tokio-tungstenite`/`sqlx` do. A corporate-CA host therefore
+#   needs its CA supplied explicitly; see `db/mongo.rs`'s `ca_pem` note for why that is
+#   currently refused rather than silently ignored.
+# * `dns-resolver` stays **on**, and it is what costs us `hickory-*` + `moka`. It is what
+#   makes `mongodb+srv://` resolve, Atlas hands out `mongodb+srv://` URIs, and the Mongo row
+#   in `db/engines.rs` lists that scheme — a driver that cannot open the string Atlas gives
+#   you is not a driver. RUSTSEC-2026-0119 (O(n²) DNS name decompression) affects
+#   `hickory-proto` < 0.26.1; `mongodb` requires `^0.26` so a fresh resolution takes 0.26.1+,
+#   and `npm run audit` is the gate that notices if a stale lock ever pins lower.
+# * OFF, every one on purpose: `snappy-/zlib-/zstd-compression` (a console moves kilobytes),
+#   `aws-auth`/`gssapi-auth`/`azure-*`/`gcp-*` (each an SDK-sized credential chain),
+#   `in-use-encryption` (libmongocrypt — a C library, i.e. an install), `socks5-proxy`,
+#   `sync` (we are already on tokio), `cert-key-password`, `tracing-unstable`.
+mongodb = { version = "3.8", default-features = false, features = ["compat-3-3-0", "bson-3", "rustls-tls", "dns-resolver"] }
+# `bson` is `mongodb`'s own BSON crate, re-exported as `mongodb::bson` — declared here for **one
+# feature**: `serde_json-1`, which is what gates `Bson::into_relaxed_extjson()`. That function is
+# how result-grid cells are rendered, and without the flag it does not exist (`extjson::json` is
+# `#[cfg(feature = "serde_json-1")]`). `mongodb` asks for `bson3` with only `["serde"]`, so the
+# feature has to be requested somewhere, and requesting it here is auditable rather than a
+# side effect of some other flag. **Zero new packages**: `bson 3.1.0` is already in `Cargo.lock`
+# via `mongodb` and this unifies with that copy — same rationale as `rand`/`libc`/`futures-util`/
+# `async-trait`/`ring`/`base64` above. `serde` is re-stated because a direct declaration replaces
+# nothing but must not *narrow* what mongodb needs. MIT.
+bson = { version = "3.1", features = ["serde", "serde_json-1"] }
+
+# ── Shareable config bundles (export/import) — src/portability/ ──────────────────────
+#
+# `ring` is the sealing primitive pair: PBKDF2-HMAC-SHA256 for the key derivation and
+# AES-256-GCM for the AEAD. It is declared directly for the same reason `rustls` above is —
+# so the crypto choice is auditable code rather than a transitive feature flag — and it is
+# **the same single provider the whole binary is unified on**, not a second one:
+# `rustls`/`tonic`/`tokio-tungstenite`/`sqlx` all already resolve `ring 0.17`, so
+# `grep -c '^name = "ring"' Cargo.lock` stays at 1 and `tests/tls_provider.rs` (which fails
+# if `aws-lc-sys` ever reappears) is untouched. Argon2id would be the stronger KDF and was
+# rejected precisely because it WOULD be a new dependency; the 600 000-iteration count
+# travels inside every bundle so it can be raised later.
+#
+# `base64` encodes the salt, the nonce and the ciphertext into the bundle's JSON.
+#
+# **Both are already compiled in-tree, so declaring them installs ZERO new packages** —
+# measured before the change: `ring 0.17.14` (one copy) and `base64` at both 0.21.7 and
+# 0.22.1. Same rationale as `rand`/`libc`/`futures-util`/`async-trait` above: a declaration,
+# not a new build, and no new `cargo audit` surface. `0.22` is the newer of the two `base64`
+# copies already present, so this adds no third one.
+ring = "0.17"
+base64 = "0.22"
+# ── Redis / Valkey — src/db/redis.rs ─────────────────────────────────────────────────
+# `redis` (redis-rs) 1.5, BSD-3-Clause. **6 new packages** (602 → 608 in Cargo.lock): `redis`,
+# `arcstr`, `async-lock`, `event-listener-strategy`, `ryu`, `xxhash-rust`. Measured, not
+# estimated.
+#
+# * `default-features = false` drops the whole of redis-rs's optional surface (29 features), which
+#   is where its weight lives: `cluster`, `sentinel`, `json`, `geospatial`, `streams` typed
+#   helpers, `r2d2`/`bb8`/`deadpool` pools, `ahash`, `num-bigint`. This console sends a command
+#   line and renders the reply, so a typed helper for every Redis data type buys nothing and pulls
+#   crates that must then be audited on every bump.
+# * `tokio-comp` is the async driver on the runtime we already run. `tokio-rustls-comp` is TLS
+#   (`rediss://`) — **not** `tokio-native-tls-comp`, which would need a system OpenSSL,
+#   and there is no aws-lc variant to get wrong here.
+# * 🔴 **The single-`ring` rule holds, verified rather than assumed.** redis-rs declares `rustls` with
+#   `default-features = false` (so rustls's own default `aws-lc-rs` provider is NOT pulled) and
+#   builds its config with a bare `rustls::ClientConfig::builder()` (`src/connection.rs:1190`),
+#   which resolves the **process-default** provider — the `ring` one `db::tls::install()` puts
+#   there. After adding: `grep -c aws-lc Cargo.lock` = 0 and `ring` is still a single copy.
+# * Trust roots: `rustls-native-certs`, i.e. the **OS store**, matching `tonic` and
+#   `tokio-tungstenite` exactly. Unlike `reqwest` there is no
+#   platform verifier, and unlike `mongodb` there are no bundled webpki roots — so on a Linux box
+#   with no `ca-certificates` installed a `rediss://` connection fails for want of anchors, which
+#   is the same Linux-packaging caveat the TLS policy block above describes.
+redis = { version = "1.5.0", default-features = false, features = ["tokio-comp", "tokio-rustls-comp"] }
+# ── SQL → MongoDB translation — src/db/sqlmongo.rs ────────────────────────────────────
+# The DB console accepts SQL such as `select * from ARCHIVEDB.items LIMIT 10;` against MongoDB.
+# MongoDB's wire protocol has no SQL, so the console **translates** it client-side. `sqlparser` parses; the mapping to a command document is ours,
+# because that is where the decisions are (and where a wrong one returns wrong data silently).
+#
+# 🔴 `default-features = false, features = ["std"]` is deliberate and measured, not tidiness:
+#   * defaults ON  → +7 packages, including `recursive` → `stacker` → **`psm`, which compiles C**
+#     and would land a new entry in the vendored-C gate (`scripts/audit.mjs`) for a parser.
+#   * defaults OFF → **+1 package** (608 → 609): `sqlparser` alone; `log` was already in the tree.
+# The cost of turning `recursive-protection` off is that deeply nested SQL could overflow the
+# stack, so `sqlmongo` refuses input past a length bound instead of relying on the crate to
+# catch it. Apache-2.0, and the same crate DataFusion uses.
+sqlparser = { version = "0.62.0", default-features = false, features = ["std"] }
+# ── Network capture proxy — src/netcap/ ───────────────────────────────────────────────
+# An in-process HTTP(S)/WS/gRPC capture proxy
+# on 127.0.0.1 that every PTY we spawn is pointed at. Hand-rolled on hyper rather than
+# `hudsucker`: hudsucker pins its own hyper/rustls/rcgen feature sets (and an `openssl` CA
+# option), and we already compile every layer it would wrap.
+#
+# * `hyper`, `hyper-util`, `http`, `http-body-util`, `tokio-rustls`, `rustls-native-certs`,
+#   `webpki-root-certs`, `flate2`, `brotli` are **all already in Cargo.lock** (pulled by
+#   reqwest/tonic/tungstenite/platform-verifier/async-compression) — declaring them adds ZERO
+#   packages; they are declarations so the proxy can use the `server` halves and the raw
+#   connection APIs directly. `tokio-rustls` is `default-features = false` because its
+#   defaults include `aws_lc_rs` (`ring` is the only provider). `brotli` drops its
+#   `ffi-api` default; `flate2` keeps its pure-Rust `miniz_oxide` backend (no zlib, no C).
+#   `webpki-root-certs` is the bundled Mozilla set as full DER certificates (webpki-roots only
+#   ships trust anchors, which cannot be written into the PEM bundle child processes read).
+# * `rcgen` mints the capture CA (once, into the app config dir) and one leaf per host for
+#   decrypt mode. `default-features = false, features = ["crypto", "pem", "ring"]` — the
+#   `ring` backend, never `aws_lc_rs`; no `x509-parser` (we rebuild the issuer from our own
+#   constant DN + the stored key instead of parsing our own cert back). Pinned to **0.13, not
+#   0.14**, measured: 0.14 locks +17 packages (its `pem 4` drags a THIRD `base64`, and its weak
+#   `x509-parser?/verify` edge makes Cargo lock the whole asn1/nom/der-parser tree even though
+#   it is never compiled — and `cargo audit` scans the lockfile, not the build). 0.13 locks
+#   +3: `rcgen`, `pem` (on the `base64 0.22` already here), `yasna`. Plus `httpdate`, which is
+#   hyper's `server` feature. Total 609 → 613. `grep -c aws-lc Cargo.lock` stays 0 and `ring`
+#   stays one copy (tests/tls_provider.rs enforces the former). MIT OR Apache-2.0.
+hyper = { version = "1", features = ["server", "client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1", "http2"] }
+http = "1"
+http-body-util = "0.1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-native-certs = "0.8"
+webpki-root-certs = "1"
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+brotli = { version = "8", default-features = false, features = ["std"] }
+# rcgen's validity window is a `time::OffsetDateTime`; `time 0.3` is already in the lock
+# (rcgen and tauri's plist/cookie stack pull it), so this is a declaration, not a new package.
+time = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+# `libc` is a unix dependency, not a macOS-only one, for the whole-computer Network view:
+# `netmachine::rdns` calls `getnameinfo(NI_NAMEREQD)`
+# for the reverse-DNS `remoteHost` on macOS AND Linux — std and tokio can resolve forward
+# but not reverse. macOS still uses it for `proc_pidinfo` (`pty/cwd.rs`). It was already
+# in the lock and already compiled on Linux (tokio, portable-pty…), so this is a
+# declaration, not a new package: measured Cargo.lock delta = 0 packages. Windows never
+# links it — `remoteHost` stays null there.
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# The Windows backends of the Network view: `netmachine::windows` reads the
+# kernel's TCP/UDP tables with their owning pids (iphlpapi), names pids from a Toolhelp snapshot
+# and reverse-resolves with Winsock's `getnameinfo`; `netcap::client` uses the same table to
+# name the process behind a proxy connection. Typed bindings rather than hand-written `extern`
+# blocks: a wrong struct layout here cannot be caught by a build on macOS or Linux.
+# `windows-sys` 0.61 was already in the lock (tokio, socket2, rustls-platform-verifier… pull
+# it), so this is a declaration, not a new package.
+#
+# The rest of the Windows backends — the process table
+# (`procscan::os`, `pty::cwd`: Toolhelp + token SID + `NtQueryInformationProcess` command line +
+# PEB cwd/env via `ReadProcessMemory`), capacity (`GlobalMemoryStatusEx`,
+# `K32GetProcessMemoryInfo`), System app logs from the Event Log (`EvtSubscribe` / `EvtRender` /
+# `EvtFormatMessage`), focusing an outside agent's window (`EnumWindows` / `SetForegroundWindow`),
+# `CommandLineToArgvW`, no-follow opens (`FILE_FLAG_OPEN_REPARSE_POINT`). Features of the same
+# package — no new crate.
+#
+# A dev app's open log files (`procscan::winproc`: `NtQueryVolumeInformationFile`
+# for a handle's device type) — `Wdk_Storage_FileSystem` + `Win32_System_IO`, both already
+# enabled in the build by mio; declared so this crate does not depend on that by accident.
+windows-sys = { version = "0.61", features = [
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Wdk_System_Threading",
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_EventLog",
+    "Win32_System_IO",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# WebView2's browser accelerator keys off in the app's windows (`webview_keys`:
+# Ctrl+R/F5 reloaded the whole IDE). Tauri 2.11 has no option for it, so the setting is made on
+# the controller Tauri hands to `with_webview`, whose type is `webview2-com`'s. Both crates are
+# already in the lock at these versions (wry depends on them): measured Cargo.lock delta = 0
+# packages. Pin with Tauri — `with_webview`'s docs say these move in Tauri minor releases.
+webview2-com = "0.38"
+windows-core = "0.61"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# NOTE: a `security-framework` Keychain reader to fetch usage limits via
+# `GET /api/oauth/usage` used to live here and was REMOVED — reading that
+# credential made macOS raise a password prompt (the item's ACL trusts the `claude`
+# binary, not ours). The usage strip now asks the CLI itself
+# (`claude -p --no-session-persistence "/usage"`), so this app needs no credential
+# access at all and no new dependency. Do not re-add a Keychain reader.
+
+[dev-dependencies]
+# `regex` is a regular dependency (literal-search escaping), so the
+# fixtures secret-scan (`tests/fixtures_no_secrets.rs`) uses it from there.
+# `test-util` gives the coalescer tests `tokio::time::pause()`/virtual time, so the
+# 8ms bound is asserted deterministically instead of by sleeping.
+tokio = { version = "1", features = ["test-util"] }
+
+# SECURITY: portable-pty 0.9.0 loads a sideloaded `conpty.dll` by **bare name** on
+# Windows (`src/win/psuedocon.rs`), so the DLL search order lets anyone who can
+# write next to our .exe — or to our cwd — run code in our process (CWE-427).
+# 0.9.0 is the latest published version; there is no fixed release to bump to, so
+# we vendor it with the sideload removed. See `vendor/portable-pty/src/win/psuedocon.rs`
+# for the full rationale and `tests/dll_hijack_guard.rs` for the CI gate.
+# The vendored crate is MIT (same as upstream). Drop this patch once upstream
+# merges the fix.
+#
+# LOCAL PATCH #2: the pseudoconsole is
+# created WITHOUT `PSEUDOCONSOLE_INHERIT_CURSOR`. With it, conhost sends `ESC[6n` and holds
+# the child until a cursor report comes back — xterm.js answered it in the app, so nothing
+# looked wrong, but every PTY spawned before its UI attached (restored agents, background
+# views, every headless test) hung, and even `cmd /C "exit 0"` never exited. A fresh
+# terminal has no cursor to inherit. A re-vendor must keep BOTH patches; see the
+# "local patch #2" block in `vendor/portable-pty/src/win/psuedocon.rs` and
+# `tests/pty_lifecycle.rs::a_child_that_exits_at_once_is_reaped_with_nobody_answering_the_terminal`.
+[patch.crates-io]
+portable-pty = { path = "vendor/portable-pty" }
+

@@ -1,0 +1,4 @@
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Agent","id":"t-a00","input":{"subagent_type":"general-purpose","description":"Flat depth-1 agent"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t-a00","is_error":false}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Workflow","id":"toolu-wf-alpha","input":{"description":"parser sweep"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu-wf-alpha","content":"Workflow launched in background. Task ID: wtestalpha\nSummary: Read the parser stage by stage and report what each one does\nTranscript dir: /w/proj/.claude/sess/subagents/workflows/wf_alpha11111-aaa\nScript file: /w/proj/.claude/sess/workflows/scripts/demo-wf_alpha11111-aaa.js\nRun ID: wf_alpha11111-aaa\nYou will be notified when it completes. Use /workflows to watch live progress."}]}}

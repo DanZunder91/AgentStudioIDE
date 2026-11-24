@@ -1,0 +1,3 @@
+{"type":"started","key":"v2:aaaa1111","agentId":"wfa11"}
+{"type":"started","key":"v2:aaaa2222","agentId":"wfa12"}
+{"type":"result","key":"v2:aaaa1111","agentId":"wfa11","result":{"states":7}}

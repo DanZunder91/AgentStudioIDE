@@ -1,0 +1,20 @@
+{
+  "latitude": -33.875,
+  "longitude": 151.25,
+  "generationtime_ms": 0.03,
+  "utc_offset_seconds": 36000,
+  "timezone": "Australia/Sydney",
+  "timezone_abbreviation": "GMT+10",
+  "elevation": 22.0,
+  "current": {
+    "time": 1790250300,
+    "interval": 900,
+    "temperature_2m": null,
+    "precipitation": 0.05,
+    "weather_code": 53,
+    "cloud_cover": 88,
+    "wind_speed_10m": null,
+    "wind_direction_10m": null,
+    "is_day": 0
+  }
+}

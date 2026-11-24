@@ -1,0 +1,47 @@
+{
+  "latitude": 25.75,
+  "longitude": -80.25,
+  "generationtime_ms": 0.0617,
+  "utc_offset_seconds": -14400,
+  "timezone": "America/New_York",
+  "timezone_abbreviation": "GMT-4",
+  "elevation": 40.0,
+  "current_units": {
+    "time": "unixtime",
+    "interval": "seconds",
+    "temperature_2m": "°C",
+    "precipitation": "mm",
+    "rain": "mm",
+    "showers": "mm",
+    "snowfall": "cm",
+    "weather_code": "wmo code",
+    "cloud_cover": "%",
+    "wind_speed_10m": "km/h",
+    "wind_direction_10m": "°",
+    "is_day": ""
+  },
+  "current": {
+    "time": 1790250300,
+    "interval": 900,
+    "temperature_2m": 27.9,
+    "precipitation": 2.88,
+    "rain": 2.28,
+    "showers": 0.6,
+    "snowfall": 0.0,
+    "weather_code": 95,
+    "cloud_cover": 100,
+    "wind_speed_10m": 52.0,
+    "wind_direction_10m": 270,
+    "is_day": 1
+  },
+  "daily_units": {
+    "time": "unixtime",
+    "sunrise": "unixtime",
+    "sunset": "unixtime"
+  },
+  "daily": {
+    "time": [1790222400],
+    "sunrise": [1790247660],
+    "sunset": [1790291400]
+  }
+}

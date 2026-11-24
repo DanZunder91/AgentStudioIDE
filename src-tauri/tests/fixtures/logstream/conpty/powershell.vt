@@ -1,0 +1,123 @@
+# Windows PowerShell 5.1 + PSReadLine through ConPTY
+# recorded by tests/logstream_conpty.rs::record_conpty_fixtures
+# spawn powershell 24x80 in C:\
+< \x1b[?9001h\x1b[?1004h
+< \x1b[?25l\x1b[2J\x1b[m\x1b[H\x1b]0;Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.EXE\x07\x1b[?25h
+< PS C:\\> 
+# quiet
+# type 'G'
+< \x1b[?25l
+< \x1b[93mG\x1b[?25h
+# type 'e'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x08Ge\x1b[?25h
+# type 't'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[1;9HGet\x1b[?25h
+# type '-'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[1;9HGet-\x1b[?25h
+# type 'L'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[1;9HGet-L\x1b[?25h
+# type 'o'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[1;9HGet-Lo\x1b[?25h
+# type 'c'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[1;9HGet-Loc\x1b[?25h
+# type 'a'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[1;9HGet-Loca\x1b[?25h
+# type 't'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[1;9HGet-Locat\x1b[?25h
+# type 'i'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[1;9HGet-Locati\x1b[?25h
+# type 'o'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[1;9HGet-Locatio\x1b[?25h
+# type 'n'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[1;9HGet-Location\x1b[?25h
+# type Enter
+< \x1b[m
+< \x1b[?25l\x1b[3;1HPath\x0d\x0a----\x0d\x0aC:\\ \x1b[8;1HPS C:\\> \x1b[?25h
+# quiet
+# type 'p'
+< \x1b[?25l
+< \x1b[93mp\x1b[?25h
+# type 'i'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x08pi\x1b[?25h
+# type 'n'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hpin\x1b[?25h
+# type 'g'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping\x1b[?25h
+# type ' '
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[?25h
+# type '-'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[37m-\x1b[?25h
+# type 'n'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n\x1b[?25h
+# type ' '
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[?25h
+# type '2'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[97m2\x1b[?25h
+# type ' '
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[97m2 \x1b[?25h
+# type '1'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[97m2 1\x1b[?25h
+# type '2'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[97m2 12\x1b[?25h
+# type '7'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[97m2 127\x1b[?25h
+# type '.'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[97m2 127.\x1b[?25h
+# type '0'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[97m2 127.0\x1b[?25h
+# type '.'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[97m2 \x1b[37m127.0.\x1b[?25h
+# type '0'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[97m2 \x1b[37m127.0.0\x1b[?25h
+# type '.'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[97m2 \x1b[37m127.0.0.\x1b[?25h
+# type '1'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[8;9Hping \x1b[90m-n \x1b[97m2 \x1b[37m127.0.0.1\x1b[?25h
+# type Enter
+< \x1b[m
+< \x0d\x0a
+< \x0d\x0aPinging 127.0.0.1 with 32 bytes of data:\x0d\x0aReply from 127.0.0.1: bytes=32 time<1ms TTL=128\x0d\x0a
+# resize 20x40
+< \x1b[?25l\x1b[8;20;40t\x1b[HPS C:\\> \x1b[93mGet-Location\x1b[K\x1b[m\x0d\x0a\x1b[K\x0d\x0aPath\x1b[K\x0d\x0a----\x1b[K\x0d\x0aC:\\\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0aPS C:\\> \x1b[93mping \x1b[90m-n \x1b[97m2 \x1b[37m127.0.0.1\x1b[K\x1b[m\x0d\x0a\x1b[K\x0d\x0aPinging 127.0.0.1 with 32 bytes of data:\x0d\x0aReply from 127.0.0.1: bytes=32 time<1ms TTL=128\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x1b[13;1H\x1b[?25h
+# quiet
+# resize 30x100
+< \x1b[?25l\x1b[HPS C:\\> \x1b[93mGet-Location\x1b[K\x1b[m\x0d\x0a\x1b[K\x0d\x0aPath\x1b[K\x0d\x0a----\x1b[K\x0d\x0aC:\\\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0aPS C:\\> \x1b[93mping \x1b[90m-n \x1b[97m2 \x1b[37m127.0.0.1\x1b[K\x1b[m\x0d\x0a\x1b[K\x0d\x0aPinging 127.0.0.1 with 32 bytes of data:\x1b[K\x0d\x0aReply from 127.0.0.1: bytes=32 time<1ms TTL=128\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x1b[12;1H\x1b[?25h
+< R
+< \x1b[?25leply from 127.0.0.1: bytes=32 time<1ms TTL=128\x1b[14;1HPing statistics for 127.0.0.1:\x0d\x0a    Packets: Sent = 2, Received = 2, Lost = 0 (0% loss),\x0d\x0aApproximate round trip times in milli-seconds:\x0d\x0a    Minimum = 0ms, Maximum = 0ms, Average = 0ms\x0d\x0aPS C:\\> \x1b[?25h
+# quiet
+# resize 24x60
+< \x1b[?25l\x1b[HPS C:\\> \x1b[93mGet-Location\x1b[K\x1b[m\x0d\x0a\x1b[K\x0d\x0aPath\x1b[K\x0d\x0a----\x1b[K\x0d\x0aC:\\\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0aPS C:\\> \x1b[93mping \x1b[90m-n \x1b[97m2 \x1b[37m127.0.0.1\x1b[K\x1b[m\x0d\x0a\x1b[K\x0d\x0aPinging 127.0.0.1 with 32 bytes of data:\x1b[K\x0d\x0aReply from 127.0.0.1: bytes=32 time<1ms TTL=128\x1b[K\x0d\x0aReply from 127.0.0.1: bytes=32 time<1ms TTL=128\x1b[K\x0d\x0a\x1b[K\x0d\x0aPing statistics for 127.0.0.1:\x1b[K\x0d\x0a    Packets: Sent = 2, Received = 2, Lost = 0 (0% loss),    \x0d\x0aApproximate round trip times in milli-seconds:\x1b[K\x0d\x0a    Minimum = 0ms, Maximum = 0ms, Average = 0ms\x1b[K\x0d\x0aPS C:\\>\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x1b[18;9H\x1b[?25h
+# quiet
+# type exit + Enter
+< \x1b[?25l
+< \x1b[92mexit\x0d\x0a\x1b[?25h
+< \x1b[?9001l\x1b[?1004l\x1b[m

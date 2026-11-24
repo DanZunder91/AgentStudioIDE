@@ -1,0 +1,250 @@
+/* ── code viewer / editor (M4) ─────────────────────────────── */
+.code-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-app, #0d1117);
+  font-size: 12.5px;
+}
+.code-editor__bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border, #21262d);
+  font-size: 11px;
+}
+.code-editor__name {
+  color: var(--text-dim, #8b949e);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.code-editor__spacer {
+  flex: 1 1 auto;
+}
+.code-editor__save {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 4px;
+  background: var(--accent, #3b82f6);
+  border: 1px solid var(--accent, #3b82f6);
+  color: #fff;
+  cursor: pointer;
+}
+.code-editor__save:hover {
+  filter: brightness(1.08);
+}
+/* Manual reload-from-disk (icon; arms to "Discard edits?" on a dirty buffer). */
+.code-editor__reloadbtn {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 20px;
+  margin-right: 6px;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 11px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-dim, #9aa0aa);
+  cursor: pointer;
+}
+.code-editor__reloadbtn:hover {
+  color: var(--fg, #e6e6e6);
+  background: var(--border, #2a2a33);
+}
+.code-editor__reloadbtn.is-armed {
+  padding: 0 8px;
+  color: var(--red, #f85149);
+  border: 1px solid var(--red, #f85149);
+}
+/* Rendered↔Source view toggle for Markdown/CSV — a small segmented control. */
+.code-editor__viewtoggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 0;
+  margin-right: 8px;
+  border: 1px solid var(--border, #2a2a33);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.code-editor__viewbtn {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 9px;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim, #9aa0aa);
+  cursor: pointer;
+}
+.code-editor__viewbtn + .code-editor__viewbtn {
+  border-left: 1px solid var(--border, #2a2a33);
+}
+.code-editor__viewbtn:hover {
+  color: var(--fg, #e6e6e6);
+}
+.code-editor__viewbtn[aria-pressed="true"] {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+/* Preview-zoom controls (− / % / +) — a sibling segmented group to the view
+   toggle, so it reuses the toggle's exact chrome (height, radius, colors). */
+.code-editor__zoom {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 0;
+  margin-right: 8px;
+  border: 1px solid var(--border, #2a2a33);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.code-editor__zoombtn {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 9px;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim, #9aa0aa);
+  cursor: pointer;
+}
+.code-editor__zoombtn + .code-editor__zoombtn {
+  border-left: 1px solid var(--border, #2a2a33);
+}
+.code-editor__zoombtn:hover {
+  color: var(--fg, #e6e6e6);
+}
+/* The % readout doubles as Reset. Fixed-ish width + tabular digits so the bar
+   doesn't jitter between 80% / 100% / 125% (max label is "400%"). */
+.code-editor__zoombtn--reset {
+  min-width: 46px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-editor__feedback {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+.code-editor__feedback--saved {
+  color: var(--green, #3fb950);
+}
+.code-editor__feedback--error {
+  color: var(--red, #f85149);
+}
+.code-editor__state {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim, #8b949e);
+  font-style: italic;
+}
+.code-editor__host {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* CodeMirror chrome — caret, selection, gutter, active line, surface — is themed
+   in `theme.ts` (EditorView.theme, Tokyo Night) so it stays cohesive with the
+   Shiki-painted tokens. Only the scroll box lives here. */
+.code-editor .cm-editor {
+  height: 100%;
+}
+.code-editor .cm-scroller {
+  overflow: auto;
+}
+
+/* ── unsaved-changes confirm dialog ─────────────────────────────────────── */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(1, 4, 9, 0.6);
+}
+.dialog {
+  min-width: 320px;
+  max-width: 420px;
+  padding: 18px 18px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-surface, #161b22);
+  color: var(--text, #c9d1d9);
+  box-shadow: 0 12px 40px rgba(1, 4, 9, 0.5);
+}
+.dialog__message {
+  margin: 0 0 16px;
+  font-size: 13px;
+}
+.dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.dialog__btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-elev, #1c2128);
+  color: var(--text, #c9d1d9);
+  cursor: pointer;
+}
+.dialog__btn:hover {
+  border-color: var(--accent, #3b82f6);
+}
+.dialog__btn--danger:hover {
+  border-color: var(--red, #f85149);
+  color: var(--red, #f85149);
+}
+
+/* ── LSP status: indexing indicator + install hint (M5) ─────────────────── */
+.lsp-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.lsp-status--indexing {
+  color: var(--text-dim, #8b949e);
+  border: 1px solid var(--border, #30363d);
+}
+.lsp-status--hint {
+  color: var(--text, #c9d1d9);
+  background: var(--bg-elev, #1c2128);
+  border: 1px solid var(--border, #30363d);
+}
+.lsp-status__dismiss {
+  font: inherit;
+  line-height: 1;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: var(--text-dim, #8b949e);
+  cursor: pointer;
+}
+.lsp-status__dismiss:hover {
+  color: var(--text, #c9d1d9);
+}
+
+/* ── Cmd/Ctrl-hover go-to-definition underline (M5) ────────────── */
+.code-editor .cm-lsp-underline {
+  text-decoration: underline;
+  text-decoration-color: var(--accent, #3b82f6);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}

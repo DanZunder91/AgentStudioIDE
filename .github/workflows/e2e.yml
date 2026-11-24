@@ -1,0 +1,104 @@
+# End-to-end WebDriver smoke: drive the REAL built app via tauri-driver.
+#
+# This is the CI-only "real shipped webview + real Rust core are wired" smoke:
+# two specs — the app boots to the 3-pane shell, and an API request
+# round-trips through real IPC → reqwest → a local 127.0.0.1 server. The full UI
+# regression lives in the browser tier (Playwright, mocked backend, runs on every
+# push in ci.yml). See e2e/README.md.
+#
+# Slow (full debug build + WebDriver) → merge-queue + nightly, NEVER per-push
+# (ci.yml's per-push lane must stay fast; see testing-strategy.md §9). macOS is
+# absent by design: tauri-driver cannot drive a WKWebView (Apple limitation).
+name: E2E
+
+# Manual only. The real-app E2E runs locally in Docker
+# via `npm run verify` (scripts/e2e-linux.mjs); no nightly schedule, no merge-queue gate.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux always; Windows only on the nightly schedule (slowest link,
+        # rarest platform, the Edge-WebDriver version-matching pitfall).
+        os: ${{ github.event_name == 'schedule'
+          && fromJSON('["ubuntu-latest","windows-latest"]')
+          || fromJSON('["ubuntu-latest"]') }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+
+      # Tauri build deps (same set as ci.yml's rust job) + the WebKit WebDriver
+      # and xvfb (a virtual display — WebKitWebDriver will not run headless bare).
+      - name: Linux system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            webkit2gtk-driver \
+            xvfb
+
+      # Windows: Microsoft Edge WebDriver (msedgedriver.exe) matched to the
+      # runner's WebView2 runtime, exposed as MSEDGEDRIVER so wdio.conf.ts passes
+      # it to `tauri-driver --native-driver`. Mismatched versions fail with opaque
+      # errors — the most common Windows pitfall.
+      # TODO(windows-e2e): wire a version-matched msedgedriver fetch here (e.g. a
+      # setup-msedgedriver action) and `echo "MSEDGEDRIVER=<path>" >> $env:GITHUB_ENV`.
+      # Deferred: Windows is nightly-only and unverifiable from the macOS dev host.
+      - name: Windows Edge WebDriver
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Write-Host "TODO: fetch a WebView2-matched msedgedriver and set MSEDGEDRIVER"
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver@2.0.6 --locked
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # `npm run e2e` builds the app (wdio onPrepare: `tauri build --debug
+      # --no-bundle`, which asserts the binary exists so a broken build cannot
+      # silently pass zero specs), seeds the fixture git repo, spawns tauri-driver
+      # with the determinism seams, then runs the two specs.
+      - name: Run E2E (Linux, headless via xvfb)
+        if: matrix.os == 'ubuntu-latest'
+        run: xvfb-run -a npm run e2e
+
+      - name: Run E2E (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npm run e2e

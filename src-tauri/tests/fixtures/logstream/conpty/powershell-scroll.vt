@@ -1,0 +1,62 @@
+# Windows PowerShell 5.1 in a 10-row terminal: scrolling, then a height-shrinking resize
+# recorded by tests/logstream_conpty.rs::record_conpty_fixtures
+# spawn powershell 10x80 in C:\
+< \x1b[?9001h\x1b[?1004h
+< \x1b[?25l\x1b[2J\x1b[m\x1b[H\x1b]0;Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.EXE\x07\x1b[?25h
+< PS C:\\> 
+# quiet
+# send "1..14\r"
+< \x1b[?25l
+< \x1b[97m1\x1b[90m..\x1b[97m14\x0d\x0a\x1b[?25h
+< \x1b[m1\x0d\x0a2\x0d\x0a3\x0d\x0a4\x0d\x0a5\x0d\x0a6\x0d\x0a7\x0d\x0a8\x0d\x0a9\x0d
+< \x0a10\x0d
+< \x0a11\x0d
+< \x0a12\x0d
+< \x0a13\x0d
+< \x0a14\x0d
+< \x0aPS C:\\>\x1b[1C
+# quiet
+# type 'e'
+< \x1b[?25l
+< \x1b[93me\x1b[?25h
+# type 'c'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x08ec\x1b[?25h
+# type 'h'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[10;9Hech\x1b[?25h
+# type 'o'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[10;9Hecho\x1b[?25h
+# type ' '
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[10;9Hecho \x1b[?25h
+# type 'd'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[10;9Hecho \x1b[37md\x1b[?25h
+# type 'o'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[10;9Hecho \x1b[37mdo\x1b[?25h
+# type 'n'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[10;9Hecho \x1b[37mdon\x1b[?25h
+# type 'e'
+< \x1b[m\x1b[?25l
+< \x1b[93m\x1b[10;9Hecho \x1b[37mdone\x1b[?25h
+# type Enter
+< \x1b[m
+< \x0d\x0a
+< done
+< \x0d
+< \x0aPS C:\\>\x1b[1C
+# quiet
+# resize 6x80
+< \x1b[?25l\x1b[8;6;80t\x1b[H12\x1b[K\x0d\x0a13\x1b[K\x0d\x0a14\x1b[K\x0d\x0aPS C:\\> \x1b[93mecho \x1b[37mdone\x1b[K\x1b[m\x0d\x0adone\x1b[K\x0d\x0aPS C:\\>\x1b[K\x1b[1C\x1b[?25h
+# quiet
+# resize 12x80
+< \x1b[?25l\x1b[H12\x1b[K\x0d\x0a13\x1b[K\x0d\x0a14\x1b[K\x0d\x0aPS C:\\> \x1b[93mecho \x1b[37mdone\x1b[K\x1b[m\x0d\x0adone\x1b[K\x0d\x0aPS C:\\>\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x0d\x0a\x1b[K\x1b[6;9H\x1b[?25h
+# quiet
+# type exit + Enter
+< \x1b[?25l
+< \x1b[92mexit\x0d\x0a\x1b[?25h
+< \x1b[?9001l\x1b[?1004l\x1b[m

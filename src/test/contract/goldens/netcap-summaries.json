@@ -1,0 +1,123 @@
+{
+  "bypass-curl-neutralized": {
+    "id": 1,
+    "startedMs": 1790251260000,
+    "proto": "bypass",
+    "method": "GET",
+    "host": "127.0.0.1",
+    "port": 3000,
+    "path": "/api/v1/health",
+    "status": null,
+    "grpcStatus": null,
+    "contentType": null,
+    "reqBytes": 0,
+    "resBytes": 0,
+    "durationMs": null,
+    "state": "done",
+    "error": null,
+    "terminalId": "term-gazelle",
+    "httpVersion": "",
+    "wsMessages": null,
+    "client": null,
+    "note": "bypass neutralised (--noproxy): strict agent capture ran this curl through the proxy — the request is its own row",
+    "bypass": {
+      "command": "curl -s --noproxy '*' http://127.0.0.1:3000/api/v1/health | head -c 300",
+      "method": "GET",
+      "url": "http://127.0.0.1:3000/api/v1/health",
+      "agentId": "agent-gazelle",
+      "toolUseId": "toolu_01GazelleHealth",
+      "reasons": [
+        "--noproxy"
+      ],
+      "neutralized": true
+    }
+  },
+  "bypass-python": {
+    "id": 2,
+    "startedMs": 1790251320000,
+    "proto": "bypass",
+    "method": "",
+    "host": "",
+    "port": 0,
+    "path": "",
+    "status": null,
+    "grpcStatus": null,
+    "contentType": null,
+    "reqBytes": 0,
+    "resBytes": 0,
+    "durationMs": null,
+    "state": "done",
+    "error": null,
+    "terminalId": "term-gazelle",
+    "httpVersion": "",
+    "wsMessages": null,
+    "client": null,
+    "note": "not captured: this agent command bypassed the proxy (NO_PROXY=*)",
+    "bypass": {
+      "command": "cd /Users/dev/gazelle && NO_PROXY='*' python3 scripts/probe.py --port 3000",
+      "method": null,
+      "url": null,
+      "agentId": "agent-gazelle",
+      "toolUseId": "toolu_02GazelleProbe",
+      "reasons": [
+        "NO_PROXY=*"
+      ],
+      "neutralized": false
+    }
+  },
+  "http-pending": {
+    "id": 1,
+    "startedMs": 1790251200000,
+    "proto": "http",
+    "method": "POST",
+    "host": "127.0.0.1",
+    "port": 8080,
+    "path": "/api/v1/items?x=1",
+    "status": null,
+    "grpcStatus": null,
+    "contentType": null,
+    "reqBytes": 0,
+    "resBytes": 0,
+    "durationMs": null,
+    "state": "pending",
+    "error": null,
+    "terminalId": "term-agent",
+    "httpVersion": "HTTP/1.1",
+    "wsMessages": null,
+    "client": {
+      "pid": 4242,
+      "name": "claude",
+      "path": "/Users/dev/.local/share/claude/versions/2.1.0"
+    },
+    "note": null
+  },
+  "ws-live": {
+    "id": 4,
+    "startedMs": 1790251203000,
+    "proto": "ws",
+    "method": "GET",
+    "host": "127.0.0.1",
+    "port": 8081,
+    "path": "/chat",
+    "status": 101,
+    "grpcStatus": null,
+    "contentType": null,
+    "reqBytes": 0,
+    "resBytes": 0,
+    "durationMs": null,
+    "state": "pending",
+    "error": null,
+    "terminalId": "term-agent",
+    "httpVersion": "HTTP/1.1",
+    "wsMessages": {
+      "up": 3,
+      "down": 3
+    },
+    "client": {
+      "pid": 4242,
+      "name": "claude",
+      "path": "/Users/dev/.local/share/claude/versions/2.1.0"
+    },
+    "note": null
+  }
+}

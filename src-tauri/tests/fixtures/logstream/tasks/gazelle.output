@@ -1,0 +1,3 @@
+[2m2026-01-01T12:00:05.101Z[0m [32m INFO[0m gazelle: starting, config=/work/gazelle/.env
+2026-01-01T12:00:05.152Z  INFO gazelle: listening on 0.0.0.0:8080
+2026-01-01T12:00:05.160Z  WARN gazelle::upstream: geo key missing, error budget unaffected

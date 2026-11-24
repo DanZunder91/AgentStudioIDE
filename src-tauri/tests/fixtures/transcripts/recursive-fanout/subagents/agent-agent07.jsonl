@@ -1,0 +1,5 @@
+{"type": "user", "isSidechain": true, "agentId": "agent07", "sessionId": "root", "cwd": "/work/proj", "gitBranch": "main"}
+{"type": "assistant", "isSidechain": true, "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Agent", "id": "tool41", "input": {"subagent_type": "Explore", "description": "Task tool41"}}]}}
+{"type": "user", "isSidechain": true, "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool41", "is_error": false}]}}
+{"type": "assistant", "isSidechain": true, "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Agent", "id": "tool40", "input": {"subagent_type": "Explore", "description": "Task tool40"}}]}}
+{"type": "user", "isSidechain": true, "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool40", "is_error": false}]}}

@@ -1,0 +1,33 @@
+.app-picker { position: relative; display: inline-block; }
+.app-picker__trigger {
+  font: inherit; font-size: 12px; color: var(--text); background: var(--bg-elev);
+  border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; cursor: pointer;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.app-picker__trigger:disabled { opacity: 0.5; cursor: default; }
+.app-picker__trigger:focus-visible { outline: 1px solid var(--accent); }
+.app-picker__pop {
+  position: absolute; z-index: 50; top: calc(100% + 4px); left: 0; width: 300px;
+  max-height: 360px; display: flex; flex-direction: column; background: var(--bg-surface);
+  border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.app-picker__search {
+  margin: 6px; padding: 4px 6px; font: inherit; font-size: 12px; color: var(--text);
+  background: var(--bg-app); border: 1px solid var(--border); border-radius: 4px;
+}
+.app-picker__list { list-style: none; margin: 0; padding: 0 0 4px; overflow: auto; min-height: 0; }
+.app-picker__row { display: flex; align-items: center; gap: 6px; padding: 2px 8px; font-size: 12px; }
+.app-picker__row:hover { background: var(--accent-soft); }
+.app-picker__row label { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; cursor: pointer; }
+.app-picker__row--all { border-bottom: 1px solid var(--border); padding-block: 4px; }
+.app-picker__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-picker__sub { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-picker__count { margin-left: auto; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.app-picker__only {
+  visibility: hidden; font: inherit; font-size: 11px; color: var(--accent);
+  background: none; border: none; cursor: pointer; padding: 0 2px;
+}
+.app-picker__row:hover .app-picker__only, .app-picker__only:focus-visible { visibility: visible; }
+.app-picker__empty { padding: 6px 8px; color: var(--text-dim); font-size: 12px; }
+
+.app-picker__pop--flip { left: auto; right: 0; }

@@ -1,0 +1,103 @@
+/* railTabs.css — feature-local styling for the rail strip's overflow trigger + menu.
+   The strip itself (`.rail__tabs` / `.rail__tab`) stays in App.css —
+   shared shell chrome — this file adds only what the seventh tab's
+   overflow answer needs, the same split `settings.css` uses for the titlebar gear.
+
+   Geometry constraints, because they are the point:
+   `.rail` is `overflow-x: hidden`, so anything wider than the rail is silently
+   CLIPPED, not scrolled. The menu therefore anchors to the STRIP (full width) and
+   pins BOTH horizontal edges — `left: 0; right: 0` + margins — so it can never
+   poke past the rail no matter how long a label gets; labels wrap instead. The
+   browser tier asserts the menu's live box stays inside the rail's. */
+
+/* The strip is the menu's containing block. Supplementing App.css's rule from here
+   (not editing it) is deliberate: `position: relative` exists only for this menu,
+   so it lives and dies with the feature. */
+.rail__tabs {
+  position: relative;
+}
+
+/* Trigger + menu cluster: a plain flex item in the strip. NOT positioned — the
+   menu must anchor to `.rail__tabs`, not to this 17px-wide wrapper. */
+.rail-tabs__overflow {
+  display: inline-flex;
+}
+
+/* The "⋯" trigger inherits everything from `.rail__tab` (same glyph size, same
+   padding, same active underline via `rail__tab--active`); nothing extra needed.
+   The class below exists as a hook for tests and future styling, and to keep the
+   budget honest: the trigger MUST cost exactly TRIGGER_W = TAB_W = 17px. */
+.rail__tab--overflow {
+  /* intentionally empty — styled entirely by `.rail__tab` */
+}
+
+/* The popover, anchored under the strip. Both horizontal edges pinned (see the
+   header comment) so it spans the strip minus margins at ANY rail width. */
+.rail-tabs__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0 8px;
+  min-width: 0;
+  z-index: 70;
+  padding: 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  color: var(--text);
+}
+
+/* A menu row: icon + VISIBLE label (unlike the strip — in the menu there is room,
+   and the label doubles as the accessible name). */
+.rail-tabs__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 6px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: var(--text);
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.rail-tabs__item:hover,
+.rail-tabs__item:focus-visible {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+/* Keyboard focus must be visible in a menu reachable with Tab. Inset, because the
+   menu hugs the rail's edges and an outset ring would be clipped by `.rail`. */
+.rail-tabs__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.rail-tabs__item > svg {
+  flex: 0 0 auto;
+}
+
+/* Labels WRAP rather than widen the row — the no-clip guarantee depends on it. */
+.rail-tabs__item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The active panel's row: the menu's stand-in for the strip's underline.
+   (`aria-selected` is invalid on a menuitem, so the signal is visual.) */
+.rail-tabs__item--current {
+  font-weight: 600;
+}
+
+.rail-tabs__item-check {
+  flex: 0 0 auto;
+  color: var(--accent);
+}

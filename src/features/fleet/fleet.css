@@ -1,0 +1,579 @@
+/* The fleet rail. Owned by src/features/fleet/**.
+   Reuses only the CSS vars declared in src/App.css — no palette of its own, so
+   theming stays in one place. Class names are `fleet`-prefixed: App.css still
+   carries the M0 placeholder's `.agent`/`.pill` rules, and a collision would
+   silently restyle this rail the day those are removed. */
+
+/* The left rail is a flex COLUMN so the usage strip can be a real footer.
+   Without this the strip would merely be the last thing in a scrolling block —
+   it would sit directly under the last agent row and drift up the rail as rows
+   are dismissed. As a column, the tree takes the slack (`flex: 1`) and the strip
+   is pinned to the bottom (`margin-top: auto`), which is what "footer" means.
+   `overflow-y` moves from the rail to the TREE: the strip must stay visible while
+   a long agent list scrolls behind it, and a scrollbar spanning both would hide
+   it. `min-height: 0` is required — a flex item's default `min-height: auto`
+   refuses to shrink below its content, so the tree would push the strip off the
+   bottom instead of scrolling (the classic flexbox overflow trap). */
+.rail--left {
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
+}
+.rail--left .rail__header {
+  flex: 0 0 auto;
+}
+
+.fleet-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px;
+  /* See `.rail--left` above: the tree scrolls, the rail does not. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* The empty state ("No agents yet") takes the slack too, so the footer stays
+   at the bottom of an EMPTY rail rather than floating under the message. */
+.rail--left .fleet-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ── row ───────────────────────────────────────────────────────────────── */
+.fleet-row {
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  /* Reserved so the selection accent never shifts the row's contents. */
+  box-shadow: inset 2px 0 0 transparent;
+}
+.fleet-row:hover {
+  background: var(--bg-elev);
+}
+.fleet-row--selected {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.fleet-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+/* Sub-agents read as subordinate without a second component. */
+.fleet-row--child {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.fleet-row--child .fleet-row__title {
+  font-weight: 400;
+}
+/* Finished agents stay legible but recede — they are for inspection, not
+   attention (ARCHITECTURE §4: "done" rows stay until explicitly dismissed). */
+.fleet-row--finished .fleet-row__title,
+.fleet-row--finished .fleet-row__meta {
+  opacity: 0.6;
+}
+
+/* ── drag-to-reorder (feature: sortable rail) ─────────────────────────────────
+   A dragged row fades; a valid drop target shows a calm accent bar on its TOP
+   edge — the dragged row lands immediately ABOVE it (moveRootAgent/moveFolder
+   insert "before"). Reuses --accent/--accent-soft, so it tracks the theme like
+   the rest of the rail. */
+.fleet-row--dragging,
+.folder-group--dragging {
+  opacity: 0.45;
+}
+.fleet-row--drop-target {
+  background: var(--accent-soft);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+/* A selected row that is also the drop target keeps BOTH accents (left + top). */
+.fleet-row--selected.fleet-row--drop-target {
+  box-shadow: inset 2px 0 0 var(--accent), inset 0 2px 0 var(--accent);
+}
+.folder-group--drop-target {
+  border-radius: 6px;
+  background: var(--accent-soft);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.fleet-row__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fleet-row__caret {
+  flex: 0 0 12px;
+  display: flex;
+  justify-content: center;
+}
+.fleet-row__caret-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.fleet-row__caret-btn:hover {
+  color: var(--text);
+}
+
+/* Fan-out connector: a sub-agent descends from its parent, it is not a sibling
+   that happens to be indented. Dim, so it frames without shouting. */
+.fleet-row__connector {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  opacity: 0.7;
+  margin-right: 2px;
+}
+
+.fleet-row__title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Attention dot: an error (later waiting_input) lives in this collapsed
+   subtree. Red, small, drawn right after the title so a wall of collapsed
+   roots still shows you which one to open. */
+.fleet-row__attention-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: #f85149;
+}
+
+/* Roll-up summary of a collapsed subtree: "3 running · 1 done · 1 error". */
+.fleet-row__rollup {
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* "Resumed after restart" (open_agents.rs): small, accent-tinted, next to the pill —
+   present until the agent's next turn. Its words are short enough to fit beside the pill at
+   the default rail width (restoredMarker.ts); in a narrower rail it moves under the pill,
+   whole, and only a line of its own too short for it ends it in an ellipsis (the sentence is
+   on hover). The `↻` is the tab's glyph, drawn here as generated content so the element's
+   text stays exactly the label the tab's glyph is named by. */
+.fleet-row__restored {
+  color: var(--accent);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fleet-row__restored::before {
+  content: "\21BB\00A0";
+}
+
+/* The "needs input" badge, bubbled up the ancestor chain so a
+   blocked descendant is visible from a collapsed trunk. */
+.fleet-row__unread {
+  margin-left: auto;
+  flex: 0 0 auto;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+/* Dismiss ✕. Subtle until the row is hovered/selected, but always reachable:
+   it stays in the DOM (never display:none), so keyboard and AT can find it. */
+.fleet-row__close {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+}
+/* When the unread badge is present it takes `margin-left:auto`; the ✕ then sits
+   just after it rather than grabbing the edge for itself. */
+.fleet-row__unread + .fleet-row__close {
+  margin-left: 6px;
+}
+.fleet-row:hover .fleet-row__close,
+.fleet-row--selected .fleet-row__close,
+.fleet-row__close:focus-visible {
+  opacity: 1;
+}
+.fleet-row__close:hover {
+  background: var(--bg-elev);
+  color: var(--text);
+}
+.fleet-row__close:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Pin 📌. Mirrors .fleet-row__close's hover-reveal, but a PINNED row
+   keeps it visible + accent-tinted (a persistent state gets a persistent signal).
+   Sits just before the ✕, so the persist/dismiss pair reads as a group. */
+.fleet-row__pin {
+  /* Own the trailing edge by default (pushes the pin+✕ group right). When an
+     unread badge is present, IT owns the auto and the pin just spaces (below). */
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+}
+/* Unread present → it grabbed the trailing-edge auto; the pin just follows it. */
+.fleet-row__unread + .fleet-row__pin {
+  margin-left: 6px;
+}
+/* The ✕ follows the pin as part of the group — never re-grab the edge. */
+.fleet-row__pin + .fleet-row__close {
+  margin-left: 6px;
+}
+/* ↻ Resume sits between the pin and the ✕ on a FINISHED root, and stays visible
+   (no hover-hide): an ended agent's next step should be obvious. */
+.fleet-row__resume {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent, var(--text));
+  cursor: pointer;
+}
+.fleet-row__resume:hover {
+  background: var(--bg-elev);
+}
+.fleet-row__resume + .fleet-row__close {
+  margin-left: 6px;
+}
+.fleet-row:hover .fleet-row__pin,
+.fleet-row--selected .fleet-row__pin,
+.fleet-row__pin:focus-visible {
+  opacity: 1;
+}
+.fleet-row__pin:hover {
+  background: var(--bg-elev);
+  color: var(--text);
+}
+.fleet-row__pin:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+/* Pinned: always shown, accent-tinted — the at-a-glance "this comes back" cue. */
+.fleet-row__pin--active {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.fleet-row__status {
+  margin-top: 4px;
+  /* Pill, roll-up, restored marker — wrapping as whole items, as the inline flow did, but
+     as FLEX items so a marker wider than a whole line shrinks to an ellipsis. Inline, it was
+     cut mid-word at the rail's edge: `text-overflow` never applied,
+     because an inline box has no width of its own to overflow. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* Between items on a line, not before an item that wrapped to the start of the next one —
+     a margin there would cost a wrapped marker 8px of a narrow rail. */
+  gap: 2px 8px;
+}
+
+/* "branch • cwd". The branch keeps its full width (capped, so a monster branch name
+   cannot push the path out entirely) and only the PATH is clipped — at its head, so
+   the folder name at its tail stays visible. One right-to-left box around both used
+   to clip the branch instead ("…tive • C:\Users\…" on Windows). */
+.fleet-row__meta {
+  display: flex;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.fleet-row__branch {
+  flex: 0 0 auto;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fleet-row__sep {
+  flex: 0 0 auto;
+  white-space: pre;
+}
+
+.fleet-row__cwd {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* keep the tail of a long path visible, not its root */
+  text-align: left;
+}
+
+/* ── status pill ───────────────────────────────────────────────────────── */
+.fleet-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.fleet-pill--running {
+  color: var(--accent);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+.fleet-pill--waiting_input {
+  color: #d29922;
+  border-color: rgba(210, 153, 34, 0.4);
+}
+.fleet-pill--done {
+  color: var(--green);
+  border-color: rgba(63, 185, 80, 0.4);
+}
+.fleet-pill--error {
+  color: #f85149;
+  border-color: rgba(248, 81, 73, 0.4);
+}
+
+/* ── empty state ───────────────────────────────────────────────────────── */
+.fleet-empty {
+  padding: 8px 14px;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.fleet-empty__hint {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+/* ── rail header launch controls (⚡ quick-launch + `+` open project) ──────── */
+.rail__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.rail__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-dim, #8b949e);
+  cursor: pointer;
+}
+.rail__action:hover {
+  color: var(--text, #c9d1d9);
+  background: var(--bg-elev, #1c2128);
+}
+
+/* ── folder-group header ──────────────────────────────────────────────────── */
+.folder-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 4px 6px;
+  margin-top: 4px;
+  color: var(--text, #c9d1d9);
+}
+.folder-group--attention .folder-group__name {
+  color: var(--red, #f85149);
+}
+.folder-group__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 2px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.folder-group__caret {
+  flex: 0 0 auto;
+  width: 12px;
+  color: var(--text-dim, #8b949e);
+  font-size: 10px;
+}
+.folder-group__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-group__count {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-dim, #8b949e);
+  background: var(--bg-elev, #1c2128);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.folder-group__rollup {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-dim, #8b949e);
+}
+.folder-group__add {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-dim, #8b949e);
+  cursor: pointer;
+}
+.folder-group__add:hover {
+  color: var(--text, #c9d1d9);
+  background: var(--bg-elev, #1c2128);
+}
+
+/* Inline rename field for an agent row's title. */
+.fleet-row__title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text, #c9d1d9);
+  background: var(--bg-app, #0d1117);
+  border: 1px solid var(--accent, #3b82f6);
+  border-radius: 3px;
+  padding: 0 4px;
+  outline: none;
+}
+
+/* ── sub-agent activity view (read-only transcript) ──────────────────────── */
+.activity-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-app, #0d1117);
+  color: var(--text, #c9d1d9);
+  font-size: 12px;
+}
+.activity-view__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border, #21262d);
+}
+.activity-view__label {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-dim, #8b949e);
+}
+.activity-view__status {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #21262d);
+  color: var(--text-dim, #8b949e);
+}
+.activity-view__status--running { color: var(--green, #3fb950); border-color: rgba(63, 185, 80, 0.4); }
+.activity-view__status--error { color: var(--red, #f85149); border-color: rgba(248, 81, 73, 0.4); }
+.activity-view__empty {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim, #8b949e);
+  font-style: italic;
+}
+.activity-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 8px 12px;
+}
+.activity-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.4);
+}
+.activity-entry__role {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-dim, #8b949e);
+}
+.activity-entry--assistant .activity-entry__role { color: var(--accent, #3b82f6); }
+.activity-entry__tool {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text, #c9d1d9);
+  background: var(--bg-elev, #1c2128);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.activity-entry__text {
+  flex: 1 1 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

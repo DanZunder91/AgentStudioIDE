@@ -1,0 +1,190 @@
+/* ── Diagnostics log overlay ─────────────────────────────────────────────────
+   A right-docked panel over a dimming backdrop — a calm dark feed of the event /
+   status / error stream. Theme vars from App.css (same vocabulary as RailTabs /
+   the shortcuts overlay). */
+
+.logs-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.logs-panel {
+  width: min(720px, calc(100vw - 48px));
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -16px 0 48px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+}
+
+.logs-panel__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.logs-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.logs-panel__spacer {
+  flex: 1 1 auto;
+}
+.logs-panel__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.logs-panel__close:hover {
+  background: var(--bg-app);
+  color: var(--text);
+}
+
+/* ── toolbar: level filter + text filter + clear/copy ────────────────────── */
+.logs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.logs-levels {
+  display: inline-flex;
+  gap: 2px;
+}
+.logs-level-btn {
+  padding: 3px 8px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.logs-level-btn--active {
+  background: var(--bg-elev);
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+.logs-filter {
+  flex: 1 1 120px;
+  min-width: 0;
+  padding: 4px 8px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+}
+.logs-action-btn {
+  padding: 4px 10px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.logs-action-btn:hover {
+  background: var(--bg-elev);
+}
+
+/* ── the feed ────────────────────────────────────────────────────────────── */
+.logs-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 4px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.logs-empty {
+  padding: 24px 14px;
+  color: var(--text-dim);
+  font-family: inherit;
+}
+.logs-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.logs-row__time {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+.logs-row__level {
+  flex: 0 0 auto;
+  min-width: 44px;
+  text-align: center;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.logs-row__level--info {
+  background: rgba(120, 130, 150, 0.18);
+  color: var(--text-dim);
+}
+.logs-row__level--event {
+  background: rgba(90, 150, 255, 0.18);
+  color: #7fb0ff;
+}
+.logs-row__level--warn {
+  background: rgba(230, 180, 60, 0.18);
+  color: #e6b43c;
+}
+.logs-row__level--error {
+  background: rgba(240, 90, 90, 0.2);
+  color: #ff7a7a;
+}
+.logs-row__source {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+.logs-row__msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+/* ── titlebar affordance ─────────────────────────────────────────────────── */
+.logs-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.logs-button:hover,
+.logs-button[aria-pressed="true"] {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  color: var(--text);
+}

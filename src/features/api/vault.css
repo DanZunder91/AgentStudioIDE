@@ -1,0 +1,75 @@
+/* ── Vault panel (the right-rail secrets / environment manager) ───────────────
+   Reuses the API client's env-row classes (api.css) for the key/value rows;
+   this file styles only the panel shell + its calm secure-storage note. Theme
+   variables come from App.css. */
+
+.vault-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 12px;
+  overflow-y: auto;
+  color: var(--text);
+  font-size: 12px;
+}
+.vault-panel__head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vault-panel__note {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.vault-panel__envs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* ── narrow-rail fit for the shared api-* row classes ──────────────────────
+   VaultEnv reuses ApiRequestView's `.api-env` / `.api-header-row*` classes,
+   which assume the wide request-view column (a fixed 200px name/key basis is
+   fine there). The rail is only ~276px of content, where that fixed basis
+   plus the value input and the remove/add button overflow horizontally (the
+   add-variable row is the tightest: 200px key + value + "+ Add" > the rail).
+   Everything below is scoped under `.vault-panel`, so `<ApiRequestView/>` —
+   whose `.api-env` lives outside `.vault-panel` — is completely unaffected. */
+.vault-panel .api-env-manager,
+.vault-panel .api-env {
+  max-width: 100%;
+  min-width: 0;
+}
+.vault-panel .api-header-row {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+/* Let the name/key column shrink and share space with the value column
+   instead of reserving a fixed 200px — this alone is what stops the
+   add-variable row (KEY + value + "+ Add") from overflowing. */
+.vault-panel .api-header-row__name,
+.vault-panel .api-header-row__value,
+.vault-panel .api-env-var__key {
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* The existing-variable key is a plain (non-input) span with ellipsis
+   truncation already defined in api.css; keep that behavior once it can
+   shrink below its old 200px floor. */
+.vault-panel .api-env-var__key {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Keep the ✕ / "+ Add" buttons at their natural content width so they never
+   get squeezed into wrapping their own text; flex-wrap on the row (above) is
+   the fallback that drops a button to its own line if the key/value columns
+   ever shrink to nothing and there is still no room. */
+.vault-panel .api-add-header {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}

@@ -1,0 +1,7 @@
+{
+  "agentType": "code-reviewer",
+  "description": "never shown",
+  "parentAgentId": "afg2",
+  "toolUseId": "toolu_n3",
+  "spawnDepth": 2
+}

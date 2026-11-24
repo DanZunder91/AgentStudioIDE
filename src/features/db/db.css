@@ -1,0 +1,633 @@
+/* ── database client: the connection dialog ──────────────────────
+   Theme variables come from App.css, with the same fallbacks the editor's dialog
+   chrome uses so this renders sanely even if it is mounted before the theme.
+
+   Deliberately its OWN overlay rather than `.dialog` from editor.css: that class is
+   a 420px-max confirm box, and this is a full form with five sections. Reusing it
+   would mean widening a shared class for one caller — a change every other dialog
+   silently inherits. */
+
+.db-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(1, 4, 9, 0.62);
+  padding: 24px;
+}
+
+.db-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(680px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 18px 20px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-surface, #161b22);
+  color: var(--text, #c9d1d9);
+  box-shadow: 0 16px 48px rgba(1, 4, 9, 0.55);
+  font-size: 12px;
+}
+
+.db-dialog__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+.db-dialog__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.db-dialog__subtitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim, #8b949e);
+}
+.db-dialog__driver {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── the engine-driven field grid ──────────────────────────────────────────── */
+.db-dialog__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 14px;
+}
+.db-dialog__row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.db-dialog__label-text {
+  color: var(--text-dim, #8b949e);
+  font-size: 11px;
+}
+.db-dialog__input {
+  min-width: 0;
+  background: var(--bg-app, #0d1117);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 5px;
+  color: var(--text, #c9d1d9);
+  font: inherit;
+  padding: 5px 8px;
+  outline: none;
+}
+.db-dialog__input:focus {
+  border-color: var(--accent, #3b82f6);
+}
+.db-dialog__input[aria-invalid="true"] {
+  border-color: var(--red, #f85149);
+}
+.db-dialog__input--mono {
+  font-family: var(--mono, ui-monospace, monospace);
+}
+input.db-dialog__input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+}
+
+.db-dialog__hint {
+  color: var(--text-dim, #8b949e);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.db-dialog__note {
+  margin: 0;
+  color: var(--text-dim, #8b949e);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.db-dialog__error {
+  margin: 0;
+  color: var(--red, #f85149);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.db-dialog__warning {
+  margin: 0;
+  color: var(--yellow, #d29922);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* ── sections ──────────────────────────────────────────────────────────────── */
+.db-dialog__section {
+  border-top: 1px solid var(--border, #30363d);
+  padding-top: 12px;
+}
+/* The guardrail block is visually distinct because it is the one block whose
+   default the user must SEE at the moment the connection is created. */
+.db-dialog__section--guard {
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  background: var(--bg-elev, #1c2128);
+  padding: 12px;
+}
+
+/* The connection-type select sits on its own line, not in the auto-fit field grid: it decides
+   what the grid below it MEANS, and a control that changes the meaning of its neighbours should
+   not be able to land beside one of them at some viewport width. */
+.db-dialog__row--mode {
+  max-width: 320px;
+}
+
+/* The Advanced disclosure. A button, not a `<details>`: the rows are genuinely unmounted while
+   it is closed, so "collapsed" is fewer DOM nodes rather than hidden ones — and a failed save
+   can open it before focusing the field it names. */
+.db-dialog__disclose {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  margin: 0 0 8px;
+  border: 0;
+  background: none;
+  color: var(--text-dim, #8b949e);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.db-dialog__disclose:hover {
+  color: var(--text, #c9d1d9);
+}
+/* One mark, one concept: the caret turns instead of swapping glyph (`.db-tree__caret`). */
+.db-dialog__caret {
+  display: inline-flex;
+  align-items: center;
+  transition: transform 90ms ease;
+}
+.db-dialog__caret.is-open {
+  transform: rotate(90deg);
+}
+
+/* An inert control still has to be readable — this is a "the URL governs" signal, not a
+   disabled button, so it dims rather than greys out. */
+.db-dialog__input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.db-dialog__urlrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.db-dialog__urlrow .db-dialog__input {
+  flex: 1 1 auto;
+}
+
+/* The password box and its Show/Hide toggle, on one line. Same shape as `__urlrow`, but its
+   own class: the password sits inside a `__grid` cell (a narrow column), so the box has to be
+   allowed to shrink — `min-width: 0` — or the button pushes it out of the cell. */
+.db-dialog__secretrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.db-dialog__secretrow .db-dialog__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.db-dialog__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.db-dialog__list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+.db-dialog__check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.db-dialog__check .db-dialog__label-text {
+  color: var(--text, #c9d1d9);
+  font-size: 12px;
+}
+
+.db-dialog__say {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ── actions ───────────────────────────────────────────────────────────────── */
+.db-dialog__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--border, #30363d);
+  padding-top: 12px;
+}
+.db-dialog__spacer {
+  flex: 1 1 auto;
+}
+.db-dialog__btn {
+  flex: 0 0 auto;
+  font: inherit;
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-elev, #1c2128);
+  color: var(--text, #c9d1d9);
+  cursor: pointer;
+}
+.db-dialog__btn:hover:not(:disabled) {
+  border-color: var(--accent, #3b82f6);
+}
+.db-dialog__btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.db-dialog__btn--primary {
+  background: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+  color: #fff;
+}
+.db-dialog__btn--small {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.db-dialog__test {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim, #8b949e);
+}
+/* Tone is painted off a data attribute, not a class, so the component never has to
+   know a colour name (the `usage.css` idiom). */
+.db-dialog__test[data-tone="ok"] {
+  color: var(--green, #3fb950);
+}
+.db-dialog__test[data-tone="bad"] {
+  color: var(--red, #f85149);
+}
+
+/* ── database client: the rail panel ────────────────────────
+   Shares `.db-dialog__btn` / `.db-dialog__error` with the dialog above rather than
+   duplicating them: one feature, one button. The list is its own block, because a rail
+   row is a different thing from a form row — it is dense, one line, and truncates. */
+
+.db-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 12px;
+  overflow-y: auto;
+  color: var(--text, #c9d1d9);
+  font-size: 12px;
+}
+
+.db-panel__head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.db-panel__note {
+  margin: 0;
+  color: var(--text-dim, #8b949e);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.db-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.db-panel__row {
+  border: 1px solid var(--border, #30363d);
+  border-radius: 5px;
+  background: var(--bg-surface, #161b22);
+}
+
+.db-panel__rowhead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  /* The rail is `overflow-x: hidden`, so over-wide content is CLIPPED, not scrolled
+     (a known failure mode). `min-width: 0` on the flex children is what lets the
+     truncating cells actually shrink instead of pushing the buttons out of the rail. */
+  min-width: 0;
+}
+
+.db-panel__disclose {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-dim, #8b949e);
+  cursor: pointer;
+}
+
+.db-panel__disclose:hover {
+  color: var(--text, #c9d1d9);
+}
+
+/* The caret turns, rather than swapping to a second glyph — one mark, one concept. */
+.db-panel__disclose--open svg {
+  transform: rotate(90deg);
+}
+
+.db-panel__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-panel__engine,
+.db-panel__where {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim, #8b949e);
+  font-size: 11px;
+}
+
+.db-panel__badge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border, #30363d);
+  color: var(--text-dim, #8b949e);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: help;
+}
+
+.db-panel__session {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 0 8px 8px 30px;
+}
+
+/* The session's action row (Refresh, Open query console). It exists because
+   `.db-panel__session` is a COLUMN: two bare buttons would stack one above the other and
+   read as two unrelated controls rather than as this session's toolbar. */
+.db-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.db-panel__status {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim, #8b949e);
+}
+
+/* Same variable names (and the same fallbacks) as `.db-dialog__test` above: one
+   feature, one palette. `--green` is the theme's own token; `--red` is not defined
+   there yet, so the literal fallback is load-bearing rather than decorative. */
+.db-panel__status[data-tone="ok"] {
+  color: var(--green, #3fb950);
+}
+
+.db-panel__status[data-tone="bad"] {
+  color: var(--red, #f85149);
+}
+
+/* ─────────────────────────── the object tree ───────────────────────────
+   Same geometry and the same tokens as `.workspace-node` in `workspace.css`: the two
+   rails sit one above the other in the same window, and a row that is 2px taller or a
+   caret that rotates the other way reads as a bug in one of them. Indentation is
+   applied inline (`paddingLeft: depth * INDENT + 8`) rather than by nested selectors,
+   which is what lets the depth come from the data instead of from the stylesheet — the
+   levels differ per engine and this file must not encode a shape. */
+.db-tree {
+  width: 100%;
+}
+
+.db-tree__list,
+.db-tree__children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.db-tree__row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 20px;
+  padding-right: 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text, #c9d1d9);
+  cursor: default;
+  user-select: none;
+}
+
+.db-tree__row:hover {
+  background: var(--hover, #1f242c);
+}
+
+/* ── drag-to-reorder a table row ───────────────────────────────────────────────
+   The fleet rail's insertion-line idiom, copied on purpose (`fleet.css`'s
+   `.fleet-row--drop-target`): a dragged row fades, and the target wears a calm accent
+   bar on its TOP edge because the dragged row lands immediately ABOVE it — the bar IS
+   where the row will go, which no colour change alone can say. Only `--accent` /
+   `--accent-soft`, so it tracks the theme like the rest of the rail. */
+.db-tree__row--dragging {
+  opacity: 0.45;
+}
+.db-tree__row--drop-target {
+  background: var(--accent-soft, rgba(59, 130, 246, 0.14));
+  box-shadow: inset 0 2px 0 var(--accent, #3b82f6);
+}
+
+/* "Reset order" on a hand-arranged group row. Sized and bordered like `.db-tree__retry`
+   — the rail's other inline, low-stakes action — and pushed to the right edge like
+   `.db-tree__del`. Unlike that ✕ it is NOT hover-gated: it renders only when a custom
+   order exists, so it is also the one visible sign that this level is no longer in the
+   server's order, and a sign that appears only under the pointer is not a sign. */
+.db-tree__reset {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 5px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim, #8b949e);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.db-tree__reset:hover {
+  background: var(--hover, #1f242c);
+  color: var(--text, #c9d1d9);
+}
+
+.db-tree__caret {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  color: var(--text-dim, #8b949e);
+  transition: transform 90ms ease;
+}
+
+.db-tree__caret.is-open svg {
+  transform: rotate(90deg);
+}
+
+/* A leaf keeps the caret's width so its label lines up with its expandable siblings. */
+.db-tree__caret--none {
+  visibility: hidden;
+}
+
+.db-tree__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-dim, #8b949e);
+}
+
+.db-tree__label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The dim text beside the label: a column's type, a group's count, "the connected
+   database". Shrinks before the label does — the name is what the user is looking for. */
+.db-tree__sub {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim, #8b949e);
+  font-size: 10px;
+}
+
+.db-tree__note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 22px;
+  font-size: 10px;
+  color: var(--text-dim, #8b949e);
+}
+
+.db-tree__note--error {
+  color: var(--red, #f85149);
+}
+
+.db-tree__retry,
+.db-tree__del {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.db-tree__del {
+  margin-left: auto;
+  border-color: transparent;
+  color: var(--text-dim, #8b949e);
+  opacity: 0;
+}
+
+.db-tree__row:hover .db-tree__del {
+  opacity: 1;
+}
+
+.db-tree__retry:hover,
+.db-tree__del:hover {
+  border-color: var(--border, #30363d);
+  background: var(--hover, #1f242c);
+}
+
+/* The console tab's own wrapper: it exists to host the ⌘S keydown handler and the two
+   notes above the console, so it must not itself become a layout — the notes take only
+   what they need and the console fills the rest.
+
+   No `height: 100%` here on purpose: `panes.css`'s `.pane__body > *` already sets
+   `flex: 1 1 auto; min-height: 0` on whatever the active tab renders, so this element is
+   sized by the pane. And `.db-console` declares `height: 100%`, which inside a column
+   flex container would resolve against the wrapper and fight the flex basis — hence the
+   `height: auto` override. This is layout, so it is NOT provable under jsdom (no layout
+   engine); it is the one part of this feature that needs a real look in the running app. */
+.db-console-tab {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.db-console-tab > .db-console {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.db-console-tab__saved {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border, #30363d);
+  font-size: 10px;
+  color: var(--text-dim, #8b949e);
+}

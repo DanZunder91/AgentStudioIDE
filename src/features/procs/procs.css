@@ -1,0 +1,395 @@
+/* Dev apps on this machine.
+   Every colour is an App.css token or a --procs-* variable declared once below; the sidebar
+   rows match the Logs Sources sidebar's metrics (11px mono rows, 10px uppercase heading) without
+   borrowing its classes, which belong to the agentlogs feature. */
+
+:root {
+  /* One hue per runtime — the badge's TEXT carries the meaning, the colour only speeds it up. */
+  --procs-jvm: #f0883e;
+  --procs-node: #3fb950;
+  --procs-rust: #e3845f;
+  --procs-python: #d2a8ff;
+  --procs-go: #39c5cf;
+  --procs-docker: #58a6ff;
+  --procs-shell: #8b949e;
+  --procs-red: var(--red, #f85149);
+  --procs-yellow: var(--yellow, #d29922);
+}
+
+/* ── the capture guard ── */
+.procs-card__uncaptured {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0;
+  color: var(--procs-yellow);
+}
+.procs-side__line {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+}
+.procs-side__line > .procs-side__row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.procs-side__uncaptured {
+  flex: 0 0 auto;
+  color: var(--procs-yellow);
+}
+
+/* ── sidebar group ─────────────────────────────────────────────────────────── */
+.procs-side__note {
+  margin: 0;
+  padding: 0 10px 2px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.procs-side {
+  font-size: 11px;
+}
+.procs-side__heading {
+  padding: 8px 10px 2px;
+  color: var(--text-dim);
+  font: 600 10px system-ui, sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.procs-side__stale {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.procs-side__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 10px;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  color: var(--text);
+  font: 11px var(--mono);
+  text-align: left;
+  cursor: pointer;
+}
+.procs-side__row:hover {
+  background: var(--bg-elev);
+}
+.procs-side__row--sel {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+}
+.procs-side__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.procs-side__ports {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.procs-side__live {
+  flex: 0 0 auto;
+  color: var(--green);
+}
+.procs-side__empty {
+  margin: 4px 10px 8px;
+  color: var(--text-dim);
+  font: 11px/1.5 system-ui, sans-serif;
+  white-space: normal;
+}
+
+/* ── runtime badge ─────────────────────────────────────────────────────────── */
+.procs-badge {
+  --procs-badge: var(--text-dim);
+  flex: 0 0 auto;
+  min-width: 34px;
+  padding: 0 4px;
+  border: 1px solid var(--procs-badge);
+  border-radius: 3px;
+  color: var(--procs-badge);
+  font: 600 9px/14px system-ui, sans-serif;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+.procs-badge--jvm { --procs-badge: var(--procs-jvm); }
+.procs-badge--node { --procs-badge: var(--procs-node); }
+.procs-badge--rust { --procs-badge: var(--procs-rust); }
+.procs-badge--python { --procs-badge: var(--procs-python); }
+.procs-badge--go { --procs-badge: var(--procs-go); }
+.procs-badge--docker { --procs-badge: var(--procs-docker); }
+.procs-badge--shell { --procs-badge: var(--procs-shell); }
+
+/* ── app card ──────────────────────────────────────────────────────────────── */
+.procs-card {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  font-size: 12px;
+}
+.procs-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.procs-card__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.procs-card__meta {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.procs-card__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 6px 0;
+}
+.procs-card__facts dt {
+  color: var(--text-dim);
+}
+.procs-card__facts dd {
+  margin: 0;
+  min-width: 0;
+}
+.procs-card__cwd {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.procs-card__cwd code,
+.procs-card__cmd {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.procs-card__ports {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.procs-card__port {
+  display: inline-flex;
+  gap: 4px;
+}
+.procs-card__console,
+.procs-card__console-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 4px 0;
+  color: var(--text-dim);
+}
+.procs-card__console-file {
+  margin: 0;
+}
+.procs-card__subhead {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font: 600 10px system-ui, sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.procs-card__files {
+  margin: 2px 0;
+  padding: 0;
+  list-style: none;
+}
+.procs-card__files li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 0;
+}
+.procs-card__kind {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.procs-card__none {
+  margin: 2px 0;
+  color: var(--text-dim);
+}
+.procs-card__btn {
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font: 11px/18px var(--mono);
+  cursor: pointer;
+}
+.procs-card__btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.procs-card__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.procs-card__btn--on {
+  border-color: var(--green);
+  color: var(--green);
+}
+.procs-card__btn--primary {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.procs-card__link {
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.procs-card__link:hover {
+  text-decoration: underline;
+}
+.procs-card__error {
+  margin: 4px 0;
+  color: var(--procs-red);
+}
+
+/* ── restart confirm — CloseTerminalDialog's chrome, under this feature's names ── */
+.procs-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(1, 4, 9, 0.6);
+}
+.procs-dialog {
+  min-width: 320px;
+  max-width: 520px;
+  padding: 18px 18px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-surface, #161b22);
+  color: var(--text, #c9d1d9);
+  box-shadow: 0 12px 40px rgba(1, 4, 9, 0.5);
+  font-size: 13px;
+}
+.procs-dialog__title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.procs-dialog__message {
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+.procs-dialog__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 0 0 16px;
+  font-size: 12px;
+}
+.procs-dialog__facts dt {
+  color: var(--text-dim, #8b949e);
+}
+.procs-dialog__facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.procs-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.procs-dialog__btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-elev, #1c2128);
+  color: var(--text, #c9d1d9);
+  cursor: pointer;
+}
+.procs-dialog__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.procs-dialog__btn--danger {
+  border-color: var(--procs-red);
+  color: var(--procs-red);
+}
+
+.procs-side__pid { color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* ── origin tags ── */
+.procs-side__tag {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+  border-radius: 3px;
+  color: var(--text-dim);
+  font-size: 10px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+}
+.procs-side__tag--ide {
+  color: var(--accent);
+}
+.procs-card__already {
+  color: var(--text-dim);
+}
+
+/* ── the Apps group's runtime sections (grouped by runtime, all shown) ── */
+.procs-rt__head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 3px 10px 1px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font: 600 10px system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  text-align: left;
+  cursor: pointer;
+}
+.procs-rt__head:hover {
+  color: var(--text);
+}
+.procs-rt__label {
+  flex: 1 1 auto;
+}
+.procs-rt__count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+.procs-rt--empty .procs-rt__head {
+  opacity: 0.55;
+}
+.procs-rt__none {
+  margin: 0;
+  padding: 1px 10px 3px 24px;
+  color: var(--text-dim);
+  font: italic 11px system-ui, sans-serif;
+}
+.procs-rt .procs-side__row {
+  padding-left: 18px;
+}

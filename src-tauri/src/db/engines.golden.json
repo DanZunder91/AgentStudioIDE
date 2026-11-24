@@ -1,0 +1,495 @@
+[
+  {
+    "id": "postgres",
+    "family": "postgres",
+    "label": "PostgreSQL",
+    "defaultPort": 5432,
+    "urlSchemes": [
+      "postgresql",
+      "postgres"
+    ],
+    "databaseLabel": "Database",
+    "supportsUser": true,
+    "sslModes": [
+      "disable",
+      "prefer",
+      "require",
+      "verify-ca",
+      "verify-full"
+    ],
+    "extraFields": [
+      {
+        "key": "applicationName",
+        "label": "Application name",
+        "kind": "text",
+        "placeholder": "Agent Studio",
+        "choices": null,
+        "default": "Agent Studio",
+        "required": false,
+        "hint": "Appears in pg_stat_activity, so a runaway query is traceable back to this app."
+      },
+      {
+        "key": "searchPath",
+        "label": "Search path",
+        "kind": "text",
+        "placeholder": "public",
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": "Which schemas an unqualified table name resolves against."
+      },
+      {
+        "key": "connectTimeout",
+        "label": "Connect timeout (s)",
+        "kind": "number",
+        "placeholder": "10",
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": "Bounds the dial itself; the query timeout is set separately below."
+      },
+      {
+        "key": "targetSessionAttrs",
+        "label": "Target session",
+        "kind": "select",
+        "placeholder": null,
+        "choices": [
+          "any",
+          "read-write",
+          "read-only",
+          "primary",
+          "standby",
+          "prefer-standby"
+        ],
+        "default": "",
+        "required": false,
+        "hint": "For a multi-host cluster: which member to accept. `read-only` steers analytical queries onto a replica."
+      }
+    ],
+    "defaults": {
+      "rowLimit": 500,
+      "timeoutMs": 30000,
+      "allowMultiStatement": false,
+      "sslMode": "prefer"
+    },
+    "serverEnforcedReadOnly": true,
+    "queryLanguage": "sql"
+  },
+  {
+    "id": "aurora-postgres",
+    "family": "postgres",
+    "label": "Amazon Aurora PostgreSQL",
+    "defaultPort": 5432,
+    "urlSchemes": [
+      "postgresql",
+      "postgres"
+    ],
+    "databaseLabel": "Database",
+    "supportsUser": true,
+    "sslModes": [
+      "disable",
+      "prefer",
+      "require",
+      "verify-ca",
+      "verify-full"
+    ],
+    "extraFields": [
+      {
+        "key": "applicationName",
+        "label": "Application name",
+        "kind": "text",
+        "placeholder": "Agent Studio",
+        "choices": null,
+        "default": "Agent Studio",
+        "required": false,
+        "hint": "Appears in pg_stat_activity, so a runaway query is traceable back to this app."
+      },
+      {
+        "key": "searchPath",
+        "label": "Search path",
+        "kind": "text",
+        "placeholder": "public",
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": "Which schemas an unqualified table name resolves against."
+      },
+      {
+        "key": "connectTimeout",
+        "label": "Connect timeout (s)",
+        "kind": "number",
+        "placeholder": "10",
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": "Bounds the dial itself; the query timeout is set separately below."
+      },
+      {
+        "key": "targetSessionAttrs",
+        "label": "Target session",
+        "kind": "select",
+        "placeholder": null,
+        "choices": [
+          "any",
+          "read-write",
+          "read-only",
+          "primary",
+          "standby",
+          "prefer-standby"
+        ],
+        "default": "",
+        "required": false,
+        "hint": "For a multi-host cluster: which member to accept. `read-only` steers analytical queries onto a replica."
+      }
+    ],
+    "defaults": {
+      "rowLimit": 500,
+      "timeoutMs": 30000,
+      "allowMultiStatement": false,
+      "sslMode": "require"
+    },
+    "serverEnforcedReadOnly": true,
+    "queryLanguage": "sql"
+  },
+  {
+    "id": "mysql",
+    "family": "mysql",
+    "label": "MySQL",
+    "defaultPort": 3306,
+    "urlSchemes": [
+      "mysql",
+      "mariadb"
+    ],
+    "databaseLabel": "Database",
+    "supportsUser": true,
+    "sslModes": [
+      "disable",
+      "prefer",
+      "require",
+      "verify-ca",
+      "verify-full"
+    ],
+    "extraFields": [
+      {
+        "key": "connectTimeout",
+        "label": "Connect timeout (s)",
+        "kind": "number",
+        "placeholder": "10",
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": "Bounds the dial itself; the query timeout is set separately below."
+      },
+      {
+        "key": "charset",
+        "label": "Character set",
+        "kind": "text",
+        "placeholder": "utf8mb4",
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": "Leave empty to take the server's default."
+      }
+    ],
+    "defaults": {
+      "rowLimit": 500,
+      "timeoutMs": 30000,
+      "allowMultiStatement": false,
+      "sslMode": "require"
+    },
+    "serverEnforcedReadOnly": true,
+    "queryLanguage": "sql"
+  },
+  {
+    "id": "aurora-mysql",
+    "family": "mysql",
+    "label": "Amazon Aurora MySQL",
+    "defaultPort": 3306,
+    "urlSchemes": [
+      "mysql",
+      "mariadb"
+    ],
+    "databaseLabel": "Database",
+    "supportsUser": true,
+    "sslModes": [
+      "disable",
+      "prefer",
+      "require",
+      "verify-ca",
+      "verify-full"
+    ],
+    "extraFields": [
+      {
+        "key": "connectTimeout",
+        "label": "Connect timeout (s)",
+        "kind": "number",
+        "placeholder": "10",
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": "Bounds the dial itself; the query timeout is set separately below."
+      },
+      {
+        "key": "charset",
+        "label": "Character set",
+        "kind": "text",
+        "placeholder": "utf8mb4",
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": "Leave empty to take the server's default."
+      }
+    ],
+    "defaults": {
+      "rowLimit": 500,
+      "timeoutMs": 30000,
+      "allowMultiStatement": false,
+      "sslMode": "require"
+    },
+    "serverEnforcedReadOnly": true,
+    "queryLanguage": "sql"
+  },
+  {
+    "id": "clickhouse",
+    "family": "clickhouse",
+    "label": "ClickHouse",
+    "defaultPort": 8123,
+    "urlSchemes": [
+      "clickhouse",
+      "clickhouses"
+    ],
+    "databaseLabel": "Database",
+    "supportsUser": true,
+    "sslModes": [
+      "disable",
+      "require",
+      "verify-ca",
+      "verify-full"
+    ],
+    "extraFields": [
+      {
+        "key": "compress",
+        "label": "Compress responses",
+        "kind": "checkbox",
+        "placeholder": null,
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": "Asks ClickHouse to gzip result bodies — worth it over a slow link."
+      }
+    ],
+    "defaults": {
+      "rowLimit": 500,
+      "timeoutMs": 30000,
+      "allowMultiStatement": false,
+      "sslMode": "require"
+    },
+    "serverEnforcedReadOnly": true,
+    "queryLanguage": "sql"
+  },
+  {
+    "id": "mongodb",
+    "family": "mongodb",
+    "label": "MongoDB",
+    "defaultPort": 27017,
+    "urlSchemes": [
+      "mongodb",
+      "mongodb+srv"
+    ],
+    "databaseLabel": "Database",
+    "supportsUser": true,
+    "sslModes": [
+      "disable",
+      "require",
+      "verify-ca",
+      "verify-full"
+    ],
+    "extraFields": [
+      {
+        "key": "authSource",
+        "label": "Auth source",
+        "kind": "text",
+        "placeholder": "admin",
+        "choices": null,
+        "default": "admin",
+        "required": true,
+        "hint": "The database that holds the user — usually `admin`, not the one you query."
+      },
+      {
+        "key": "replicaSet",
+        "label": "Replica set",
+        "kind": "text",
+        "placeholder": "atlas-abc123-shard-0",
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": null
+      },
+      {
+        "key": "readPreference",
+        "label": "Read preference",
+        "kind": "select",
+        "placeholder": null,
+        "choices": [
+          "primary",
+          "primaryPreferred",
+          "secondary",
+          "secondaryPreferred",
+          "nearest"
+        ],
+        "default": "primary",
+        "required": false,
+        "hint": "Reading from a secondary keeps analytical queries off the primary."
+      },
+      {
+        "key": "directConnection",
+        "label": "Direct connection",
+        "kind": "checkbox",
+        "placeholder": null,
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": "Talk to exactly this host instead of discovering the replica set."
+      },
+      {
+        "key": "appName",
+        "label": "App name",
+        "kind": "text",
+        "placeholder": "Agent Studio",
+        "choices": null,
+        "default": "Agent Studio",
+        "required": false,
+        "hint": "Appears in Mongo's `currentOp` and its logs."
+      }
+    ],
+    "defaults": {
+      "rowLimit": 500,
+      "timeoutMs": 30000,
+      "allowMultiStatement": false,
+      "sslMode": "require"
+    },
+    "serverEnforcedReadOnly": false,
+    "queryLanguage": "json"
+  },
+  {
+    "id": "redis",
+    "family": "redis",
+    "label": "Redis",
+    "defaultPort": 6379,
+    "urlSchemes": [
+      "redis",
+      "rediss"
+    ],
+    "databaseLabel": "Database index",
+    "supportsUser": true,
+    "sslModes": [
+      "disable",
+      "require",
+      "verify-ca",
+      "verify-full"
+    ],
+    "extraFields": [
+      {
+        "key": "clientName",
+        "label": "Client name",
+        "kind": "text",
+        "placeholder": "agent-studio",
+        "choices": null,
+        "default": "agent-studio",
+        "required": false,
+        "hint": "Shown by `CLIENT LIST`, so this connection is identifiable on the server."
+      }
+    ],
+    "defaults": {
+      "rowLimit": 500,
+      "timeoutMs": 30000,
+      "allowMultiStatement": false,
+      "sslMode": "disable"
+    },
+    "serverEnforcedReadOnly": false,
+    "queryLanguage": "commandline"
+  },
+  {
+    "id": "valkey",
+    "family": "redis",
+    "label": "Valkey (Redis-compatible)",
+    "defaultPort": 6379,
+    "urlSchemes": [
+      "redis",
+      "rediss"
+    ],
+    "databaseLabel": "Database index",
+    "supportsUser": true,
+    "sslModes": [
+      "disable",
+      "require",
+      "verify-ca",
+      "verify-full"
+    ],
+    "extraFields": [
+      {
+        "key": "clientName",
+        "label": "Client name",
+        "kind": "text",
+        "placeholder": "agent-studio",
+        "choices": null,
+        "default": "agent-studio",
+        "required": false,
+        "hint": "Shown by `CLIENT LIST`, so this connection is identifiable on the server."
+      }
+    ],
+    "defaults": {
+      "rowLimit": 500,
+      "timeoutMs": 30000,
+      "allowMultiStatement": false,
+      "sslMode": "disable"
+    },
+    "serverEnforcedReadOnly": false,
+    "queryLanguage": "commandline"
+  },
+  {
+    "id": "dynamodb",
+    "family": "dynamodb",
+    "label": "Amazon DynamoDB",
+    "defaultPort": 443,
+    "urlSchemes": [],
+    "databaseLabel": null,
+    "supportsUser": true,
+    "sslModes": [
+      "disable",
+      "require",
+      "verify-ca",
+      "verify-full"
+    ],
+    "extraFields": [
+      {
+        "key": "region",
+        "label": "Region",
+        "kind": "text",
+        "placeholder": "eu-west-1",
+        "choices": null,
+        "default": "",
+        "required": true,
+        "hint": "Part of every signed request, so it cannot be guessed: the wrong region reaches a different set of tables and looks like an empty account."
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint override",
+        "kind": "text",
+        "placeholder": "http://127.0.0.1:8000",
+        "choices": null,
+        "default": "",
+        "required": false,
+        "hint": "Leave empty for the real service. This is how DynamoDB Local is addressed, and it is the only way to reach anything other than AWS."
+      }
+    ],
+    "defaults": {
+      "rowLimit": 500,
+      "timeoutMs": 30000,
+      "allowMultiStatement": false,
+      "sslMode": "verify-full"
+    },
+    "serverEnforcedReadOnly": false,
+    "queryLanguage": "sql"
+  }
+]

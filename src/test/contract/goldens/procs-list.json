@@ -1,0 +1,546 @@
+{
+  "dockerDown": {
+    "available": true,
+    "reason": "Docker is not running",
+    "apps": [
+      {
+        "key": "pid:601",
+        "pid": 601,
+        "runtime": "go",
+        "name": "gateway",
+        "exe": "/var/folders/x1/T/go-build31415/b001/exe/gateway",
+        "argv": [
+          "/var/folders/x1/T/go-build31415/b001/exe/gateway"
+        ],
+        "cwd": "/work/gateway",
+        "startedMs": 1790250599000,
+        "ports": [],
+        "console": "terminal",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:202",
+        "pid": 202,
+        "runtime": "rust",
+        "name": "gazelle",
+        "exe": "/work/gazelle/target/debug/gazelle",
+        "argv": [
+          "target/debug/gazelle",
+          "--db-password=••••",
+          "--port",
+          "3000"
+        ],
+        "cwd": "/work/gazelle",
+        "startedMs": 1790250998000,
+        "ports": [
+          3000
+        ],
+        "console": "file",
+        "logFiles": [
+          {
+            "path": "/work/gazelle/gazelle.log",
+            "kind": "stdout"
+          },
+          {
+            "path": "/work/gazelle/logs/audit.log",
+            "kind": "log"
+          }
+        ],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:310",
+        "pid": 310,
+        "runtime": "jvm",
+        "name": "gradle daemon",
+        "exe": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
+        "argv": [
+          "java",
+          "-Xmx2g",
+          "-cp",
+          "/Users/dev/.gradle/lib/gradle-daemon-main-8.10.jar",
+          "org.gradle.launcher.daemon.bootstrap.GradleDaemon",
+          "8.10"
+        ],
+        "cwd": "/Users/dev/.gradle/daemon/8.10",
+        "startedMs": 1790250890000,
+        "ports": [],
+        "console": "pipe",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:112",
+        "pid": 112,
+        "runtime": "node",
+        "name": "server.js · gazelle",
+        "exe": "/opt/homebrew/bin/node",
+        "argv": [
+          "node",
+          "server.js"
+        ],
+        "cwd": "/work/gazelle",
+        "startedMs": 1790251088000,
+        "ports": [
+          4000
+        ],
+        "console": "pipe",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "ide",
+        "terminalId": "01J000000000000000000AGENT",
+        "agentId": "01J000000000000000000AGENT",
+        "launchedBy": "claude · gazelle",
+        "captured": false
+      },
+      {
+        "key": "pid:700",
+        "pid": 700,
+        "runtime": "shell",
+        "name": "sh · worker",
+        "exe": "/bin/sh",
+        "argv": [
+          "/bin/sh",
+          "-c",
+          "exec >/tmp/worker.out 2>&1; API_TOKEN=•••• ./worker"
+        ],
+        "cwd": "/work/worker",
+        "startedMs": 1790250500000,
+        "ports": [],
+        "console": "file",
+        "logFiles": [
+          {
+            "path": "/tmp/worker.out",
+            "kind": "stdout"
+          }
+        ],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:300",
+        "pid": 300,
+        "runtime": "jvm",
+        "name": "shop-0.1.jar · shop",
+        "exe": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
+        "argv": [
+          "java",
+          "-Dspring.datasource.password=••••",
+          "-jar",
+          "build/libs/shop-0.1.jar"
+        ],
+        "cwd": "/work/shop",
+        "startedMs": 1790250900000,
+        "ports": [
+          8080
+        ],
+        "console": "terminal",
+        "logFiles": [
+          {
+            "path": "/work/shop/logs/spring.log",
+            "kind": "log"
+          }
+        ],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:500",
+        "pid": 500,
+        "runtime": "python",
+        "name": "uvicorn · api",
+        "exe": "/work/api/.venv/bin/python3.12",
+        "argv": [
+          "/work/api/.venv/bin/python3",
+          "-m",
+          "uvicorn",
+          "main:app",
+          "--port",
+          "8000"
+        ],
+        "cwd": "/work/api",
+        "startedMs": 1790250700000,
+        "ports": [
+          8000
+        ],
+        "console": "pipe",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:402",
+        "pid": 402,
+        "runtime": "node",
+        "name": "vite · site",
+        "exe": "/opt/homebrew/bin/node",
+        "argv": [
+          "node",
+          "/work/site/node_modules/.bin/vite"
+        ],
+        "cwd": "/work/site",
+        "startedMs": 1790250798000,
+        "ports": [
+          5173
+        ],
+        "console": "terminal",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:102",
+        "pid": 102,
+        "runtime": "node",
+        "name": "vite · web",
+        "exe": "/opt/homebrew/bin/node",
+        "argv": [
+          "node",
+          "/work/web/node_modules/.bin/vite"
+        ],
+        "cwd": "/work/web",
+        "startedMs": 1790251098000,
+        "ports": [
+          5174
+        ],
+        "console": "ide-terminal",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "ide",
+        "terminalId": "01J0000000000000000000TERM",
+        "agentId": null,
+        "launchedBy": "zsh",
+        "captured": true
+      }
+    ]
+  },
+  "machine": {
+    "available": true,
+    "reason": null,
+    "apps": [
+      {
+        "key": "docker:9b8a7c6d5e4f",
+        "pid": null,
+        "runtime": "docker",
+        "name": "cache",
+        "exe": null,
+        "argv": [],
+        "cwd": null,
+        "startedMs": null,
+        "ports": [],
+        "console": "none",
+        "logFiles": [],
+        "containerId": "9b8a7c6d5e4f",
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "docker:3f2a9c1b0d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4",
+        "pid": null,
+        "runtime": "docker",
+        "name": "db-fixtures-postgres-1",
+        "exe": null,
+        "argv": [],
+        "cwd": "/work/db-fixtures",
+        "startedMs": null,
+        "ports": [
+          5432
+        ],
+        "console": "none",
+        "logFiles": [],
+        "containerId": "3f2a9c1b0d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4",
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:601",
+        "pid": 601,
+        "runtime": "go",
+        "name": "gateway",
+        "exe": "/var/folders/x1/T/go-build31415/b001/exe/gateway",
+        "argv": [
+          "/var/folders/x1/T/go-build31415/b001/exe/gateway"
+        ],
+        "cwd": "/work/gateway",
+        "startedMs": 1790250599000,
+        "ports": [],
+        "console": "terminal",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:202",
+        "pid": 202,
+        "runtime": "rust",
+        "name": "gazelle",
+        "exe": "/work/gazelle/target/debug/gazelle",
+        "argv": [
+          "target/debug/gazelle",
+          "--db-password=••••",
+          "--port",
+          "3000"
+        ],
+        "cwd": "/work/gazelle",
+        "startedMs": 1790250998000,
+        "ports": [
+          3000
+        ],
+        "console": "file",
+        "logFiles": [
+          {
+            "path": "/work/gazelle/gazelle.log",
+            "kind": "stdout"
+          },
+          {
+            "path": "/work/gazelle/logs/audit.log",
+            "kind": "log"
+          }
+        ],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:310",
+        "pid": 310,
+        "runtime": "jvm",
+        "name": "gradle daemon",
+        "exe": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
+        "argv": [
+          "java",
+          "-Xmx2g",
+          "-cp",
+          "/Users/dev/.gradle/lib/gradle-daemon-main-8.10.jar",
+          "org.gradle.launcher.daemon.bootstrap.GradleDaemon",
+          "8.10"
+        ],
+        "cwd": "/Users/dev/.gradle/daemon/8.10",
+        "startedMs": 1790250890000,
+        "ports": [],
+        "console": "pipe",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:112",
+        "pid": 112,
+        "runtime": "node",
+        "name": "server.js · gazelle",
+        "exe": "/opt/homebrew/bin/node",
+        "argv": [
+          "node",
+          "server.js"
+        ],
+        "cwd": "/work/gazelle",
+        "startedMs": 1790251088000,
+        "ports": [
+          4000
+        ],
+        "console": "pipe",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "ide",
+        "terminalId": "01J000000000000000000AGENT",
+        "agentId": "01J000000000000000000AGENT",
+        "launchedBy": "claude · gazelle",
+        "captured": false
+      },
+      {
+        "key": "pid:700",
+        "pid": 700,
+        "runtime": "shell",
+        "name": "sh · worker",
+        "exe": "/bin/sh",
+        "argv": [
+          "/bin/sh",
+          "-c",
+          "exec >/tmp/worker.out 2>&1; API_TOKEN=•••• ./worker"
+        ],
+        "cwd": "/work/worker",
+        "startedMs": 1790250500000,
+        "ports": [],
+        "console": "file",
+        "logFiles": [
+          {
+            "path": "/tmp/worker.out",
+            "kind": "stdout"
+          }
+        ],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:300",
+        "pid": 300,
+        "runtime": "jvm",
+        "name": "shop-0.1.jar · shop",
+        "exe": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
+        "argv": [
+          "java",
+          "-Dspring.datasource.password=••••",
+          "-jar",
+          "build/libs/shop-0.1.jar"
+        ],
+        "cwd": "/work/shop",
+        "startedMs": 1790250900000,
+        "ports": [
+          8080
+        ],
+        "console": "terminal",
+        "logFiles": [
+          {
+            "path": "/work/shop/logs/spring.log",
+            "kind": "log"
+          }
+        ],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:500",
+        "pid": 500,
+        "runtime": "python",
+        "name": "uvicorn · api",
+        "exe": "/work/api/.venv/bin/python3.12",
+        "argv": [
+          "/work/api/.venv/bin/python3",
+          "-m",
+          "uvicorn",
+          "main:app",
+          "--port",
+          "8000"
+        ],
+        "cwd": "/work/api",
+        "startedMs": 1790250700000,
+        "ports": [
+          8000
+        ],
+        "console": "pipe",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:402",
+        "pid": 402,
+        "runtime": "node",
+        "name": "vite · site",
+        "exe": "/opt/homebrew/bin/node",
+        "argv": [
+          "node",
+          "/work/site/node_modules/.bin/vite"
+        ],
+        "cwd": "/work/site",
+        "startedMs": 1790250798000,
+        "ports": [
+          5173
+        ],
+        "console": "terminal",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "external",
+        "terminalId": null,
+        "agentId": null,
+        "launchedBy": null,
+        "captured": null
+      },
+      {
+        "key": "pid:102",
+        "pid": 102,
+        "runtime": "node",
+        "name": "vite · web",
+        "exe": "/opt/homebrew/bin/node",
+        "argv": [
+          "node",
+          "/work/web/node_modules/.bin/vite"
+        ],
+        "cwd": "/work/web",
+        "startedMs": 1790251098000,
+        "ports": [
+          5174
+        ],
+        "console": "ide-terminal",
+        "logFiles": [],
+        "containerId": null,
+        "origin": "ide",
+        "terminalId": "01J0000000000000000000TERM",
+        "agentId": null,
+        "launchedBy": "zsh",
+        "captured": true
+      }
+    ]
+  },
+  "noDocker": {
+    "available": true,
+    "reason": null,
+    "apps": []
+  },
+  "unavailable": {
+    "available": false,
+    "reason": "Dev-app discovery is not available on this OS yet",
+    "apps": []
+  }
+}

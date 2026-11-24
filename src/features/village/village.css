@@ -1,0 +1,245 @@
+/* Agent Village — the canvas fills the tab; HUD, zoom controls, empty state and the
+   hover card float above it. Dark only, on the app's tokens (App.css :root). Tones
+   are declared locally (no load-order dependency on another feature's :root). */
+:root {
+  --village-amber: #d29922;
+  --village-red: #f85149;
+  --village-grey: #8b8f96;
+  --village-glass: rgba(13, 17, 23, 0.86);
+}
+
+.village {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.village__stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.village__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  cursor: grab;
+}
+.village__canvas--pointer { cursor: pointer; }
+.village__canvas--grabbing { cursor: grabbing; }
+
+.village-hud,
+.village-zoom,
+.village__empty,
+.village-card {
+  position: absolute;
+  background: var(--village-glass);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.village-hud {
+  top: 8px;
+  left: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px;
+  max-width: calc(100% - 140px);
+}
+.village-hud__counts { font-weight: 600; }
+.village-hud__err { color: var(--village-red); }
+
+/* Village | City: a two-way segmented switch at the top of the HUD. */
+.village-mode {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.village-mode__opt {
+  font: inherit;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 0;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.village-mode__opt + .village-mode__opt { border-left: 1px solid var(--border); }
+.village-mode__opt:hover { background: var(--accent-soft); }
+.village-mode__opt[aria-checked="true"] {
+  color: var(--text);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.village-mode__opt:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+.village-switch,
+.village-btn {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.village-switch::before { content: "○ "; color: var(--text-dim); }
+.village-switch[aria-checked="true"] { border-color: var(--green); }
+.village-switch[aria-checked="true"]::before { content: "● "; color: var(--green); }
+.village-switch:focus-visible,
+.village-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.village-btn:hover,
+.village-switch:hover { background: var(--accent-soft); }
+
+.village-zoom {
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+}
+.village-zoom .village-btn { min-width: 26px; }
+
+.village__empty {
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  color: var(--text-dim);
+  text-align: center;
+  pointer-events: none;
+}
+
+.village-card {
+  z-index: 1;
+  min-width: 180px;
+  max-width: 280px;
+  padding: 6px 10px;
+  pointer-events: none;
+  line-height: 1.45;
+}
+.village-card__title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.village-card__dim { color: var(--text-dim); }
+.village-card__origin--ide { color: var(--accent); }
+.village-card__origin--external { color: var(--village-grey); }
+.village-card__hint { color: var(--village-amber); }
+
+/* The capacity figures in words: the canvas's description for assistive tech, never painted. */
+.village__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Capacity cards: wider (exact numbers + their source), the seats' "estimate" tag. */
+.village-card--capacity { max-width: 360px; }
+.village-card--capacity .village-card__title { white-space: normal; }
+.village-card__estimate {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--village-amber);
+  border-radius: 3px;
+  color: var(--village-amber);
+  font-size: 10px;
+  font-weight: 400;
+}
+.village-card__source { margin-top: 2px; font-size: 11px; }
+
+/* ── Sky chip (time of day + weather) ──────────────────────────────────────────────────
+   Lives inside the HUD. Integrator hooks: `.village-sky[data-weather][data-phase]`,
+   `.village-sky--override`, and `--village-sky-accent` (the glyph/border tone per
+   weather) — override it on `.village` to retheme. */
+.village-sky {
+  --village-sky-accent: var(--village-amber);
+  position: relative;
+  display: inline-block;
+}
+.village-sky[data-weather="cloudy"],
+.village-sky[data-weather="fog"] { --village-sky-accent: var(--village-grey); }
+.village-sky[data-weather="drizzle"],
+.village-sky[data-weather="rain"] { --village-sky-accent: #58a6ff; }
+.village-sky[data-weather="snow"] { --village-sky-accent: #c9d1d9; }
+.village-sky[data-weather="storm"] { --village-sky-accent: #a371f7; }
+.village-sky[data-weather="none"] { --village-sky-accent: var(--text-dim); }
+
+.village-sky__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--village-sky-accent);
+  border-radius: 2px; /* pixel-ish: nearly square */
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.village-sky__chip:hover { background: var(--accent-soft); }
+.village-sky__chip:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.village-sky--override .village-sky__chip { border-style: dashed; border-left-style: solid; }
+.village-sky__glyph {
+  flex: none;
+  color: var(--village-sky-accent);
+  shape-rendering: crispEdges;
+}
+.village-sky__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.village-sky__pop {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  min-width: 240px;
+  background: var(--village-glass);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.village-sky__group { display: flex; flex-direction: column; gap: 3px; }
+.village-sky__label { color: var(--text-dim); font-size: 11px; }
+.village-sky__seg { display: flex; flex-wrap: wrap; gap: 2px; }
+.village-sky__opt {
+  font: inherit;
+  font-size: 11px;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+.village-sky__opt:hover { background: var(--accent-soft); }
+.village-sky__opt:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.village-sky__opt[aria-checked="true"] {
+  border-color: var(--village-sky-accent);
+  color: var(--village-sky-accent);
+}
+.village-sky__err { color: var(--village-amber); font-size: 11px; }

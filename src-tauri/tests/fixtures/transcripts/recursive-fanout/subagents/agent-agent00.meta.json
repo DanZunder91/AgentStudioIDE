@@ -1,0 +1,6 @@
+{
+  "agentType": "general-purpose",
+  "description": "Task tool18",
+  "toolUseId": "tool18",
+  "spawnDepth": 1
+}

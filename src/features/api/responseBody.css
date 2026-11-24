@@ -1,0 +1,73 @@
+/* Response search + copy. Existing tokens only. */
+
+.response-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* or the <pre> refuses to shrink and clips its last line */
+  flex: 1 1 auto;
+}
+
+.response-body__tools {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
+.response-body__find {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.response-body__find-input {
+  flex: 1 1 auto;
+  min-width: 0; /* the rail measures narrow; an input must be allowed to shrink */
+}
+
+.response-body__count {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.response-body__count.is-error {
+  color: var(--danger, #e06c75);
+}
+/* The OTHER view's total, shown only when it disagrees with this one (see the
+   component docblock). Dimmer and italic: it is context, not the count. */
+.response-body__count--other {
+  opacity: 0.75;
+  font-style: italic;
+}
+
+/* The Formatted (tree) view reuses the response box chrome, minus two claims
+   that belong to somebody else:
+   - `overflow-x`: `.jsonview` scrolls itself in the single panel, and inside a
+     compare pane `.compare-pane__body` owns BOTH axes (compare.css overrides
+     `.jsonview` there for exactly that reason). A second scroll container here
+     would trap the bar at the bottom of the tree — the failure shape
+     `compare.browser.test.tsx` already pins in numbers.
+   - `word-break`: the tree's rows are `white-space: pre` and must not be
+     re-broken by an inherited value.
+   Two class selectors so this wins over `.api-response__body` (one class)
+   whatever order the stylesheets happen to load in. */
+.response-body .response-body__formatted {
+  overflow-x: visible;
+  word-break: normal;
+}
+
+/* The palette the other two match lists already use, so a hit looks the same
+   wherever the user finds one. */
+.response-body__hit {
+  background: rgba(229, 192, 123, 0.28);
+  color: inherit;
+  border-radius: 2px;
+}
+.response-body__hit.is-current {
+  background: var(--accent, #61afef);
+  color: var(--bg-app, #1e2127);
+}

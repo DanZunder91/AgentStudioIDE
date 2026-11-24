@@ -1,0 +1,708 @@
+/* ── Claude metrics — the dashboard tab ───────────────────────────────────────
+
+   A DESTINATION, not chrome. Unlike `usage.css` (10–11px type in a 260px rail),
+   this surface is a full pane and may breathe — but it must stay legible in a
+   narrow window, so every row wraps and every grid is `auto-fit` rather than a
+   fixed column count.
+
+   Visual hierarchy, deliberately steep:
+     hero value      44px / 300 weight   ← the only display-size number
+     token values    22px / 500
+     KPI values      18px / 500
+     table + labels  11–12px
+   Six equally-weighted tiles is a table dump; one hero carrying the page is a
+   dashboard.
+
+   ── the palette, computed not eyeballed ────────────────────────────────────
+   `--accent #3b82f6` on the card surface `--bg-elev #1c2128` passes all five
+   checks (contrast, both CVD simulations, the dark lightness band) and is the
+   ONLY series colour the chart needs today — it is single-series. The validated
+   second hue for future parent-vs-children bars is **#d97430**, NOT the
+   brighter #e8873c, which failed the dark lightness band at L 0.715. It is
+   recorded here so nobody "restores" the brighter value when a second series lands.
+
+   The three tone values below are RE-DECLARED locally, with `usage.css` named as
+   their origin: reusing another feature's `:root` declaration would create a CSS
+   load-order dependency between two independent features, and
+   duplicating three hex values with a pointer is the cheaper correctness. They
+   were chosen for monotonic L* under deuteranopia and protanopia — see the long
+   note in `usage.css` for the measurements. */
+:root {
+  --metrics-ok: #2ea043;
+  --metrics-warn: #dea82c;
+  --metrics-danger: #ffb3ab;
+  --metrics-series: var(--accent);
+  /* The future second series. Validated: protan ΔE 28.7, tritan 28.8, normal 32.9,
+     all in the dark lightness band, all ≥ 3:1. Do not brighten. */
+  --metrics-series-2: #d97430;
+}
+
+.metrics {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-app);
+  color: var(--text);
+  font-size: 12px;
+}
+
+/* A failed rescan over good numbers dims the whole surface a notch — the same
+   signal `usage.css` uses, so "stale" looks the same everywhere in the app. */
+.metrics--stale .metrics__body {
+  opacity: 0.72;
+}
+
+/* ── row 0: the honesty header ──────────────────────────────────────────────
+   ONE filter row above everything it scopes (no per-chart filters). Wraps
+   rather than scrolls: a header that clips its own Rescan
+   button in a narrow pane is a broken header. */
+.metrics__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.metrics__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+.metrics__brand-text {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.metrics__spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The window toggle: a segmented control, not two buttons. */
+.metrics__windows {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.metrics__window {
+  padding: 3px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.metrics__window + .metrics__window {
+  border-left: 1px solid var(--border);
+}
+.metrics__window:hover {
+  color: var(--text);
+}
+.metrics__window--on {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+/* "This project" with nothing selected. Visibly unavailable rather than absent, so the
+   toggle's shape does not jump when an agent is selected — and it keeps its `title`, so
+   the REASON is reachable by hover and by AT. A control that errors when clicked is worse
+   than one that says it cannot be clicked. */
+.metrics__window:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.metrics__window:disabled:hover {
+  color: var(--text-dim);
+}
+
+.metrics__scope,
+.metrics__fresh {
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "stale" reads as a warning, never as decoration. */
+.metrics__stale {
+  padding: 1px 6px;
+  border: 1px solid var(--metrics-warn);
+  border-radius: 999px;
+  color: var(--metrics-warn);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.metrics__badge {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.metrics__badge:hover {
+  color: var(--text);
+}
+.metrics__badge--partial {
+  border-color: var(--metrics-warn);
+  color: var(--metrics-warn);
+}
+
+.metrics__rescan {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.metrics__rescan:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.metrics__rescan:disabled {
+  cursor: default;
+  color: var(--text-dim);
+}
+/* No spin animation: a busy button that moves competes with the numbers for
+   attention, and the disabled state already says "working". */
+.metrics__rescan--busy {
+  opacity: 0.65;
+}
+
+/* ── the scrolling body ─────────────────────────────────────────────────────
+   ONE vertical scroller for the whole dashboard, so nothing nests a second
+   scrollbar. Horizontal overflow is contained per-section (the table), never
+   here — the page body must never scroll sideways. */
+/* ── tier 1: the account block ───────────────────────────────────────────────
+   Visually SEPARATE from the body below it, and deliberately so: these numbers cover
+   every device, the ones below cover this machine, and a reader must never have to work
+   out which block a figure belongs to. The bottom border is the boundary between the two
+   claims — it is doing semantic work, not decoration.
+
+   Sized between the header and the hero: present, readable, and never competing with the
+   one display-size figure on the page. */
+.metrics__account {
+  flex: 0 0 auto;
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 20px;
+}
+.metrics__account-head {
+  margin: 0;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.metrics__account-tier {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.metrics__account-note {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: 0.85;
+}
+.metrics__account-note code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+}
+.metrics__account-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+.metrics__account-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.metrics__account-row-label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+/* No progress bar — the number is the signal. Tone comes
+   from `usageTone()` via `data-tone`, on the locally-declared ramp at the top of this
+   file. */
+.metrics__account-chip {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.metrics__account-chip[data-tone="ok"] {
+  color: var(--metrics-ok);
+  border-color: rgba(46, 160, 67, 0.45);
+}
+.metrics__account-chip[data-tone="warn"] {
+  color: var(--metrics-warn);
+  border-color: rgba(222, 168, 44, 0.45);
+  font-weight: 600;
+}
+.metrics__account-chip[data-tone="danger"] {
+  color: var(--metrics-danger);
+  border-color: rgba(255, 179, 171, 0.45);
+  font-weight: 700;
+}
+.metrics__account-state {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.metrics__account-state--error {
+  color: var(--metrics-warn);
+}
+
+.metrics__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* The report answered a wider question than it was asked. Stated, not hidden — this
+   sentence is the honest replacement for an earlier `scan-failed` error screen. */
+.metrics__fallback {
+  margin: -8px 0 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  border-left: 2px solid var(--accent);
+  padding-left: 8px;
+}
+
+.metrics__tier {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+/* The disclosure sits ON the tier header, because that is the sentence it qualifies:
+   these numbers are this machine's, at this scope, root sessions only. */
+.metrics__tier-note {
+  display: block;
+  margin-top: 3px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: 0.85;
+}
+
+/* ── empty / loading / error: composed, not broken ──────────────────────────
+   Centred, generous, with the glyph — so "no sessions today" looks like an
+   answer rather than a failure to render. */
+.metrics__state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 220px;
+  padding: 40px 24px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.metrics__state-title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+.metrics__state-note {
+  margin: 0;
+  max-width: 46ch;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.metrics__state--error .metrics__state-title {
+  color: var(--metrics-danger);
+}
+
+/* ── row 1: the hero ───────────────────────────────────────────────────────
+   Proportional figures on purpose (`tabular-nums` is scoped to the table): at
+   44px, tabular digits look mechanically spaced. The value is `line-height: 1`
+   so the block's height is the type's height and the label sits tight to it. */
+.metrics__hero {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--bg-elev), var(--bg-surface));
+}
+.metrics__hero-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+.metrics__hero-value {
+  font-size: 44px;
+  font-weight: 300;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.metrics__hero-sub {
+  font-size: 13px;
+  color: var(--text);
+}
+.metrics__hero-def {
+  max-width: 70ch;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+/* ── row 2: KPI tiles — subordinate to the hero, and visibly so ─────────── */
+.metrics__kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+}
+.metrics__kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}
+.metrics__kpi-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.metrics__kpi-value {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* ── row 3: the token group — the centrepiece of the honesty story ────────
+   Bordered and titled so it reads as one statement, and the four tiles are
+   structurally all there is: no cell exists for a total. */
+.metrics__tokens {
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface);
+}
+.metrics__tokens-title {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.metrics__tokens-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+}
+.metrics__token {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+}
+/* The derived tile is visually distinguished from the four measured ones: it is
+   an average we computed, not a counter the API reported. */
+.metrics__token--derived {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: linear-gradient(180deg, var(--accent-soft), var(--bg-elev));
+}
+.metrics__token-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.metrics__token-value {
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.15;
+  color: var(--text);
+}
+.metrics__token-foot {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.metrics__token-foot abbr {
+  margin-left: 3px;
+  padding: 0 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 9px;
+  text-decoration: none;
+  cursor: help;
+}
+.metrics__tokens-why {
+  margin: 10px 0 0;
+  max-width: 78ch;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+/* ── row 4: the chart ──────────────────────────────────────────────────── */
+.metrics__chart,
+.metrics__turns {
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  min-width: 0;
+}
+.metrics__chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.metrics__chart-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.metrics__chart-sub {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.metrics__chart-copy {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.metrics__chart-copy:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* `height` in px + `preserveAspectRatio="none"` is what makes the vertical
+   geometry pixel-exact at any width — see the note in MetricsPanel.tsx. */
+.metrics__chart-svg {
+  display: block;
+  width: 100%;
+  height: 132px;
+}
+.metrics__bar {
+  fill: var(--metrics-series);
+}
+/* The axis is a hairline exactly one step off the surface — present enough to
+   sit the bars on, quiet enough not to compete with them. No gridlines: at this
+   height they would out-weigh the data. */
+.metrics__axis {
+  fill: var(--border);
+}
+.metrics__tick {
+  fill: var(--text-dim);
+  font-size: 9.5px;
+  /* The only place outside the table where figures align — an axis whose labels
+     drift is worse than no labels. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── row 5: the top-turns table ────────────────────────────────────────────
+   🔴 `tabular-nums` HERE AND ONLY HERE. Columns of figures must align; the hero
+   and the tiles read better proportional. Scrolls inside its own container so
+   the page body never scrolls sideways. */
+.metrics__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.metrics__turns {
+  overflow-x: auto;
+}
+.metrics__table th {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: left;
+  white-space: nowrap;
+}
+.metrics__table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+.metrics__num {
+  text-align: right;
+}
+.metrics__row:hover td {
+  background: var(--bg-elev);
+}
+.metrics__row--open td {
+  background: var(--bg-elev);
+}
+.metrics__when {
+  color: var(--text-dim);
+}
+/* The label is the one cell allowed to be wide and to wrap-by-ellipsis: it is
+   the only TEXT on this surface (one text field, one rule, one place). */
+.metrics__label-cell {
+  max-width: 34ch;
+  min-width: 0;
+  overflow: hidden;
+}
+.metrics__turn-button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.metrics__turn-button:hover .metrics__turn-name {
+  color: var(--accent);
+}
+.metrics__turn-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.metrics__flag {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.metrics__flag--warn {
+  border-color: var(--metrics-warn);
+  color: var(--metrics-warn);
+}
+/* The cli/derived marker and the error count ride under their number rather than
+   beside it, so the numeric column stays a clean right-aligned stack. */
+.metrics__src {
+  display: block;
+  font-size: 9.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.metrics__src--warn {
+  color: var(--metrics-warn);
+}
+
+/* ── the turn detail, expanded in place (no modal) ───────────────────────── */
+.metrics__detail-row td {
+  padding: 0 8px 10px;
+  background: var(--bg-elev);
+  white-space: normal;
+}
+.metrics__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 4px 2px;
+}
+/* The corrected footer, in mono so the ↑ ↓ ♻ groups line up as one reading. */
+.metrics__footer-line {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text);
+}
+.metrics__detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+}
+.metrics__detail-grid dt,
+.metrics__coverage dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.metrics__detail-grid dd,
+.metrics__coverage dd {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--text);
+}
+.metrics__detail-note {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+/* ── the coverage block, expanded from its badge ─────────────────────────── */
+.metrics__coverage {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}

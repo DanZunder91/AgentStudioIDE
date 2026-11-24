@@ -1,0 +1,4 @@
+# The fixture workspace is turned into a throwaway git repo at test time
+# (wdio.conf.ts onPrepare / fixtures/init-workspace.sh). That inner repo must
+# never be tracked by — or confuse the status of — the outer Agent Studio repo.
+fixtures/workspace/.git/

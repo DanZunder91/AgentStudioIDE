@@ -1,0 +1,3 @@
+{"type":"rate_limit_event","limitType":"five_hour","status":"allowed_warning","cwd":"/work/proj","sessionId":"sess-ratelimit","version":"2.1.220"}
+{"type":"user","cwd":"/work/proj","sessionId":"sess-ratelimit","promptId":"turn-r1","promptSource":"typed","timestamp":"2026-07-29T08:00:00.000Z","message":{"role":"user","content":"hello"}}
+{"type":"assistant","cwd":"/work/proj","sessionId":"sess-ratelimit","requestId":"req-r1","timestamp":"2026-07-29T08:00:02.000Z","message":{"id":"msg-r1","role":"assistant","model":"claude-opus-5","stop_reason":"end_turn","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":1,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":10}}}

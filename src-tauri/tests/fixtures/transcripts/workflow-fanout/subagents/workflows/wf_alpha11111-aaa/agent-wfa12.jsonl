@@ -1,0 +1,1 @@
+{"parentUuid":null,"isSidechain":true,"agentId":"wfa12","type":"user","message":{"role":"user","content":"Read the emitter and list every node type it can produce."},"uuid":"00000000-0000-4000-8000-00000000000f","timestamp":"2026-07-31T10:01:00.000Z","userType":"external","entrypoint":"cli","cwd":"/w/proj","sessionId":"sess","version":"2.1.212","gitBranch":"trunk"}

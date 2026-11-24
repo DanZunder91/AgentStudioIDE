@@ -1,0 +1,173 @@
+{
+  "rootId": "root",
+  "agents": [
+    {
+      "agentId": "agent00",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool18"
+    },
+    {
+      "agentId": "agent01",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool13"
+    },
+    {
+      "agentId": "agent02",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool16"
+    },
+    {
+      "agentId": "agent03",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool12"
+    },
+    {
+      "agentId": "agent04",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool01"
+    },
+    {
+      "agentId": "agent05",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool23"
+    },
+    {
+      "agentId": "agent06",
+      "parentId": "agent07",
+      "agentType": "Explore",
+      "spawnDepth": 2,
+      "title": "Task tool40"
+    },
+    {
+      "agentId": "agent07",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool24"
+    },
+    {
+      "agentId": "agent08",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool17"
+    },
+    {
+      "agentId": "agent09",
+      "parentId": "agent05",
+      "agentType": "Explore",
+      "spawnDepth": 2,
+      "title": "Task tool37"
+    },
+    {
+      "agentId": "agent10",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool32"
+    },
+    {
+      "agentId": "agent11",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool20"
+    },
+    {
+      "agentId": "agent12",
+      "parentId": "agent05",
+      "agentType": "Explore",
+      "spawnDepth": 2,
+      "title": "Task tool39"
+    },
+    {
+      "agentId": "agent13",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool14"
+    },
+    {
+      "agentId": "agent14",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool19"
+    },
+    {
+      "agentId": "agent15",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool11"
+    },
+    {
+      "agentId": "agent16",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool02"
+    },
+    {
+      "agentId": "agent17",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool28"
+    },
+    {
+      "agentId": "agent18",
+      "parentId": "agent05",
+      "agentType": "Explore",
+      "spawnDepth": 2,
+      "title": "Task tool38"
+    },
+    {
+      "agentId": "agent19",
+      "parentId": "agent07",
+      "agentType": "Explore",
+      "spawnDepth": 2,
+      "title": "Task tool41"
+    },
+    {
+      "agentId": "agent20",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool22"
+    },
+    {
+      "agentId": "agent21",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool03"
+    },
+    {
+      "agentId": "agent22",
+      "parentId": "root",
+      "agentType": "general-purpose",
+      "spawnDepth": 1,
+      "title": "Task tool21"
+    },
+    {
+      "agentId": "agent23",
+      "parentId": "root",
+      "agentType": "claude-code-guide",
+      "spawnDepth": 1,
+      "title": "Task tool00"
+    }
+  ]
+}

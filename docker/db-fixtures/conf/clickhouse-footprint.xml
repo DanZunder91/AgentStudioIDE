@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<!--
+  Agent Studio database-client fixture — ClickHouse footprint trim.
+  Mounted at /etc/clickhouse-server/config.d/zz-footprint.xml.
+
+  ClickHouse is by far the greediest of the five engines out of the box: it sizes
+  its caches from total host RAM, which on a typical developer laptop means it
+  reserves more than the other four engines combined. A developer is meant to be able to run
+  this fixture WHILE the IDE is open, so we cap it. Only long-stable top-level
+  server settings are used here on purpose — a setting that moved between
+  ClickHouse minors would turn a pinned image into a startup failure.
+
+  These numbers are sized for a fixture holding ~2000 rows. Do not copy them
+  anywhere real.
+-->
+<clickhouse>
+    <!-- 64 MiB instead of a RAM-derived default. -->
+    <mark_cache_size>67108864</mark_cache_size>
+
+    <!-- Off: with a 2000-row dataset it buys nothing and costs resident memory. -->
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+
+    <!-- 1.25 GiB against compose.yaml's `mem_limit: 2g`: enough headroom that ordinary drift
+         cannot reach the cap, while the cap still exists so the server refuses a runaway query
+         with a readable `MEMORY_LIMIT_EXCEEDED` instead of being OOM-killed at exit 137. A clean
+         "memory limit exceeded" from ClickHouse is a debuggable failure; an exit 137 is not.
+
+         ⚠️ A tighter cap (768 MiB against a 1 GiB limit) is too tight for a ClickHouse that stays
+         up for hours, even with the log tables off: a clean container sat at about 630 MiB, and
+         hours later the same container was at about 980 MiB / 96% of its limit and refusing every
+         query including its own healthcheck. A steady-state number measured at t=0 is not a
+         ceiling. -->
+    <max_server_memory_usage>1342177280</max_server_memory_usage>
+
+    <max_concurrent_queries>32</max_concurrent_queries>
+
+    <!-- Turn off the system.*_log tables nothing here reads. Each one keeps an
+         in-memory flush buffer and its own MergeTree parts. Measured on this
+         fixture (arm64, 6-row database): roughly 720 MiB → 610 MiB resident.
+         Together with compose.yaml's MALLOC_CONF it lands near 570 MiB.
+         `system.query_log` is handled separately, further down. -->
+    <asynchronous_metric_log remove="1"/>
+    <metric_log remove="1"/>
+    <trace_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <query_views_log remove="1"/>
+    <part_log remove="1"/>
+    <text_log remove="1"/>
+
+    <!-- ⚠️ Without these three, the list above is INCOMPLETE, and the fixture
+         degrades into permanent failure after a few hours.
+
+         On a container that had been up 5 hours, RSS reached the 768 MiB cap
+         then in force, so the server refused every query — including its own
+         healthcheck, which is a `SELECT count() FROM tracks`. It then flapped:
+         a merge freed memory, the check went green, RSS drifted back over, red
+         again. `npm run verify` refuses to run the whole database tier when any
+         fixture container is unhealthy, so an engine that no test even uses
+         would intermittently block the gate — a flapping gate is worse than a
+         red one. The mechanism is self-feeding, because the 2-second healthcheck
+         is itself the query load that fills these tables.
+
+         These three are newer than the list above (they arrived in later
+         ClickHouse minors). Row counts after 5 hours of nothing but
+         healthchecks: processors_profile_log ~36 000, latency_log ~13 000,
+         error_log ~3 000. -->
+    <processors_profile_log remove="1"/>
+    <latency_log remove="1"/>
+    <error_log remove="1"/>
+
+    <!-- ⚠️ `system.query_log` is off too — it is the one that actually addresses the cause.
+         Nothing here reads it, and it is the LAST accumulating table:
+
+           t+0min   ~530 MiB   query_log ~20 rows
+           t+15min  ~850 MiB   query_log ~2300 rows     ← +~320 MiB in a quarter of an hour
+
+         The 2-second healthcheck is itself a query, so this fixture generates ~1800 query_log rows
+         an hour whether or not anyone uses it. A daily TTL prunes far too slowly to matter, and
+         removing other log tables or adding headroom only treats the symptom.
+
+         If a test ever needs `query_log`, it can turn it on for that test's fixture rather than
+         every developer paying for it continuously. -->
+    <query_log remove="1"/>
+
+    <!-- `information` floods `docker compose logs` and buries the seed's own
+         errors, which is the thing you actually need to read when a seed fails. -->
+    <logger>
+        <level>warning</level>
+    </logger>
+</clickhouse>

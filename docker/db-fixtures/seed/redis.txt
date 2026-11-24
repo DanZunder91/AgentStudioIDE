@@ -1,0 +1,46 @@
+# ═════════════════════════════════════════════════════════════════════════════
+#  Redis seed — Agent Studio database-client fixture
+#  Fed to `redis-cli` on stdin by seed/redis-entrypoint.sh. One command per line;
+#  redis-cli does the quoting/escaping (including "\xNN"), which is why this is a
+#  command list rather than a RESP dump — a RESP dump is unreadable in review.
+#  TEST FIXTURE ONLY.
+#
+#  NOTE: the `fixture:seeded` marker key is NOT set here. The entrypoint sets it
+#  only after checking this file produced no errors, and compose.yaml's
+#  healthcheck tests that marker — so "healthy" cannot mean "half-seeded".
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ── strings ──────────────────────────────────────────────────────────────────
+SET fixture:string "hello"
+# An EMPTY STRING value. In Redis the NULL-vs-empty distinction is "key absent"
+# vs "key present holding ''", and GET must return "" here and nil for
+# fixture:absent (which is deliberately never created).
+SET fixture:empty ""
+SET fixture:number 42
+# Non-UTF-8 bytes in the VALUE: the RESP reply is a byte string, so the renderer
+# must fall back to hex exactly as it does for bytea/blob.
+SET fixture:binary "\x00\xff\x10"
+SET fixture:unicode "ünïcode ✓ 中文"
+# A key name containing a space and a colon — the tree must not split key names
+# on either.
+SET "fixture:key with spaces" "ok"
+# A key with a TTL, so `TTL`/`PTTL` (read-only allowlist) return a real
+# number and the tree's sub-label has something to show.
+SET fixture:ttl "expires" EX 3600
+
+# ── one key per remaining RESP type, so `TYPE` and the tree's per-type sub-label
+#    ("hash · 3 fields") are exercised rather than assumed ─────────────────────
+HSET fixture:hash studio harbor gain 0.25 note "ünïcode ✓ 中文"
+RPUSH fixture:list first second third
+SADD fixture:set alpha beta gamma
+ZADD fixture:zset 1 one 2 two 3 three
+XADD fixture:stream * event play title Amberline
+
+# ── 5000 keys under k:* ──────────────────────────────────────────────────────
+# So the tree's key browse needs MULTIPLE SCAN round trips (`KEYS` is refused in
+# both modes because it is O(N) and blocks the single-threaded server; the tree
+# must use a cursor). 5000 keys is well past the default COUNT of 10.
+# Generated with EVAL rather than 5000 committed lines. NB: the read-only
+# allowlist refuses EVAL from the *app's* console — this is the fixture seeding
+# itself, which is not the app, and it keeps this file reviewable.
+EVAL "for i=1,5000 do redis.call('SET', 'k:'..i, i) end return 1" 0

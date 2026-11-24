@@ -1,0 +1,6 @@
+{
+  "agentType": "claude-code-guide",
+  "description": "Task tool00",
+  "toolUseId": "tool00",
+  "spawnDepth": 1
+}

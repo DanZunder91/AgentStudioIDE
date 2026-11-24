@@ -1,0 +1,13 @@
+# Line endings: LF in the working tree on EVERY OS.
+#
+# Git for Windows ships `core.autocrlf=true`, so without this file a Windows clone checks every
+# text file out with CRLF. Tests here read their own sources and fixtures as bytes — the
+# no-console-window guard scans `src-tauri/src`, the transcript parser reads JSONL fixtures,
+# contract goldens compare exact text — so a Windows checkout would test different bytes from the
+# ones the Mac tests. One rule, one set of bytes, everywhere. The repository content was already
+# LF; this changes only what a Windows working tree holds.
+* text=auto eol=lf
+
+# cmd.exe batch files are the exception: `cmd` mis-parses labels and `goto` in LF files.
+*.cmd text eol=crlf
+*.bat text eol=crlf

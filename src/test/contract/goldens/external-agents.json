@@ -1,0 +1,201 @@
+{
+  "dead-hidden": {
+    "agents": [
+      {
+        "key": "k1",
+        "parentKey": null,
+        "title": "calm-idle-heron",
+        "folder": "beta",
+        "activity": "idle",
+        "tool": null,
+        "lastActivityMs": 1790251110000,
+        "alive": true,
+        "host": null,
+        "language": null
+      }
+    ],
+    "scannedAtMs": 1790251200000
+  },
+  "macos-linux": {
+    "agents": [
+      {
+        "key": "k1",
+        "parentKey": null,
+        "title": "quiet-running-otter",
+        "folder": "alpha",
+        "activity": "running",
+        "tool": "Agent",
+        "lastActivityMs": 1790251198000,
+        "alive": true,
+        "host": null,
+        "language": "rust"
+      },
+      {
+        "key": "k2",
+        "parentKey": "k1",
+        "title": "Explore",
+        "folder": "alpha",
+        "activity": "done",
+        "tool": null,
+        "lastActivityMs": 1790251080000,
+        "alive": true,
+        "host": null,
+        "language": "rust"
+      },
+      {
+        "key": "k3",
+        "parentKey": "k1",
+        "title": "general-purpose",
+        "folder": "alpha",
+        "activity": "running",
+        "tool": "Grep",
+        "lastActivityMs": 1790251198000,
+        "alive": true,
+        "host": null,
+        "language": "rust"
+      },
+      {
+        "key": "k4",
+        "parentKey": "k3",
+        "title": "code-reviewer",
+        "folder": "alpha",
+        "activity": "done",
+        "tool": null,
+        "lastActivityMs": 1790251140000,
+        "alive": true,
+        "host": null,
+        "language": "rust"
+      },
+      {
+        "key": "k5",
+        "parentKey": null,
+        "title": "feat/x",
+        "folder": "gamma",
+        "activity": "waiting",
+        "tool": "AskUserQuestion",
+        "lastActivityMs": 1790251180000,
+        "alive": true,
+        "host": "iTerm2",
+        "language": null
+      },
+      {
+        "key": "k6",
+        "parentKey": null,
+        "title": "claude",
+        "folder": "zeta",
+        "activity": "error",
+        "tool": null,
+        "lastActivityMs": 1790251160000,
+        "alive": true,
+        "host": "Terminal",
+        "language": null
+      },
+      {
+        "key": "k7",
+        "parentKey": null,
+        "title": "calm-idle-heron",
+        "folder": "beta",
+        "activity": "idle",
+        "tool": null,
+        "lastActivityMs": 1790251110000,
+        "alive": true,
+        "host": null,
+        "language": null
+      }
+    ],
+    "scannedAtMs": 1790251200000
+  },
+  "no-sessions": {
+    "agents": [],
+    "scannedAtMs": 1790251200000
+  },
+  "windows": {
+    "agents": [
+      {
+        "key": "k1",
+        "parentKey": null,
+        "title": "quiet-running-otter",
+        "folder": "alpha",
+        "activity": "running",
+        "tool": "Agent",
+        "lastActivityMs": 1790251198000,
+        "alive": null,
+        "host": null,
+        "language": "rust"
+      },
+      {
+        "key": "k2",
+        "parentKey": "k1",
+        "title": "Explore",
+        "folder": "alpha",
+        "activity": "done",
+        "tool": null,
+        "lastActivityMs": 1790251080000,
+        "alive": null,
+        "host": null,
+        "language": "rust"
+      },
+      {
+        "key": "k3",
+        "parentKey": "k1",
+        "title": "general-purpose",
+        "folder": "alpha",
+        "activity": "running",
+        "tool": "Grep",
+        "lastActivityMs": 1790251198000,
+        "alive": null,
+        "host": null,
+        "language": "rust"
+      },
+      {
+        "key": "k4",
+        "parentKey": "k3",
+        "title": "code-reviewer",
+        "folder": "alpha",
+        "activity": "done",
+        "tool": null,
+        "lastActivityMs": 1790251140000,
+        "alive": null,
+        "host": null,
+        "language": "rust"
+      },
+      {
+        "key": "k5",
+        "parentKey": null,
+        "title": "feat/x",
+        "folder": "gamma",
+        "activity": "waiting",
+        "tool": "AskUserQuestion",
+        "lastActivityMs": 1790251180000,
+        "alive": null,
+        "host": null,
+        "language": null
+      },
+      {
+        "key": "k6",
+        "parentKey": null,
+        "title": "claude",
+        "folder": "zeta",
+        "activity": "error",
+        "tool": null,
+        "lastActivityMs": 1790251160000,
+        "alive": null,
+        "host": null,
+        "language": null
+      },
+      {
+        "key": "k7",
+        "parentKey": null,
+        "title": "calm-idle-heron",
+        "folder": "beta",
+        "activity": "idle",
+        "tool": null,
+        "lastActivityMs": 1790251110000,
+        "alive": null,
+        "host": null,
+        "language": null
+      }
+    ],
+    "scannedAtMs": 1790251200000
+  }
+}

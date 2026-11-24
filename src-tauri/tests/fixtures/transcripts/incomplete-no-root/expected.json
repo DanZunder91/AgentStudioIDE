@@ -1,0 +1,33 @@
+{
+  "rootId": "root",
+  "agents": [
+    {
+      "agentId": "agent00",
+      "parentId": "root",
+      "agentType": "Explore",
+      "spawnDepth": 1,
+      "title": "Task tool00"
+    },
+    {
+      "agentId": "agent01",
+      "parentId": "root",
+      "agentType": "Explore",
+      "spawnDepth": 1,
+      "title": "Task tool01"
+    },
+    {
+      "agentId": "agent02",
+      "parentId": "root",
+      "agentType": "claude",
+      "spawnDepth": 1,
+      "title": "Task tool02"
+    },
+    {
+      "agentId": "agent03",
+      "parentId": "root",
+      "agentType": "Explore",
+      "spawnDepth": 1,
+      "title": "Task tool03"
+    }
+  ]
+}

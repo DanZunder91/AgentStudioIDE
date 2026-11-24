@@ -1,0 +1,624 @@
+/* ── database client: the query console + results grid ─────────
+   Tokens come from App.css (--bg-app/-surface/-elev, --text, --text-dim, --border,
+   --accent, --mono), with the same light-scheme fallbacks csvTable.css declares.
+
+   The table half deliberately mirrors `csvTable.css`'s header / zebra / border
+   treatment: this grid replaces that component but keeps its LOOK, so the two tables in
+   this app read as siblings rather than as two unrelated tables. */
+
+.db-console {
+  --db-bg: var(--bg-app, #0d1117);
+  --db-surface: var(--bg-surface, #161b22);
+  --db-header: var(--bg-elev, #1c2128);
+  --db-zebra: rgba(255, 255, 255, 0.02);
+  --db-text: var(--text, #c9d1d9);
+  --db-dim: var(--text-dim, #8b949e);
+  --db-border: var(--border, #21262d);
+  --db-accent: var(--accent, #3b82f6);
+  --db-safe: #3fb950;
+  --db-warn: #d29922;
+  --db-danger: #f85149;
+  --db-scroll-thumb: rgba(255, 255, 255, 0.22);
+  /* The shortest a results table is allowed to get. See `.db-result[data-kind="rows"]`. */
+  --db-grid-floor: 176px;
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--db-bg);
+  color: var(--db-text);
+  font-size: 12px;
+}
+
+@media (prefers-color-scheme: light) {
+  .db-console {
+    --db-bg: #ffffff;
+    --db-surface: #ffffff;
+    --db-header: #f3f4f6;
+    --db-zebra: rgba(0, 0, 0, 0.025);
+    --db-text: #1f2328;
+    --db-dim: #57606a;
+    --db-border: #d0d7de;
+    --db-accent: #0969da;
+    --db-safe: #1a7f37;
+    --db-warn: #9a6700;
+    --db-danger: #cf222e;
+    --db-scroll-thumb: rgba(0, 0, 0, 0.28);
+  }
+}
+
+/* ── toolbar ─────────────────────────────────────────────────────────────── */
+.db-console__toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--db-border);
+  background: var(--db-surface);
+}
+.db-console__spacer {
+  flex: 1 1 auto;
+}
+
+.db-console__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 5px;
+  border: 1px solid var(--db-border);
+  background: var(--db-header);
+  color: var(--db-text);
+  font: inherit;
+  cursor: pointer;
+}
+.db-console__btn:hover:not(:disabled) {
+  border-color: var(--db-accent);
+}
+.db-console__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.db-console__btn--primary {
+  border-color: var(--db-accent);
+}
+
+.db-console__chip {
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--db-border);
+  color: var(--db-dim);
+  white-space: nowrap;
+}
+
+/* The guardrail badge. Tone is DATA (`readOnlyBadge().tone`), not a hard-coded
+   class per call site — a badge must never look stronger than the engine is. */
+.db-console__badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.db-console__badge[data-tone="safe"] {
+  color: var(--db-safe);
+}
+.db-console__badge[data-tone="warn"] {
+  color: var(--db-warn);
+}
+.db-console__badge[data-tone="danger"] {
+  color: var(--db-danger);
+}
+
+.db-console__caveat {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--db-border);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.db-console__caveat[data-tone="warn"] {
+  color: var(--db-warn);
+  background: rgba(210, 153, 34, 0.08);
+}
+.db-console__caveat[data-tone="danger"] {
+  color: var(--db-danger);
+  background: rgba(248, 81, 73, 0.08);
+}
+
+/* ── the INTERNAL split ───────────────────────────────────────────────
+   Two flex children whose `flex-grow` is the divider's fraction, plus a 6px
+   grabber. `flex-basis: 0` + `min-height: 0` is what makes grow the ONLY thing
+   deciding the ratio — without the basis, content height leaks into it and the
+   divider stops being the source of truth. */
+.db-console__split {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.db-console__pane {
+  flex-basis: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.db-console__divider {
+  flex: 0 0 6px;
+  cursor: row-resize;
+  background: var(--db-border);
+  border: none;
+}
+.db-console__divider:hover,
+.db-console__divider:focus-visible {
+  background: var(--db-accent);
+  outline: none;
+}
+
+/* ── the query editor host ───────────────────────────────────────────────── */
+.db-query {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.db-query .cm-editor {
+  height: 100%;
+}
+
+/* ── output pane ─────────────────────────────────────────────────────────── */
+.db-console__outhead {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--db-border);
+  background: var(--db-surface);
+}
+.db-console__outtitle {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-size: 10px;
+  color: var(--db-dim);
+}
+.db-console__running {
+  color: var(--db-accent);
+}
+
+.db-console__error {
+  margin: 0;
+  padding: 7px 10px;
+  color: var(--db-danger);
+  background: rgba(248, 81, 73, 0.08);
+  border-bottom: 1px solid var(--db-border);
+  line-height: 1.45;
+}
+
+.db-console__empty {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--db-dim);
+  font-style: italic;
+}
+
+.db-console__results {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* One statement's outcome.
+
+   🔴 The original bug, from `SELECT * FROM widgets`: a 1-row result
+   drew a 56px table inside a 400px output pane — a black void underneath it, and the
+   horizontal scrollbar sitting ON TOP of the only row, which was sliced in half. Two
+   distinct bugs, one cause. A scroll container's scrollbar is taken out of its own
+   CONTENT box, so a box that is exactly as tall as its content pays for the bar with
+   its last row; and a content-tall scroll box also has `clientHeight === scrollHeight`,
+   which is the input `visibleWindow` windows on — so virtualisation had quietly stopped
+   windowing anything and a 500-row result was rendering all 500 rows.
+
+   So: a `rows` result takes a SHARE of the output pane and scrolls inside it, while
+   prose results (a message, an affected count) stay exactly as tall as their text. */
+.db-result {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--db-border);
+}
+/* A table gets the room — and its floor is stated HERE, in px, on the one box in the
+   chain that may carry a minimum.
+
+   The first version of this fix left `min-height` at the flex default (`auto`) all the
+   way down, expecting the scroll box's own minimum to push back up as a min-content
+   contribution. `DbConsole.browser.test.tsx` failed it: `expected 12032 to be less than
+   12000` — Chromium resolves a *scroll container's* min-content height to its full
+   content height, so a 500-row table's 12 000px travelled up the chain as a minimum and
+   nothing shrank at all. Hence one explicit floor here, and `min-height: 0` on every box
+   below it.
+
+   The number is comfort, not arithmetic: ≈ the table header, five rows and the
+   horizontal scrollbar. What actually keeps the bar off the data is the box being
+   TALLER than its content, which the flex fill above provides. */
+.db-result[data-kind="rows"] {
+  flex: 1 1 auto;
+  min-height: var(--db-grid-floor);
+}
+.db-result__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--db-surface);
+}
+.db-result__index {
+  flex: 0 0 auto;
+  min-width: 16px;
+  text-align: center;
+  border-radius: 3px;
+  background: var(--db-header);
+  color: var(--db-dim);
+}
+.db-result__statement {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  color: var(--db-dim);
+}
+.db-result__summary {
+  flex: 0 0 auto;
+  color: var(--db-dim);
+  font-variant-numeric: tabular-nums;
+}
+.db-result__line,
+.db-result__message,
+.db-result__notice {
+  margin: 0;
+  padding: 7px 10px;
+  line-height: 1.45;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  white-space: pre-wrap;
+}
+/* A `message` result is a NOTICE tone, never an error tone: `DbResultSet` carries
+   no severity, so painting it red would be a guess about what the text means. */
+.db-result__message {
+  color: var(--db-warn);
+  background: rgba(210, 153, 34, 0.07);
+}
+.db-result__notice {
+  color: var(--db-dim);
+}
+
+/* ── the grid ────────────────────────────────────────────────────────────── */
+.db-grid {
+  display: flex;
+  flex-direction: column;
+  /* Fills the share `.db-result[data-kind="rows"]` won above. `min-height: 0` is
+     load-bearing: without it this box inherits a content-based minimum from the scroll
+     container below (12 000px for a 500-row result) and refuses to shrink. */
+  flex: 1 1 auto;
+  min-height: 0;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+}
+
+/* Persistent, not a toast: a user who scrolled to the bottom and missed a
+   toast would believe they had seen everything. */
+.db-grid__truncated {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 5px 10px;
+  color: var(--db-warn);
+  background: rgba(210, 153, 34, 0.1);
+  border-bottom: 1px solid var(--db-border);
+  line-height: 1.45;
+}
+
+.db-grid__scroll {
+  flex: 1 1 auto;
+  /* 0, not the floor: the floor lives on `.db-result[data-kind="rows"]` (one box, one
+     minimum). A minimum here as well would let the box outgrow the grid and paint over
+     the next result. */
+  min-height: 0;
+  /* Both axes scroll INSIDE this box: a 200-column result must never widen the
+     tab, the pane, or the window. */
+  overflow: auto;
+  /* A grid scrolled to its last row must not then start scrolling the output list
+     out from under the pointer. */
+  overscroll-behavior: contain;
+}
+
+/* The grid's own scrollbars, thin and quiet. Unstyled, WebKit draws the 15px system
+   slab — which is what was lying across the data in the original bug. */
+.db-grid__scroll::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+.db-grid__scroll::-webkit-scrollbar-track,
+.db-grid__scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.db-grid__scroll::-webkit-scrollbar-thumb {
+  /* `background-clip: content-box` + a transparent border is the only way to inset a
+     WebKit thumb; padding does nothing on a scrollbar pseudo-element. */
+  background: var(--db-scroll-thumb);
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: 99px;
+}
+.db-grid__scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--db-dim);
+  background-clip: content-box;
+}
+
+/* `box-sizing: border-box` on the cells below is LOAD-BEARING, not tidiness. Without
+   it a cell's 1px border is added outside its `height`, so a 22px row measured 23px
+   in Chromium — while `visibleWindow` does its spacer maths in 22. One px per row is
+   500px of drift over 500 rows: a scrollbar that lies. jsdom cannot see it (no
+   layout); `DbConsole.browser.test.tsx` measured it, and mutating the property back
+   turns that test red. `separate` + `border-spacing: 0` is belt-and-braces on top —
+   it keeps row stacking free of collapsed-border rounding — not the fix itself. */
+/* `width: 0` + `min-width: 100%` + `table-layout: fixed` is the recipe that makes the
+   `<col>` widths AUTHORITATIVE, and it is not the obvious spelling.
+
+   🔴 It used to say `width: max-content`, and that is the deeper half of the original
+   bug. A table sized by `max-content` is measured from its CELL
+   CONTENT, and fixed layout then treats the `<col>` widths as mere RATIOS of that width
+   — so `columnWidthsCh`'s 48ch cap was never enforced by anything. A 66-character hash
+   and a 100-character code blew the table out to ~1700px in a 1000px pane, which is why
+   three columns needed a horizontal scrollbar at all, and why a dragged width was
+   silently overruled (measured: a 120px drag moved the column 0px).
+
+   Under fixed layout the used table width is `max(specified width, sum of the column
+   widths)` (CSS 2.1 §17.5.2.1), so `width: 0` says "be exactly as wide as your columns"
+   and `min-width: 100%` adds "…but fill the pane if they leave room". */
+.db-grid table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 0;
+  min-width: 100%;
+  table-layout: fixed;
+}
+/* The trailing filler column (see `ResultsGrid.tsx`): it swallows the leftover width so
+   the real columns keep theirs. No right border — it is empty space, not a column. */
+.db-grid .db-grid__filler {
+  border-right: none;
+}
+
+.db-grid th,
+.db-grid td {
+  box-sizing: border-box;
+  /* The fallback must track `ROW_HEIGHT_PX`. It is unreachable in practice — the grid
+     always publishes the property — but a stale number here is a row height that
+     disagrees with the windowing maths the moment it ever is reached, which is the
+     drift `--db-row-h` exists to prevent. Found at 22 while verifying the installer. */
+  height: var(--db-row-h, 24px);
+  padding: 0 8px;
+  border-right: 1px solid var(--db-border);
+  border-bottom: 1px solid var(--db-border);
+  vertical-align: middle;
+  text-align: left;
+  white-space: pre;
+  overflow: hidden;
+  /* A value wider than its column must LOOK cut rather than be sliced mid-glyph — the
+     `id` column ended in half a character with nothing to say so. The full
+     value is still the `title`, and the column is draggable. */
+  text-overflow: ellipsis;
+}
+/* `separate` leaves the leading edge bare; put it back without touching height. */
+.db-grid th:first-child,
+.db-grid td:first-child {
+  border-left: 1px solid var(--db-border);
+}
+
+.db-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: auto;
+  padding: 3px 8px;
+  background: var(--db-header);
+  color: var(--db-text);
+  font-weight: 600;
+  box-shadow: inset 0 -1px 0 var(--db-border);
+}
+/* `text-overflow` acts on a block container's own inline content, so the two stacked
+   spans need it themselves — the `th` rule above cannot reach inside them. */
+.db-grid__name,
+.db-grid__type {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* The server's own type name, quiet but always visible — it is the thing that
+   makes `1` vs `'1'` legible without clicking. */
+.db-grid__type {
+  color: var(--db-dim);
+  font-weight: 400;
+  font-size: 10px;
+}
+
+/* The column-resize grab strip: the right edge of each header cell. Invisible until
+   you go looking for it — a permanent grab bar on every column would out-shout the
+   data — and `position: sticky` on the `th` is what makes this `absolute` box land
+   inside it rather than at the table's edge. */
+/* The whole header label is the sort control. A button rather than a click
+   handler on the <th> so it is reachable by keyboard and announced as pressable;
+   the resize grip stays a separate target beside it. */
+.db-grid__find {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.db-grid__find-input {
+  flex: 1 1 auto;
+  min-width: 0; /* an input's intrinsic width would push the bar past the pane */
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 3px 6px;
+}
+.db-grid__find-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.db-grid__find-count {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.db-grid__find-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 6px;
+}
+.db-grid__find-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The same palette as the response search, so a hit looks like a hit wherever
+   the user finds one. */
+.db-grid__hit {
+  background: rgba(229, 192, 123, 0.28);
+  color: inherit;
+  border-radius: 2px;
+}
+.db-grid__hit.is-current {
+  background: var(--accent, #61afef);
+  color: var(--bg-app, #1e2127);
+}
+
+.db-grid__sort {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.db-grid__sort:hover .db-grid__name {
+  color: var(--accent);
+}
+
+.db-grid__arrow {
+  color: var(--accent);
+  font-size: 9px;
+  /* Reserved even when empty, so turning a sort on does not shift the header. */
+  min-width: 0.75em;
+}
+
+.db-grid__resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+}
+.db-grid__resize:hover,
+.db-grid__resize:focus-visible {
+  background: var(--db-accent);
+  outline: none;
+}
+
+.db-grid tbody tr:nth-child(even) td {
+  background: var(--db-zebra);
+}
+.db-grid tbody tr:hover td {
+  background: var(--accent-soft, rgba(59, 130, 246, 0.1));
+}
+
+/* Numbers get tabular figures so digits line up column-wise. */
+.db-grid td[data-kind="number"] {
+  font-variant-numeric: tabular-nums;
+}
+/* Binary is data you cannot read; dim it so it never competes with text. */
+.db-grid td[data-kind="binary"] {
+  color: var(--db-dim);
+}
+
+/* ── the three honesty states ─────────────────────────────────────────
+   NULL, the empty string, and whitespace-only must be TELLABLE APART at a glance
+   — the entire text protocol exists to preserve that distinction, so losing it in
+   CSS would waste the backend's whole design. */
+
+/* SQL NULL: a dim italic chip that is visibly not data. */
+.db-grid__null {
+  color: var(--db-dim);
+  font-style: italic;
+  opacity: 0.8;
+}
+
+/* The empty string: an empty cell with a solid baseline rule, so it reads as a
+   value that is empty rather than as a gap in the table. */
+.db-grid td[data-empty="true"]::after {
+  content: "";
+  display: block;
+  width: 1.6ch;
+  border-bottom: 1px solid var(--db-dim);
+}
+
+/* Whitespace-only: a DOTTED rule under the (invisible) characters — a different
+   mark from the empty string's solid one, on purpose. */
+.db-grid td[data-display="whitespace"] {
+  text-decoration: underline dotted var(--db-warn);
+  text-underline-offset: 3px;
+}
+
+/* A row shorter than the column list: a contract violation, not a NULL. */
+.db-grid td[data-display="missing"]::after {
+  content: "—";
+  color: var(--db-danger);
+}
+
+/* A one-line reduction of a multi-line value: marked, so the cell never passes
+   its first line off as the whole value. */
+.db-grid td[data-collapsed="true"] {
+  box-shadow: inset -3px 0 0 -1px var(--db-accent);
+}
+
+.db-grid__empty {
+  height: auto;
+  padding: 12px 10px;
+  color: var(--db-dim);
+  font-style: italic;
+  text-align: center;
+}

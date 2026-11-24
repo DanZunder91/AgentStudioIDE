@@ -1,0 +1,158 @@
+/* View strip — the TOP-LEVEL bar of layouts.
+   Owned by src/components/**, like panes.css, and reuses the same CSS vars
+   declared in src/App.css. Deliberately the same idiom as `.pane-tab` one level
+   up: the difference is WHERE the accent sits (top, not bottom) and that the
+   active chip takes the pane header's surface colour, so it reads as holding up
+   the strip beneath it rather than as a second, competing tab row. */
+
+.view-bar {
+  display: flex;
+  align-items: stretch;
+  height: 32px;
+  min-width: 0;
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.view-bar::-webkit-scrollbar {
+  display: none;
+}
+
+/* `.center > *` (App.css) makes every child of the work area flex-grow. The
+   strip is chrome, not content, so it must not — matched with the same `.center`
+   ancestor to beat that rule's specificity rather than with `!important`. */
+.center > .view-bar {
+  flex: 0 0 auto;
+}
+
+.view-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  max-width: 220px;
+  padding: 0 6px 0 12px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  /* Reserved so the active accent never shifts the label. */
+  box-shadow: inset 0 2px 0 transparent;
+}
+.view-tab:hover {
+  color: var(--text);
+  background: var(--bg-elev);
+}
+.view-tab--active {
+  color: var(--text);
+  /* The pane header's own colour: the active view "holds up" the strip below. */
+  background: var(--bg-surface);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.view-tab:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* A tab is hovering here and would move INTO this view. */
+.view-tab--tab-target {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* Reorder insertion line — the same inset-shadow trick as `.pane-tab`: it lands
+   on the exact pixel boundary and cannot shift the strip by its own width. */
+.view-tab--insert-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.view-tab--insert-after {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+.view-tab--active.view-tab--insert-before {
+  box-shadow: inset 2px 0 0 var(--accent), inset 0 2px 0 var(--accent);
+}
+.view-tab--active.view-tab--insert-after {
+  box-shadow: inset -2px 0 0 var(--accent), inset 0 2px 0 var(--accent);
+}
+
+.view-tab__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* How many tabs are inside — the same number the close confirmation quotes. */
+.view-tab__count {
+  flex: 0 0 auto;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+.view-tab--active .view-tab__count {
+  background: var(--bg-app);
+  color: var(--text);
+}
+
+.view-tab__close {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  /* Keep the × from stealing width until hovered/active — VS Code behaviour,
+     and the same rule `.pane-tab__close` follows. */
+  visibility: hidden;
+}
+.view-tab:hover .view-tab__close,
+.view-tab--active .view-tab__close {
+  visibility: visible;
+}
+.view-tab__close:hover:not(:disabled) {
+  background: var(--bg-elev);
+  color: var(--text);
+}
+.view-tab__close:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.view-tab__close:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.view-tab__title-input {
+  min-width: 0;
+  width: 100%;
+  padding: 1px 4px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-app);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  outline: none;
+}
+
+.view-tab__new {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 0 4px;
+}

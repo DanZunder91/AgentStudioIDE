@@ -1,0 +1,211 @@
+/* ── History panel (the right-rail API request history, M6 follow-on) ─────────
+   Theme variables come from App.css; the method badge reuses the palette idea
+   from the request view. Panel shell mirrors the Vault panel. */
+
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 12px;
+  overflow-y: auto;
+  color: var(--text);
+  font-size: 12px;
+}
+.history-panel__head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.history-panel__note,
+.history-panel__empty {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.history-clear-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--danger, #f7768e);
+  border-radius: 6px;
+}
+.history-clear-confirm__q {
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.history-clear-confirm__actions {
+  display: flex;
+  gap: 6px;
+}
+.history-clear-confirm__yes {
+  color: var(--danger, #f7768e);
+  border-color: var(--danger, #f7768e);
+}
+
+/* ── search box ───────────────────────────────────────────────────────────
+   `min-width: 0` + a flexible basis is load-bearing, not cosmetic: the rail
+   drags down to 180px and `railChrome.browser.test.tsx` asserts this panel
+   never scrolls horizontally. An input's default `size` gives it an intrinsic
+   min-content width that would blow the rail out. Mirrors `.logs-filter`. */
+.history-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.history-search__input {
+  flex: 1 1 60px;
+  min-width: 0;
+  padding: 4px 8px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 11px;
+  outline: none;
+}
+.history-search__input:focus {
+  border-color: var(--accent);
+}
+.history-search__clear {
+  flex: 0 0 auto;
+}
+
+.history-panel__count {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* ── day groups (everything older than the newest RECENT_COUNT) ──────────── */
+.history-days {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.history-day__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.history-day__head:hover {
+  border-color: var(--accent);
+}
+.history-day__caret {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+.history-day__label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-day__count {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+/* The day's requests are indented so the flat "recent" block still reads as
+   the outer level. */
+.history-day__list {
+  padding-left: 12px;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.history-item {
+  margin: 0;
+}
+.history-item__run {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface, transparent);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.history-item__run:hover {
+  border-color: var(--accent, #7aa2f7);
+  background: color-mix(in srgb, var(--accent, #7aa2f7) 8%, transparent);
+}
+.history-item__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  min-width: 0;
+}
+.history-item__time {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.history-item__url {
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  word-break: break-all;
+  color: var(--text);
+}
+.history-item__err {
+  color: var(--danger, #f7768e);
+  font-size: 10px;
+  word-break: break-word;
+}
+
+.history-method {
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--accent, #7aa2f7);
+}
+.history-method--POST,
+.history-method--PUT,
+.history-method--PATCH {
+  color: var(--ok, #9ece6a);
+}
+.history-method--DELETE {
+  color: var(--danger, #f7768e);
+}
+
+.history-status {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.history-status--err {
+  color: var(--danger, #f7768e);
+}

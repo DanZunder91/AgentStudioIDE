@@ -1,0 +1,97 @@
+/* ── ContextMenu — a floating right-click menu surface ──────────────────────
+   A calm, rounded panel consistent with the app's dark chrome: subtle border,
+   soft shadow, muted separators, hover/focus highlight, and a danger accent for
+   destructive items. Rendered above the tree via z-index; fixed-positioned by
+   the component at the clamped (x, y). */
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 168px;
+  max-width: 260px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  box-shadow:
+    0 6px 24px rgba(0, 0, 0, 0.45),
+    0 1px 2px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+  color: var(--text);
+  user-select: none;
+}
+.context-menu:focus-visible {
+  outline: none;
+}
+
+.context-menu__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.context-menu__item:hover:not(:disabled),
+.context-menu__item:focus-visible {
+  background: var(--accent-soft);
+  color: var(--text);
+  outline: none;
+}
+.context-menu__item:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.context-menu__item:disabled {
+  color: var(--text-dim);
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Destructive action (Delete): a muted red that fills on hover/focus. */
+.context-menu__item.is-danger {
+  color: var(--danger, #e06c75);
+}
+.context-menu__item.is-danger:hover:not(:disabled),
+.context-menu__item.is-danger:focus-visible {
+  background: var(--danger, #e06c75);
+  color: #fff;
+}
+
+.context-menu__separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+/* ── Submenus ───────────────────────────────────────────────────────────────
+   A submenu is another `.context-menu` surface, rendered INSIDE its parent's
+   DOM subtree (so the outside-click check still sees it as "inside") and
+   fixed-positioned by the component beside its parent item. The row wrapper is
+   `display: contents` so that nesting costs the flat menu no layout at all —
+   the button still lays out as a direct child of the menu box. */
+.context-menu__row {
+  display: contents;
+}
+
+/* A parent row pushes its chevron to the trailing edge; the gap keeps the label
+   from ever touching it on a narrow menu. */
+.context-menu__item.has-submenu {
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.context-menu__chevron {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1;
+}
+.context-menu__item.has-submenu:hover:not(:disabled) .context-menu__chevron,
+.context-menu__item.has-submenu:focus-visible .context-menu__chevron {
+  color: var(--text);
+}

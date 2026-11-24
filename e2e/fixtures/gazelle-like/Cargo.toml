@@ -1,0 +1,26 @@
+# gazelle-like — the E2E's realistic Rust service (e2e/specs/gazelle-like*.e2e.ts).
+#
+# Its own Cargo project, NOT part of any workspace (the empty [workspace] table below stops cargo
+# from walking up into the repo). Built by scripts/e2e-linux.mjs inside the Ubuntu E2E image, into
+# the E2E target volume, never on the host's target.
+#
+# The trust behaviour is the point: reqwest + rustls with **webpki-roots** only, like a typical
+# Rust service.
+# It never reads the OS store, SSL_CERT_FILE or the IDE's CA, so a MITM would fail with
+# UnknownIssuer; the IDE must tunnel it untouched.
+[package]
+name = "gazelle-like"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+tiny_http = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "json", "blocking"] }
+serde_json = "1"
+
+[profile.dev]
+debug = 0
+incremental = false

@@ -1,0 +1,105 @@
+/* ── the terminal-close confirm ──────────────────────────────────────────────
+   The chrome is `editor.css`'s `.dialog` — the house template for a centred
+   confirm box (same overlay wash, radius, border, surface, shadow and button
+   metrics), re-declared here under its own names rather than reused, for the
+   reason `db.css` gives at the top of its own overlay: reusing `.dialog` means
+   either widening a class every other dialog silently inherits, or importing
+   another feature's whole stylesheet to get four rules. A terminal must render
+   its confirm without the editor feature ever having been loaded.
+
+   Every colour is an App.css token with the same fallback the other dialogs
+   carry, so this file hard-codes no palette of its own. Two spellings of "red"
+   exist in the repo and NEITHER is defined in App.css today — `--danger`
+   (#e06c75: the file-tree delete confirm, the API history) and `--red`
+   (#f85149: the editor's `.dialog__btn--danger`, the database dialog). This is
+   a modal confirm, so it follows the modal one, `--red`. Flagged rather than
+   silently picked: the two want to become one token. */
+
+.close-terminal-overlay {
+  position: fixed;
+  inset: 0;
+  /* Above the database/portability dialogs (60): this one interrupts a gesture
+     that is already in flight, so nothing may cover it. */
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(1, 4, 9, 0.6);
+}
+
+.close-terminal-dialog {
+  min-width: 320px;
+  max-width: 460px;
+  padding: 18px 18px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-surface, #161b22);
+  color: var(--text, #c9d1d9);
+  box-shadow: 0 12px 40px rgba(1, 4, 9, 0.5);
+  font-size: 13px;
+}
+
+.close-terminal-dialog__title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.close-terminal-dialog__message {
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+/* The several-terminals shape. A list, not a run-on sentence: the point of
+   naming them is that each one can be recognised at a glance. */
+.close-terminal-dialog__list {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  line-height: 1.6;
+  color: var(--text-dim, #8b949e);
+}
+/* The label is what the user recognises, so it keeps the full-strength colour
+   while the predicate stays dim. */
+.close-terminal-dialog__list strong,
+.close-terminal-dialog__message strong {
+  color: var(--text, #c9d1d9);
+}
+
+.close-terminal-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.close-terminal-dialog__btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-elev, #1c2128);
+  color: var(--text, #c9d1d9);
+  cursor: pointer;
+}
+.close-terminal-dialog__btn:hover {
+  border-color: var(--accent, #3b82f6);
+}
+/* Focus is moved here on open, so the ring has to be visible — Cancel being
+   the default is only useful if you can SEE that it is. */
+.close-terminal-dialog__btn:focus-visible {
+  outline: 1px solid var(--accent, #3b82f6);
+  outline-offset: 1px;
+}
+
+/* The destructive one, and it says so AT REST. `.dialog__btn--danger` only
+   turns red on hover, which leaves the two buttons identical until the pointer
+   is already on one of them — no help at all to a keyboard user, and none to
+   anyone deciding which button to aim at. */
+.close-terminal-dialog__btn--danger {
+  border-color: var(--red, #f85149);
+  color: var(--red, #f85149);
+}
+.close-terminal-dialog__btn--danger:hover {
+  background: var(--red, #f85149);
+  color: #fff;
+}

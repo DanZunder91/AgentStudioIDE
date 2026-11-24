@@ -1,0 +1,1874 @@
+{
+  "linux-first": {
+    "tsMs": 1790251200000,
+    "apps": [
+      {
+        "key": "no process:0",
+        "name": "no process",
+        "pid": 0,
+        "user": "self",
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "10.0.0.5:52001",
+            "remote": "93.184.216.34:443",
+            "remoteHost": "api.example.com",
+            "state": "TimeWait",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "node:4242",
+        "name": "node",
+        "pid": 4242,
+        "user": "self",
+        "bytesIn": 95400,
+        "bytesOut": 1813,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:3000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "10.0.0.5:52000",
+            "remote": "93.184.216.34:443",
+            "remoteHost": "api.example.com",
+            "state": "Established",
+            "bytesIn": 5400,
+            "bytesOut": 1201,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp6",
+            "local": "[::1]:9229",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp6",
+            "local": "[2001:db8::5]:40000",
+            "remote": "[2606:4700::1111]:443",
+            "remoteHost": "one.one.one.one",
+            "state": "Established",
+            "bytesIn": 90000,
+            "bytesOut": 612,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp4",
+            "local": "*:5353",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp6",
+            "local": "[fe80::1]:546",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "other user:0",
+        "name": "other user",
+        "pid": 0,
+        "user": "other",
+        "bytesIn": 2048,
+        "bytesOut": 880,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "*:22",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "10.0.0.5:22",
+            "remote": "10.0.0.9:60000",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 2048,
+            "bytesOut": 880,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp4",
+            "local": "127.0.0.53:53",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      }
+    ]
+  },
+  "linux-no-ss": {
+    "tsMs": 1790251200000,
+    "apps": [
+      {
+        "key": "no process:0",
+        "name": "no process",
+        "pid": 0,
+        "user": "self",
+        "bytesIn": null,
+        "bytesOut": null,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "10.0.0.5:52001",
+            "remote": "93.184.216.34:443",
+            "remoteHost": "api.example.com",
+            "state": "TimeWait",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "node:4242",
+        "name": "node",
+        "pid": 4242,
+        "user": "self",
+        "bytesIn": null,
+        "bytesOut": null,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:3000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "10.0.0.5:52000",
+            "remote": "93.184.216.34:443",
+            "remoteHost": "api.example.com",
+            "state": "Established",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp6",
+            "local": "[::1]:9229",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp6",
+            "local": "[2001:db8::5]:40000",
+            "remote": "[2606:4700::1111]:443",
+            "remoteHost": "one.one.one.one",
+            "state": "Established",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp4",
+            "local": "*:5353",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp6",
+            "local": "[fe80::1]:546",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "other user:0",
+        "name": "other user",
+        "pid": 0,
+        "user": "other",
+        "bytesIn": null,
+        "bytesOut": null,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "*:22",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "10.0.0.5:22",
+            "remote": "10.0.0.9:60000",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp4",
+            "local": "127.0.0.53:53",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      }
+    ]
+  },
+  "linux-second": {
+    "tsMs": 1790251201000,
+    "apps": [
+      {
+        "key": "no process:0",
+        "name": "no process",
+        "pid": 0,
+        "user": "self",
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "10.0.0.5:52001",
+            "remote": "93.184.216.34:443",
+            "remoteHost": "api.example.com",
+            "state": "TimeWait",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "node:4242",
+        "name": "node",
+        "pid": 4242,
+        "user": "self",
+        "bytesIn": 115400,
+        "bytesOut": 2813,
+        "rateIn": 20000.0,
+        "rateOut": 1000.0,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:3000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "10.0.0.5:52000",
+            "remote": "93.184.216.34:443",
+            "remoteHost": "api.example.com",
+            "state": "Established",
+            "bytesIn": 9400,
+            "bytesOut": 2201,
+            "rateIn": 4000.0,
+            "rateOut": 1000.0
+          },
+          {
+            "proto": "tcp6",
+            "local": "[::1]:9229",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp6",
+            "local": "[2001:db8::5]:40000",
+            "remote": "[2606:4700::1111]:443",
+            "remoteHost": "one.one.one.one",
+            "state": "Established",
+            "bytesIn": 106000,
+            "bytesOut": 612,
+            "rateIn": 16000.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "udp4",
+            "local": "*:5353",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp6",
+            "local": "[fe80::1]:546",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "other user:0",
+        "name": "other user",
+        "pid": 0,
+        "user": "other",
+        "bytesIn": 2048,
+        "bytesOut": 1380,
+        "rateIn": 0.0,
+        "rateOut": 500.0,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "*:22",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "10.0.0.5:22",
+            "remote": "10.0.0.9:60000",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 2048,
+            "bytesOut": 1380,
+            "rateIn": 0.0,
+            "rateOut": 500.0
+          },
+          {
+            "proto": "udp4",
+            "local": "127.0.0.53:53",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      }
+    ]
+  },
+  "macos-first": {
+    "tsMs": 1790251200000,
+    "apps": [
+      {
+        "key": "Browser Helper (Renderer):100",
+        "name": "Browser Helper (Renderer)",
+        "pid": 100,
+        "user": null,
+        "bytesIn": 1000000,
+        "bytesOut": 0,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:8000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp6",
+            "local": "[::1]:8000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp4",
+            "local": "*:67",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 1000000,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "Chat Helper:110",
+        "name": "Chat Helper",
+        "pid": 110,
+        "user": null,
+        "bytesIn": 1000,
+        "bytesOut": 800,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "udp6",
+            "local": "*:546",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 1000,
+            "bytesOut": 800,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "Music Helper:120",
+        "name": "Music Helper",
+        "pid": 120,
+        "user": null,
+        "bytesIn": 3000,
+        "bytesOut": 2000,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp6",
+            "local": "[fe80::1%en0]:50402",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp6",
+            "local": "[fe80::1%en0]:50401",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp6",
+            "local": "[fe80::1%en0]:50400",
+            "remote": "[fe80::2%en0]:50403",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 3000,
+            "bytesOut": 2000,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "claude 2.1.0:130",
+        "name": "claude 2.1.0",
+        "pid": 130,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 40000,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "udp4",
+            "local": "*:50600",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 0,
+            "bytesOut": 40000,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "cloudd:250",
+        "name": "cloudd",
+        "pid": 250,
+        "user": null,
+        "bytesIn": 43000,
+        "bytesOut": 37000,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "192.0.2.1:51001",
+            "remote": "192.0.2.7:443",
+            "remoteHost": null,
+            "state": "CloseWait",
+            "bytesIn": 5000,
+            "bytesOut": 2000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "192.0.2.1:51002",
+            "remote": "192.0.2.8:443",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 29000,
+            "bytesOut": 24600,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:51004",
+            "remote": "127.0.0.1:51005",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 500,
+            "bytesOut": 8400,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "192.0.2.1:51003",
+            "remote": "192.0.2.9:443",
+            "remoteHost": null,
+            "state": "CloseWait",
+            "bytesIn": 8500,
+            "bytesOut": 2000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:51004",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "dbserver:240",
+        "name": "dbserver",
+        "pid": 240,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:5432",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:9100",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "ide:230",
+        "name": "ide",
+        "pid": 230,
+        "user": null,
+        "bytesIn": 1564700,
+        "bytesOut": 5255900,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50020",
+            "remote": "127.0.0.1:50021",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 200,
+            "bytesOut": 400,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50000",
+            "remote": "127.0.0.1:50101",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 600000,
+            "bytesOut": 1000000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50000",
+            "remote": "127.0.0.1:50102",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 400000,
+            "bytesOut": 900000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50000",
+            "remote": "127.0.0.1:50103",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 150000,
+            "bytesOut": 600000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "192.0.2.1:50030",
+            "remote": "192.0.2.6:443",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 10000,
+            "bytesOut": 1500,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50010",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:7001",
+            "remote": "127.0.0.1:50203",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 400,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:7001",
+            "remote": "127.0.0.1:50202",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 40000,
+            "bytesOut": 4000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:7001",
+            "remote": "127.0.0.1:50201",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 350000,
+            "bytesOut": 110000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:7001",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50301",
+            "remote": "127.0.0.1:7000",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 100,
+            "bytesOut": 140000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50302",
+            "remote": "127.0.0.1:7000",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 14000,
+            "bytesOut": 2500000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:9000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "identityd:220",
+        "name": "identityd",
+        "pid": 220,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "udp6",
+            "local": "*:50900",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "kernel_task:190",
+        "name": "kernel_task",
+        "pid": 190,
+        "user": null,
+        "bytesIn": 16000,
+        "bytesOut": 24000,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "udp4",
+            "local": "192.0.2.3:50801",
+            "remote": "192.0.2.4:443",
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 6000,
+            "bytesOut": 10000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp4",
+            "local": "192.0.2.3:50802",
+            "remote": "192.0.2.4:443",
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 5000,
+            "bytesOut": 7000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp4",
+            "local": "192.0.2.1:50803",
+            "remote": "192.0.2.5:443",
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 5000,
+            "bytesOut": 7000,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "mdnsd:150",
+        "name": "mdnsd",
+        "pid": 150,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": []
+      },
+      {
+        "key": "netd:160",
+        "name": "netd",
+        "pid": 160,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": []
+      },
+      {
+        "key": "pushd:180",
+        "name": "pushd",
+        "pid": 180,
+        "user": null,
+        "bytesIn": 70000000,
+        "bytesOut": 21400000,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "udp6",
+            "local": "*:5353",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 31800000,
+            "bytesOut": 8760000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp4",
+            "local": "*:5353",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 38200000,
+            "bytesOut": 12640000,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "sharingd:200",
+        "name": "sharingd",
+        "pid": 200,
+        "user": null,
+        "bytesIn": 14000,
+        "bytesOut": 7400,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp6",
+            "local": "[fe80::1%en0]:50500",
+            "remote": "[fe80::2%en0]:50501",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 14000,
+            "bytesOut": 7392,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp6",
+            "local": "*:50500",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "*:50500",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp6",
+            "local": "*:50502",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 0,
+            "bytesOut": 8,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "syncd:140",
+        "name": "syncd",
+        "pid": 140,
+        "user": null,
+        "bytesIn": 2500000,
+        "bytesOut": 450000,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "192.0.2.1:50700",
+            "remote": "192.0.2.2:443",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 2500000,
+            "bytesOut": 450000,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "timed:210",
+        "name": "timed",
+        "pid": 210,
+        "user": null,
+        "bytesIn": 3400,
+        "bytesOut": 8000,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp6",
+            "local": "[fe80::3%en0]:1025",
+            "remote": "[fe80::4%en0]:1026",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 2100,
+            "bytesOut": 7000,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp6",
+            "local": "[fe80::3%en0]:1024",
+            "remote": "[fe80::4%en0]:1024",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 1300,
+            "bytesOut": 1000,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "updaterd:170",
+        "name": "updaterd",
+        "pid": 170,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": []
+      }
+    ]
+  },
+  "macos-second": {
+    "tsMs": 1790251201000,
+    "apps": [
+      {
+        "key": "Browser Helper (Renderer):100",
+        "name": "Browser Helper (Renderer)",
+        "pid": 100,
+        "user": null,
+        "bytesIn": 1000000,
+        "bytesOut": 0,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:8000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp6",
+            "local": "[::1]:8000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "udp4",
+            "local": "*:67",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 1000000,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "Chat Helper:110",
+        "name": "Chat Helper",
+        "pid": 110,
+        "user": null,
+        "bytesIn": 1000,
+        "bytesOut": 800,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "udp6",
+            "local": "*:546",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 1000,
+            "bytesOut": 800,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "Music Helper:120",
+        "name": "Music Helper",
+        "pid": 120,
+        "user": null,
+        "bytesIn": 3000,
+        "bytesOut": 2000,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "tcp6",
+            "local": "[fe80::1%en0]:50402",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp6",
+            "local": "[fe80::1%en0]:50401",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp6",
+            "local": "[fe80::1%en0]:50400",
+            "remote": "[fe80::2%en0]:50403",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 3000,
+            "bytesOut": 2000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "claude 2.1.0:130",
+        "name": "claude 2.1.0",
+        "pid": 130,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 40000,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "udp4",
+            "local": "*:50600",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 0,
+            "bytesOut": 40000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "cloudd:250",
+        "name": "cloudd",
+        "pid": 250,
+        "user": null,
+        "bytesIn": 43000,
+        "bytesOut": 37000,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "192.0.2.1:51001",
+            "remote": "192.0.2.7:443",
+            "remoteHost": null,
+            "state": "CloseWait",
+            "bytesIn": 5000,
+            "bytesOut": 2000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "192.0.2.1:51002",
+            "remote": "192.0.2.8:443",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 29000,
+            "bytesOut": 24600,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:51004",
+            "remote": "127.0.0.1:51005",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 500,
+            "bytesOut": 8400,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "192.0.2.1:51003",
+            "remote": "192.0.2.9:443",
+            "remoteHost": null,
+            "state": "CloseWait",
+            "bytesIn": 8500,
+            "bytesOut": 2000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:51004",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "dbserver:240",
+        "name": "dbserver",
+        "pid": 240,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:5432",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:9100",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "ide:230",
+        "name": "ide",
+        "pid": 230,
+        "user": null,
+        "bytesIn": 1564750,
+        "bytesOut": 5255980,
+        "rateIn": 50.0,
+        "rateOut": 80.0,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50020",
+            "remote": "127.0.0.1:50021",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 200,
+            "bytesOut": 400,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50000",
+            "remote": "127.0.0.1:50101",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 600050,
+            "bytesOut": 1000080,
+            "rateIn": 50.0,
+            "rateOut": 80.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50000",
+            "remote": "127.0.0.1:50102",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 400000,
+            "bytesOut": 900000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50000",
+            "remote": "127.0.0.1:50103",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 150000,
+            "bytesOut": 600000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "192.0.2.1:50030",
+            "remote": "192.0.2.6:443",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 10000,
+            "bytesOut": 1500,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50010",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:7001",
+            "remote": "127.0.0.1:50203",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 400,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:7001",
+            "remote": "127.0.0.1:50202",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 40000,
+            "bytesOut": 4000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:7001",
+            "remote": "127.0.0.1:50201",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 350000,
+            "bytesOut": 110000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:7001",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50301",
+            "remote": "127.0.0.1:7000",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 100,
+            "bytesOut": 140000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:50302",
+            "remote": "127.0.0.1:7000",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 14000,
+            "bytesOut": 2500000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "127.0.0.1:9000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "identityd:220",
+        "name": "identityd",
+        "pid": 220,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "udp6",
+            "local": "*:50900",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "kernel_task:190",
+        "name": "kernel_task",
+        "pid": 190,
+        "user": null,
+        "bytesIn": 16000,
+        "bytesOut": 24000,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "udp4",
+            "local": "192.0.2.3:50801",
+            "remote": "192.0.2.4:443",
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 6000,
+            "bytesOut": 10000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "udp4",
+            "local": "192.0.2.3:50802",
+            "remote": "192.0.2.4:443",
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 5000,
+            "bytesOut": 7000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "udp4",
+            "local": "192.0.2.1:50803",
+            "remote": "192.0.2.5:443",
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 5000,
+            "bytesOut": 7000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "mdnsd:150",
+        "name": "mdnsd",
+        "pid": 150,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": []
+      },
+      {
+        "key": "netd:160",
+        "name": "netd",
+        "pid": 160,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": []
+      },
+      {
+        "key": "pushd:180",
+        "name": "pushd",
+        "pid": 180,
+        "user": null,
+        "bytesIn": 70003000,
+        "bytesOut": 21400800,
+        "rateIn": 3000.0,
+        "rateOut": 800.0,
+        "connections": [
+          {
+            "proto": "udp6",
+            "local": "*:5353",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 31801000,
+            "bytesOut": 8760400,
+            "rateIn": 1000.0,
+            "rateOut": 400.0
+          },
+          {
+            "proto": "udp4",
+            "local": "*:5353",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 38202000,
+            "bytesOut": 12640400,
+            "rateIn": 2000.0,
+            "rateOut": 400.0
+          }
+        ]
+      },
+      {
+        "key": "sharingd:200",
+        "name": "sharingd",
+        "pid": 200,
+        "user": null,
+        "bytesIn": 14000,
+        "bytesOut": 7400,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "tcp6",
+            "local": "[fe80::1%en0]:50500",
+            "remote": "[fe80::2%en0]:50501",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 14000,
+            "bytesOut": 7392,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp6",
+            "local": "*:50500",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp4",
+            "local": "*:50500",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": 0,
+            "bytesOut": 0,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "udp6",
+            "local": "*:50502",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": 0,
+            "bytesOut": 8,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "syncd:140",
+        "name": "syncd",
+        "pid": 140,
+        "user": null,
+        "bytesIn": 2500000,
+        "bytesOut": 450000,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "192.0.2.1:50700",
+            "remote": "192.0.2.2:443",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 2500000,
+            "bytesOut": 450000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "timed:210",
+        "name": "timed",
+        "pid": 210,
+        "user": null,
+        "bytesIn": 3400,
+        "bytesOut": 8000,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": [
+          {
+            "proto": "tcp6",
+            "local": "[fe80::3%en0]:1025",
+            "remote": "[fe80::4%en0]:1026",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 2100,
+            "bytesOut": 7000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          },
+          {
+            "proto": "tcp6",
+            "local": "[fe80::3%en0]:1024",
+            "remote": "[fe80::4%en0]:1024",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": 1300,
+            "bytesOut": 1000,
+            "rateIn": 0.0,
+            "rateOut": 0.0
+          }
+        ]
+      },
+      {
+        "key": "updaterd:170",
+        "name": "updaterd",
+        "pid": 170,
+        "user": null,
+        "bytesIn": 0,
+        "bytesOut": 0,
+        "rateIn": 0.0,
+        "rateOut": 0.0,
+        "connections": []
+      }
+    ]
+  },
+  "windows-first": {
+    "tsMs": 1790251200000,
+    "apps": [
+      {
+        "key": "System:4",
+        "name": "System",
+        "pid": 4,
+        "user": null,
+        "bytesIn": null,
+        "bytesOut": null,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "*:445",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "chrome:9044",
+        "name": "chrome",
+        "pid": 9044,
+        "user": null,
+        "bytesIn": null,
+        "bytesOut": null,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp6",
+            "local": "[::1]:52002",
+            "remote": "[::1]:3000",
+            "remoteHost": null,
+            "state": "Established",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp6",
+            "local": "[2001:db8::5]:52003",
+            "remote": "[2606:4700::1111]:443",
+            "remoteHost": "one.one.one.one",
+            "state": "TimeWait",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "udp4",
+            "local": "*:5353",
+            "remote": null,
+            "remoteHost": null,
+            "state": "",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      },
+      {
+        "key": "node:5120",
+        "name": "node",
+        "pid": 5120,
+        "user": null,
+        "bytesIn": null,
+        "bytesOut": null,
+        "rateIn": null,
+        "rateOut": null,
+        "connections": [
+          {
+            "proto": "tcp4",
+            "local": "10.0.0.5:52001",
+            "remote": "93.184.216.34:443",
+            "remoteHost": "api.example.com",
+            "state": "Established",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          },
+          {
+            "proto": "tcp4",
+            "local": "*:3000",
+            "remote": null,
+            "remoteHost": null,
+            "state": "Listen",
+            "bytesIn": null,
+            "bytesOut": null,
+            "rateIn": null,
+            "rateOut": null
+          }
+        ]
+      }
+    ]
+  }
+}

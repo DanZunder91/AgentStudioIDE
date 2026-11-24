@@ -1,0 +1,104 @@
+/* The `diff` center tab (Git ▸ Compare with HEAD).
+ *
+ * Unlike git.css this is NOT rail furniture — it fills a pane, so the job here
+ * is the opposite one: own the full height and give the MergeView a scroll box
+ * of its own. `.cm-mergeView` is not scrollable by default (the package says so
+ * outright), so without an explicit height + overflow the two panes grow to
+ * their content and the pane body scrolls the whole document, header included.
+ * It is the content-sized scroll box problem again, in a different feature.
+ *
+ * Colors use the same `var(--x, #hex)` idiom the rest of the app does: the
+ * tokens may not exist in a bare test document, and the surface must still read
+ * as the editor's dark surface either way. */
+
+.diff-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-app, #0d1117);
+  color: var(--text, #c9d1d9);
+  font-size: 12px;
+}
+
+.diff-view__header {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border, #21262d);
+  background: var(--bg-surface, #161b22);
+}
+
+.diff-view__title {
+  overflow: hidden;
+  min-width: 0;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-view__sides {
+  flex: none;
+  color: var(--text-dim, #8b949e);
+  font-size: 11px;
+}
+
+/* The scroll box. `min-height: 0` is what lets it actually shrink inside the
+   column flex parent instead of overflowing it. */
+.diff-view__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+
+.diff-view__merge {
+  min-height: 0;
+}
+
+/* The package's own container. Both panes share the row; neither may push the
+   other out, hence the 1fr-ish flex on the editors below. */
+.diff-view__merge .cm-mergeView {
+  height: 100%;
+}
+
+.diff-view__merge .cm-mergeViewEditors {
+  min-height: 0;
+}
+
+.diff-view__merge .cm-mergeViewEditor {
+  min-width: 0;
+}
+
+/* A note is the whole body in the states that have no diff — centered, calm,
+   never an error-looking box unless it IS an error. */
+.diff-view__note {
+  margin: 0;
+  padding: 14px 12px;
+  color: var(--text-dim, #8b949e);
+}
+
+.diff-view__note--error {
+  color: var(--danger, #e06c75);
+  overflow-wrap: anywhere;
+}
+
+/* New-file / deleted-on-disk: one side only, as plain text. */
+.diff-view__plain {
+  margin: 0;
+  padding: 0 12px 12px;
+  overflow-x: auto;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 4;
+  white-space: pre;
+}

@@ -1,0 +1,12 @@
+# Stable rustfmt defaults, stated explicitly so `cargo fmt --check` in CI is
+# pinned rather than implied (quality gates).
+#
+# Deliberately not opinionated: every value below is either rustfmt's default or
+# forced by the CI matrix. A house style is a separate decision from having the
+# gate at all, and only the stable options are used so the gate works on the
+# release toolchain rather than requiring nightly.
+edition = "2021"
+max_width = 100
+# Forced: the CI matrix includes Windows, where a checkout can land CRLF and would
+# otherwise fail `--check` on files nobody touched.
+newline_style = "Unix"

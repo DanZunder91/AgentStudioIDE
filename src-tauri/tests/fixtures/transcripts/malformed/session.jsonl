@@ -1,0 +1,2 @@
+{"type":"assistant","isSidechain":false,"message":{"role":"assistant","content":[{"type":"tool_use","name":"Agent","id":"tool00","input":{"subagent_type":"general-purpose","description":"Task tool00"}}]}}
+{"type":"assistant","isSidechain":false,"message":{"role":"assistant","content":[{"type":"tool_use","name":"Agent","id":"tool01","in
