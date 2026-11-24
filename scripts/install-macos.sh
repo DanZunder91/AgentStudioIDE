@@ -76,6 +76,9 @@ if pgrep -f "$dest/$APP/Contents/MacOS/" >/dev/null 2>&1; then
     pgrep -f "$dest/$APP/Contents/MacOS/" >/dev/null 2>&1 || break
     sleep 1
   done
+  pkill -f "$dest/$APP/Contents/MacOS/" >/dev/null 2>&1 || true
+  # macOS ignores an `open` of an app it is still tearing down.
+  sleep 2
 fi
 
 echo "Installing into $dest"
@@ -85,4 +88,9 @@ codesign --verify --deep --strict "$dest/$APP" 2>/dev/null ||
   fail "the installed app's code signature is invalid; please report this build."
 
 echo "Agent Studio is installed: $dest/$APP"
+open "$dest/$APP"
+for _ in 1 2 3 4 5; do
+  pgrep -f "$dest/$APP/Contents/MacOS/" >/dev/null 2>&1 && exit 0
+  sleep 1
+done
 open "$dest/$APP"
