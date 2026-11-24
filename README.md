@@ -11,7 +11,8 @@
   <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-CE422B?logo=rust&logoColor=white">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white">
   <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black">
-  <img alt="Platforms" src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-native-444">
+  <img alt="macOS: tested" src="https://img.shields.io/badge/macOS-tested-2ea44f?logo=apple&logoColor=white">
+  <img alt="Linux and Windows: in testing" src="https://img.shields.io/badge/Linux%20%C2%B7%20Windows-in%20testing-d4a72c">
   <img alt="Licence" src="https://img.shields.io/badge/licence-AGPL--3.0-blue">
   <img alt="Status" src="https://img.shields.io/badge/status-alpha-orange">
 </p>
@@ -61,7 +62,7 @@ needs you raises a badge through every parent, so you see it even when the tree 
 | **Git and workspace** | ✅ Multi-root file tree with git status colours<br>✅ Git tab: status, diff, revert, branches; your open GitHub pull requests<br>✅ Export and import of connections, requests and environments |
 | **Shortcuts** | ✅ `⌘⇧F` find in files · `⌘O` quick open · `⌘F` find · `F12` go to definition · `⌘S` save · `⌘W` close tab · `⌘/` all shortcuts ([full list](#keyboard-shortcuts)) |
 | **Extras** | ✅ Timestamp converter (epoch, ISO and plain dates)<br>✅ Agent Village: the fleet drawn as a living town, with outside agents and machine capacity |
-| **Platforms** | ✅ macOS, Linux, Windows<br>🟡 Code signing and auto-update |
+| **Platforms** | ✅ **macOS**: tested and used every day<br>🟡 **Linux** and **Windows**: supported, with installers in every release; still being tested in everyday use<br>🟡 Code signing and auto-update |
 
 The images above are the real UI rendered with a scripted backend and fictional sample projects,
 so they contain no real data. Regenerate them with `node scripts/readme-media.mjs`.
@@ -79,9 +80,11 @@ Agents plug in through one `AgentAdapter` interface; the next ones are on the [r
 
 ## Install
 
-**Prebuilt installers** for macOS, Windows and Linux are attached to
+**Prebuilt installers** for macOS, Linux and Windows are attached to
 [GitHub Releases](https://github.com/DanZunder91/AgentStudioIDE/releases). They are unsigned for now: on
-macOS, right-click the app and choose **Open** the first time.
+macOS, right-click the app and choose **Open** the first time. macOS is the tested platform; the Linux and
+Windows builds work but are still being tested, so please
+[open an issue](https://github.com/DanZunder91/AgentStudioIDE/issues) if something looks off.
 
 **Build from source.** You need Rust (stable), Node 22 or newer, and the `claude` CLI, plus:
 
@@ -122,11 +125,14 @@ npm run tauri build     # build installers into src-tauri/target/release/bundle/
 
 ## Roadmap
 
-Alpha. Everything marked ✅ above works today on macOS, Linux and Windows; every merge to `main` publishes
-installers to GitHub Releases.
+Alpha. Everything marked ✅ above works today on macOS. Linux and Windows get the same features and an
+installer in every release, and are still being tested. Every merge to `main` publishes installers to
+GitHub Releases.
 
 **What is left**
 
+- [ ] **Linux and Windows, fully tested** — both build and run today; they need more hands-on use
+      before they are marked as tested like macOS
 - [ ] **Next iteration: more agents** — OpenAI (Codex CLI) and local models through Ollama, behind
       the same `AgentAdapter` interface: launch, live status, sub-agent tree and metrics, as Claude
       Code has today
