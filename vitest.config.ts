@@ -240,6 +240,9 @@ export default defineConfig({
         // gates NOTHING while its tests pass, and unmeasured reads as covered. Measured at
         // 100% across all four metrics before joining, so adding it moved no threshold.
         "src/features/portability/**/*.{ts,tsx}",
+        // What agents do through the `agent-studio` command (the event listener). Added with
+        // the feature, for the same reason as every line here.
+        "src/features/agentctl/**/*.{ts,tsx}",
         // The Tools rail tab (the epoch ⇄ date converter). Added WITH the feature, not
         // after it: a per-feature include list means a new feature gates NOTHING until
         // someone remembers this line, and a suite that gates nothing reads as covered.

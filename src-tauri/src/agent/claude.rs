@@ -356,6 +356,22 @@ date: the Agent Studio proxy serves loopback and keeps TLS working. A connection
 refuses or cannot be reached fails through the proxy exactly as without it (a transport error, \
 never an HTTP 502), so tests that expect a refused connection pass unchanged.";
 
+/// What the `SessionStart` hook tells the agent about the `agent-studio` command
+/// (`crate::agent_ctl`). Advice, but here advice is the whole mechanism: the agent has to know the
+/// command exists to use it when the user says "connect me to this database".
+pub(crate) const TOOLS_CONTEXT: &str = "Agent Studio tools: this terminal has an `agent-studio` \
+command that acts on the Agent Studio app itself. When the user asks you to connect to, add or \
+open a database in Agent Studio, run `agent-studio db connect '<connection-url>'` with the URL \
+quoted (postgres, postgresql, mysql, clickhouse, mongodb, mongodb+srv, redis, rediss and valkey \
+URLs; --name <name> names it). It tests the connection, saves it read-only, moves the password \
+into Agent Studio's Vault and opens it in the DB panel, and it never prints the password back. \
+`agent-studio db list` shows the saved connections; `agent-studio help` explains the rest.";
+
+/// Everything the `SessionStart` hook adds to the session's context.
+pub(crate) fn session_context() -> String {
+    format!("{PROXY_CONTEXT}\n\n{TOOLS_CONTEXT}")
+}
+
 /// Put the IDE's `curl` shim back at the front of `PATH` for every later Bash command of the
 /// session (`crate::netcap::shim`): Claude Code's Bash tool runs commands from a LOGIN-shell
 /// snapshot, and macOS's `path_helper` there moves `/usr/bin` ahead of the shim dir the PTY
@@ -397,6 +413,34 @@ fn env_file_shim_path_for(windows: bool) -> String {
     )
 }
 
+/// The `agent-studio` command's directory, put in front of `PATH` for every later Bash command
+/// the same way as the curl shim ([`env_file_shim_path`]), and for the same reason (LESSONS §85).
+/// Independent of capture: the command works whether or not the proxy is on.
+fn env_file_tools_path() -> String {
+    env_file_tools_path_for(cfg!(windows))
+}
+
+const TOOLS_ENV_FILE_LINE: &str =
+    r#"export PATH="$AGENTSTUDIO_TOOLS_DIR:$PATH"  # agentstudio-tools-path"#;
+
+const TOOLS_ENV_FILE_LINE_WINDOWS: &str = r#"if [ -n "${AGENTSTUDIO_TOOLS_DIR:-}" ] && command -v cygpath >/dev/null 2>&1; then PATH="$(cygpath -u "$AGENTSTUDIO_TOOLS_DIR"):$PATH"; export PATH; fi  # agentstudio-tools-path"#;
+
+/// [`env_file_tools_path`] for a named platform.
+fn env_file_tools_path_for(windows: bool) -> String {
+    let line = if windows {
+        TOOLS_ENV_FILE_LINE_WINDOWS
+    } else {
+        TOOLS_ENV_FILE_LINE
+    };
+    format!(
+        "{{ [ -z \"$CLAUDE_ENV_FILE\" ] || [ -z \"${VAR}\" ] || \
+         grep -qsF agentstudio-tools-path \"$CLAUDE_ENV_FILE\" || \
+         printf '%s\\n' {line} >> \"$CLAUDE_ENV_FILE\"; }} 2>/dev/null",
+        VAR = crate::agent_ctl::tools::TOOLS_DIR_VAR,
+        line = sh_single_quote(line),
+    )
+}
+
 /// POSIX single-quote `s` as one shell word (`'` → `'\''`).
 fn sh_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -412,14 +456,15 @@ fn session_start_hook_command() -> String {
     let json = serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": PROXY_CONTEXT,
+            "additionalContext": session_context(),
         }
     })
     .to_string();
     format!(
-        "[ -n \"${ENV_HOOK_URL}\" ] && {{ {post}; {shim}; printf '%s\\n' {json}; }}; true  # {HOOK_MARKER}",
+        "[ -n \"${ENV_HOOK_URL}\" ] && {{ {post}; {shim}; {tools}; printf '%s\\n' {json}; }}; true  # {HOOK_MARKER}",
         post = hook_post(),
         shim = env_file_shim_path(),
+        tools = env_file_tools_path(),
         json = sh_single_quote(&json),
     )
 }
@@ -3017,7 +3062,10 @@ node  \"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n)\r\n";
         assert_eq!(docs.len(), 1, "{stdout:?}");
         let v = &docs[0];
         assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart");
-        assert_eq!(v["hookSpecificOutput"]["additionalContext"], PROXY_CONTEXT);
+        assert_eq!(
+            v["hookSpecificOutput"]["additionalContext"],
+            session_context()
+        );
         assert!(v.get("additionalContext").is_none(), "top-level is ignored");
         assert!(PROXY_CONTEXT.starts_with("This terminal runs inside Agent Studio. Its HTTP(S)"));
         assert!(
@@ -3078,7 +3126,10 @@ node  \"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n)\r\n";
             let out = run_hook_env(&session_start_command(), &env);
             assert_eq!(out.status.code(), Some(0), "{out:?}");
             let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON doc");
-            assert_eq!(v["hookSpecificOutput"]["additionalContext"], PROXY_CONTEXT);
+            assert_eq!(
+                v["hookSpecificOutput"]["additionalContext"],
+                session_context()
+            );
         }
         let text = std::fs::read_to_string(&env_file).unwrap();
         assert_eq!(text.lines().count(), 1, "once per file: {text}");
@@ -3178,6 +3229,124 @@ node  \"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n)\r\n";
         );
         assert_eq!(env_file_shim_path(), env_file_shim_path_for(cfg!(windows)));
         assert!(session_start_command().contains(&env_file_shim_path_for(cfg!(windows))));
+    }
+
+    /// The `agent-studio` command's PATH line: its own marker (so it is appended independently
+    /// of the curl shim's), the POSIX form off Windows and the `cygpath` form on it, and it is
+    /// part of the SessionStart command on this platform.
+    #[test]
+    fn the_tools_env_file_line_has_its_own_marker_and_a_windows_variant() {
+        assert_eq!(
+            env_file_tools_path_for(false),
+            "{ [ -z \"$CLAUDE_ENV_FILE\" ] || [ -z \"$AGENTSTUDIO_TOOLS_DIR\" ] || grep -qsF \
+             agentstudio-tools-path \"$CLAUDE_ENV_FILE\" || printf '%s\\n' 'export \
+             PATH=\"$AGENTSTUDIO_TOOLS_DIR:$PATH\"  # agentstudio-tools-path' >> \
+             \"$CLAUDE_ENV_FILE\"; } 2>/dev/null"
+        );
+        let win = env_file_tools_path_for(true);
+        assert!(
+            win.contains("cygpath -u \"$AGENTSTUDIO_TOOLS_DIR\""),
+            "{win}"
+        );
+        assert!(win.contains("# agentstudio-tools-path'"), "{win}");
+        assert!(session_start_command().contains(&env_file_tools_path_for(cfg!(windows))));
+    }
+
+    /// The context names the command and its two verbs, keeps the proxy text first and intact,
+    /// and stays small enough to sit in every session's context.
+    #[test]
+    fn the_session_context_tells_the_agent_about_the_agent_studio_command() {
+        let ctx = session_context();
+        assert!(ctx.starts_with(PROXY_CONTEXT));
+        assert!(ctx.contains("agent-studio db connect '<connection-url>'"));
+        assert!(ctx.contains("agent-studio db list"));
+        assert!(ctx.contains("never prints the password"));
+        // Every scheme it names is one the registry really parses.
+        for scheme in [
+            "postgres",
+            "postgresql",
+            "mysql",
+            "clickhouse",
+            "mongodb",
+            "mongodb+srv",
+            "redis",
+            "rediss",
+            "valkey",
+        ] {
+            assert!(
+                crate::db::url::parse(&format!("{scheme}://h/x")).is_ok()
+                    || crate::db::url::parse(&format!("{scheme}://h")).is_ok(),
+                "{scheme} is not a scheme the URL parser accepts"
+            );
+        }
+        assert!(ctx.len() < 2048, "{}", ctx.len());
+    }
+
+    /// Both PATH lines land in `$CLAUDE_ENV_FILE` once each, and sourcing it puts the
+    /// `agent-studio` dir and the curl shim dir in front of a login shell's `/usr/bin`. Without
+    /// a tools dir (no install) only the shim line is written.
+    #[cfg(unix)]
+    #[test]
+    fn session_start_puts_the_agent_studio_command_on_claudes_path() {
+        let dir = std::env::temp_dir().join(format!("envfile-tools-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let env_file = dir.join("session-env.sh");
+        let shim = dir.join("Application Support/netcap/bin");
+        let tools = dir.join("Application Support/agent-tools/bin");
+        let env = [
+            ("PATH", "/usr/bin:/bin".to_string()),
+            (ENV_HOOK_URL, "http://127.0.0.1:9/hook".to_string()),
+            (ENV_HOOK_TOKEN, "tok".to_string()),
+            (ENV_TERMINAL_ID, "term-1".to_string()),
+            ("CLAUDE_ENV_FILE", env_file.to_string_lossy().into_owned()),
+            (
+                crate::netcap::env::SHIM_DIR_VAR,
+                shim.to_string_lossy().into_owned(),
+            ),
+            (
+                crate::agent_ctl::tools::TOOLS_DIR_VAR,
+                tools.to_string_lossy().into_owned(),
+            ),
+        ];
+        for _ in 0..2 {
+            let out = run_hook_env(&session_start_command(), &env);
+            assert_eq!(out.status.code(), Some(0), "{out:?}");
+            let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON doc");
+            assert_eq!(
+                v["hookSpecificOutput"]["additionalContext"],
+                session_context()
+            );
+        }
+        let text = std::fs::read_to_string(&env_file).unwrap();
+        assert_eq!(text.lines().count(), 2, "once each: {text}");
+        let sourced = run_hook_env(
+            &format!(". '{}'; printf '%s' \"$PATH\"", env_file.display()),
+            &[env[0].clone(), env[5].clone(), env[6].clone()],
+        );
+        assert_eq!(
+            String::from_utf8(sourced.stdout).unwrap(),
+            format!("{}:{}:/usr/bin:/bin", tools.display(), shim.display())
+        );
+
+        let other = dir.join("other.sh");
+        let mut no_tools: Vec<_> = env
+            .iter()
+            .filter(|(k, _)| {
+                *k != crate::agent_ctl::tools::TOOLS_DIR_VAR && *k != "CLAUDE_ENV_FILE"
+            })
+            .cloned()
+            .collect();
+        no_tools.push(("CLAUDE_ENV_FILE", other.to_string_lossy().into_owned()));
+        assert_eq!(
+            run_hook_env(&session_start_command(), &no_tools)
+                .status
+                .code(),
+            Some(0)
+        );
+        let text = std::fs::read_to_string(&other).unwrap();
+        assert!(text.contains("agentstudio-curl-shim"), "{text}");
+        assert!(!text.contains("agentstudio-tools-path"), "{text}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A one-shot HTTP responder on loopback for the Windows Git Bash test: every request head
@@ -3284,7 +3453,10 @@ node  \"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n)\r\n";
             let out = run(&session_start_command(), &hook_env);
             assert_eq!(out.status.code(), Some(0), "{out:?}");
             let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON doc");
-            assert_eq!(v["hookSpecificOutput"]["additionalContext"], PROXY_CONTEXT);
+            assert_eq!(
+                v["hookSpecificOutput"]["additionalContext"],
+                session_context()
+            );
         }
         let text = std::fs::read_to_string(&env_file).unwrap();
         assert_eq!(

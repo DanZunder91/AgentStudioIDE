@@ -16,6 +16,8 @@
 //! `net` feature). The token check, not the parser, is the boundary; the parser is
 //! deliberately minimal and refuses anything it doesn't recognise.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,6 +43,14 @@ const MAX_BODY: usize = 16 * 1024 * 1024;
 /// A whole request must arrive within this window. Bounds a slow/stuck peer to one
 /// short-lived task rather than a permanent leak.
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long an agent-control request may take once read (`crate::agent_ctl`): a database
+/// connection test is the slow case, and the engines cap their own timeouts below this.
+const CTL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// What an agent-control handler returns: the HTTP status and a JSON body.
+pub type CtlFuture = Pin<Box<dyn Future<Output = (u16, Vec<u8>)> + Send>>;
+/// The handler for `POST /ctl` (`crate::agent_ctl::CTL_PATH`), given the terminal id and body.
+pub type CtlHandler = dyn Fn(String, Vec<u8>) -> CtlFuture + Send + Sync;
 
 /// What the supervisor needs to inject into every PTY so a hook can phone home.
 /// Per app instance (ephemeral port + fresh token), so two running apps never
@@ -94,6 +104,18 @@ impl HookListener {
     where
         F: Fn(String, Vec<u8>) + Send + Sync + 'static,
     {
+        self.serve_with_ctl(on_hook, None);
+    }
+
+    /// [`Self::serve`], plus the agent-control route: a `POST` to
+    /// [`crate::agent_ctl::CTL_PATH`] goes to `on_ctl`, which answers with a status and a body.
+    /// Same token check, same caps; only the time allowed to *answer* is longer
+    /// ([`CTL_TIMEOUT`]). Without a handler that route answers 404 and every other path is a
+    /// hook, exactly as before.
+    pub fn serve_with_ctl<F>(self, on_hook: F, on_ctl: Option<Arc<CtlHandler>>)
+    where
+        F: Fn(String, Vec<u8>) + Send + Sync + 'static,
+    {
         let token = Arc::new(self.token);
         let on_hook = Arc::new(on_hook);
         tauri::async_runtime::spawn(async move {
@@ -109,14 +131,11 @@ impl HookListener {
                     Ok((stream, _peer)) => {
                         let token = token.clone();
                         let on_hook = on_hook.clone();
+                        let on_ctl = on_ctl.clone();
                         // One task per connection, each strictly time- and
                         // size-bounded, so a misbehaving peer can't wedge the loop.
                         tauri::async_runtime::spawn(async move {
-                            let _ = tokio::time::timeout(
-                                READ_TIMEOUT,
-                                handle_connection(stream, &token, on_hook.as_ref()),
-                            )
-                            .await;
+                            handle_connection(stream, &token, on_hook.as_ref(), on_ctl).await;
                         });
                     }
                     // Transient accept errors (fd pressure, peer reset) must not
@@ -150,15 +169,49 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Read the head, check the token, read the body, and (only then) fire the callback.
-async fn handle_connection<F>(mut stream: TcpStream, expected_token: &str, on_hook: &F)
-where
+/// Read the request within [`READ_TIMEOUT`], then route it: [`crate::agent_ctl::CTL_PATH`] to the
+/// control handler (answered with its body, within [`CTL_TIMEOUT`]), anything else to the hook
+/// callback.
+async fn handle_connection<F>(
+    mut stream: TcpStream,
+    expected_token: &str,
+    on_hook: &F,
+    on_ctl: Option<Arc<CtlHandler>>,
+) where
     F: Fn(String, Vec<u8>),
 {
-    let Some(head) = read_head(&mut stream).await else {
-        // Malformed / oversized / truncated — refuse without a callback.
-        let _ = respond(&mut stream, 400, "bad request").await;
+    let read = tokio::time::timeout(READ_TIMEOUT, read_request(&mut stream, expected_token)).await;
+    let Ok(Some((head, terminal_id, body))) = read else {
         return;
+    };
+    if head.path != crate::agent_ctl::CTL_PATH {
+        on_hook(terminal_id, body);
+        let _ = respond(&mut stream, 204, "").await;
+        return;
+    }
+    let Some(on_ctl) = on_ctl else {
+        let _ = respond(&mut stream, 404, "no control handler").await;
+        return;
+    };
+    match tokio::time::timeout(CTL_TIMEOUT, on_ctl(terminal_id, body)).await {
+        Ok((status, reply)) => {
+            let _ = respond_json(&mut stream, status, &reply).await;
+        }
+        Err(_) => {
+            let _ = respond(&mut stream, 504, "timed out").await;
+        }
+    }
+}
+
+/// Read the head, check the token, read the body. `None` once a refusal has been answered.
+async fn read_request(
+    stream: &mut TcpStream,
+    expected_token: &str,
+) -> Option<(RequestHead, String, Vec<u8>)> {
+    let Some(mut head) = read_head(stream).await else {
+        // Malformed / oversized / truncated — refuse without a callback.
+        let _ = respond(stream, 400, "bad request").await;
+        return None;
     };
 
     // The security boundary, decided on the HEADERS: a peer without the token never
@@ -171,15 +224,15 @@ where
         .map(|t| constant_time_eq(t.as_bytes(), expected_token.as_bytes()))
         .unwrap_or(false);
     if !token_ok {
-        let _ = respond(&mut stream, 403, "forbidden").await;
-        return;
+        let _ = respond(stream, 403, "forbidden").await;
+        return None;
     }
 
     // A valid token but no terminal id is a malformed hook, not an attacker — still
     // nothing to bind, so drop it.
-    let Some(terminal_id) = head.terminal_id else {
-        let _ = respond(&mut stream, 400, "missing terminal").await;
-        return;
+    let Some(terminal_id) = head.terminal_id.clone() else {
+        let _ = respond(stream, 400, "missing terminal").await;
+        return None;
     };
 
     if head.content_length > MAX_BODY {
@@ -190,20 +243,21 @@ where
             "hook listener: refused a {}-byte hook payload (cap {MAX_BODY})",
             head.content_length
         );
-        let _ = respond(&mut stream, 400, "payload too large").await;
-        return;
+        let _ = respond(stream, 400, "payload too large").await;
+        return None;
     }
-    let Some(body) = read_body(&mut stream, head.body_prefix, head.content_length).await else {
-        let _ = respond(&mut stream, 400, "bad request").await;
-        return;
+    let prefix = std::mem::take(&mut head.body_prefix);
+    let Some(body) = read_body(stream, prefix, head.content_length).await else {
+        let _ = respond(stream, 400, "bad request").await;
+        return None;
     };
-
-    on_hook(terminal_id, body);
-    let _ = respond(&mut stream, 204, "").await;
+    Some((head, terminal_id, body))
 }
 
 /// The request line + headers we care about.
 struct RequestHead {
+    /// The request path (`/` for a hook, [`crate::agent_ctl::CTL_PATH`] for agent control).
+    path: String,
     token: Option<String>,
     terminal_id: Option<String>,
     content_length: usize,
@@ -236,9 +290,11 @@ async fn read_head(stream: &mut TcpStream) -> Option<RequestHead> {
 
     // Request line must be a POST. We serve exactly one verb.
     let request_line = lines.next()?;
-    if !request_line.starts_with("POST ") {
-        return None;
-    }
+    let path = request_line
+        .strip_prefix("POST ")?
+        .split(' ')
+        .next()?
+        .to_string();
 
     let (mut token, mut terminal_id, mut content_length) = (None, None, 0usize);
     for line in lines {
@@ -257,6 +313,7 @@ async fn read_head(stream: &mut TcpStream) -> Option<RequestHead> {
     }
 
     Some(RequestHead {
+        path,
         token,
         terminal_id,
         content_length,
@@ -287,6 +344,24 @@ async fn respond(stream: &mut TcpStream, status: u16, reason: &str) -> std::io::
     let response =
         format!("HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     stream.write_all(response.as_bytes()).await?;
+    stream.flush().await
+}
+
+/// A JSON reply, for the control route.
+async fn respond_json(stream: &mut TcpStream, status: u16, body: &[u8]) -> std::io::Result<()> {
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        422 => "Unprocessable Entity",
+        _ => "Error",
+    };
+    let head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(body).await?;
     stream.flush().await
 }
 

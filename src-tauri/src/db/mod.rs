@@ -100,7 +100,7 @@ pub struct Paths {
 
 impl Paths {
     /// The real paths, in the OS app config dir. The one function here that an `AppHandle` gates.
-    fn of(app: &tauri::AppHandle) -> Self {
+    pub(crate) fn of(app: &tauri::AppHandle) -> Self {
         Self {
             store: store::store_path(app),
             vault: crate::api_store::store_path_for(app),

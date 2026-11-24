@@ -12,6 +12,7 @@
 // nothing here is part of the JS wire contract, which is the `#[tauri::command]`
 // surface in `supervisor::commands`.
 pub mod agent;
+pub mod agent_ctl;
 pub mod api_store;
 pub mod browser_open;
 pub mod build_info;
@@ -150,6 +151,11 @@ pub fn run() {
             // returns, so no PTY gets a CA variable naming a missing file.
             // A bind failure logs and runs on.
             netcap::start(app.handle());
+            // The `agent-studio` command every terminal gets (agent_ctl::tools), before any PTY
+            // exists. Real boot only; a failure logs and terminals open without it.
+            if let (Ok(dir), Ok(exe)) = (app.path().app_config_dir(), std::env::current_exe()) {
+                agent_ctl::tools::install(&dir, exe);
+            }
             // One supervisor for the whole app; the handle is cheap to clone and
             // is how every command reaches the registry.
             //
@@ -187,11 +193,15 @@ pub fn run() {
                         Some(logs),
                         Some(open_agents_store),
                     );
-                    // The listener forwards token-checked hooks to the supervisor.
+                    // The listener forwards token-checked hooks to the supervisor, and
+                    // `POST /ctl` from the `agent-studio` command to agent control.
                     let for_hooks = handle.clone();
-                    listener.serve(move |terminal_id, body| {
-                        for_hooks.deliver_hook(terminal_id, body);
-                    });
+                    listener.serve_with_ctl(
+                        move |terminal_id, body| {
+                            for_hooks.deliver_hook(terminal_id, body);
+                        },
+                        Some(agent_ctl::tauri_handler(app.handle().clone())),
+                    );
                     handle
                 }
                 Err(e) => {

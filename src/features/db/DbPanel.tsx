@@ -100,12 +100,55 @@ export function sessionTitle(session: {
   return "How long this connection took to open — DNS, TLS, authentication and the version query.";
 }
 
+/**
+ * What an agent just did through `agent-studio db connect`, in words: which agent, which
+ * connection, and that it is read-only — so a connection never appears in the list unexplained.
+ */
+export function agentNoticeText(
+  notice: { created: boolean; agent: string | null },
+  connection: DbConnection | null,
+): string {
+  const who = notice.agent === null ? "An agent" : `The agent "${notice.agent}"`;
+  const what = connection === null ? "a connection" : `"${connection.name}"`;
+  if (!notice.created) return `${who} opened ${what}, which was already saved. Nothing changed.`;
+  const access =
+    connection === null || connection.readOnly
+      ? " It is read-only: use Edit to allow writes."
+      : "";
+  return `${who} added ${what}.${access}`;
+}
+
+function AgentNotice({
+  notice,
+  connection,
+  onDismiss,
+}: {
+  notice: { created: boolean; agent: string | null };
+  connection: DbConnection | null;
+  onDismiss: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="db-panel__agent-notice" role="status" data-testid="db-agent-notice">
+      <span>{agentNoticeText(notice, connection)}</span>
+      <button
+        type="button"
+        className="db-dialog__btn"
+        data-testid="db-agent-notice-dismiss"
+        onClick={onDismiss}
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
 export function DbPanel(): React.JSX.Element {
   const engines = useAppStore((s) => s.dbEngines);
   const connections = useAppStore((s) => s.dbConnections);
   const sessions = useAppStore((s) => s.dbSessions);
   const dbError = useAppStore((s) => s.dbError);
   const dialog = useAppStore((s) => s.dbDialog);
+  const agentNotice = useAppStore((s) => s.dbAgentNotice);
   const {
     loadDbStore,
     openDbDialog,
@@ -115,6 +158,7 @@ export function DbPanel(): React.JSX.Element {
     openDbSession,
     closeDbSession,
     refreshDbTree,
+    dismissDbAgentNotice,
   } = useAppStore((s) => s.dbActions);
   const openDbConsoleTab = useAppStore((s) => s.layoutActions.openDbConsoleTab);
 
@@ -166,6 +210,14 @@ export function DbPanel(): React.JSX.Element {
           New connection
         </button>
       </div>
+
+      {agentNotice !== null && (
+        <AgentNotice
+          notice={agentNotice}
+          connection={connections.find((c) => c.id === agentNotice.connectionId) ?? null}
+          onDismiss={dismissDbAgentNotice}
+        />
+      )}
 
       {dbError !== null && (
         <p className="db-dialog__error" role="alert" data-testid="db-panel-error">
@@ -273,52 +325,57 @@ function ConnectionRow({
         <span className="db-panel__where" title={connectionSubtitle(c)}>
           {connectionSubtitle(c)}
         </span>
-        {c.readOnly && (
-          <span
-            className="db-panel__badge"
-            title={readOnlyBadgeTitle(spec)}
-            data-testid={`db-row-readonly-${c.id}`}
+        {/* The badge and the buttons wrap onto their own line when the rail is too narrow
+            for one: on one line at the default 300px rail they squeezed the name, engine and
+            host to 0px and pushed Delete out of view. */}
+        <div className="db-panel__actions">
+          {c.readOnly && (
+            <span
+              className="db-panel__badge"
+              title={readOnlyBadgeTitle(spec)}
+              data-testid={`db-row-readonly-${c.id}`}
+            >
+              read-only
+            </span>
+          )}
+          {/* The connection offers a way to refresh its tables and database model,
+              next to Edit and Delete.
+              It used to live in the session block, which only appears once connected — and
+              a control that appears only sometimes teaches nobody where it lives.
+              Always rendered here, DISABLED without an open session, because the
+              levels it re-reads are answered by `db_children`, which needs one. */}
+          <button
+            type="button"
+            className="db-dialog__btn db-dialog__btn--small"
+            data-testid={`db-row-refresh-${c.id}`}
+            aria-label={`Refresh ${c.name}`}
+            title={
+              session?.status === "open"
+                ? "Re-read this connection's databases and tables. Levels you have opened stay open."
+                : "Connect first — refreshing re-reads the server's catalogue."
+            }
+            disabled={session?.status !== "open"}
+            onClick={onRefresh}
           >
-            read-only
-          </span>
-        )}
-        {/* The connection offers a way to refresh its tables and database model,
-            next to Edit and Delete.
-            It used to live in the session block, which only appears once connected — and
-            a control that appears only sometimes teaches nobody where it lives.
-            Always rendered here, DISABLED without an open session, because the
-            levels it re-reads are answered by `db_children`, which needs one. */}
-        <button
-          type="button"
-          className="db-dialog__btn db-dialog__btn--small"
-          data-testid={`db-row-refresh-${c.id}`}
-          aria-label={`Refresh ${c.name}`}
-          title={
-            session?.status === "open"
-              ? "Re-read this connection's databases and tables. Levels you have opened stay open."
-              : "Connect first — refreshing re-reads the server's catalogue."
-          }
-          disabled={session?.status !== "open"}
-          onClick={onRefresh}
-        >
-          Refresh
-        </button>
-        <button
-          type="button"
-          className="db-dialog__btn db-dialog__btn--small"
-          aria-label={`Edit ${c.name}`}
-          onClick={onEdit}
-        >
-          Edit
-        </button>
-        <button
-          type="button"
-          className="db-dialog__btn db-dialog__btn--small"
-          aria-label={`Delete ${c.name}`}
-          onClick={onDelete}
-        >
-          Delete
-        </button>
+            Refresh
+          </button>
+          <button
+            type="button"
+            className="db-dialog__btn db-dialog__btn--small"
+            aria-label={`Edit ${c.name}`}
+            onClick={onEdit}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className="db-dialog__btn db-dialog__btn--small"
+            aria-label={`Delete ${c.name}`}
+            onClick={onDelete}
+          >
+            Delete
+          </button>
+        </div>
       </div>
 
       {session !== undefined && (

@@ -5962,3 +5962,108 @@ mod db_live_ddl_kind {
         );
     }
 }
+
+/// `agent-studio db connect <url>` against the real Postgres fixture: what an agent does when the
+/// user says "connect me to this database". The URL carries the password, the way a user pastes it
+/// into a conversation; it must come out tested, saved read-only, with the password in the Vault,
+/// and open from the saved record alone.
+mod db_live_agent_ctl {
+    const HOST: &str = "127.0.0.1";
+    const PORT: u16 = 55432;
+    const USER: &str = "agentstudio";
+    /// TEST FIXTURE ONLY — published in this repo, bound to localhost.
+    const PASSWORD: &str = "agentstudio-test-pw";
+    const DATABASE: &str = "maestro";
+
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    fn temp_paths(tag: &str) -> (std::path::PathBuf, agent_studio_scaffold_lib::db::Paths) {
+        let dir = std::env::temp_dir().join(format!(
+            "agentstudio-db-live-ctl-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = agent_studio_scaffold_lib::db::Paths::in_dir(&dir);
+        (dir, paths)
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn an_agents_url_is_tested_saved_read_only_and_opens_from_the_vault() {
+        let (dir, paths) = temp_paths("ok");
+        let url = format!("postgresql://{USER}:{PASSWORD}@{HOST}:{PORT}/{DATABASE}");
+        rt().block_on(async {
+            let report =
+                agent_studio_scaffold_lib::agent_ctl::db_connect(&paths, &url, None, false)
+                    .await
+                    .unwrap_or_else(|e| panic!("db connect refused the fixture: {e}"));
+            assert!(report.created);
+            let test = report.test.clone().expect("a fresh connection is tested");
+            assert!(test.ok, "{test:?}");
+            assert!(
+                test.server_version
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("PostgreSQL"),
+                "{test:?}"
+            );
+            let c = &report.connection;
+            assert_eq!(c.name, format!("{DATABASE}@{HOST}"));
+            assert!(c.read_only);
+            let store = std::fs::read_to_string(&paths.store).unwrap();
+            assert!(
+                !store.contains(PASSWORD),
+                "the password reached the connection store"
+            );
+
+            // The saved record alone opens: the password comes back out of the Vault.
+            let opened = agent_studio_scaffold_lib::db::open(&paths, &c.id, None)
+                .await
+                .unwrap_or_else(|e| panic!("the saved connection did not open: {}", e.message));
+            assert!(opened.server_version.contains("PostgreSQL"));
+            agent_studio_scaffold_lib::db::db_close(opened.session_id.clone()).await;
+
+            // Asking again changes nothing and says so.
+            let again = agent_studio_scaffold_lib::agent_ctl::db_connect(&paths, &url, None, false)
+                .await
+                .unwrap();
+            assert!(!again.created);
+            assert_eq!(again.connection.id, c.id);
+        });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn a_wrong_password_is_reported_by_the_server_and_nothing_is_saved() {
+        let (dir, paths) = temp_paths("bad");
+        let url = format!("postgresql://{USER}:wrong-pw@{HOST}:{PORT}/{DATABASE}");
+        rt().block_on(async {
+            let err = agent_studio_scaffold_lib::agent_ctl::db_connect(&paths, &url, None, false)
+                .await
+                .unwrap_err();
+            assert!(err.contains("Nothing was saved"), "{err}");
+            assert!(
+                !err.contains("wrong-pw"),
+                "the password leaked into the error: {err}"
+            );
+        });
+        assert!(
+            !paths.store.exists()
+                || std::fs::read_to_string(&paths.store)
+                    .unwrap()
+                    .contains("[]")
+        );
+        assert!(
+            !paths.vault.exists(),
+            "a refused connection wrote the Vault"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

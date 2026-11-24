@@ -1208,6 +1208,9 @@ fn open_terminal(
         .spec
         .env
         .extend(crate::netcap::pty_env(&params.terminal_id));
+    // …and the `agent-studio` command (agent_ctl::tools). Last, because it prepends to the
+    // PATH the capture env may have just set.
+    crate::agent_ctl::tools::apply_env(&mut params.spec.env);
 
     let rows = params.spec.rows;
     let cols = params.spec.cols;

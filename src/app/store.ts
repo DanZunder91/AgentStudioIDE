@@ -2261,6 +2261,12 @@ export interface DbState {
    */
   dbDialog: { connectionId: string | null } | null;
   /**
+   * The connection an agent just added or opened through `agent-studio db connect`, shown as a
+   * notice at the top of the DB panel until dismissed. `agent` is the agent's name when its
+   * terminal is an agent we know, else `null` ("an agent").
+   */
+  dbAgentNotice: { connectionId: string; created: boolean; agent: string | null } | null;
+  /**
    * The lazily-loaded object tree, one subtree per connection id.
    *
    * In the store, not in `<DbTree/>`'s own state, although a tree buffer is usually
@@ -2404,6 +2410,16 @@ export interface DbActions {
     password: string,
     id: string | null,
   ): Promise<DbConnection>;
+  /**
+   * An agent added (or re-opened) a connection through `agent-studio db connect`. Rust has
+   * already written `db-connections.json` and, for a password, the Vault in `api-store.json`,
+   * underneath two slices whose load-once gates say they are current — so both gates are
+   * re-armed (LESSONS §34), the list is reloaded, and the DB tab is brought into view with a
+   * notice naming the agent.
+   */
+  showAgentDbConnection(event: { connectionId: string; terminalId: string; created: boolean }): void;
+  /** Dismiss the agent notice. */
+  dismissDbAgentNotice(): void;
   /** Delete a connection (Rust cascades its live sessions) and drop our mirror of it. */
   deleteDbConnection(id: string): Promise<void>;
   /**
@@ -4368,6 +4384,7 @@ function initialDbState(): DbState {
     dbError: null,
     dbSessions: {},
     dbDialog: null,
+    dbAgentNotice: null,
     dbConsoles: {},
     dbTrees: {},
     dbSavedQueries: {},
@@ -5432,6 +5449,28 @@ export const useAppStore = create<AppStore>()(
             });
           }
         },
+
+        showAgentDbConnection: ({ connectionId, terminalId, created }) => {
+          const agent = get().agents[terminalId as AgentId];
+          set((s) => {
+            s.dbLoaded = false;
+            s.apiStoreLoaded = false;
+            s.rightRailCollapsed = false;
+            s.rightRailTab = "db";
+            s.dbAgentNotice = {
+              connectionId,
+              created,
+              agent: agent === undefined ? null : (agent.customTitle ?? agent.title),
+            };
+          });
+          // A mounted panel only loads on mount, so re-issue it; it never rejects.
+          void get().dbActions.loadDbStore();
+        },
+
+        dismissDbAgentNotice: () =>
+          set((s) => {
+            s.dbAgentNotice = null;
+          }),
 
         hydrateDbStore: (engines, store) =>
           set((s) => {
