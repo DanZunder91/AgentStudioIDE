@@ -36,7 +36,16 @@ drag Agent Studio into Applications, then run this once so macOS does not show t
 xattr -dr com.apple.quarantine "/Applications/Agent Studio.app"
 ```
 
-Windows and Linux installers are on the [releases page](https://github.com/DanZunder91/AgentStudioIDE/releases/latest).
+**Install on Linux (x86_64)** — the same, for the `.deb` (Debian, Ubuntu), the `.rpm` (Fedora, openSUSE)
+or the AppImage (anything else):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DanZunder91/AgentStudioIDE/main/scripts/install-linux.sh | bash
+```
+
+Start it from the applications menu or with `agent-studio-scaffold`.
+
+Windows installers are on the [releases page](https://github.com/DanZunder91/AgentStudioIDE/releases/latest).
 
 <p align="center">
   <img src="docs/media/tour.gif" alt="Agent Studio tour: an agent orchestrating sub-agents, a sub-agent's activity, a permission prompt, and the Network view" width="900">
@@ -107,6 +116,14 @@ install with one command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DanZunder91/AgentStudioIDE/main/scripts/install-macos.sh | bash
+```
+
+On Linux (x86_64), one command picks the package for the machine: the `.deb` with apt, the `.rpm` with
+dnf, zypper or yum, otherwise the AppImage into `~/.local/bin` (also the fallback without sudo). It
+checks the download against the release's checksums and installs the command `agent-studio-scaffold`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DanZunder91/AgentStudioIDE/main/scripts/install-linux.sh | bash
 ```
 
 The `.dmg` is not notarized yet, so when you install from it macOS blocks the first launch: open
