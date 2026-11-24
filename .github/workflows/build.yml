@@ -6,8 +6,9 @@
 #   * doc-only changes don't build (paths-ignore) — they'd produce identical binaries;
 #   * a `v*` tag or a manual run builds artifacts only (no release).
 # Tests are NOT run here: `npm run verify` on the machine doing the work is the gate
-# (scripts/verify.mjs). Nothing is signed: macOS notarization and Windows signing need secrets
-# this repo does not have, and the release notes say so.
+# (scripts/verify.mjs). macOS: the bundle is always ad-hoc signed (tauri.conf.json), signed with a
+# Developer ID and notarized when the APPLE_* secrets exist, and checked before anything is
+# published. Windows is unsigned. The release notes say which applies.
 name: Build
 
 on:
@@ -74,10 +75,51 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # With a Developer ID the app is signed and notarized, and opens from a browser download with
+      # no prompt. `tauri build` reads these variables. Each one is exported only when its secret
+      # exists: an empty APPLE_SIGNING_IDENTITY would replace the ad-hoc identity "-" from
+      # tauri.conf.json and leave the bundle unsigned.
+      - name: Apple signing and notarization secrets (when configured)
+        if: matrix.os == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -n "${!name}" ]; then
+              { echo "$name<<APPLE_EOF"; echo "${!name}"; echo "APPLE_EOF"; } >> "$GITHUB_ENV"
+              echo "$name: set"
+            else
+              echo "$name: not set"
+            fi
+          done
+
       # Runs `npm run build` first via tauri.conf.json's `beforeBuildCommand`,
       # so the frontend dist/ is produced as part of this step.
       - name: Build the app
         run: npm run tauri build
+
+      # A macOS app whose signature does not verify is reported as "damaged" and cannot be opened
+      # at all. Checked on the app as built and on the copy inside the .dmg users download; the
+      # release job needs every bundle job, so a failure here publishes nothing. A notarized build
+      # must also pass Gatekeeper.
+      - name: Check the macOS app opens (code signature)
+        if: matrix.os == 'macos-latest'
+        run: |
+          app="src-tauri/target/release/bundle/macos/Agent Studio.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          mnt="$(mktemp -d)"
+          hdiutil attach src-tauri/target/release/bundle/dmg/*.dmg -nobrowse -readonly -noautoopen -mountpoint "$mnt" -quiet
+          codesign --verify --deep --strict --verbose=2 "$mnt/Agent Studio.app"
+          hdiutil detach "$mnt" -quiet
+          if [ -n "${APPLE_ID:-}" ]; then
+            spctl --assess --type execute --verbose=4 "$app"
+            xcrun stapler validate "$app"
+          fi
 
       - name: Upload bundles
         if: ${{ !cancelled() }}
@@ -106,6 +148,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      # The macOS build was notarized (see the bundle job), so the .dmg opens with no prompt.
+      NOTARIZED: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' }}
     steps:
       - name: Download this run's bundles
         run: gh run download "${{ github.run_id }}" --dir bundles
@@ -126,6 +170,14 @@ jobs:
           subject="$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA" --jq '.commit.message' | head -1)"
           version="$(gh api "repos/$GH_REPO/contents/src-tauri/tauri.conf.json?ref=$GITHUB_SHA" \
             --jq '.content' | base64 -d | jq -r .version)"
+          if [ "$NOTARIZED" = "true" ]; then
+            mac="macOS: open the \`.dmg\` and drag **Agent Studio** into Applications."
+          else
+            mac="macOS: install with one command, no security prompt:
+          \`curl -fsSL https://raw.githubusercontent.com/$GH_REPO/main/scripts/install-macos.sh | bash\`
+          The \`.dmg\` is not notarized yet, so macOS blocks its first launch: open **System Settings →
+          Privacy & Security** and click **Open Anyway**."
+          fi
           cat > notes.md <<NOTES
           Automatic build of \`main\` at [\`$short\`](https://github.com/$GH_REPO/commit/$GITHUB_SHA): $subject
 
@@ -135,9 +187,10 @@ jobs:
           | Windows | \`.msi\` or \`-setup.exe\` |
           | Linux | \`.deb\`, \`.rpm\` or \`.AppImage\` |
 
-          ⚠️ Not code-signed yet. macOS: right-click the app → **Open** the first time (or
-          \`xattr -dr com.apple.quarantine "/Applications/Agent Studio.app"\`). Windows: SmartScreen →
-          **More info → Run anyway**. Needs the \`claude\` CLI on your PATH.
+          $mac
+
+          Windows: not code-signed yet; SmartScreen → **More info → Run anyway**.
+          Needs the \`claude\` CLI on your PATH.
 
           Checksums: \`SHA256SUMS.txt\`.
           NOTES

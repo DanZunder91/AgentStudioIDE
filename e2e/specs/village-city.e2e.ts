@@ -714,14 +714,15 @@ const BAND_READS = 3;
 const BAND_GAP_MS = 1_000;
 /**
  * The share of the band that must be `coloured` by day and `neon` at night (support/village-scene.ts
- * PIXEL_CLASSES), in every read. Measured on three Docker runs over this band of this city
- * (Fit, ¼ zoom: 33 408 px): Tokyo's backdrop holds 0.67–1.05 % coloured pixels by day (its canyon's
- * screens change scene) and 0.78–1.59 % neon at night; the plain haze — the same band of the same city
- * painted before the backdrop (read off three runs' stills, which match the page's own reads) — holds
- * 0.000 % of either. So the floors are ~⅖ of the backdrop's worst read and still ~100 pixels the haze
- * would have to grow.
+ * PIXEL_CLASSES), in every read. The backdrop is world-locked (render/backdrop.ts hashes world x), so a
+ * given city reads the same on every run. Measured on three Docker runs over this band of this city
+ * (Fit, ¼ zoom: 32 538 px, the city's two open ends): by day 0.197 % coloured in the worst read and
+ * 0.341 % once the canyon's screens change scene — its ends now fall mostly on the quiet apartments, not
+ * the sign-lit shops — and at night 0.553–0.569 % neon. The plain haze over the same band holds 0.000 %
+ * of either. So the day floor is ~⅖ of the backdrop's worst read (~26 pixels the haze would have to
+ * grow); the night floor, set when the band read 0.78 % at least, is still ~½ of its worst read.
  */
-const BACKDROP_DAY_COLOURED = 0.0025;
+const BACKDROP_DAY_COLOURED = 0.0008;
 const BACKDROP_NIGHT_NEON = 0.003;
 
 /**

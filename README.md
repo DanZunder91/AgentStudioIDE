@@ -81,8 +81,16 @@ Agents plug in through one `AgentAdapter` interface; the next ones are on the [r
 ## Install
 
 **Prebuilt installers** for macOS, Linux and Windows are attached to
-[GitHub Releases](https://github.com/DanZunder91/AgentStudioIDE/releases). They are unsigned for now: on
-macOS, right-click the app and choose **Open** the first time. macOS is the tested platform; the Linux and
+[GitHub Releases](https://github.com/DanZunder91/AgentStudioIDE/releases). On macOS (Apple Silicon),
+install with one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DanZunder91/AgentStudioIDE/main/scripts/install-macos.sh | bash
+```
+
+The `.dmg` is not notarized yet, so when you install from it macOS blocks the first launch: open
+**System Settings → Privacy & Security** and click **Open Anyway**. The Windows installers are
+unsigned: SmartScreen → **More info → Run anyway**. macOS is the tested platform; the Linux and
 Windows builds work but are still being tested, so please
 [open an issue](https://github.com/DanZunder91/AgentStudioIDE/issues) if something looks off.
 
@@ -136,8 +144,8 @@ GitHub Releases.
 - [ ] **Next iteration: more agents** — OpenAI (Codex CLI) and local models through Ollama, behind
       the same `AgentAdapter` interface: launch, live status, sub-agent tree and metrics, as Claude
       Code has today
-- [ ] **Code signing and auto-update** — installers are unsigned today (on macOS, right-click the
-      app and choose **Open** the first time)
+- [ ] **Code signing and auto-update** — macOS builds are ad-hoc signed; Developer ID signing and
+      notarization switch on when the Apple secrets are added. Windows installers are unsigned
 - [ ] **Code intelligence** — completion and diagnostics; today it is go-to-definition and find
       usages
 - [ ] **Windows network bytes** — the whole-machine network view has no per-connection byte counts

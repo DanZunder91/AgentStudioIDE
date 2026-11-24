@@ -901,19 +901,27 @@ async fn the_flow_ring_keeps_exactly_the_newest_5000() {
     .await;
 }
 
-/// 200 requests at once: all complete with the right status, and each is exactly one
+/// 200 parallel requests: all complete with the right status, and each is exactly one
 /// flow carrying that status.
+///
+/// At most [`IN_FLIGHT`] at a time: macOS caps a listener's accept queue at
+/// `kern.ipc.somaxconn` (128 by default) and resets connects beyond it, so 200 simultaneous
+/// connects fail in the kernel before the proxy sees them. 100 stays under that cap and still
+/// overlaps on every worker thread.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_hundred_parallel_requests_all_complete_as_two_hundred_flows() {
+    const IN_FLIGHT: usize = 100;
     within(Duration::from_secs(120), "200 parallel", async {
         let up = spawn_upstream().await;
         let nc = proxy();
         let c = client(&nc);
         let codes = [200u16, 201, 204, 404, 418, 500, 503];
+        let slots = Arc::new(tokio::sync::Semaphore::new(IN_FLIGHT));
         let mut tasks = Vec::new();
         for i in 0..200usize {
-            let (c, code) = (c.clone(), codes[i % codes.len()]);
+            let (c, code, slots) = (c.clone(), codes[i % codes.len()], slots.clone());
             tasks.push(tokio::spawn(async move {
+                let _slot = slots.acquire_owned().await.unwrap();
                 let res = c
                     .get(format!("http://127.0.0.1:{up}/status/{code}?i={i}"))
                     .send()
