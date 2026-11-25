@@ -40,6 +40,10 @@ pub fn run_if_cli() -> Option<i32> {
     if !is_command(&args) {
         return None;
     }
+    // `agent-studio mcp …`: the MCP server (which needs this process's stdin) and its install.
+    if args[0] == super::mcp::WORD {
+        return Some(super::mcp::main(&args[1..]));
+    }
     let env = CtlEnv::from_process();
     let mut out = std::io::stdout();
     let mut err = std::io::stderr();
@@ -47,10 +51,13 @@ pub fn run_if_cli() -> Option<i32> {
 }
 
 /// Whether `args` (without the program name) is a command rather than an app launch: the first
-/// word is a tool group (`db`, `http`, …) or a request for help.
+/// word is a tool group (`db`, `http`, …), `mcp`, or a request for help. `mcp` must be here: it
+/// is how Claude Code starts the server, and as an app launch it would open a second window.
 pub fn is_command(args: &[String]) -> bool {
     args.first().is_some_and(|a| {
-        matches!(a.as_str(), "help" | "--help" | "-h") || registry::groups().contains(&a.as_str())
+        matches!(a.as_str(), "help" | "--help" | "-h")
+            || a == super::mcp::WORD
+            || registry::groups().contains(&a.as_str())
     })
 }
 
@@ -288,6 +295,7 @@ pub fn usage() -> String {
             t.summary
         ));
     }
+    s.push_str(&super::mcp::agent_usage());
     s
 }
 
@@ -433,6 +441,8 @@ mod tests {
         assert!(is_command(&args(&["db", "list"])));
         assert!(is_command(&args(&["help"])));
         assert!(is_command(&args(&["--help"])));
+        assert!(is_command(&args(&["mcp"])));
+        assert!(is_command(&args(&["mcp", "install"])));
         // A plain launch, and anything an OS or a launcher may pass, starts the app.
         assert!(!is_command(&args(&[])));
         assert!(!is_command(&args(&["-psn_0_12345"])));
@@ -528,6 +538,14 @@ mod tests {
                 t.name
             );
             assert!(all.contains(t.summary), "{}", t.name);
+        }
+        // The help every agent is pointed at names the MCP server and its status, but never the
+        // commands that change the user's Claude Code config: the user adds it from Settings.
+        assert!(all.contains("agent-studio mcp\n"));
+        assert!(all.contains("agent-studio mcp status"));
+        assert!(all.contains("Settings"));
+        for word in ["install", "uninstall", "claude mcp add"] {
+            assert!(!all.contains(word), "{word}");
         }
         let one = tool_usage(registry::find("db_connect").unwrap());
         assert!(one.starts_with("agent-studio db connect <url> [--name <name>] [--force]"));

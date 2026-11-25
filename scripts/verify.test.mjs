@@ -241,10 +241,11 @@ describe("planSteps — what runs, what is skipped, what fails without running",
   const NETTOP = "real nettop whole-computer sampler";
   const WIN_SMOKE = "Windows: the real app (WebView2) smoke";
   const TASKS = "real background task tailed into the log hub";
+  const MCP = "MCP install via the real claude CLI (throwaway config)";
   const GATED_OFF = {
     darwin: [WIN_PS, WIN_LOG, WIN_SMOKE],
     linux: [WIN_PS, MAC_LOG, WIN_LOG, NETTOP, WIN_SMOKE],
-    win32: [SHIM, MAC_LOG, NETTOP, TASKS],
+    win32: [MCP, SHIM, MAC_LOG, NETTOP, TASKS],
   };
   const everyStep = GROUPS.flatMap((g) => g.steps.map((s) => s.name));
   const flat = (plan) => plan.flatMap((g) => g.entries);
@@ -290,7 +291,7 @@ describe("planSteps — what runs, what is skipped, what fails without running",
 
   it("on a Windows host, SKIPS the Docker cross-compile by name — with the reason — and runs the rest", () => {
     const plan = planSteps({ groups: GROUPS, platform: "win32", docker: DOCKER });
-    expect(byAction(plan, "skip")).toEqual([SHIM, MAC_LOG, NETTOP, TASKS, WINCHECK]);
+    expect(byAction(plan, "skip")).toEqual([MCP, SHIM, MAC_LOG, NETTOP, TASKS, WINCHECK]);
     expect(flat(plan).find((e) => e.step.name === WINCHECK).reason).toBe(WINDOWS_HOST_CHECK_SKIP);
     expect(WINDOWS_HOST_CHECK_SKIP).toContain("the native cargo clippy --all-targets and cargo test steps are the Windows check");
     expect(byAction(plan, "run")).toEqual(everyStep.filter((n) => ![...GATED_OFF.win32, WINCHECK].includes(n)));
@@ -299,6 +300,34 @@ describe("planSteps — what runs, what is skipped, what fails without running",
     expect(byAction(plan, "run")).toEqual(
       expect.arrayContaining(["cargo clippy", "cargo test", WIN_PS, WIN_LOG, WIN_SMOKE, "real curl through the capture proxy"]),
     );
+  });
+
+  it("the real-claude MCP install check is blocking local integration on macOS and Linux, runs only that test, and is a named SKIP on Windows", () => {
+    const step = GROUPS.find((g) => g.name === "local integration").steps.find((s) => s.name === MCP);
+    expect(step).toMatchObject({
+      cmd: "cargo",
+      args: [
+        "test", "--manifest-path", "src-tauri/Cargo.toml", "--test", "agent_mcp", "--",
+        "--ignored", "--exact", "real_claude_adds_checks_and_removes_the_server_in_a_throwaway_config",
+      ],
+    });
+    expect(step.blocking).not.toBe(false);
+    expect(step.needsDocker).toBeFalsy();
+    for (const platform of ["darwin", "linux"]) {
+      expect(byAction(planSteps({ groups: GROUPS, platform, docker: NO_DOCKER }), "run")).toContain(MCP);
+    }
+    // On Windows the install would read verify's own stdin, which is no console when a program
+    // runs verify: it would refuse, and the blocking step would fail every time.
+    const onWindows = flat(planSteps({ groups: GROUPS, platform: "win32", docker: NO_DOCKER })).find(
+      (e) => e.step.name === MCP,
+    );
+    expect(onWindows.action).toBe("skip");
+    expect(onWindows.reason).toBe(
+      "macOS/Linux only (cfg(unix)): the test types `agent-studio mcp install` into a pty of its own, and " +
+        "moves HOME to keep Claude Code's config untouched; Windows has neither here — on this host it would " +
+        "run 0 tests and print a pass",
+    );
+    expect(classify([fail(MCP)]).ok).toBe(false);
   });
 
   it("the Windows real-app smoke builds its own exe, is blocking local integration, and needs no Docker", () => {
@@ -321,7 +350,7 @@ describe("planSteps — what runs, what is skipped, what fails without running",
       );
     }
     // The redundant step is still a SKIP, not a Docker failure: it would not run even with Docker.
-    expect(byAction(plan, "skip")).toEqual([SHIM, MAC_LOG, NETTOP, TASKS, WINCHECK]);
+    expect(byAction(plan, "skip")).toEqual([MCP, SHIM, MAC_LOG, NETTOP, TASKS, WINCHECK]);
     // Everything that does not need Docker still runs.
     expect(byAction(plan, "run")).toEqual(
       everyStep.filter((n) => ![DB, WINCHECK, E2E, E2E_EXT, LINUX_INSTALL, ...GATED_OFF.win32].includes(n)),
@@ -347,7 +376,7 @@ describe("planSteps — what runs, what is skipped, what fails without running",
     expect(v.ok).toBe(false);
     expect(v.failedBlocking).toEqual([DB, E2E]);
     expect(v.failedExternal).toEqual([E2E_EXT, LINUX_INSTALL]);
-    expect(v.skipped).toEqual([SHIM, MAC_LOG, NETTOP, TASKS, WINCHECK]);
+    expect(v.skipped).toEqual([MCP, SHIM, MAC_LOG, NETTOP, TASKS, WINCHECK]);
   });
 
   it("--no-docker leaves out ONLY the database-fixture step, as before; the other Docker steps stay", () => {

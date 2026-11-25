@@ -28,6 +28,7 @@
 
 pub mod cli;
 pub mod commands;
+pub mod mcp;
 pub mod registry;
 pub mod tools;
 

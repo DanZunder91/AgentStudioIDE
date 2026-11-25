@@ -5,7 +5,8 @@
  * is a lightweight menu, not a global overlay, so it does not live in the store):
  * a gear button toggles a popover that closes on outside-click or Esc. Inside is
  * an accessible switch ("Focus follows agent") bound straight to the store's
- * `focusFollowsAgent` / `setFocusFollowsAgent`.
+ * `focusFollowsAgent` / `setFocusFollowsAgent`, the config export/import items,
+ * and "Add Agent Studio to Claude Code" (`<ClaudeMcpItem/>`).
  *
  * App only imports `{ SettingsMenu }` and mounts it in the titlebar; everything
  * else (open state, keyboard, click-away) is owned here.
@@ -14,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
+import { ClaudeMcpItem } from "./ClaudeMcpItem";
 import "./settings.css";
 
 /** A small gear icon (inherits `currentColor`), sized to match the titlebar cluster. */
@@ -36,7 +38,7 @@ export function SettingsMenu(): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   const focusFollowsAgent = useAppStore((s) => s.focusFollowsAgent);
-  // Config bundles: the only two actions in this menu. Selected narrowly (not the whole actions object)
+  // Config bundles: the two store actions in this menu. Selected narrowly (not the whole actions object)
   // so a change elsewhere in the portability slice cannot re-render the titlebar.
   const openPortabilityDialog = useAppStore((s) => s.portabilityActions.openPortabilityDialog);
   const setFocusFollowsAgent = useAppStore(
@@ -141,6 +143,12 @@ export function SettingsMenu(): React.JSX.Element {
               Review a colleague&rsquo;s file before anything is added.
             </span>
           </button>
+
+          {/* ── Agent Studio's tools in Claude Code ─────────────────────────────
+              The menu's way to `agent-studio mcp install|uninstall`. It asks Claude Code
+              for the status when it mounts, i.e. when this popover opens. */}
+          <div className="settings-menu__separator" role="separator" />
+          <ClaudeMcpItem />
         </div>
       )}
     </div>
