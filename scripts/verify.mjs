@@ -143,6 +143,19 @@ const LOCAL_INTEGRATION = [
     ],
   },
   {
+    // Agent tools over MCP: the real `claude mcp add|get|remove` behind `agent-studio mcp
+    // install|status|uninstall`, so a change in the wording Claude Code prints is caught here.
+    // In a throwaway CLAUDE_CONFIG_DIR and HOME: the user's Claude Code config is never read or
+    // written, and the test asserts it gained nothing. No model call. Claude's own health check
+    // starts the built binary as the MCP server.
+    name: "MCP install via the real claude CLI (throwaway config)",
+    cmd: "cargo",
+    args: [
+      "test", "--manifest-path", "src-tauri/Cargo.toml", "--test", "agent_mcp", "--",
+      "--ignored", "--exact", "real_claude_adds_checks_and_removes_the_server_in_a_throwaway_config",
+    ],
+  },
+  {
     name: "metrics over the real ~/.claude",
     cmd: "cargo",
     args: [

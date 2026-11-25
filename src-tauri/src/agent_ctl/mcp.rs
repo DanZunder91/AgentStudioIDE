@@ -25,11 +25,16 @@
 //! own, and gives launched agents no `--mcp-config` (one mechanism, explicit). The entry points
 //! at this binary by absolute path, so the server also starts for a `claude` running outside
 //! Agent Studio — where its tools then explain themselves.
+//!
+//! Only the user adds or removes it. The help every agent is pointed at (`agent-studio help`)
+//! does not list `install`/`uninstall`, and on the command line both refuse to run for an agent:
+//! when Claude Code started them (`CLAUDECODE` is set) or nobody could have typed them (stdin is
+//! not a terminal). `status` stays open to anyone.
 
 use std::io::{self, BufRead, IsTerminal as _, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, TryLockError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -101,6 +106,7 @@ pub fn main(args: &[String]) -> i32 {
     }
     command(
         args,
+        Caller::from_process(),
         Claude::resolve(),
         server_exe(),
         &mut io::stdout(),
@@ -384,6 +390,9 @@ fn read_line<R: BufRead>(input: &mut R, max: usize) -> io::Result<Option<Line>> 
 pub const CLAUDE_TIMEOUT: Duration = Duration::from_secs(45);
 /// How much of `claude`'s output is kept: plenty for `mcp get`, never a transcript.
 const OUTPUT_CAP: usize = 64 * 1024;
+/// How long the pipes are read after `claude` exits. A process it left running in the background
+/// can hold them open for as long as it lives; past this, what had arrived is what it said.
+const PIPE_GRACE: Duration = Duration::from_secs(2);
 /// How much of `claude`'s own words an error repeats.
 const DETAIL_CHARS: usize = 200;
 
@@ -453,34 +462,56 @@ impl Claude {
                 Err(e) => return Err(format!("Claude Code could not be waited for ({e}).")),
             }
         };
-        // A grandchild that kept a pipe open must not hold this up past the exit.
-        let collect = |rx: mpsc::Receiver<String>| {
-            rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default()
-        };
+        // A grandchild that kept a pipe open must not hold this up past the exit: both pipes get
+        // the same grace, and what arrived by then is kept.
+        let until = Instant::now() + PIPE_GRACE;
         Ok(Output {
             code: status.code(),
-            stdout: collect(stdout),
-            stderr: collect(stderr),
+            stdout: stdout.take(until),
+            stderr: stderr.take(until),
         })
     }
 }
 
+/// A pipe being read on its own thread.
+struct Drained {
+    kept: Arc<Mutex<Vec<u8>>>,
+    /// Signalled when the pipe reached its end.
+    done: mpsc::Receiver<()>,
+}
+
 /// Read a pipe to its end on its own thread, keeping the first [`OUTPUT_CAP`] bytes. It keeps
 /// reading past the cap, so the child never blocks on a full pipe.
-fn drain<P: Read + Send + 'static>(pipe: Option<P>) -> mpsc::Receiver<String> {
-    let (tx, rx) = mpsc::channel();
+fn drain<P: Read + Send + 'static>(pipe: Option<P>) -> Drained {
+    let kept = Arc::new(Mutex::new(Vec::new()));
+    let (tx, done) = mpsc::channel();
+    let into = kept.clone();
     std::thread::spawn(move || {
-        let mut kept = Vec::new();
         if let Some(mut pipe) = pipe {
             let mut buf = [0u8; 8192];
             while let Ok(n @ 1..) = pipe.read(&mut buf) {
+                let mut kept = into.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 let room = OUTPUT_CAP.saturating_sub(kept.len());
                 kept.extend_from_slice(&buf[..n.min(room)]);
             }
         }
-        let _ = tx.send(String::from_utf8_lossy(&kept).into_owned());
+        let _ = tx.send(());
     });
-    rx
+    Drained { kept, done }
+}
+
+impl Drained {
+    /// Everything the pipe carried if it ends by `until`; otherwise what had arrived by then.
+    fn take(self, until: Instant) -> String {
+        let _ = self
+            .done
+            .recv_timeout(until.saturating_duration_since(Instant::now()));
+        let kept = self
+            .kept
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        String::from_utf8_lossy(&kept).into_owned()
+    }
 }
 
 /// Where Claude Code stands with the `agent-studio` server.
@@ -492,6 +523,10 @@ pub enum McpState {
     NotInstalled,
     /// An `agent-studio` entry exists but runs something else (another copy of the app).
     Different,
+    /// Claude Code's `agent-studio` entry is in its local or project config (or one Agent Studio
+    /// cannot change), which takes precedence over the user config `install` writes: adding
+    /// there would change nothing Claude Code runs.
+    Shadowed,
     /// No `claude` to ask.
     ClaudeMissing,
     /// `claude` ran but did not say, or the action failed; the message says why.
@@ -583,7 +618,7 @@ fn installable(exe: &Path) -> Result<(), String> {
 pub fn status(claude: &Claude, exe: &Path) -> McpReport {
     match claude.run(&[WORD, "get", SERVER_NAME]) {
         Ok(out) => interpret_get(&out, exe),
-        Err(e) => McpReport::failed(exe, format!("Could not ask Claude Code: {e}")),
+        Err(e) => could_not_ask(exe, &e),
     }
 }
 
@@ -624,7 +659,18 @@ pub fn interpret_get(out: &Output, exe: &Path) -> McpReport {
     };
     let args = field("Args:").unwrap_or_default();
     let scope = field("Scope:");
-    let mut report = if same_file(&target, exe) && args == WORD {
+    let runs = [target.as_str(), args.as_str()]
+        .join(" ")
+        .trim_end()
+        .to_string();
+    let mut report = if let Some(other) = scope.as_deref().filter(|s| !s.starts_with(USER_SCOPE)) {
+        McpReport::new(
+            true,
+            McpState::Shadowed,
+            exe,
+            shadowed_message(other, &runs),
+        )
+    } else if same_file(&target, exe) && args == WORD {
         McpReport::new(
             true,
             McpState::Installed,
@@ -644,9 +690,8 @@ pub fn interpret_get(out: &Output, exe: &Path) -> McpReport {
             McpState::Different,
             exe,
             format!(
-                "Claude Code's `{SERVER_NAME}` server runs `{}`, not this Agent Studio (`{}`). \
+                "Claude Code's `{SERVER_NAME}` server runs `{runs}`, not this Agent Studio (`{}`). \
                  `agent-studio mcp install` points it here.",
-                [target.as_str(), args.as_str()].join(" ").trim_end(),
                 exe.display()
             ),
         )
@@ -656,46 +701,60 @@ pub fn interpret_get(out: &Output, exe: &Path) -> McpReport {
     report
 }
 
+/// How `claude mcp get` names the scope `install` writes ("User config (available in all your
+/// projects)"). Its local and project scopes take precedence over it.
+const USER_SCOPE: &str = "User config";
+
+/// Why an entry in another scope stops `install` from helping, and Claude's own way to remove it.
+fn shadowed_message(scope: &str, runs: &str) -> String {
+    let flag = if scope.starts_with("Local config") {
+        Some("local")
+    } else if scope.starts_with("Project config") {
+        Some("project")
+    } else {
+        None
+    };
+    let fix = match flag {
+        Some(flag) => format!(
+            "Remove that entry with `claude mcp remove {SERVER_NAME} -s {flag}` (run in your home \
+             folder), then add Agent Studio again."
+        ),
+        None => "Agent Studio cannot change that entry.".to_string(),
+    };
+    format!(
+        "Claude Code's `{SERVER_NAME}` server comes from its {scope} and runs `{runs}`. That entry \
+         takes precedence over the user config Agent Studio adds itself to. {fix}"
+    )
+}
+
 /// Add Agent Studio to Claude Code's user config. An entry that already runs this binary is left
-/// alone; one that runs another copy of the app is pointed here.
+/// alone; one that runs another copy of the app is pointed here. An entry in a scope that takes
+/// precedence (local, project) is reported and never reported as success: Claude Code would go on
+/// running it.
 pub fn install(claude: &Claude, exe: &Path) -> McpReport {
     if let Err(message) = installable(exe) {
         return McpReport::failed(exe, message);
     }
-    let exe_text = exe.to_string_lossy();
-    let add = || {
-        claude.run(&[
-            WORD,
-            "add",
-            "--scope",
-            "user",
-            SERVER_NAME,
-            "--",
-            exe_text.as_ref(),
-            WORD,
-        ])
-    };
-    let added = |out: Output, message: String| {
-        if out.code == Some(0) {
-            McpReport::new(true, McpState::Installed, exe, message)
-        } else {
-            McpReport::failed(exe, format!("Claude Code did not add it: {}", detail(&out)))
-        }
-    };
-    let done = format!(
-        "Added Agent Studio to Claude Code (user config): Claude Code now starts `{} {WORD}`. \
-         Agents in Agent Studio's terminals get its tools; a running Claude Code session picks \
-         them up when it restarts.",
-        exe.display()
-    );
-    let out = match add() {
+    let out = match add(claude, exe) {
         Ok(out) => out,
-        Err(e) => return McpReport::failed(exe, format!("Could not ask Claude Code: {e}")),
+        Err(e) => return could_not_ask(exe, &e),
     };
-    if out.code == Some(0) || !all_text(&out).contains("already exists") {
-        return added(out, done);
+    if out.code == Some(0) {
+        return confirm(
+            claude,
+            exe,
+            format!(
+                "Added Agent Studio to Claude Code (user config): Claude Code now starts `{} \
+                 {WORD}`. Agents in Agent Studio's terminals get its tools; a running Claude Code \
+                 session picks them up when it restarts.",
+                exe.display()
+            ),
+        );
     }
-    // An `agent-studio` entry is already there: this copy, or another one.
+    if !all_text(&out).contains("already exists") {
+        return not_added(exe, &out);
+    }
+    // An `agent-studio` entry is already in the user config: this copy, or another one.
     let now = status(claude, exe);
     match now.state {
         McpState::Installed => McpReport {
@@ -712,20 +771,73 @@ pub fn install(claude: &Claude, exe: &Path) -> McpReport {
             if !removed.ok {
                 return removed;
             }
-            match add() {
-                Ok(out) => added(
-                    out,
+            match add(claude, exe) {
+                Ok(out) if out.code == Some(0) => confirm(
+                    claude,
+                    exe,
                     format!(
                         "Claude Code's `{SERVER_NAME}` server ran `{before}`; it now runs `{} \
                          {WORD}`. A running Claude Code session picks it up when it restarts.",
                         exe.display()
                     ),
                 ),
-                Err(e) => McpReport::failed(exe, format!("Could not ask Claude Code: {e}")),
+                Ok(out) => not_added(exe, &out),
+                Err(e) => could_not_ask(exe, &e),
             }
         }
+        McpState::Shadowed => McpReport {
+            ok: false,
+            message: format!("Nothing was changed. {}", now.message),
+            ..now
+        },
         _ => McpReport { ok: false, ..now },
     }
+}
+
+/// `claude mcp add --scope user agent-studio -- <exe> mcp`.
+fn add(claude: &Claude, exe: &Path) -> Result<Output, String> {
+    let exe = exe.to_string_lossy();
+    claude.run(&[
+        WORD,
+        "add",
+        "--scope",
+        "user",
+        SERVER_NAME,
+        "--",
+        exe.as_ref(),
+        WORD,
+    ])
+}
+
+/// After an add Claude accepted, what Claude Code now runs. An entry in a scope that takes
+/// precedence is said, not hidden: the add happened, but sessions start that other entry.
+fn confirm(claude: &Claude, exe: &Path, done: String) -> McpReport {
+    let now = status(claude, exe);
+    match now.state {
+        McpState::Installed => McpReport {
+            message: done,
+            ..now
+        },
+        McpState::Shadowed => McpReport {
+            ok: false,
+            message: format!(
+                "Agent Studio was added to Claude Code's user config, but that is not what Claude \
+                 Code runs. {}",
+                now.message
+            ),
+            ..now
+        },
+        // Claude accepted the add; a look it answered in a form we cannot read does not undo it.
+        _ => McpReport::new(true, McpState::Installed, exe, done),
+    }
+}
+
+fn not_added(exe: &Path, out: &Output) -> McpReport {
+    McpReport::failed(exe, format!("Claude Code did not add it: {}", detail(out)))
+}
+
+fn could_not_ask(exe: &Path, e: &str) -> McpReport {
+    McpReport::failed(exe, format!("Could not ask Claude Code: {e}"))
 }
 
 /// Remove Agent Studio from Claude Code's user config.
@@ -736,7 +848,7 @@ pub fn uninstall(claude: &Claude, exe: &Path) -> McpReport {
 fn remove(claude: &Claude, exe: &Path) -> McpReport {
     let out = match claude.run(&[WORD, "remove", "--scope", "user", SERVER_NAME]) {
         Ok(out) => out,
-        Err(e) => return McpReport::failed(exe, format!("Could not ask Claude Code: {e}")),
+        Err(e) => return could_not_ask(exe, &e),
     };
     if out.code == Some(0) {
         McpReport::new(
@@ -814,11 +926,54 @@ fn act(
     }
 }
 
+/// Who started `agent-studio mcp install|uninstall`. Both change the user's Claude Code config,
+/// so they run only when the user types them, never for an agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Caller {
+    /// `CLAUDECODE` is set: Claude Code started this (it sets it for every command it runs).
+    pub claude_code: bool,
+    /// stdin is a terminal, so someone could have typed this. An agent's commands read from a
+    /// pipe or from nothing.
+    pub terminal: bool,
+}
+
+impl Caller {
+    pub fn from_process() -> Self {
+        Self {
+            claude_code: std::env::var_os("CLAUDECODE").is_some(),
+            terminal: io::stdin().is_terminal(),
+        }
+    }
+}
+
+/// Why `verb` (`install` or `uninstall`) will not run for `caller`; `None` when the user typed it.
+fn refusal(verb: &str, caller: Caller) -> Option<String> {
+    let why = if caller.claude_code {
+        "Claude Code started it (CLAUDECODE is set)"
+    } else if !caller.terminal {
+        "its input is not a terminal, so it was not typed by the user"
+    } else {
+        return None;
+    };
+    let item = if verb == "install" {
+        "Add Agent Studio to Claude Code"
+    } else {
+        "Remove Agent Studio from Claude Code"
+    };
+    Some(format!(
+        "`agent-studio {WORD} {verb}` changes the user's Claude Code configuration, so only the \
+         user runs it, and an agent cannot: {why}. The user can choose Settings → \"{item}\" in \
+         Agent Studio, or run `agent-studio {WORD} {verb}` themselves in a terminal. Nothing was \
+         changed."
+    ))
+}
+
 /// `agent-studio mcp install|uninstall|status [--json]`. Prints the report's sentence (stdout
 /// when it worked, stderr when not) or, with `--json`, the report. Exit 0 when it worked, 1 when
-/// not, 2 for a usage error.
+/// not (a refusal included), 2 for a usage error.
 pub fn command(
     args: &[String],
+    caller: Caller,
     claude: Result<Claude, String>,
     exe: Result<PathBuf, String>,
     out: &mut dyn Write,
@@ -845,7 +1000,14 @@ pub fn command(
         ["status"] => status,
         _ => return usage_error(err, &format!("unknown mcp command `{}`", words.join(" "))),
     };
-    let report = act(action, claude, exe);
+    let refused = match words.as_slice() {
+        [verb @ ("install" | "uninstall")] => refusal(verb, caller),
+        _ => None,
+    };
+    let report = match refused {
+        Some(message) => McpReport::failed(exe.as_deref().unwrap_or(Path::new("")), message),
+        None => act(action, claude, exe),
+    };
     if json {
         let _ = writeln!(out, "{}", serde_json::to_value(&report).unwrap_or_default());
     } else if report.ok {
@@ -866,16 +1028,28 @@ fn usage_error(err: &mut dyn Write, message: &str) -> i32 {
     2
 }
 
-/// The `mcp` commands' help, also appended to `agent-studio help`.
+/// `agent-studio mcp --help`: the server, and the commands the user adds it to Claude Code with.
 pub fn usage() -> String {
     format!(
         "\n  agent-studio {WORD}\n      Serve these tools over MCP on stdin/stdout: what Claude \
          Code starts once Agent Studio is added to it.\n  agent-studio {WORD} install [--json]\n      \
          Add Agent Studio to Claude Code (runs `claude mcp add --scope user {SERVER_NAME} -- \
-         <this app> {WORD}`).\n  agent-studio {WORD} uninstall [--json]\n      Remove it \
-         (`claude mcp remove --scope user {SERVER_NAME}`).\n  agent-studio {WORD} status \
+         <this app> {WORD}`). Typed by the user in a terminal; it refuses to run for an agent.\n  \
+         agent-studio {WORD} uninstall [--json]\n      Remove it (`claude mcp remove --scope user \
+         {SERVER_NAME}`). Typed by the user, like install.\n  agent-studio {WORD} status \
          [--json]\n      Whether Claude Code has it, and which copy of the app it runs (`claude \
          mcp get {SERVER_NAME}`).\n"
+    )
+}
+
+/// The `mcp` lines of `agent-studio help`, the help every agent is pointed at: the server and
+/// its status, never the commands that change the user's Claude Code config.
+pub fn agent_usage() -> String {
+    format!(
+        "\n  agent-studio {WORD}\n      Serve these tools over MCP on stdin/stdout, for Claude Code \
+         to start. The user adds it to Claude Code from Agent Studio's Settings menu.\n  \
+         agent-studio {WORD} status [--json]\n      Whether Claude Code has Agent Studio's MCP \
+         server, and which copy of the app it runs.\n"
     )
 }
 
@@ -883,29 +1057,81 @@ pub fn usage() -> String {
 // The Settings menu item
 // ---------------------------------------------------------------------------------------------
 
-/// Run an action off the async runtime: `claude` can take seconds.
-async fn off_thread(action: fn(&Claude, &Path) -> McpReport) -> McpReport {
-    tauri::async_runtime::spawn_blocking(move || act(action, Claude::resolve(), server_exe()))
-        .await
-        .unwrap_or_else(|e| McpReport::failed(Path::new(""), format!("The check stopped ({e}).")))
+/// What a change asked for while another run of `claude mcp` is going is told.
+pub const BUSY: &str = "Agent Studio is already running Claude Code's `claude mcp`; wait for it \
+    to finish, then try again. Nothing was changed.";
+
+/// The menu's runs of `claude mcp`, one at a time. A change (add or remove) asked for while
+/// another run is going is refused as busy rather than run alongside it; a status waits for a
+/// change in flight and then reads what it left.
+pub struct Gate(Mutex<()>);
+
+impl Gate {
+    pub const fn new() -> Self {
+        Self(Mutex::new(()))
+    }
+
+    /// Run an add or a remove, or say one is already running.
+    pub fn change(&self, run: impl FnOnce() -> McpReport) -> McpReport {
+        match self.0.try_lock() {
+            Ok(_held) => run(),
+            Err(TryLockError::Poisoned(poisoned)) => {
+                let _held = poisoned.into_inner();
+                run()
+            }
+            Err(TryLockError::WouldBlock) => McpReport::failed(Path::new(""), BUSY),
+        }
+    }
+
+    /// Read the status, after any change in flight has finished.
+    pub fn look(&self, run: impl FnOnce() -> McpReport) -> McpReport {
+        let _held = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        run()
+    }
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The app's one gate: every window's menu item goes through it.
+static GATE: Gate = Gate::new();
+
+/// Run an action off the async runtime (`claude` can take seconds), through [`GATE`].
+async fn off_thread(action: fn(&Claude, &Path) -> McpReport, change: bool) -> McpReport {
+    tauri::async_runtime::spawn_blocking(move || {
+        let run = || act(action, Claude::resolve(), server_exe());
+        if change {
+            GATE.change(run)
+        } else {
+            GATE.look(run)
+        }
+    })
+    .await
+    .unwrap_or_else(|e| McpReport::failed(Path::new(""), format!("The check stopped ({e}).")))
 }
 
 /// Whether Claude Code has Agent Studio. Asked when the Settings menu opens, never at startup.
 #[tauri::command]
 pub async fn claude_mcp_status() -> McpReport {
-    off_thread(status).await
+    off_thread(status, false).await
 }
 
 /// The Settings menu's "Add Agent Studio to Claude Code".
 #[tauri::command]
 pub async fn claude_mcp_install() -> McpReport {
-    off_thread(install).await
+    off_thread(install, true).await
 }
 
 /// The Settings menu's "Remove Agent Studio from Claude Code".
 #[tauri::command]
 pub async fn claude_mcp_uninstall() -> McpReport {
-    off_thread(uninstall).await
+    off_thread(uninstall, true).await
 }
 
 #[cfg(test)]

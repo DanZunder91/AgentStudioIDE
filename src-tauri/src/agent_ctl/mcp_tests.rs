@@ -1,6 +1,8 @@
 //! The MCP server driven over in-memory pipes, with its calls forwarded to a real listener whose
 //! `/ctl` route is the real dispatcher over a temp dir; and the install against a fake `claude`
 //! that records its argv. Nothing here reads or writes a real Claude Code config or app store.
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use super::*;
 use crate::agent_ctl::tests::Recorder;
 use crate::agent_ctl::{handle, ToolCtx};
@@ -356,6 +358,62 @@ fn many_calls_at_once_are_all_answered_each_under_its_own_id() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// An app whose every `/ctl` call takes `delay`, counting how many it is answering at once.
+/// Returns the terminal's link to it and the most calls it ever held at the same time.
+fn slow_app(delay: Duration) -> (CtlEnv, Arc<AtomicUsize>) {
+    let (listener, config) = HookListener::bind().unwrap();
+    let (now, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let seen = most.clone();
+    let on_ctl: Arc<CtlHandler> = Arc::new(move |_terminal: String, _body: Vec<u8>| {
+        let (now, most) = (now.clone(), seen.clone());
+        Box::pin(async move {
+            let at_once = now.fetch_add(1, Ordering::SeqCst) + 1;
+            most.fetch_max(at_once, Ordering::SeqCst);
+            tokio::time::sleep(delay).await;
+            now.fetch_sub(1, Ordering::SeqCst);
+            let reply = CtlResponse::ok("slow and done", Value::Null);
+            (200u16, serde_json::to_vec(&reply).unwrap())
+        }) as CtlFuture
+    });
+    listener.serve_with_ctl(|_, _| {}, Some(on_ctl));
+    let env = CtlEnv {
+        url: config.base_url,
+        token: config.token,
+        terminal_id: "term-slow".into(),
+    };
+    (env, most)
+}
+
+#[test]
+fn a_slow_call_does_not_hold_up_a_ping_sent_after_it() {
+    let (env, _) = slow_app(Duration::from_millis(1500));
+    let replies = exchange(
+        &[call(1, "db_list", json!({})), req(2, "ping", Value::Null)],
+        Some(env),
+    );
+    // Written in the order they were answered: the ping first, though it came second.
+    let order: Vec<&Value> = replies.iter().map(|r| &r["id"]).collect();
+    assert_eq!(order, [&json!(2), &json!(1)], "{replies:#?}");
+    assert_eq!(by_id(&replies, 1)["result"]["isError"], false);
+}
+
+#[test]
+fn calls_run_side_by_side_but_never_more_than_the_limit_at_once() {
+    let (env, most) = slow_app(Duration::from_millis(400));
+    let n = MAX_IN_FLIGHT as i64 * 2 + 3;
+    let lines: Vec<String> = (0..n).map(|i| call(i, "db_list", json!({}))).collect();
+    let replies = exchange(&lines, Some(env));
+    assert_eq!(replies.len(), lines.len());
+    for i in 0..n {
+        assert_eq!(by_id(&replies, i)["result"]["isError"], false);
+    }
+    let most = most.load(Ordering::SeqCst);
+    assert!(
+        most > 1 && most <= MAX_IN_FLIGHT,
+        "{most} calls were answered at once (expected 2..={MAX_IN_FLIGHT})"
+    );
+}
+
 #[test]
 fn an_unreachable_app_is_an_error_result_that_says_so() {
     let env = CtlEnv {
@@ -463,13 +521,86 @@ fn claudes_answer_is_read_for_installed_missing_and_another_copy() {
     let http = interpret_get(
         &output(
             Some(0),
-            "agent-studio:\n  Scope: Local config\n  Type: http\n  URL: http://127.0.0.1:9/mcp\n",
+            "agent-studio:\n  Scope: User config (available in all your projects)\n  Type: \
+             http\n  URL: http://127.0.0.1:9/mcp\n",
             "",
         ),
         exe,
     );
     assert_eq!(http.state, McpState::Different);
     assert_eq!(http.configured.as_deref(), Some("http://127.0.0.1:9/mcp"));
+}
+
+#[test]
+fn an_entry_in_a_scope_that_wins_over_the_user_config_is_reported_whatever_it_runs() {
+    let exe = Path::new("/Applications/Agent Studio.app/Contents/MacOS/agent-studio");
+    let answer = |scope: &str, command: &str| {
+        get_answer(command, "mcp").replace("User config (available in all your projects)", scope)
+    };
+    // Even an entry that runs this very binary: it applies to one folder, not every project.
+    let local = interpret_get(
+        &output(
+            Some(0),
+            &answer(
+                "Local config (private to you in this project)",
+                &exe.to_string_lossy(),
+            ),
+            "",
+        ),
+        exe,
+    );
+    assert_eq!((local.state, local.ok), (McpState::Shadowed, true));
+    assert!(local.scope.as_deref().unwrap().starts_with("Local config"));
+    assert!(
+        local
+            .message
+            .contains("`claude mcp remove agent-studio -s local`"),
+        "{}",
+        local.message
+    );
+    let project = interpret_get(
+        &output(
+            Some(0),
+            &answer("Project config (shared via .mcp.json)", "/old/a"),
+            "",
+        ),
+        exe,
+    );
+    assert_eq!(project.state, McpState::Shadowed);
+    assert!(
+        project.message.contains("-s project"),
+        "{}",
+        project.message
+    );
+    assert!(
+        project.message.contains("/old/a mcp"),
+        "{}",
+        project.message
+    );
+    let managed = interpret_get(
+        &output(
+            Some(0),
+            &answer("Enterprise config (managed by your organization)", "/x"),
+            "",
+        ),
+        exe,
+    );
+    assert_eq!(managed.state, McpState::Shadowed);
+    assert!(
+        managed.message.contains("cannot change"),
+        "{}",
+        managed.message
+    );
+    // No scope line at all: read as the user scope, as before.
+    let plain = interpret_get(
+        &output(
+            Some(0),
+            &format!("agent-studio:\n  Command: {}\n  Args: mcp\n", exe.display()),
+            "",
+        ),
+        exe,
+    );
+    assert_eq!(plain.state, McpState::Installed);
 }
 
 #[test]
@@ -587,6 +718,15 @@ impl FakeClaude {
     fn mode(&self, mode: &str) {
         std::fs::write(self.dir.join("mode"), mode).unwrap();
     }
+
+    /// An `agent-studio` entry in Claude Code's local scope, which wins over the user one.
+    fn local_entry(&self, command: &str) {
+        std::fs::write(self.dir.join("local"), format!("{command}\nmcp\n")).unwrap();
+    }
+
+    fn verbs(&self) -> Vec<String> {
+        self.runs().iter().map(|r| r[1].clone()).collect()
+    }
 }
 
 #[cfg(unix)]
@@ -622,9 +762,11 @@ fn install_status_and_uninstall_run_claudes_own_commands() {
         added.message
     );
     assert!(added.message.contains(&exe_s));
+    assert!(added.scope.as_deref().unwrap().starts_with("User config"));
+    let runs = fake.runs();
     assert_eq!(
-        fake.runs().last().unwrap(),
-        &words(&[
+        runs[runs.len() - 2],
+        words(&[
             "mcp",
             "add",
             "--scope",
@@ -635,6 +777,8 @@ fn install_status_and_uninstall_run_claudes_own_commands() {
             "mcp"
         ])
     );
+    // Then a look at what Claude Code now runs.
+    assert_eq!(runs[runs.len() - 1], words(&["mcp", "get", "agent-studio"]));
 
     let now = status(c, exe);
     assert_eq!(now.state, McpState::Installed);
@@ -687,9 +831,93 @@ fn an_entry_for_another_copy_of_the_app_is_reported_then_pointed_here() {
         fixed.message
     );
     assert!(fixed.message.contains("/Volumes/Old"), "{}", fixed.message);
-    let verbs: Vec<String> = fake.runs().iter().map(|r| r[1].clone()).collect();
-    assert_eq!(verbs, ["get", "add", "get", "remove", "add"]);
+    assert_eq!(fake.verbs(), ["get", "add", "get", "remove", "add", "get"]);
     assert_eq!(status(c, exe).state, McpState::Installed);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_entry_in_the_local_scope_is_named_and_an_install_never_claims_it_worked() {
+    let exe = Path::new("/Applications/Agent Studio.app/Contents/MacOS/agent-studio");
+    let exe_s = exe.to_string_lossy().into_owned();
+
+    // No user entry: Claude accepts the add, but its local entry is what sessions run.
+    let fake = FakeClaude::new("local-only");
+    fake.local_entry("/somewhere/else/agent-studio");
+    let c = &fake.claude;
+    let seen = status(c, exe);
+    assert_eq!((seen.state, seen.ok), (McpState::Shadowed, true));
+    let report = install(c, exe);
+    assert_eq!(
+        (report.state, report.ok),
+        (McpState::Shadowed, false),
+        "{}",
+        report.message
+    );
+    assert!(
+        report.message.contains("not what Claude Code runs"),
+        "{}",
+        report.message
+    );
+    assert!(report.message.contains("-s local"), "{}", report.message);
+    assert!(!report.message.contains("now starts"), "{}", report.message);
+    assert_eq!(fake.verbs(), ["get", "add", "get"]);
+
+    // A user entry for this binary under a local one: nothing is removed or re-added.
+    let fake = FakeClaude::new("local-over-user");
+    fake.entry(&exe_s);
+    fake.local_entry(&exe_s);
+    let c = &fake.claude;
+    let report = install(c, exe);
+    assert_eq!((report.state, report.ok), (McpState::Shadowed, false));
+    assert!(
+        report.message.starts_with("Nothing was changed."),
+        "{}",
+        report.message
+    );
+    assert_eq!(fake.verbs(), ["add", "get"], "no remove, no second add");
+    assert!(fake.dir.join("entry").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_change_waits_for_no_one_and_a_status_waits_for_the_change() {
+    let fake = FakeClaude::new("gate");
+    fake.mode("slow");
+    let exe = Path::new("/opt/agent-studio");
+    let gate = Gate::new();
+    std::thread::scope(|s| {
+        let first = s.spawn(|| gate.change(|| install(&fake.claude, exe)));
+        // Let the first add start (each `claude` run takes a second here).
+        std::thread::sleep(Duration::from_millis(300));
+        let started = Instant::now();
+        let second = gate.change(|| uninstall(&fake.claude, exe));
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "a second change waited"
+        );
+        assert_eq!((second.state, second.ok), (McpState::Failed, false));
+        assert_eq!(second.message, BUSY);
+        // A look waits for the change and reads what it left. (The change, an add and a look of
+        // its own, takes two seconds; a look that did not wait would be back after one.)
+        let looked = gate.look(|| status(&fake.claude, exe));
+        assert!(
+            first.is_finished(),
+            "the status answered while the change was running"
+        );
+        assert_eq!(looked.state, McpState::Installed, "{}", looked.message);
+        assert_eq!(first.join().unwrap().state, McpState::Installed);
+    });
+    assert!(
+        !fake.verbs().contains(&"remove".to_string()),
+        "the refused change never ran: {:?}",
+        fake.verbs()
+    );
+    // Free again once the change is over.
+    assert_eq!(
+        gate.change(|| uninstall(&fake.claude, exe)).state,
+        McpState::NotInstalled
+    );
 }
 
 #[cfg(unix)]
@@ -732,6 +960,34 @@ fn a_claude_that_fails_answers_oddly_or_hangs_is_reported() {
     );
     assert_eq!(hung.state, McpState::Failed);
     assert!(hung.message.contains("did not answer"), "{}", hung.message);
+
+    // More output than is kept: the first OUTPUT_CAP bytes, and the pipe is read to its end
+    // so the child never blocks on it (it would not exit, and this would time out).
+    let mut fake = FakeClaude::new("big");
+    fake.mode("big");
+    fake.claude.timeout = Duration::from_secs(10);
+    let out = fake.claude.run(&["mcp", "get", "agent-studio"]).unwrap();
+    assert_eq!(out.code, Some(0), "{}", out.stderr);
+    assert_eq!(out.stdout.len(), OUTPUT_CAP);
+    assert!(out.stdout.bytes().all(|b| b == b'x'));
+
+    // A background process still holding claude's pipes does not hold up the answer, and what
+    // claude printed before it exited is kept.
+    let fake = FakeClaude::new("grandchild");
+    fake.mode("grandchild");
+    let started = Instant::now();
+    let report = status(&fake.claude, exe);
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        (report.state, report.ok),
+        (McpState::NotInstalled, true),
+        "{}",
+        report.message
+    );
 
     // A claude that cannot be started at all.
     let gone = Claude {
@@ -776,9 +1032,13 @@ fn an_app_claude_could_not_start_later_is_never_installed() {
 fn the_command_line_prints_a_sentence_or_json_and_exits_with_the_outcome() {
     let fake = FakeClaude::new("cli");
     let exe = PathBuf::from("/opt/Agent Studio/agent-studio");
+    let user = Caller {
+        claude_code: false,
+        terminal: true,
+    };
     let run = |args: &[&str], claude: Result<Claude, String>, exe: Result<PathBuf, String>| {
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = command(&words(args), claude, exe, &mut out, &mut err);
+        let code = command(&words(args), user, claude, exe, &mut out, &mut err);
         (
             code,
             String::from_utf8(out).unwrap(),
@@ -817,10 +1077,13 @@ fn the_command_line_prints_a_sentence_or_json_and_exits_with_the_outcome() {
     assert_eq!(code, 1);
     assert!(err.contains("no exe"));
 
-    // Usage.
+    // Usage: `mcp --help` is where install and uninstall are described.
     let (code, out, _) = run(&["--help"], ok(), Ok(exe.clone()));
     assert_eq!(code, 0);
     assert!(out.contains("agent-studio mcp install"));
+    assert!(out.contains("agent-studio mcp uninstall"));
+    assert!(!agent_usage().contains("install"));
+    assert!(agent_usage().contains("agent-studio mcp status"));
     for bad in [
         &["bogus"][..],
         &["status", "--bogus"],
@@ -831,4 +1094,114 @@ fn the_command_line_prints_a_sentence_or_json_and_exits_with_the_outcome() {
         assert_eq!(code, 2, "{bad:?}");
         assert!(err.contains("agent-studio mcp status"), "{err}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_agent_cannot_install_or_uninstall_and_is_told_who_can() {
+    let fake = FakeClaude::new("agent");
+    let exe = PathBuf::from("/opt/agent-studio");
+    let run = |args: &[&str], caller: Caller| {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = command(
+            &words(args),
+            caller,
+            Ok(fake.claude.clone()),
+            Ok(exe.clone()),
+            &mut out,
+            &mut err,
+        );
+        (
+            code,
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+        )
+    };
+    let claude_code = Caller {
+        claude_code: true,
+        terminal: true,
+    };
+    let piped = Caller {
+        claude_code: false,
+        terminal: false,
+    };
+    for (caller, why) in [
+        (claude_code, "CLAUDECODE is set"),
+        (piped, "not a terminal"),
+    ] {
+        for (verb, item) in [
+            ("install", "Settings → \"Add Agent Studio to Claude Code\""),
+            (
+                "uninstall",
+                "Settings → \"Remove Agent Studio from Claude Code\"",
+            ),
+        ] {
+            let (code, out, err) = run(&[verb], caller);
+            assert_eq!((code, out.as_str()), (1, ""), "{verb}: {err}");
+            assert!(err.contains(why), "{err}");
+            assert!(err.contains(item), "{err}");
+            assert!(err.contains("themselves in a terminal"), "{err}");
+            assert!(err.contains("Nothing was changed"), "{err}");
+            let (code, out, _) = run(&[verb, "--json"], caller);
+            assert_eq!(code, 1);
+            let v: Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(
+                (v["ok"].clone(), v["state"].clone()),
+                (json!(false), json!("failed"))
+            );
+        }
+    }
+    assert!(
+        fake.runs().is_empty(),
+        "claude was never asked: {:?}",
+        fake.runs()
+    );
+
+    // The status is anyone's to read, an agent's included.
+    let (code, out, _) = run(&["status"], claude_code);
+    assert_eq!(code, 0);
+    assert!(out.contains("not added"), "{out}");
+    assert_eq!(fake.verbs(), ["get"]);
+}
+
+#[test]
+fn only_a_terminal_without_claude_code_is_the_user() {
+    let caller = |claude_code, terminal| Caller {
+        claude_code,
+        terminal,
+    };
+    assert_eq!(refusal("install", caller(false, true)), None);
+    assert!(refusal("install", caller(true, true)).is_some());
+    assert!(refusal("uninstall", caller(false, false)).is_some());
+    assert!(refusal("install", caller(true, false))
+        .unwrap()
+        .contains("CLAUDECODE"));
+}
+
+#[test]
+fn output_past_the_cap_is_dropped_and_what_came_before_the_cutoff_is_kept() {
+    let far = || Instant::now() + Duration::from_secs(5);
+    let big = drain(Some(io::Cursor::new(vec![b'y'; OUTPUT_CAP * 3]))).take(far());
+    assert_eq!(big.len(), OUTPUT_CAP);
+    assert_eq!(drain(None::<io::Empty>).take(far()), "");
+
+    // A pipe that never ends: what arrived is returned at the cutoff.
+    struct Trickle(bool);
+    impl Read for Trickle {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if std::mem::replace(&mut self.0, true) {
+                std::thread::sleep(Duration::from_secs(3600));
+            }
+            buf[..5].copy_from_slice(b"early");
+            Ok(5)
+        }
+    }
+    let pipe = drain(Some(Trickle(false)));
+    std::thread::sleep(Duration::from_millis(100));
+    let started = Instant::now();
+    assert_eq!(
+        pipe.take(Instant::now() + Duration::from_millis(200)),
+        "early"
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
 }

@@ -40,6 +40,7 @@ vi.mock("./claudeMcpIpc", () => claudeMcpIpc);
 
 import { useAppStore } from "../../app/store";
 import { resetStore } from "../../test/store-harness";
+import { forgetClaudeMcpRuns } from "./claudeMcpRuns";
 import { SettingsMenu } from "./SettingsMenu";
 
 const popover = () => screen.queryByTestId("settings-popover");
@@ -52,6 +53,7 @@ beforeEach(() => {
     s.focusFollowsAgent = false;
   });
   layoutPrefsIpc.saveLayoutPrefs.mockClear();
+  forgetClaudeMcpRuns();
   claudeMcpIpc.claudeMcpStatus.mockReset().mockReturnValue(new Promise(() => {}));
 });
 afterEach(cleanup);
@@ -190,15 +192,17 @@ describe("SettingsMenu", () => {
     expect(item).toHaveTextContent("Checking Claude Code…");
   });
 
-  it("asks Claude Code each time the menu opens, and never before", () => {
+  it("asks Claude Code when the menu opens and never before; a reopen while it answers asks nothing new", () => {
     render(<SettingsMenu />);
     // A closed menu runs nothing: the vendor CLI runs on the user's action only.
     expect(claudeMcpIpc.claudeMcpStatus).not.toHaveBeenCalled();
     fireEvent.click(trigger());
     expect(claudeMcpIpc.claudeMcpStatus).toHaveBeenCalledTimes(1);
+    // Closed and opened again while `claude mcp get` is still running: it waits for that one.
     fireEvent.click(trigger());
     fireEvent.click(trigger());
-    expect(claudeMcpIpc.claudeMcpStatus).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("settings-claude-mcp")).toHaveTextContent("Checking Claude Code…");
+    expect(claudeMcpIpc.claudeMcpStatus).toHaveBeenCalledTimes(1);
     expect(claudeMcpIpc.claudeMcpInstall).not.toHaveBeenCalled();
     expect(claudeMcpIpc.claudeMcpUninstall).not.toHaveBeenCalled();
   });

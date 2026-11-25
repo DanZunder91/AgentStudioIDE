@@ -60,19 +60,21 @@ describe("Settings: Add Agent Studio to Claude Code", () => {
     );
     expect(mcpRuns().slice(before)).toEqual(["mcp get agent-studio"]);
 
-    // The add: Claude Code's own command, with this app's binary by absolute path.
+    // The add: Claude Code's own command, with this app's binary by absolute path, then a look at
+    // what Claude Code now runs (the stub's answer is unreadable, so the add's exit code stands).
     await (await item()).click();
     expect(await settled("failed")).toBe("installed");
     await expect(item()).toHaveText(expect.stringContaining("Remove Agent Studio from Claude Code"));
     const add = mcpRuns().slice(before)[1] ?? "";
     // Absolute on either OS: `/…` or `C:\…`.
     expect(add).toMatch(/^mcp add --scope user agent-studio -- (\/|[A-Za-z]:\\).*agent-studio.* mcp$/);
+    expect(mcpRuns().slice(before)[2]).toBe("mcp get agent-studio");
 
     // And the removal.
     await (await item()).click();
     expect(await settled("installed")).toBe("notInstalled");
     await expect(item()).toHaveText(expect.stringContaining("Add Agent Studio to Claude Code"));
-    expect(mcpRuns().slice(before)[2]).toBe("mcp remove --scope user agent-studio");
+    expect(mcpRuns().slice(before)[3]).toBe("mcp remove --scope user agent-studio");
 
     // The popover stayed open throughout (the answer is shown in the item); Esc closes it.
     await browser.keys("Escape");

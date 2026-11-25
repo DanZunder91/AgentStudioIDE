@@ -295,7 +295,7 @@ pub fn usage() -> String {
             t.summary
         ));
     }
-    s.push_str(&super::mcp::usage());
+    s.push_str(&super::mcp::agent_usage());
     s
 }
 
@@ -539,8 +539,13 @@ mod tests {
             );
             assert!(all.contains(t.summary), "{}", t.name);
         }
-        for word in ["mcp install", "mcp uninstall", "mcp status"] {
-            assert!(all.contains(&format!("agent-studio {word}")), "{word}");
+        // The help every agent is pointed at names the MCP server and its status, but never the
+        // commands that change the user's Claude Code config: the user adds it from Settings.
+        assert!(all.contains("agent-studio mcp\n"));
+        assert!(all.contains("agent-studio mcp status"));
+        assert!(all.contains("Settings"));
+        for word in ["install", "uninstall", "claude mcp add"] {
+            assert!(!all.contains(word), "{word}");
         }
         let one = tool_usage(registry::find("db_connect").unwrap());
         assert!(one.starts_with("agent-studio db connect <url> [--name <name>] [--force]"));

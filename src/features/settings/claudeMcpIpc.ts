@@ -18,6 +18,9 @@ export type ClaudeMcpState =
   | "notInstalled"
   /** An `agent-studio` entry runs something else (another copy of the app). */
   | "different"
+  /** The entry is in Claude Code's local or project config, which wins over the user config an
+   * add writes: `message` names it and how to remove it. */
+  | "shadowed"
   /** No `claude` to ask. */
   | "claudeMissing"
   /** `claude` did not say, or the action failed: `message` says why. */

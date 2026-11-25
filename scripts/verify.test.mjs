@@ -301,6 +301,25 @@ describe("planSteps — what runs, what is skipped, what fails without running",
     );
   });
 
+  it("the real-claude MCP install check is blocking local integration, runs on every OS, and runs only that test", () => {
+    const name = "MCP install via the real claude CLI (throwaway config)";
+    const step = GROUPS.find((g) => g.name === "local integration").steps.find((s) => s.name === name);
+    expect(step).toMatchObject({
+      cmd: "cargo",
+      args: [
+        "test", "--manifest-path", "src-tauri/Cargo.toml", "--test", "agent_mcp", "--",
+        "--ignored", "--exact", "real_claude_adds_checks_and_removes_the_server_in_a_throwaway_config",
+      ],
+    });
+    expect(step.blocking).not.toBe(false);
+    expect(step.needsDocker).toBeFalsy();
+    expect(step.onlyOn).toBeUndefined();
+    for (const platform of ["darwin", "linux", "win32"]) {
+      expect(byAction(planSteps({ groups: GROUPS, platform, docker: NO_DOCKER }), "run")).toContain(name);
+    }
+    expect(classify([fail(name)]).ok).toBe(false);
+  });
+
   it("the Windows real-app smoke builds its own exe, is blocking local integration, and needs no Docker", () => {
     const smoke = GROUPS.find((g) => g.name === "local integration").steps.find((s) => s.name === WIN_SMOKE);
     expect(smoke).toMatchObject({ cmd: "node", args: ["scripts/windows-smoke.mjs", "--build"] });

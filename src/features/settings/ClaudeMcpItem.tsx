@@ -7,24 +7,33 @@
  *
  * Mounted only while the popover is open, so Claude Code is asked for the status when the user
  * opens the menu and never at startup: a vendor CLI runs on the user's action, not on its own.
+ * The run in flight and the last answer outlive the popover (`claudeMcpRuns.ts`): a reopen joins
+ * a run still going, and a recent answer is shown without asking again.
  * Clicking does not close the popover, because the answer is shown right here, in the item's own
  * description line; nothing else opens.
  */
 import { useEffect, useRef, useState } from "react";
 
 import {
-  claudeMcpInstall,
-  claudeMcpStatus,
-  claudeMcpUninstall,
-  type ClaudeMcpReport,
-} from "./claudeMcpIpc";
-
-type Action = "install" | "uninstall";
+  currentRun,
+  recentAnswer,
+  startRun,
+  type ClaudeMcpAction as Action,
+  type ClaudeMcpAnswer,
+} from "./claudeMcpRuns";
 
 type View =
   | { phase: "checking" }
   | { phase: "working"; action: Action }
-  | { phase: "ready"; report: ClaudeMcpReport };
+  | { phase: "ready"; answer: ClaudeMcpAnswer };
+
+/** What the item shows when the popover opens: the run still going, or a recent answer. */
+function opening(): View {
+  const run = currentRun();
+  if (run !== null) return run.action === null ? { phase: "checking" } : { phase: "working", action: run.action };
+  const known = recentAnswer();
+  return known === null ? { phase: "checking" } : { phase: "ready", answer: known };
+}
 
 const ADD = "Add Agent Studio to Claude Code";
 const REMOVE = "Remove Agent Studio from Claude Code";
@@ -47,10 +56,17 @@ function show(view: View): Shown {
       ? { label: "Adding Agent Studio to Claude Code…", hint: "Running claude mcp add…", action: null, problem: false }
       : { label: "Removing Agent Studio from Claude Code…", hint: "Running claude mcp remove…", action: null, problem: false };
   }
-  const r = view.report;
-  // A problem: say it, and offer the add again unless there is no Claude Code to run.
+  const r = view.answer.report;
+  // A problem: say it, and offer the same again (a failed removal is still a removal to retry),
+  // unless there is no Claude Code to run.
   if (!r.ok) {
-    return { label: ADD, hint: r.message, action: r.state === "claudeMissing" ? null : "install", problem: true };
+    const retry: Action = view.answer.after === "uninstall" ? "uninstall" : "install";
+    return {
+      label: retry === "uninstall" ? REMOVE : ADD,
+      hint: r.message,
+      action: r.state === "claudeMissing" ? null : retry,
+      problem: true,
+    };
   }
   switch (r.state) {
     case "installed":
@@ -67,6 +83,10 @@ function show(view: View): Shown {
         action: "install",
         problem: false,
       };
+    // An entry in Claude Code's local or project config wins over the user config: say which,
+    // and how to remove it. Adding again re-checks.
+    case "shadowed":
+      return { label: ADD, hint: r.message, action: "install", problem: true };
     default:
       return {
         label: ADD,
@@ -78,27 +98,29 @@ function show(view: View): Shown {
 }
 
 export function ClaudeMcpItem(): React.JSX.Element {
-  const [view, setView] = useState<View>({ phase: "checking" });
-  // An answer that arrives after the popover closed has no item to land in.
+  const [initial] = useState(opening);
+  const [view, setView] = useState<View>(initial);
+  // An answer that arrives after the popover closed has no item to land in (claudeMcpRuns keeps
+  // it for the next open).
   const live = useRef(true);
+  const land = (answer: ClaudeMcpAnswer) => {
+    if (live.current) setView({ phase: "ready", answer });
+  };
 
   useEffect(() => {
     live.current = true;
-    void claudeMcpStatus().then((report) => {
-      if (live.current) setView({ phase: "ready", report });
-    });
+    // Ask Claude Code, or wait for the run already going; a recent answer needs neither.
+    if (initial.phase !== "ready") void startRun(null).then(land);
     return () => {
       live.current = false;
     };
-  }, []);
+  }, [initial]);
 
   const shown = show(view);
   const action = shown.action;
   const run = (act: Action) => {
     setView({ phase: "working", action: act });
-    void (act === "install" ? claudeMcpInstall() : claudeMcpUninstall()).then((report) => {
-      if (live.current) setView({ phase: "ready", report });
-    });
+    void startRun(act).then(land);
   };
 
   return (
@@ -107,7 +129,7 @@ export function ClaudeMcpItem(): React.JSX.Element {
       role="menuitem"
       className="settings-menu__item"
       data-testid="settings-claude-mcp"
-      data-state={view.phase === "ready" ? view.report.state : view.phase}
+      data-state={view.phase === "ready" ? view.answer.report.state : view.phase}
       disabled={action === null}
       aria-busy={view.phase !== "ready"}
       onClick={action === null ? undefined : () => run(action)}
