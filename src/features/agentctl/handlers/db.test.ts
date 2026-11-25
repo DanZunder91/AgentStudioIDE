@@ -504,3 +504,28 @@ describe("dbConsole / dbSavedQuery", () => {
     await vi.waitFor(() => expect(dbIpc.dbSavedQueries).toHaveBeenCalledWith("c1"));
   });
 });
+
+describe("dbConnection / dbOpen: shown connected", () => {
+  it("connects a new connection whose test passed, and not a forced dead one", () => {
+    const open = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState((s) => {
+      s.dbActions.openDbSession = open;
+    });
+    dispatchAgentCtl({ kind: "dbConnection", terminalId: "t1", connectionId: "c1", created: true, open: true });
+    dispatchAgentCtl({ kind: "dbConnection", terminalId: "t1", connectionId: "c2", created: true, open: false });
+    expect(open.mock.calls).toEqual([["c1"]]);
+    expect(useAppStore.getState().dbAgentNotice?.connectionId).toBe("c2");
+  });
+
+  it("db open shows the connection in the DB panel and connects it", () => {
+    const open = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState((s) => {
+      s.dbActions.openDbSession = open;
+    });
+    dispatchAgentCtl({ kind: "dbOpen", terminalId: "t1", connectionId: "c2" });
+    expect(open).toHaveBeenCalledWith("c2");
+    const s = useAppStore.getState();
+    expect(s.rightRailTab).toBe("db");
+    expect(s.dbAgentNotice).toMatchObject({ connectionId: "c2", created: false });
+  });
+});

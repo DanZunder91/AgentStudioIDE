@@ -113,6 +113,16 @@ pub const TOOLS: &[ToolSpec] = &[
         run: run_test,
     },
     ToolSpec {
+        name: "db_open",
+        cli: &["db", "open"],
+        summary: "Show a saved database connection to the user: the DB panel comes into view \
+                  with the connection connected and its tables listed.",
+        details: "The app connects with the password from its Vault (never shown here) and \
+                  read-only connections stay read-only. Nothing is queried.",
+        params: &[CONNECTION],
+        run: run_open,
+    },
+    ToolSpec {
         name: "db_schema",
         cli: &["db", "schema"],
         summary: "Browse a saved connection's objects one level at a time: databases, schemas, \
@@ -304,6 +314,22 @@ fn scrubbed(result: Result<(String, Value), String>, secrets: &[String]) -> Resu
     }
 }
 
+fn run_open(ctx: ToolCtx, args: Args) -> ToolFuture {
+    Box::pin(async move {
+        let c = db_target::load_and_resolve(&ctx.db_paths(), args.req_str("connection")?)?;
+        ctx.emit("dbOpen", serde_json::json!({"connectionId": c.id}));
+        Ok(ToolOk::new(
+            format!(
+                "Showing \"{}\" ({}, {}) in Agent Studio's DB panel, connected, with its tables.",
+                c.name,
+                target_label(&c),
+                access_label(c.read_only)
+            ),
+            summary(&c),
+        ))
+    })
+}
+
 fn run_test(ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move {
         let (paths, connection) = (ctx.db_paths(), args.req_str("connection")?);
@@ -429,11 +455,15 @@ fn run_connect(ctx: ToolCtx, args: Args) -> ToolFuture {
         let url = args.req_str("url")?.to_string();
         let name = args.str("name").map(str::to_string);
         let report = db_connect(&ctx.db_paths(), &url, name.as_deref(), args.bool("force")).await?;
+        // Shown connected only when it is known to connect: an already-saved one, or a new one
+        // whose test passed. A `--force` save of a dead server is not dialled again.
+        let open = !report.created || report.test.as_ref().is_some_and(|t| t.ok);
         ctx.emit(
             "dbConnection",
             serde_json::json!({
                 "connectionId": report.connection.id,
                 "created": report.created,
+                "open": open,
             }),
         );
         Ok(ToolOk::new(report.message(), report.data()))

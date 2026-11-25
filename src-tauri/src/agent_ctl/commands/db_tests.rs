@@ -340,6 +340,7 @@ async fn the_tools_answer_through_the_dispatcher_and_emit_the_panel_event() {
             "terminalId": "term-7",
             "connectionId": id,
             "created": true,
+            "open": false,
         })
     );
 
@@ -398,4 +399,59 @@ fn the_query_help_states_the_real_boundary_and_claims_nothing_more() {
     let console = details("db_console");
     assert!(console.contains("left as it is"), "{console}");
     assert!(!console.contains("added below"), "{console}");
+}
+
+#[tokio::test]
+async fn connect_shows_a_connection_connected_only_when_it_is_known_to_connect() {
+    let (dir, _paths) = temp_paths();
+    let (ctx, rec) = crate::agent_ctl::tests::ctx(&dir, "t-open");
+    let call = |tool: &str, args: serde_json::Value| {
+        serde_json::to_vec(&serde_json::json!({"tool": tool, "args": args})).unwrap()
+    };
+    let url = format!("postgres://app:pw@127.0.0.1:{}/shop", dead_port());
+
+    // A forced save of a server that does not answer: shown, but not dialled again.
+    let (status, _) = crate::agent_ctl::handle(
+        ctx.clone(),
+        &call("db_connect", serde_json::json!({"url": url, "force": true})),
+    )
+    .await;
+    assert_eq!(status, 200);
+    // The same target again: already saved, so it is opened.
+    crate::agent_ctl::handle(
+        ctx.clone(),
+        &call("db_connect", serde_json::json!({"url": url})),
+    )
+    .await;
+    let events = rec.0.lock().unwrap().clone();
+    assert_eq!(events[0].payload["open"], false);
+    assert_eq!(events[1].payload["created"], false);
+    assert_eq!(events[1].payload["open"], true);
+
+    // db open: by name, any case; an unknown name lists what exists.
+    let (status, r) = crate::agent_ctl::handle(
+        ctx.clone(),
+        &call(
+            "db_open",
+            serde_json::json!({"connection": "SHOP@127.0.0.1"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{}", r.message);
+    assert!(r.message.contains("connected, with its tables"));
+    assert!(!r.message.contains("pw"));
+    let last = rec.0.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(last.kind, "dbOpen");
+    assert_eq!(
+        last.payload["connectionId"],
+        events[0].payload["connectionId"]
+    );
+    let (status, r) = crate::agent_ctl::handle(
+        ctx,
+        &call("db_open", serde_json::json!({"connection": "nope"})),
+    )
+    .await;
+    assert_eq!(status, 422);
+    assert!(r.message.contains("shop@127.0.0.1"), "{}", r.message);
+    let _ = std::fs::remove_dir_all(dir);
 }

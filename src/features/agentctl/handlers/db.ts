@@ -8,7 +8,9 @@ import type { AgentCtlHandler } from "../dispatch";
 /** `The agent "claude · shop"` for a terminal whose agent we know, else `An agent`. */
 export function agentWho(terminalId: string): string {
   const agent = useAppStore.getState().agents[terminalId as AgentId];
-  return agent === undefined ? "An agent" : `The agent "${agent.customTitle ?? agent.title}"`;
+  return agent === undefined
+    ? "An agent"
+    : `The agent "${agent.customTitle ?? agent.title}"`;
 }
 
 const strings = (v: unknown): string[] =>
@@ -19,13 +21,19 @@ const strings = (v: unknown): string[] =>
  * either what came back (with every cut Rust made, so a cut table is not read as the whole
  * answer) or why it did not run.
  */
-export function agentRunNote(event: AgentCtlEvent, results: DbResultSet[]): DbResultSet {
+export function agentRunNote(
+  event: AgentCtlEvent,
+  results: DbResultSet[],
+): DbResultSet {
   const who = agentWho(event.terminalId);
   const error = typeof event.error === "string" ? event.error : null;
   const notes = strings(event.notes);
   const text =
     error === null
-      ? [`${who} ran this query from its terminal. Below is what it received.`, ...notes].join(" ")
+      ? [
+          `${who} ran this query from its terminal. Below is what it received.`,
+          ...notes,
+        ].join(" ")
       : `${who} tried to run this query from its terminal, and it did not run: ${error}`;
   return {
     kind: "message",
@@ -51,13 +59,18 @@ export function runOutcome(results: DbResultSet[]): string {
   const read = results.filter((r) => r.kind === "rows");
   if (read.length > 0) {
     const n = read.reduce((sum, r) => sum + r.rows.length, 0);
-    parts.push(`${rowCount(n)}${read.some((r) => r.truncated) ? " (cut)" : ""}`);
+    parts.push(
+      `${rowCount(n)}${read.some((r) => r.truncated) ? " (cut)" : ""}`,
+    );
   }
   const wrote = results.filter((r) => r.kind === "affected");
   if (wrote.length > 0) {
-    parts.push(`${rowCount(wrote.reduce((sum, r) => sum + (r.rowsAffected ?? 0), 0))} affected`);
+    parts.push(
+      `${rowCount(wrote.reduce((sum, r) => sum + (r.rowsAffected ?? 0), 0))} affected`,
+    );
   }
-  if (results.some((r) => r.kind === "message")) parts.push("an error from the database");
+  if (results.some((r) => r.kind === "message"))
+    parts.push("an error from the database");
   return parts.length === 0 ? "nothing" : parts.join(", ");
 }
 
@@ -87,12 +100,29 @@ async function openAgentConsole(
 
 export const DB_HANDLERS: Readonly<Record<string, AgentCtlHandler>> = {
   /** `db_connect`: a connection was added (or an already-saved one re-opened). */
-  dbConnection: (e) =>
-    useAppStore.getState().dbActions.showAgentDbConnection({
-      connectionId: String(e.connectionId),
+  dbConnection: (e) => {
+    const { dbActions } = useAppStore.getState();
+    const connectionId = String(e.connectionId);
+    dbActions.showAgentDbConnection({
+      connectionId,
       terminalId: e.terminalId,
       created: e.created === true,
-    }),
+    });
+    // Connected and expanded when Rust knows it connects (a passing test, or already saved).
+    if (e.open === true) void dbActions.openDbSession(connectionId);
+  },
+
+  /** `db_open`: show a saved connection, connected, with its tables. */
+  dbOpen: (e) => {
+    const { dbActions } = useAppStore.getState();
+    const connectionId = String(e.connectionId);
+    dbActions.showAgentDbConnection({
+      connectionId,
+      terminalId: e.terminalId,
+      created: false,
+    });
+    void dbActions.openDbSession(connectionId);
+  },
 
   /** `db_console`: open the connection's console with the agent's query typed in, not run. */
   dbConsole: (e) =>
@@ -108,7 +138,9 @@ export const DB_HANDLERS: Readonly<Record<string, AgentCtlHandler>> = {
    * keeps the focus.
    */
   dbQueryRun: (e) => {
-    const results = Array.isArray(e.results) ? (e.results as DbResultSet[]) : [];
+    const results = Array.isArray(e.results)
+      ? (e.results as DbResultSet[])
+      : [];
     const error = typeof e.error === "string" ? e.error : null;
     void useAppStore.getState().dbActions.showAgentDbQuery({
       connectionId: String(e.connectionId),
@@ -122,5 +154,7 @@ export const DB_HANDLERS: Readonly<Record<string, AgentCtlHandler>> = {
 
   /** `db_save_query`: the connection's saved-query list changed on disk; read it again. */
   dbSavedQuery: (e) =>
-    void useAppStore.getState().dbActions.loadDbSavedQueries(String(e.connectionId)),
+    void useAppStore
+      .getState()
+      .dbActions.loadDbSavedQueries(String(e.connectionId)),
 };

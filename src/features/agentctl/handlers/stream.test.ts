@@ -163,3 +163,79 @@ describe("STREAM_HANDLERS", () => {
     ]);
   });
 });
+
+describe("wsOpen / grpcOpen", () => {
+  /** The newest API request and the title of its tab. */
+  const newest = () => {
+    const s = useAppStore.getState();
+    const ids = Object.keys(s.apiRequests);
+    return s.apiRequests[ids[ids.length - 1]];
+  };
+  const titles = (): string[] =>
+    Object.values(useAppStore.getState().tabs).map((t) => t.customTitle ?? t.title);
+
+  it("opens a WebSocket console tab filled in, not connected", () => {
+    const before = Object.keys(useAppStore.getState().apiRequests).length;
+    dispatchAgentCtl({
+      kind: "wsOpen",
+      terminalId: "t1",
+      url: "wss://echo.example.test/socket",
+      headers: [{ name: "X-Client", value: "agent" }],
+      message: '{"hello":true}',
+      title: "WS echo.example.test/socket",
+    });
+    expect(Object.keys(useAppStore.getState().apiRequests)).toHaveLength(before + 1);
+    const r = newest();
+    expect(r.protocol).toBe("ws");
+    expect(r.url).toBe("wss://echo.example.test/socket");
+    expect(JSON.stringify(r)).toContain('{\\"hello\\":true}');
+    expect(titles()).toContain("WS echo.example.test/socket");
+  });
+
+  it("opens a gRPC console tab with target, method, body and metadata, not sent", () => {
+    dispatchAgentCtl({
+      kind: "grpcOpen",
+      terminalId: "t1",
+      target: "localhost:50051",
+      plaintext: true,
+      service: "greet.Greeter",
+      method: "SayHello",
+      body: '{\n  "name": "ada"\n}',
+      headers: [{ name: "x-trace", value: "1" }],
+      title: "gRPC SayHello",
+    });
+    const r = newest();
+    expect(r.protocol).toBe("grpc");
+    expect(r.url).toBe("localhost:50051");
+    expect(JSON.stringify(r)).toContain("greet.Greeter");
+    expect(JSON.stringify(r)).toContain("SayHello");
+    expect(titles()).toContain("gRPC SayHello");
+  });
+
+  it("opens nothing for a tab naming a Vault variable, however it is spelled", () => {
+    const before = Object.keys(useAppStore.getState().apiRequests).length;
+    STREAM_HANDLERS.wsOpen({ kind: "wsOpen", terminalId: "t1", url: "wss://h/{{T}}" });
+    STREAM_HANDLERS.wsOpen({
+      kind: "wsOpen",
+      terminalId: "t1",
+      url: "wss://h",
+      message: "\\u007b\\u007bT}}",
+    });
+    STREAM_HANDLERS.grpcOpen({
+      kind: "grpcOpen",
+      terminalId: "t1",
+      target: "h:1",
+      headers: [{ name: "authorization", value: "%7B%7BT}}" }],
+    });
+    expect(Object.keys(useAppStore.getState().apiRequests)).toHaveLength(before);
+  });
+
+  it("leaves the message box and method alone when the event has none", () => {
+    dispatchAgentCtl({ kind: "wsOpen", terminalId: "t1", url: "ws://h:1/x" });
+    expect(newest().protocol).toBe("ws");
+    dispatchAgentCtl({ kind: "grpcOpen", terminalId: "t1", target: "h:1" });
+    expect(newest().protocol).toBe("grpc");
+    expect(HANDLERS).toHaveProperty("wsOpen");
+    expect(HANDLERS).toHaveProperty("grpcOpen");
+  });
+});

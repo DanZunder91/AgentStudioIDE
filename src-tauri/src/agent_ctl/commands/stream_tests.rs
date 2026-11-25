@@ -1839,3 +1839,107 @@ async fn an_unreachable_server_is_a_clear_failure_and_a_call_still_reaches_histo
     assert!(e["transportError"].as_str().is_some_and(|m| !m.is_empty()));
     assert!(e["durationMs"].is_u64());
 }
+
+#[test]
+fn ws_open_fills_a_tab_and_refuses_what_it_must() {
+    let tab = ws_open_tab(&args(json!({
+        "url": "wss://echo.example.com/socket?room=1",
+        "header": ["X-Client: agent", "Origin: https://example.com"],
+        "message": "{\"hello\":true}",
+    })))
+    .unwrap();
+    assert_eq!(tab["url"], "wss://echo.example.com/socket?room=1");
+    assert_eq!(
+        tab["headers"][0],
+        json!({"name": "X-Client", "value": "agent"})
+    );
+    assert_eq!(tab["message"], "{\"hello\":true}");
+    assert!(tab["title"]
+        .as_str()
+        .unwrap()
+        .starts_with("WS echo.example.com"));
+
+    let refused = |a: Value| ws_open_tab(&args(a)).unwrap_err();
+    assert!(refused(json!({"url": "wss://h/{{TOKEN}}"})).contains("Vault"));
+    assert!(
+        refused(json!({"url": "wss://h", "header": ["Authorization: {{TOKEN}}"]}))
+            .contains("Vault")
+    );
+    assert!(
+        refused(json!({"url": "wss://h", "message": "\\u007b\\u007bTOKEN}}"})).contains("Vault")
+    );
+    assert!(refused(json!({"url": "https://h/socket"})).contains("ws://"));
+}
+
+#[test]
+fn grpc_open_fills_a_tab_and_refuses_what_it_must() {
+    let tab = grpc_open_tab(&args(json!({
+        "target": "http://localhost:50051",
+        "method": "greet.Greeter/SayHello",
+        "body": {"name": "ada"},
+        "header": ["x-trace: 1"],
+    })))
+    .unwrap();
+    assert_eq!(tab["target"], "localhost:50051");
+    assert_eq!(tab["plaintext"], true, "http:// is plaintext");
+    assert_eq!(tab["service"], "greet.Greeter");
+    assert_eq!(tab["method"], "SayHello");
+    assert_eq!(
+        serde_json::from_str::<Value>(tab["body"].as_str().unwrap()).unwrap(),
+        json!({"name": "ada"})
+    );
+    assert_eq!(tab["headers"][0], json!({"name": "x-trace", "value": "1"}));
+    assert_eq!(tab["title"], "gRPC SayHello");
+
+    // No method: a tab on the target alone, body {}.
+    let bare = grpc_open_tab(&args(json!({"target": "api.example.com:443"}))).unwrap();
+    assert_eq!(bare["plaintext"], false);
+    assert_eq!(bare["method"], "");
+    assert_eq!(bare["title"], "gRPC api.example.com:443");
+    assert_eq!(bare["body"], "{}");
+
+    let refused = |a: Value| grpc_open_tab(&args(a)).unwrap_err();
+    assert!(refused(json!({"target": "h:1", "body": {"t": "{{TOKEN}}"}})).contains("Vault"));
+    assert!(
+        refused(json!({"target": "h:1", "body": "{\"t\":\"\\u007b\\u007bTOKEN}}\"}"}))
+            .contains("Vault")
+    );
+    assert!(
+        refused(json!({"target": "h:1", "header": ["authorization: {{T}}"]})).contains("Vault")
+    );
+    assert!(refused(json!({"target": "h:1", "method": "bad"})).contains("package.Service/Method"));
+    assert!(refused(json!({"target": "nope"})).contains("host:port"));
+}
+
+#[tokio::test]
+async fn the_open_tools_emit_the_tab_events_the_webview_handles() {
+    let dir = std::env::temp_dir().join(format!("agentstudio-open-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ctx, rec) = crate::agent_ctl::tests::ctx(&dir, "t-open");
+    let (status, r) = crate::agent_ctl::handle(
+        ctx.clone(),
+        &call_json("ws_open", json!({"url": "ws://h:1/x"})),
+    )
+    .await;
+    assert_eq!(status, 200, "{}", r.message);
+    assert!(r.message.contains("Nothing connected"));
+    let (status, r) = crate::agent_ctl::handle(
+        ctx,
+        &call_json(
+            "grpc_open",
+            json!({"target": "h:1", "method": "p.S/M", "plaintext": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{}", r.message);
+    assert!(r.message.contains("Nothing was sent"));
+    let kinds: Vec<String> = rec
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|e| e.kind.clone())
+        .collect();
+    assert_eq!(kinds, ["wsOpen", "grpcOpen"]);
+    let _ = std::fs::remove_dir_all(dir);
+}

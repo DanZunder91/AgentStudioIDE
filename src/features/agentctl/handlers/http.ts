@@ -55,7 +55,7 @@ function percentDecode(text: string): string {
  * either order, a few layers deep (`\u007b\u007b`, `%7B%7B`, `%7b{`, `%257B%257B`)? The same rule
  * as Rust's `spells_vault_ref`.
  */
-function spellsVaultRef(text: string): boolean {
+export function spellsVaultRef(text: string): boolean {
   let frontier = [text];
   for (let layer = 0; layer <= 3 && frontier.length > 0; layer++) {
     if (frontier.some((t) => t.includes("{{"))) return true;

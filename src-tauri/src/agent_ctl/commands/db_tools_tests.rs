@@ -1973,6 +1973,7 @@ fn no_tool_can_make_a_connection_writable_edit_or_delete_one_or_export_a_secret(
             "db_connect",
             "db_list",
             "db_test",
+            "db_open",
             "db_schema",
             "db_search",
             "db_query",

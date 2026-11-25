@@ -1,6 +1,6 @@
-//! WebSocket and gRPC tools: an agent can hold a short conversation with a WebSocket server, and
-//! list, describe and call a gRPC server's methods, through the API client's own engines
-//! ([`crate::ws`], [`crate::grpc`]).
+//! WebSocket and gRPC tools: an agent can hold a short conversation with a WebSocket server, open
+//! a WebSocket console tab for the user to connect, and list, describe and call a gRPC server's
+//! methods, through the API client's own engines ([`crate::ws`], [`crate::grpc`]).
 //!
 //! Rules on top of the module-wide ones ([`crate::agent_ctl`]):
 //! * Everything here is agent-authored, so nothing resolves Vault variables: a URL, target,
@@ -10,6 +10,9 @@
 //!   view (the engines record them like the consoles' traffic), and a call is also added to the
 //!   API client's History (`grpcCall` event). `grpc services` and `grpc describe` only read a
 //!   server's schema, like `db list` reads the store, and leave no row.
+//! * `ws open` connects to nothing: it opens a WebSocket console tab (`wsOpen` event) holding the
+//!   URL, headers and a draft message, and the user presses Connect. The console resolves Vault
+//!   variables on Connect, which is why the Vault rule applies to it all the same.
 
 use std::time::{Duration, Instant};
 
@@ -116,6 +119,37 @@ pub const TOOLS: &[ToolSpec] = &[
         run: run_ws_exchange,
     },
     ToolSpec {
+        name: "ws_open",
+        cli: &["ws", "open"],
+        summary: "Open a WebSocket console tab in the API client for the user to review and \
+                  connect (nothing connects).",
+        details: "url: ws:// or wss:// (quote it). --header adds a handshake header, 'Name: \
+                  value' (repeatable, at most 50). --message puts a text message in the \
+                  console's message box, unsent (at most 1 MiB). A URL, header or message \
+                  naming a Vault variable ({{…}}) is refused: agents cannot use the user's \
+                  saved secrets.",
+        params: &[
+            Param::new(
+                "url",
+                ParamKind::String,
+                "The WebSocket URL (ws:// or wss://).",
+            )
+            .required()
+            .positional(),
+            Param::new(
+                "header",
+                ParamKind::StringList,
+                "A handshake header, 'Name: value' (repeatable).",
+            ),
+            Param::new(
+                "message",
+                ParamKind::String,
+                "A text message to leave in the console's message box, unsent.",
+            ),
+        ],
+        run: run_ws_open,
+    },
+    ToolSpec {
         name: "grpc_services",
         cli: &["grpc", "services"],
         summary: "List a gRPC server's services and methods, with their request and response \
@@ -195,10 +229,58 @@ pub const TOOLS: &[ToolSpec] = &[
         ],
         run: run_grpc_call,
     },
+    ToolSpec {
+        name: "grpc_open",
+        cli: &["grpc", "open"],
+        summary: "Open a gRPC console tab in the API client with the target, method, body and \
+                  metadata filled in, for the user to review and send (nothing is sent).",
+        details: "target: host:port, http://host:port (plaintext) or https://host:port. method: \
+                  package.Service/Method (optional). --body is the request message as JSON. \
+                  --header adds request metadata, 'name: value' (repeatable, at most 50). A \
+                  target, method, header or body naming a Vault variable ({{…}}) is refused: \
+                  agents cannot use the user's saved secrets.",
+        params: &[
+            TARGET_PARAM,
+            Param::new(
+                "method",
+                ParamKind::String,
+                "The method, package.Service/Method (optional).",
+            )
+            .positional(),
+            Param::new(
+                "body",
+                ParamKind::Json,
+                "The request message as JSON (default {}).",
+            ),
+            Param::new(
+                "header",
+                ParamKind::StringList,
+                "Request metadata, 'name: value' (repeatable).",
+            ),
+            PLAINTEXT_PARAM,
+        ],
+        run: run_grpc_open,
+    },
 ];
 
 fn run_ws_exchange(_ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move { ws_exchange_with(&args, &Tap::global()).await })
+}
+
+fn run_ws_open(ctx: ToolCtx, args: Args) -> ToolFuture {
+    Box::pin(async move {
+        let tab = ws_open_tab(&args)?;
+        ctx.emit("wsOpen", tab.clone());
+        let shown = display_url(tab["url"].as_str().unwrap_or_default());
+        let title = tab["title"].as_str().unwrap_or_default();
+        Ok(ToolOk::new(
+            format!(
+                "Opened a WebSocket console for {shown} in a new API client tab (\"{title}\"). \
+                 Nothing connected; the user can review it and press Connect."
+            ),
+            json!({"url": shown, "headers": tab["headers"], "message": tab["message"], "title": title}),
+        ))
+    })
 }
 
 fn run_grpc_services(_ctx: ToolCtx, args: Args) -> ToolFuture {
@@ -384,6 +466,128 @@ pub fn display_url(url: &str) -> String {
 // ws exchange
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Refuse a URL that is not `ws://` or `wss://`.
+fn run_grpc_open(ctx: ToolCtx, args: Args) -> ToolFuture {
+    Box::pin(async move {
+        let tab = grpc_open_tab(&args)?;
+        ctx.emit("grpcOpen", tab.clone());
+        let title = tab["title"].as_str().unwrap_or_default().to_string();
+        let what = match (tab["service"].as_str(), tab["method"].as_str()) {
+            (Some(s), Some(m)) if !s.is_empty() => format!(" calling {s}/{m}"),
+            _ => String::new(),
+        };
+        Ok(ToolOk::new(
+            format!(
+                "Opened a gRPC console for {}{what} in a new API client tab (\"{title}\"). \
+                 Nothing was sent; the user can review it and press Send.",
+                tab["target"].as_str().unwrap_or_default()
+            ),
+            tab,
+        ))
+    })
+}
+
+/// The tab `grpc open` describes: checked like `grpc call` (target, method, body, metadata,
+/// Vault references), nothing dialled.
+pub fn grpc_open_tab(args: &Args) -> Result<Value, String> {
+    let target = args.req_str("target")?;
+    let method = args.str("method").map(str::trim).filter(|m| !m.is_empty());
+    let header_lines = args.list("header");
+    let mut fields: Vec<(&str, &str)> = vec![("target", target)];
+    if let Some(m) = method {
+        fields.push(("method", m));
+    }
+    for h in &header_lines {
+        fields.push(("header", h.as_str()));
+    }
+    refuse_vault_refs(&fields)?;
+    if args.json("body").is_some_and(json_names_vault_var) {
+        return Err(vault_refusal("body"));
+    }
+    let (endpoint, plaintext) = grpc_target(target, args.bool("plaintext"))?;
+    let (service, method) = match method {
+        Some(m) => split_method(m)?,
+        None => (String::new(), String::new()),
+    };
+    let body = body_value(args.json("body"))?;
+    if json_names_vault_var(&body) {
+        return Err(vault_refusal("body"));
+    }
+    if header_lines.len() > 50 {
+        return Err("At most 50 --header lines.".to_string());
+    }
+    let headers = header_lines
+        .iter()
+        .map(|h| parse_header(h).map(|(name, value)| json!({"name": name, "value": value})))
+        .collect::<Result<Vec<_>, _>>()?;
+    let title = if method.is_empty() {
+        format!("gRPC {endpoint}")
+    } else {
+        format!("gRPC {method}")
+    };
+    Ok(json!({
+        "target": endpoint,
+        "plaintext": plaintext,
+        "service": service,
+        "method": method,
+        "body": serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".to_string()),
+        "headers": headers,
+        "title": title,
+    }))
+}
+
+fn require_ws_scheme(url: &str) -> Result<(), String> {
+    let scheme = url.split("://").next().unwrap_or("").to_ascii_lowercase();
+    if url.split_once("://").is_none() || !matches!(scheme.as_str(), "ws" | "wss") {
+        return Err(format!(
+            "A WebSocket URL starts with ws:// or wss://; `{}` does not.",
+            quote(&display_url(url), 120)
+        ));
+    }
+    Ok(())
+}
+
+/// A tab title: `WS stream.example.com/ws/feed`, at most 60 characters.
+pub fn ws_tab_title(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    let rest = rest.rsplit_once('@').map_or(rest, |(_, host)| host);
+    let mut title = format!("WS {rest}");
+    if title.chars().count() > 60 {
+        title = title.chars().take(59).collect::<String>() + "…";
+    }
+    title
+}
+
+/// The `wsOpen` event `args` ask for, every rule checked before anything is opened: the URL,
+/// headers (parsed) and draft message as the tab will hold them, and its title.
+pub fn ws_open_tab(args: &Args) -> Result<Value, String> {
+    let url = args.req_str("url")?;
+    let header_lines = args.list("header");
+    let message = args.str("message").unwrap_or_default();
+    let mut fields = vec![("URL", url)];
+    fields.extend(header_lines.iter().map(|h| ("header", h.as_str())));
+    fields.push(("message", message));
+    refuse_vault_refs(&fields)?;
+    require_ws_scheme(url)?;
+    let headers: Vec<Value> = headers(args)?
+        .into_iter()
+        .map(|(name, value)| json!({"name": name, "value": value}))
+        .collect();
+    if message.len() > MAX_SEND_BYTES {
+        return Err(format!(
+            "The message is {} bytes; at most {MAX_SEND_BYTES}.",
+            message.len()
+        ));
+    }
+    Ok(json!({
+        "url": url,
+        "headers": headers,
+        "message": message,
+        "title": ws_tab_title(url),
+    }))
+}
+
 /// The exchange `args` ask for, every rule checked before anything connects.
 pub fn ws_spec(args: &Args) -> Result<ExchangeSpec, String> {
     let url = args.req_str("url")?;
@@ -393,14 +597,7 @@ pub fn ws_spec(args: &Args) -> Result<ExchangeSpec, String> {
     fields.extend(header_lines.iter().map(|h| ("header", h.as_str())));
     fields.extend(sends.iter().map(|m| ("message", m.as_str())));
     refuse_vault_refs(&fields)?;
-
-    let scheme = url.split("://").next().unwrap_or("").to_ascii_lowercase();
-    if url.split_once("://").is_none() || !matches!(scheme.as_str(), "ws" | "wss") {
-        return Err(format!(
-            "A WebSocket URL starts with ws:// or wss://; `{}` does not.",
-            quote(&display_url(url), 120)
-        ));
-    }
+    require_ws_scheme(url)?;
     let headers = headers(args)?
         .into_iter()
         .map(|(name, value)| WsHeader { name, value })
