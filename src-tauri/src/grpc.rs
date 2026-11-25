@@ -170,7 +170,7 @@ fn code_number(code: Code) -> u32 {
 /// The full 17-code gRPC status table (`0..=16`), using the Go/grpcurl canonical names
 /// (note `Canceled`, one `l`) the frontend has always displayed — kept identical so the
 /// switch from grpcurl to native is invisible to the UI. Unknown numbers → `"Unknown"`.
-fn status_name_for(code: u32) -> &'static str {
+pub(crate) fn status_name_for(code: u32) -> &'static str {
     match code {
         0 => "OK",
         1 => "Canceled",
