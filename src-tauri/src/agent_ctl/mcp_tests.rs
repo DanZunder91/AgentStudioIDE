@@ -531,6 +531,67 @@ fn claudes_answer_is_read_for_installed_missing_and_another_copy() {
     assert_eq!(http.configured.as_deref(), Some("http://127.0.0.1:9/mcp"));
 }
 
+/// A status is anyone's to read, an agent's included, and only the user adds Agent Studio to
+/// Claude Code. So where a status says how to change Claude Code's config, it says it to the
+/// user: the Settings item (by the name the menu shows), or a command the user runs themselves
+/// in a terminal. Never "Add it with `agent-studio mcp install`", which an agent would take as
+/// its next step.
+#[test]
+fn a_status_tells_the_user_how_to_change_claudes_config_not_the_agent_reading_it() {
+    let exe = Path::new("/Applications/Agent Studio.app/Contents/MacOS/agent-studio");
+    let read = |code, stdout: &str, stderr: &str| interpret_get(&output(code, stdout, stderr), exe);
+    let missing = read(
+        Some(1),
+        "",
+        "No MCP server named \"agent-studio\". Run `claude mcp add` to add one.",
+    );
+    assert_eq!(missing.state, McpState::NotInstalled);
+    assert_eq!(
+        missing.message,
+        "Agent Studio is not added to Claude Code. Add it from Settings → \"Add Agent Studio to \
+         Claude Code\", or run `agent-studio mcp install` yourself in a terminal."
+    );
+    let other = read(Some(0), &get_answer("/old/agent-studio", "mcp"), "");
+    assert_eq!(other.state, McpState::Different);
+    assert!(
+        other.message.ends_with(
+            " Point it here from Settings → \"Point Claude Code at this Agent Studio\", or run \
+             `agent-studio mcp install` yourself in a terminal."
+        ),
+        "{}",
+        other.message
+    );
+    let local = read(
+        Some(0),
+        &get_answer("/old/agent-studio", "mcp").replace(
+            "User config (available in all your projects)",
+            "Local config (private to you in this project)",
+        ),
+        "",
+    );
+    assert_eq!(local.state, McpState::Shadowed);
+    assert!(
+        local.message.ends_with(
+            " To use this Agent Studio, remove that entry yourself, in a terminal in your home \
+             folder (`claude mcp remove agent-studio -s local`), then add Agent Studio again \
+             from Settings → \"Add Agent Studio to Claude Code\"."
+        ),
+        "{}",
+        local.message
+    );
+    for report in [&missing, &other, &local] {
+        let m = &report.message;
+        assert!(!m.contains("Add it with"), "{m}");
+        assert!(!m.contains("points it here"), "{m}");
+        assert!(m.contains("yourself"), "{m}");
+    }
+    // The items named are the menu's own labels.
+    let menu = include_str!("../../../src/features/settings/ClaudeMcpItem.tsx");
+    for label in [ADD_ITEM, POINT_ITEM] {
+        assert!(menu.contains(&format!("\"{label}\"")), "{label}");
+    }
+}
+
 #[test]
 fn an_entry_in_a_scope_that_wins_over_the_user_config_is_reported_whatever_it_runs() {
     let exe = Path::new("/Applications/Agent Studio.app/Contents/MacOS/agent-studio");

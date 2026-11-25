@@ -29,7 +29,9 @@
 //! Only the user adds or removes it. The help every agent is pointed at (`agent-studio help`)
 //! does not list `install`/`uninstall`, and on the command line both refuse to run for an agent:
 //! when Claude Code started them (`CLAUDECODE` is set) or nobody could have typed them (stdin is
-//! not a terminal). `status` stays open to anyone.
+//! not a terminal). `status` stays open to anyone; where it says how to change Claude Code's
+//! config, it says it to the user (the Settings item, or a command they run themselves), never as
+//! a next step for whoever ran it.
 
 use std::io::{self, BufRead, IsTerminal as _, Read, Write};
 use std::path::{Path, PathBuf};
@@ -631,8 +633,10 @@ pub fn interpret_get(out: &Output, exe: &Path) -> McpReport {
                 true,
                 McpState::NotInstalled,
                 exe,
-                "Agent Studio is not added to Claude Code. Add it with `agent-studio mcp \
-                 install`, or from Agent Studio's Settings menu.",
+                format!(
+                    "Agent Studio is not added to Claude Code. {}",
+                    for_the_user(ADD_ITEM, "Add it")
+                ),
             );
         }
         return McpReport::failed(
@@ -691,14 +695,30 @@ pub fn interpret_get(out: &Output, exe: &Path) -> McpReport {
             exe,
             format!(
                 "Claude Code's `{SERVER_NAME}` server runs `{runs}`, not this Agent Studio (`{}`). \
-                 `agent-studio mcp install` points it here.",
-                exe.display()
+                 {}",
+                exe.display(),
+                for_the_user(POINT_ITEM, "Point it here")
             ),
         )
     };
     report.configured = Some(target);
     report.scope = scope;
     report
+}
+
+/// The Settings menu item that adds Agent Studio to Claude Code, by the name it shows when
+/// Claude Code has no `agent-studio` entry, and when its entry runs another copy of the app.
+const ADD_ITEM: &str = "Add Agent Studio to Claude Code";
+const POINT_ITEM: &str = "Point Claude Code at this Agent Studio";
+
+/// How a status tells the user to change Claude Code's config. A status is anyone's to read, an
+/// agent's included, and `install` is the user's alone: so it is the user who is told, with the
+/// menu item first.
+fn for_the_user(item: &str, verb: &str) -> String {
+    format!(
+        "{verb} from Settings → \"{item}\", or run `agent-studio {WORD} install` yourself in a \
+         terminal."
+    )
 }
 
 /// How `claude mcp get` names the scope `install` writes ("User config (available in all your
@@ -716,8 +736,9 @@ fn shadowed_message(scope: &str, runs: &str) -> String {
     };
     let fix = match flag {
         Some(flag) => format!(
-            "Remove that entry with `claude mcp remove {SERVER_NAME} -s {flag}` (run in your home \
-             folder), then add Agent Studio again."
+            "To use this Agent Studio, remove that entry yourself, in a terminal in your home \
+             folder (`claude mcp remove {SERVER_NAME} -s {flag}`), then add Agent Studio again \
+             from Settings → \"{ADD_ITEM}\"."
         ),
         None => "Agent Studio cannot change that entry.".to_string(),
     };

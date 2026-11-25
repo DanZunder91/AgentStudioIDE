@@ -145,15 +145,24 @@ const LOCAL_INTEGRATION = [
   {
     // Agent tools over MCP: the real `claude mcp add|get|remove` behind `agent-studio mcp
     // install|status|uninstall`, so a change in the wording Claude Code prints is caught here.
-    // In a throwaway CLAUDE_CONFIG_DIR and HOME: the user's Claude Code config is never read or
-    // written, and the test asserts it gained nothing. No model call. Claude's own health check
-    // starts the built binary as the MCP server.
+    // In a throwaway CLAUDE_CONFIG_DIR, HOME and XDG dirs: the user's Claude Code config is never
+    // written, and the test asserts it comes out byte-identical. No model call. Claude's own
+    // health check starts the built binary as the MCP server.
     name: "MCP install via the real claude CLI (throwaway config)",
     cmd: "cargo",
     args: [
       "test", "--manifest-path", "src-tauri/Cargo.toml", "--test", "agent_mcp", "--",
       "--ignored", "--exact", "real_claude_adds_checks_and_removes_the_server_in_a_throwaway_config",
     ],
+    // `install` runs only for input typed at a terminal, so the test gives the binary a pty of
+    // its own; Windows has no such pty to hand a child here, and verify's own stdin is not a
+    // console when a program runs it.
+    onlyOn: {
+      platforms: ["darwin", "linux"],
+      reason:
+        "macOS/Linux only (cfg(unix)): the test types `agent-studio mcp install` into a pty of its " +
+        "own, and moves HOME to keep Claude Code's config untouched; Windows has neither here",
+    },
   },
   {
     name: "metrics over the real ~/.claude",
