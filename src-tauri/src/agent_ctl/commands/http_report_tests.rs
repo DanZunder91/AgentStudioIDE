@@ -1,6 +1,7 @@
 //! The reply shapes: caps that say they cut, order-preserving JSON, redaction of substituted
 //! values and credential-looking URL parts, and the compare diff.
 use super::*;
+use crate::api_store::ApiStore;
 
 fn header(name: &str, value: &str) -> HttpHeader {
     HttpHeader {
@@ -97,28 +98,219 @@ fn the_redactor_puts_names_back_for_every_spelling_of_a_substituted_value() {
     assert!(Redactor::new(&[("A".into(), "xyz".into())]).is_empty());
 }
 
+/// The spellings servers really echo: a form-decoded query reads `+` as a space, PHP-style JSON
+/// escapes `/` as `\/`, percent-escapes come in lowercase hex too, a form encoder writes a
+/// space as `+`. Falsify: drop any one of those forms in `Redactor::forms` — its row goes red.
+#[test]
+fn the_redactor_catches_form_decoded_slash_escaped_and_lowercase_hex_echoes() {
+    let r = Redactor::new(&[
+        ("TOKEN".into(), "s3cr3t-tok/en+1".into()),
+        ("PW".into(), "pa ss/wörd".into()),
+    ]);
+    for echoed in [
+        "s3cr3t-tok/en 1",
+        "s3cr3t-tok\\/en+1",
+        "s3cr3t-tok%2fen%2b1",
+        "\"t\":\"s3cr3t-tok\\/en 1\"",
+        "pa+ss%2Fw%C3%B6rd",
+        "pa+ss%2fw%c3%b6rd",
+        "pa ss\\/wörd",
+    ] {
+        let out = r.apply(echoed);
+        assert!(!out.contains("s3cr3t"), "{echoed} → {out}");
+        assert!(
+            !out.contains("ss/w") && !out.contains("ss%2"),
+            "{echoed} → {out}"
+        );
+        assert!(
+            out.contains("{{TOKEN}}") || out.contains("{{PW}}"),
+            "{echoed} → {out}"
+        );
+    }
+}
+
+/// A literal credential reads as `***`, a Vault value as its name, and where both know one
+/// spelling the name wins. `vault` holds every variable of every environment.
+#[test]
+fn masking_vault_and_merging_redactors() {
+    let used = Redactor::new(&[("TOKEN".into(), "tok_shared_123".into())]);
+    let r = used.masking(&["tok_shared_123".into(), "literal-pass".into(), "ab".into()]);
+    assert_eq!(
+        r.apply("a=tok_shared_123 b=literal-pass c=ab"),
+        "a={{TOKEN}} b=*** c=ab",
+        "the name wins over the mask; a two-letter value is left alone"
+    );
+    let store = ApiStore {
+        environments: vec![
+            crate::api_store::Environment {
+                id: "e1".into(),
+                name: "dev".into(),
+                variables: vec![crate::api_store::EnvVar {
+                    key: "BASE".into(),
+                    value: "https://dev.internal:8443".into(),
+                }],
+            },
+            crate::api_store::Environment {
+                id: "e2".into(),
+                name: "prod".into(),
+                variables: vec![crate::api_store::EnvVar {
+                    key: "PG_PASSWORD".into(),
+                    value: "pg-prod-hunter2".into(),
+                }],
+            },
+        ],
+        ..ApiStore::default()
+    };
+    let vault = Redactor::vault(&store);
+    assert_eq!(
+        vault.apply("could not connect: dev.internal:8443 (pg-prod-hunter2)"),
+        "could not connect: {{BASE}} ({{PG_PASSWORD}})"
+    );
+    let both = Redactor::default()
+        .masking(&["xyzw-literal".into()])
+        .and(&vault);
+    assert_eq!(
+        both.apply("xyzw-literal pg-prod-hunter2"),
+        "*** {{PG_PASSWORD}}"
+    );
+    assert!(Redactor::vault(&ApiStore::default()).is_empty());
+}
+
+/// 🔴 Every piece of a userinfo is a credential — a token as the user name (`ghp_…@`), a key
+/// with an empty password (`sk_live_…:@`, Stripe's documented form) — and so is the value of a
+/// credential-named parameter in the query or the fragment (`#access_token=…`). References stay:
+/// they name, they do not reveal. Falsify: mask only a non-empty password (as before) — the
+/// userinfo rows go red; leave the fragment as written — the fragment rows go red.
 #[test]
 fn url_credentials_and_secret_named_parameters_are_masked_but_references_stay() {
+    let cases = [
+        (
+            "https://ada:hunter2@api.example.com/x?api_key=abc&page=2&token={{TOKEN}}#frag",
+            "https://***:***@api.example.com/x?api_key=***&page=2&token={{TOKEN}}#frag",
+        ),
+        (
+            "{{BASE}}/users?X-Amz-Signature=deadbeef&sig=1&q=a=b",
+            "{{BASE}}/users?X-Amz-Signature=***&sig=***&q=a=b",
+        ),
+        (
+            "https://ada:{{PW}}@h/?password=",
+            "https://***:{{PW}}@h/?password=",
+        ),
+        ("https://{{U}}:{{P}}@h/", "https://{{U}}:{{P}}@h/"),
+        ("https://ada@h/p", "https://***@h/p"),
+        (
+            "https://sk_live_not-a-real-key:@api.stripe.com/v1/charges",
+            "https://***:@api.stripe.com/v1/charges",
+        ),
+        (
+            "https://ghp_16C7e42F292c6912E7710c838347Ae178B4a@github.com/o/r.git",
+            "https://***@github.com/o/r.git",
+        ),
+        ("https://u:p@ss@h/x", "https://***:***@h/x"),
+        (
+            "https://app.example/cb#access_token=eyJhbGci&token_type=bearer&state=xyz",
+            "https://app.example/cb#access_token=***&token_type=***&state=xyz",
+        ),
+        (
+            "https://app.example/#/route?id_token=abc&page=2",
+            "https://app.example/#/route?id_token=***&page=2",
+        ),
+        (
+            "https://h/?code=c&client_secret=s&refresh_token=r&apikey=k&passwd=p&pwd=q\
+             &authorization=a&session=s1&key=k2&secret=s2&signature=g&auth=x&page=1",
+            "https://h/?code=***&client_secret=***&refresh_token=***&apikey=***&passwd=***\
+             &pwd=***&authorization=***&session=***&key=***&secret=***&signature=***&auth=***\
+             &page=1",
+        ),
+        ("https://h/?a=1;sid=xyz;b=2", "https://h/?a=1;sid=***;b=2"),
+        ("https://h/?%74oken=abc", "https://h/?%74oken=***"),
+        ("https://h/docs#section-2", "https://h/docs#section-2"),
+        ("https://h/a@b", "https://h/a@b"),
+        ("tok_grpc_1@grpc.example:443", "***@grpc.example:443"),
+        ("u:pw@db.internal:5432/x", "***:***@db.internal:5432/x"),
+        ("localhost:50051", "localhost:50051"),
+        (
+            "{{BASE}}/users/ada@example.com",
+            "{{BASE}}/users/ada@example.com",
+        ),
+        ("not a url", "not a url"),
+        (
+            "http://h/?access_token=x&session_id=y&monkey=z&zipcode=1",
+            "http://h/?access_token=***&session_id=***&monkey=***&zipcode=1",
+        ),
+    ];
+    for (url, want) in cases {
+        assert_eq!(redact_url(url), want, "{url}");
+    }
+}
+
+#[test]
+fn the_credentials_in_a_url_are_listed_as_written_and_decoded() {
     assert_eq!(
-        redact_url("https://ada:hunter2@api.example.com/x?api_key=abc&page=2&token={{TOKEN}}#frag"),
-        "https://ada:***@api.example.com/x?api_key=***&page=2&token={{TOKEN}}#frag"
+        url_secrets("https://ad%40a:pw@h/x?api_key=a%2Fb&page=2&t={{T}}#access_token=frag-tok"),
+        vec!["ad%40a", "ad@a", "pw", "a%2Fb", "a/b", "frag-tok"]
+    );
+    assert_eq!(url_secrets("https://ghp_x@h/"), vec!["ghp_x"]);
+    assert!(url_secrets("{{BASE}}/x?q=1#top").is_empty());
+}
+
+/// 🔴 Free text that names a URL — an engine error's ` for url (…)` — gets every URL in it
+/// redacted, and the rest of the text left alone. Falsify: make `redact_urls_in` return its
+/// input — the secret rows go red.
+#[test]
+fn every_url_inside_free_text_is_redacted() {
+    let err = "invalid request: error sending request for url \
+               (https://u:pw-live-1@api.x/v1?api_key=REALKEY&page=2)";
+    let out = redact_urls_in(err);
+    assert_eq!(
+        out,
+        "invalid request: error sending request for url (https://***:***@api.x/v1?api_key=***&page=2)"
+    );
+    // A Vault value that is the URL's base still leaves a literal credential in its query
+    // masked: the URL is found before the base reads `{{BASE}}`.
+    let base = Redactor::new(&[("BASE".into(), "https://api.internal:8443".into())]);
+    assert_eq!(
+        scrub(
+            "error following redirect for url (https://api.internal:8443/next?sig=OTHER-SIG.)",
+            &base
+        ),
+        "error following redirect for url ({{BASE}}/next?sig=***.)"
     );
     assert_eq!(
-        redact_url("{{BASE}}/users?X-Amz-Signature=deadbeef&sig=1&q=a=b"),
-        "{{BASE}}/users?X-Amz-Signature=***&sig=***&q=a=b"
+        redact_urls_in("see https://h/x?token=ab, then https://h/y."),
+        "see https://h/x?token=***, then https://h/y."
     );
     assert_eq!(
-        redact_url("https://ada:{{PW}}@h/?password="),
-        "https://ada:{{PW}}@h/?password="
+        redact_urls_in("a \"wss://h/s?token=abc\" and ftp+x://ghp_t@h/ and http://h/ok"),
+        "a \"wss://h/s?token=***\" and ftp+x://***@h/ and http://h/ok"
     );
-    assert_eq!(redact_url("https://ada@h/p"), "https://ada@h/p");
-    assert_eq!(redact_url("https://h/a@b"), "https://h/a@b");
-    assert_eq!(redact_url("not a url"), "not a url");
+    assert_eq!(redact_urls_in("no urls :// here"), "no urls :// here");
+    assert_eq!(redact_urls_in("://x?token=a"), "://x?token=***");
+    // Both passes: values the redactor knows first, then URLs.
+    let r = Redactor::new(&[("KEY".into(), "REALKEY".into())]);
     assert_eq!(
-        redact_url("http://h/?access_token=x&session_id=y&monkey=z"),
-        "http://h/?access_token=***&session_id=***&monkey=***",
-        "a name ending in key is a key"
+        scrub(err, &r),
+        "invalid request: error sending request for url \
+         (https://***:***@api.x/v1?api_key={{KEY}}&page=2)"
     );
+}
+
+#[test]
+fn credential_names_are_read_through_case_punctuation_and_escapes() {
+    for name in [
+        "Authorization",
+        "X-Api-Key",
+        "Cookie",
+        "x-amz-security-token",
+        "%41pi_Key",
+        "CODE",
+        "jwt",
+    ] {
+        assert!(secret_param(name), "{name}");
+    }
+    for name in ["page", "zipcode", "content-type", "accept", "q", "barcode"] {
+        assert!(!secret_param(name), "{name}");
+    }
 }
 
 #[test]
@@ -147,13 +339,51 @@ fn a_response_report_says_what_it_cut() {
     assert_eq!(data["headersTruncated"], true);
     assert_eq!(data["headers"].as_array().unwrap().len(), HEADER_CAP);
 
+    // The engine stopped reading at its cap: the real size is unknown, and the reply says so
+    // rather than quoting the bytes read as the response's size.
     let mut engine_cut = response(200, vec![], "partial");
     engine_cut.truncated = true;
     engine_cut.size_bytes = 9_000_000;
     let (message, data) = response_report(&engine_cut, "GET https://h/", "");
     assert!(message.contains("Body:\npartial"));
-    assert!(message.contains("truncated by the API client at 8.0 MB; the response was 9,000,000"));
+    assert!(
+        message.starts_with("200 OK in 12 ms, over 8.0 MB"),
+        "{message}"
+    );
+    assert!(
+        message.contains(
+            "[Body truncated by the API client: the response is over 8.0 MB and the API \
+             client read no further.]"
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("9,000,000"), "{message}");
     assert_eq!(data["bodyTruncated"], true);
+
+    let mut both = response(200, vec![], &"y".repeat(BODY_CAP + 10));
+    both.truncated = true;
+    let (message, _) = response_report(&both, "GET https://h/", "");
+    assert!(
+        message.contains(
+            "[Body truncated: showing the first 65,536 of 65,546 bytes; the response is over \
+             8.0 MB and the API client read no further.]"
+        ),
+        "{message}"
+    );
+    let (message, _) = compare_report(
+        &Side {
+            label: "A".into(),
+            outcome: Ok(engine_cut),
+        },
+        &Side {
+            label: "B".into(),
+            outcome: Ok(response(200, vec![], "x")),
+        },
+    );
+    assert!(
+        message.contains("A: 200 OK in 12 ms, over 8.0 MB"),
+        "{message}"
+    );
 }
 
 #[test]

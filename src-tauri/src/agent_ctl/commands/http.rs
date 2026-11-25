@@ -2,20 +2,26 @@
 //!
 //! Two kinds of request, with different rights:
 //! * **Agent-authored** (`http send`, `http open`, a URL side of `api compare`): the agent wrote
-//!   every byte, so nothing is substituted. Anything containing `{{` — URL, a header, the body,
-//!   the curl command — is **refused**: it would name a Vault variable, and an agent that could
-//!   get one substituted could send the user's saved secret to a host it chose. (`http open`
-//!   needs this most: the tab it opens substitutes on the user's Send.)
+//!   every byte, so nothing is substituted. Anything that spells `{{` — URL, a header, the body,
+//!   the curl command; as written, or once JSON escapes (`\u007b`) or percent-escapes (`%7B`) are
+//!   decoded ([`spells_vault_ref`]) — is **refused**: it would name a Vault variable, and an agent
+//!   that could get one substituted could send the user's saved secret to a host it chose.
+//!   (`http open` needs this most: the tab it opens substitutes on the user's Send, and its
+//!   Format button turns `"\u007b\u007bKEY}}"` into `"{{KEY}}"`.)
 //! * **User-saved** (`api run`, a saved side of `api compare`): the request is sent exactly as the
 //!   user saved it — the agent picks which one and which of the user's environments, and cannot
 //!   change its method, URL, headers or body. Its `{{VAR}}`s are resolved here, in Rust, by the
 //!   API client's own rule (the chosen environment, or the active one; an unset name becomes
 //!   empty). Whatever comes back is passed through [`report::Redactor`], so a substituted value
-//!   an echo endpoint or an error repeats reads as its `{{NAME}}` again.
+//!   an echo endpoint or an error repeats reads as its `{{NAME}}` again, and a credential the user
+//!   typed literally into the request (URL userinfo, a credential-named parameter or header)
+//!   reads as `***`.
 //!
 //! Nothing an agent reads carries a Vault value: environments are listed by variable **name**,
 //! saved requests by URL as written ({{HOST}} stays a name) with credential-looking URL parts
-//! masked, history without headers or bodies.
+//! masked, history without headers or bodies and with every field scrubbed of every Vault value
+//! and of credentials in URLs ([`report::scrub`]) — an error the user's own send recorded can
+//! hold the URL as sent. Every error a send returns gets the same pass.
 //!
 //! Bounded: request inputs ([`MAX_URL`], [`MAX_HEADERS`], [`MAX_BODY`]), time
 //! ([`crate::http::REQUEST_TIMEOUT`] at most), and every reply ([`report`]'s caps), each cut said
@@ -50,8 +56,19 @@ pub const MAX_BODY: usize = 1024 * 1024;
 /// How many history entries `api history` lists at most (and by default).
 pub const HISTORY_MAX: i64 = 200;
 pub const HISTORY_DEFAULT: i64 = 20;
-/// How many saved requests `api collections` lists.
+/// How many saved requests `api collections` lists (and folders it names).
 pub const LIST_CAP: usize = 500;
+/// How many environments `api envs` lists.
+pub const ENV_CAP: usize = 50;
+/// How many variable names `api envs` lists per environment.
+pub const ENV_VARS_CAP: usize = 200;
+/// How many header names `api collections` lists per request.
+pub const HEADER_NAMES_CAP: usize = 50;
+/// The longest name (request, folder, environment, variable, header) shown, in characters.
+pub const NAME_CAP: usize = 120;
+/// The most a listing (`api collections`, `api envs`) returns, text and data together, in bytes:
+/// past it, the rest is counted, not listed.
+pub const LISTING_BUDGET: usize = 256 * 1024;
 
 const URL_HELP: &str = "The URL (http:// or https://). A whole `curl …` command is read as --curl.";
 const METHOD_HELP: &str = "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS… (default GET, or POST \
@@ -113,7 +130,8 @@ pub const TOOLS: &[ToolSpec] = &[
         summary: "List the requests the user saved in the API client: name, folder, method and \
                   URL as written ({{VARS}} stay names).",
         details: "Header values and bodies are not shown; credential-looking URL parts are \
-                  masked. Run one with `agent-studio api run <name>`.",
+                  masked. Long names and URLs are cut, and a long listing stops at 256 KB; the \
+                  reply says so. Run one with `agent-studio api run <name>`.",
         params: &[],
         run: run_collections,
     },
@@ -131,7 +149,8 @@ pub const TOOLS: &[ToolSpec] = &[
         cli: &["api", "history"],
         summary: "List recent requests from the API history: method, URL, status and time, \
                   newest first.",
-        details: "--limit defaults to 20, at most 200.",
+        details: "--limit defaults to 20, at most 200. Values from the user's environments \
+                  read as their {{NAME}} and credentials in URLs as ***, in every field.",
         params: &[Param::new(
             "limit",
             ParamKind::Integer,
@@ -233,16 +252,116 @@ impl AgentRequest {
 /// The sentence for a `{{` in an agent's request. `part` names where it was found.
 pub fn vault_refusal(part: &str) -> String {
     format!(
-        "That request names an Agent Studio Vault variable ({{{{…}}}}) in its {part}. Agents \
-         cannot use the user's saved secrets: put the value itself in the request, or run a \
-         request the user saved with `agent-studio api run <name>` (`agent-studio api \
-         collections` lists them)."
+        "That request names an Agent Studio Vault variable ({{{{…}}}}, also when written with \
+         escapes or percent-encoded) in its {part}. Agents cannot use the user's saved secrets: \
+         put the value itself in the request, or run a request the user saved with \
+         `agent-studio api run <name>` (`agent-studio api collections` lists them)."
     )
 }
 
-/// Refuse when any part of an agent-written request contains `{{`.
+/// The four hex digits at the start of `s` as one UTF-16 unit.
+fn hex4(s: &str) -> Option<u32> {
+    let h = s.get(..4)?;
+    h.bytes()
+        .all(|b| b.is_ascii_hexdigit())
+        .then(|| u32::from_str_radix(h, 16).ok())
+        .flatten()
+}
+
+/// `text` with JSON string escapes decoded (`\u007b` → `{`, `\"` → `"`, surrogate pairs
+/// joined), leniently: anything that is not an escape stays as written. Run over the whole
+/// text, which for valid JSON leaves the structure alone and decodes every string and key in
+/// place — and also reads JSON that `serde_json` would reject but `JSON.parse` accepts (a lone
+/// surrogate).
+fn json_unescape(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains('\\') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while let Some(c) = text[i..].chars().next() {
+        if c != '\\' {
+            out.push(c);
+            i += c.len_utf8();
+            continue;
+        }
+        let simple = match text[i + 1..].chars().next() {
+            Some('"') => Some('"'),
+            Some('\\') => Some('\\'),
+            Some('/') => Some('/'),
+            Some('b') => Some('\u{8}'),
+            Some('f') => Some('\u{c}'),
+            Some('n') => Some('\n'),
+            Some('r') => Some('\r'),
+            Some('t') => Some('\t'),
+            _ => None,
+        };
+        if let Some(d) = simple {
+            out.push(d);
+            i += 2;
+        } else if let Some(unit) = text[i + 1..].strip_prefix('u').and_then(hex4) {
+            i += 6;
+            let low = text[i..].strip_prefix("\\u").and_then(hex4);
+            match (unit, low) {
+                (0xD800..=0xDBFF, Some(lo @ 0xDC00..=0xDFFF)) => {
+                    let cp = 0x10000 + ((unit - 0xD800) << 10) + (lo - 0xDC00);
+                    out.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
+                    i += 6;
+                }
+                _ => out.push(char::from_u32(unit).unwrap_or('\u{FFFD}')),
+            }
+        } else {
+            out.push('\\');
+            i += 1;
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// Does `text` spell `{{` — as written, or once decoded the way something between the agent and
+/// the user's Send could decode it: JSON string escapes (the request tab's Format button parses
+/// and re-serializes a JSON body: `"\u007b\u007bKEY}}"` becomes `"{{KEY}}"`) or percent-escapes
+/// (`%7B%7B`, `%7b{`, any case), in either order, a few layers deep (`%257B`, `\u0025 7B`)?
+///
+/// A superset of "the body parses as JSON and a decoded string or key contains `{{`": decoding
+/// the whole text leniently reads every string and key of valid JSON in place, and also reads
+/// what only `JSON.parse` accepts. A text that is merely odd (a literal `\u007b\u007b` in plain
+/// text) is refused too — the cost of a check that cannot be talked around.
+pub fn spells_vault_ref(text: &str) -> bool {
+    const LAYERS: usize = 3;
+    let mut frontier: Vec<String> = vec![text.to_string()];
+    for layer in 0..=LAYERS {
+        let mut next: Vec<String> = Vec::new();
+        for t in &frontier {
+            if t.contains("{{") {
+                return true;
+            }
+            if layer == LAYERS {
+                continue;
+            }
+            let decoded = [
+                json_unescape(t).into_owned(),
+                percent_encoding::percent_decode_str(t)
+                    .decode_utf8_lossy()
+                    .into_owned(),
+            ];
+            for d in decoded {
+                if d != *t && !next.contains(&d) {
+                    next.push(d);
+                }
+            }
+        }
+        if next.is_empty() {
+            return false;
+        }
+        frontier = next;
+    }
+    false
+}
+
+/// Refuse when any part of an agent-written request spells `{{` ([`spells_vault_ref`]).
 pub fn refuse_vault_refs(parts: &[(&str, &str)]) -> Result<(), String> {
-    match parts.iter().find(|(_, text)| text.contains("{{")) {
+    match parts.iter().find(|(_, text)| spells_vault_ref(text)) {
         Some((part, _)) => Err(vault_refusal(part)),
         None => Ok(()),
     }
@@ -352,7 +471,8 @@ fn agent_request_for(
     };
 
     // Again on what the request became: a curl command can spell `{{` without writing it
-    // (`\{\{` is unescaped like curl does), and a JSON body is re-serialized.
+    // (`\{\{` and `$'\x7b'` are unescaped like bash and curl do), and a JSON body is
+    // re-serialized.
     let mut parts: Vec<(&str, &str)> = vec![("URL", req.url.as_str())];
     for (name, value) in &req.headers {
         parts.push(("headers", name));
@@ -491,15 +611,16 @@ pub fn var_names(text: &str) -> Vec<String> {
 
 /// The saved request `key` names: its id, else its name (case-insensitive). `Err` says what
 /// there is instead.
-pub fn find_saved<'a>(store: &'a ApiStore, key: &str) -> Result<&'a SavedRequest, String> {
-    let key = key.trim();
-    if let Some(r) = store.collections.iter().find(|r| r.id == key) {
+pub fn find_saved<'a>(store: &'a ApiStore, key_arg: &str) -> Result<&'a SavedRequest, String> {
+    let key_arg = key_arg.trim();
+    let key = report::short_to(key_arg, NAME_CAP);
+    if let Some(r) = store.collections.iter().find(|r| r.id == key_arg) {
         return Ok(r);
     }
     let matches: Vec<&SavedRequest> = store
         .collections
         .iter()
-        .filter(|r| r.name.trim().eq_ignore_ascii_case(key))
+        .filter(|r| r.name.trim().eq_ignore_ascii_case(key_arg))
         .collect();
     match matches.as_slice() {
         [one] => Ok(one),
@@ -513,7 +634,7 @@ pub fn find_saved<'a>(store: &'a ApiStore, key: &str) -> Result<&'a SavedRequest
                 .collections
                 .iter()
                 .take(15)
-                .map(|r| format!("\"{}\"", r.name))
+                .map(|r| format!("\"{}\"", report::short_to(&r.name, NAME_CAP)))
                 .collect();
             Err(format!(
                 "No saved request is called \"{key}\". Saved requests: {}{}. \
@@ -527,12 +648,18 @@ pub fn find_saved<'a>(store: &'a ApiStore, key: &str) -> Result<&'a SavedRequest
             ))
         }
         many => Err(format!(
-            "{} saved requests are called \"{key}\"; give the id of the one to run: {}.",
+            "{} saved requests are called \"{key}\"; give the id of the one to run: {}{}.",
             many.len(),
             many.iter()
-                .map(|r| format!("{} ({})", r.id, folder_name(store, r)))
+                .take(15)
+                .map(|r| format!(
+                    "{} ({})",
+                    report::short_to(&r.id, NAME_CAP),
+                    folder_name(store, r)
+                ))
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", "),
+            if many.len() > 15 { ", …" } else { "" }
         )),
     }
 }
@@ -541,7 +668,7 @@ fn folder_name(store: &ApiStore, r: &SavedRequest) -> String {
     r.folder_id
         .as_deref()
         .and_then(|id| store.folders.iter().find(|f| f.id == id))
-        .map(|f| format!("in {}", f.name))
+        .map(|f| format!("in {}", report::short_to(&f.name, NAME_CAP)))
         .unwrap_or_else(|| "at the root".to_string())
 }
 
@@ -564,16 +691,22 @@ pub fn pick_env<'a>(
             .map(Some)
             .ok_or_else(|| {
                 format!(
-                    "The API client has no environment \"{key}\". Environments: {}.",
+                    "The API client has no environment \"{key}\". Environments: {}{}.",
                     if store.environments.is_empty() {
                         "none".to_string()
                     } else {
                         store
                             .environments
                             .iter()
-                            .map(|e| format!("\"{}\"", e.name))
+                            .take(ENV_CAP)
+                            .map(|e| format!("\"{}\"", report::short_to(&e.name, NAME_CAP)))
                             .collect::<Vec<_>>()
                             .join(", ")
+                    },
+                    if store.environments.len() > ENV_CAP {
+                        ", …"
+                    } else {
+                        ""
                     }
                 )
             }),
@@ -652,19 +785,55 @@ pub fn resolve(saved: &SavedRequest, env: Option<&Environment>) -> Result<Resolv
     };
     let label = format!(
         "Saved request \"{}\": {} {} ({})",
-        saved.name,
-        saved.method,
-        redact_url(&saved.url),
-        env.map(|e| format!("environment \"{}\"", e.name))
+        report::short_to(&saved.name, NAME_CAP),
+        report::short_to(&saved.method, NAME_CAP),
+        report::short(&redact_url(&saved.url)),
+        env.map(|e| format!("environment \"{}\"", report::short_to(&e.name, NAME_CAP)))
             .unwrap_or_else(|| "no environment".to_string())
     );
+    let redactor = Redactor::new(&used).masking(&literal_secrets(&wire.url, &headers));
     Ok(Resolved {
         wire,
         literal,
-        redactor: Redactor::new(&used),
+        redactor,
         label,
         missing,
     })
+}
+
+/// Credentials the user typed into a saved request rather than keeping in the Vault: the
+/// userinfo and the credential-named query/fragment parameters of the URL as sent, the
+/// `Authorization: Basic …` reqwest builds from that userinfo, and every credential-named
+/// header written without a `{{VAR}}` (whole, and the part after its scheme: `Bearer <this>`).
+/// An echo endpoint or an error could hand any of them back; they read as `***`.
+pub fn literal_secrets(wire_url: &str, headers: &[&api_store::HttpHeader]) -> Vec<String> {
+    use base64::Engine as _;
+    let mut out = report::url_secrets(wire_url);
+    if let Ok(u) = reqwest::Url::parse(wire_url) {
+        if !u.username().is_empty() || u.password().is_some() {
+            let decode = |s: &str| {
+                percent_encoding::percent_decode_str(s)
+                    .decode_utf8_lossy()
+                    .into_owned()
+            };
+            let pair = format!(
+                "{}:{}",
+                decode(u.username()),
+                decode(u.password().unwrap_or_default())
+            );
+            out.push(base64::engine::general_purpose::STANDARD.encode(pair));
+        }
+    }
+    for h in headers {
+        let value = h.value.trim();
+        if report::secret_param(&h.name) && !value.is_empty() && !value.contains("{{") {
+            out.push(value.to_string());
+            if let Some((_, credential)) = value.split_once(' ') {
+                out.push(credential.trim().to_string());
+            }
+        }
+    }
+    out
 }
 
 fn missing_note(missing: &[String], env: &str) -> Option<String> {
@@ -708,18 +877,20 @@ fn now_ms() -> i64 {
 
 /// Send `wire` through the API client's engine, redact what comes back, and append the literal
 /// request and its outcome to the API history.
+///
+/// A response is redacted with the request's own `redactor`; an error — which can name
+/// anything the request carried — also with every Vault value (`vault`) and with credentials
+/// masked in any URL it names ([`report::scrub`]), before it is returned or recorded.
 async fn send_recorded(
     ctx: &ToolCtx,
     wire: HttpRequest,
     literal: Literal,
     timeout: Duration,
     redactor: &Redactor,
+    vault: &Redactor,
 ) -> Sent {
     let at = now_ms();
-    let outcome = engine::send_bounded(wire, timeout)
-        .await
-        .map(|r| redactor.response(r))
-        .map_err(|e| redactor.apply(&e));
+    let outcome = redacted(engine::send_bounded(wire, timeout).await, redactor, vault);
     let history_id = ulid::Ulid::new().to_string();
     let (status, status_text, duration_ms, size_bytes, error) = match &outcome {
         Ok(r) => (
@@ -757,6 +928,18 @@ async fn send_recorded(
         history_id,
         recorded,
     }
+}
+
+/// A send's outcome as it may be returned and recorded: the response through the request's
+/// `redactor`; an error through it, every Vault value (`vault`) and URL masking.
+fn redacted(
+    outcome: Result<HttpResponse, String>,
+    redactor: &Redactor,
+    vault: &Redactor,
+) -> Result<HttpResponse, String> {
+    outcome
+        .map(|r| redactor.response(r))
+        .map_err(|e| report::scrub(&e, &redactor.clone().and(vault)))
 }
 
 /// Bring the History rail into view with the new entries (`handlers/http.ts`).
@@ -810,12 +993,14 @@ fn run_send(ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move {
         let req = agent_request(&args)?;
         let (timeout, timeout_note) = deadline(&args, req.timeout_ms)?;
+        let vault = Redactor::vault(&load_store(&ctx));
         let sent = send_recorded(
             &ctx,
             req.wire(),
             req.literal(),
             timeout,
             &Redactor::default(),
+            &vault,
         )
         .await;
         emit_history(&ctx, &[&sent]);
@@ -881,7 +1066,12 @@ fn load_store(ctx: &ToolCtx) -> ApiStore {
 
 /// A saved request as an agent may see it: no header values, no body, the URL as written with
 /// credential-looking parts masked, and the `{{NAME}}`s it needs.
+///
+/// Bounded: names cut at [`NAME_CAP`] characters and the URL at [`report::VALUE_CAP`] (a cut ends
+/// in `…`), at most [`HEADER_NAMES_CAP`] header names and variable names each, and
+/// `headersTruncated` / `variablesTruncated` say when a list was cut.
 pub fn saved_summary(store: &ApiStore, r: &SavedRequest) -> Value {
+    let name = |s: &str| report::short_to(s, NAME_CAP);
     let mut vars = var_names(&r.url);
     for h in &r.headers {
         vars.extend(var_names(&h.value));
@@ -889,18 +1079,26 @@ pub fn saved_summary(store: &ApiStore, r: &SavedRequest) -> Value {
     vars.extend(var_names(&r.body));
     let mut seen = std::collections::HashSet::new();
     vars.retain(|v| seen.insert(v.clone()));
+    let headers: Vec<&str> = r
+        .headers
+        .iter()
+        .filter(|h| !h.name.trim().is_empty())
+        .map(|h| h.name.as_str())
+        .collect();
     json!({
-        "id": r.id,
-        "name": r.name,
+        "id": name(&r.id),
+        "name": name(&r.name),
         "folder": r.folder_id.as_deref()
             .and_then(|id| store.folders.iter().find(|f| f.id == id))
-            .map(|f| f.name.clone()),
-        "protocol": r.protocol.clone().unwrap_or_else(|| "http".into()),
-        "method": r.method,
-        "url": redact_url(&r.url),
-        "headers": r.headers.iter().filter(|h| !h.name.trim().is_empty()).map(|h| h.name.clone()).collect::<Vec<_>>(),
+            .map(|f| name(&f.name)),
+        "protocol": name(r.protocol.as_deref().unwrap_or("http")),
+        "method": name(&r.method),
+        "url": report::short(&redact_url(&r.url)),
+        "headers": headers.iter().take(HEADER_NAMES_CAP).map(|h| name(h)).collect::<Vec<_>>(),
+        "headersTruncated": headers.len() > HEADER_NAMES_CAP,
         "hasBody": !r.body.is_empty(),
-        "variables": vars,
+        "variables": vars.iter().take(HEADER_NAMES_CAP).map(|v| name(v)).collect::<Vec<_>>(),
+        "variablesTruncated": vars.len() > HEADER_NAMES_CAP,
     })
 }
 
@@ -908,7 +1106,7 @@ fn verb(r: &SavedRequest) -> String {
     match r.protocol.as_deref() {
         Some("ws") => "WS".into(),
         Some("grpc") => "gRPC".into(),
-        _ => r.method.clone(),
+        _ => report::short_to(&r.method, NAME_CAP),
     }
 }
 
@@ -967,39 +1165,81 @@ fn run_collections(ctx: ToolCtx, _args: Args) -> ToolFuture {
             }
         )];
         let mut listed = Vec::new();
-        for (folder, requests) in &groups {
+        let mut used = lines[0].len();
+        let mut over_budget = false;
+        let mut cut = false;
+        'groups: for (folder, requests) in &groups {
             if requests.is_empty() {
                 continue;
             }
-            if listed.len() >= LIST_CAP {
-                break;
-            }
-            lines.push(match folder {
-                Some(name) => format!("{name}/"),
+            let heading = match folder {
+                Some(name) => {
+                    cut |= name.chars().count() > NAME_CAP;
+                    format!("{}/", report::short_to(name, NAME_CAP))
+                }
                 None if store.folders.is_empty() => String::new(),
                 None => "(no folder)".into(),
-            });
+            };
+            let mut heading = Some(heading);
             for r in requests {
                 if listed.len() >= LIST_CAP {
-                    break;
+                    break 'groups;
                 }
-                lines.push(format!(
+                let url = redact_url(&r.url);
+                let line = format!(
                     "  {:<6} {}  —  \"{}\"{}",
                     verb(r),
-                    redact_url(&r.url),
-                    r.name,
+                    report::short(&url),
+                    report::short_to(&r.name, NAME_CAP),
                     if duplicate(r) {
-                        format!(" [id {}]", r.id)
+                        format!(" [id {}]", report::short_to(&r.id, NAME_CAP))
                     } else {
                         String::new()
                     }
-                ));
-                listed.push(saved_summary(&store, r));
+                );
+                let summary = saved_summary(&store, r);
+                let size = line.len() + summary.to_string().len() + NAME_CAP;
+                if used + size > LISTING_BUDGET {
+                    over_budget = true;
+                    break 'groups;
+                }
+                used += size;
+                cut |= url.chars().count() > report::VALUE_CAP
+                    || r.name.chars().count() > NAME_CAP
+                    || summary["headersTruncated"] == true
+                    || summary["variablesTruncated"] == true;
+                if let Some(h) = heading.take() {
+                    lines.push(h);
+                }
+                lines.push(line);
+                listed.push(summary);
             }
         }
         lines.retain(|l| !l.is_empty());
-        if total > LIST_CAP {
-            lines.push(format!("[{} more not listed.]", total - LIST_CAP));
+        if listed.len() < total {
+            lines.push(format!(
+                "[{} more not listed{}.]",
+                total - listed.len(),
+                if over_budget {
+                    format!(" (a listing stops at {} KB)", LISTING_BUDGET / 1024)
+                } else {
+                    String::new()
+                }
+            ));
+        }
+        if store.folders.len() > LIST_CAP {
+            lines.push(format!(
+                "[{} more folders not named in the data.]",
+                store.folders.len() - LIST_CAP
+            ));
+        }
+        if cut {
+            lines.push(format!(
+                "[Names longer than {NAME_CAP} characters and URLs longer than {} are cut, \
+                 ending in `…`, and a request lists at most {HEADER_NAMES_CAP} header and \
+                 variable names; run a request by its id when its name is cut.]",
+                report::VALUE_CAP
+            ));
         }
         lines.push(
             "Run one with `agent-studio api run \"<name>\"`; {{VARS}} resolve from the user's \
@@ -1009,10 +1249,14 @@ fn run_collections(ctx: ToolCtx, _args: Args) -> ToolFuture {
         Ok(ToolOk::new(
             lines.join("\n"),
             json!({
-                "folders": store.folders.iter().map(|f| json!({"id": f.id, "name": f.name})).collect::<Vec<_>>(),
+                "folders": store.folders.iter().take(LIST_CAP).map(|f| json!({
+                    "id": report::short_to(&f.id, NAME_CAP),
+                    "name": report::short_to(&f.name, NAME_CAP),
+                })).collect::<Vec<_>>(),
+                "foldersTruncated": store.folders.len() > LIST_CAP,
                 "requests": listed,
                 "count": total,
-                "truncated": total > LIST_CAP,
+                "truncated": listed.len() < total,
             }),
         ))
     })
@@ -1028,29 +1272,34 @@ fn run_envs(ctx: ToolCtx, _args: Args) -> ToolFuture {
                 json!({"active": null, "environments": []}),
             ));
         }
+        let name = |s: &str| report::short_to(s, NAME_CAP);
+        let total = store.environments.len();
         let mut lines = vec![format!(
-            "{} environment{}; {}:",
-            store.environments.len(),
-            if store.environments.len() == 1 {
-                ""
-            } else {
-                "s"
-            },
+            "{total} environment{}; {}:",
+            if total == 1 { "" } else { "s" },
             match active {
-                Some(e) => format!("\"{}\" is active", e.name),
+                Some(e) => format!("\"{}\" is active", name(&e.name)),
                 None => "none is active".into(),
             }
         )];
         let mut envs = Vec::new();
-        for e in &store.environments {
+        let mut used = lines[0].len();
+        let mut over_budget = false;
+        let mut cut = false;
+        for (i, e) in store.environments.iter().enumerate() {
             let is_active = active.is_some_and(|a| a.id == e.id);
-            let mut names: Vec<String> = e.variables.iter().map(|v| v.key.clone()).collect();
+            // The active one is always listed, even past the cap or the budget.
+            if (i >= ENV_CAP || used > LISTING_BUDGET) && !is_active {
+                over_budget |= i < ENV_CAP;
+                continue;
+            }
+            let mut names: Vec<String> = e.variables.iter().map(|v| name(&v.key)).collect();
             names.dedup();
-            let shown: Vec<&String> = names.iter().take(LIST_CAP).collect();
-            lines.push(format!(
+            let shown: Vec<&String> = names.iter().take(ENV_VARS_CAP).collect();
+            let line = format!(
                 "{} {} — {}{}",
                 if is_active { "*" } else { " " },
-                e.name,
+                name(&e.name),
                 if shown.is_empty() {
                     "no variables".to_string()
                 } else {
@@ -1060,18 +1309,40 @@ fn run_envs(ctx: ToolCtx, _args: Args) -> ToolFuture {
                         .collect::<Vec<_>>()
                         .join(", ")
                 },
-                if names.len() > LIST_CAP {
-                    format!(" [{} more]", names.len() - LIST_CAP)
+                if names.len() > ENV_VARS_CAP {
+                    format!(" [{} more not listed]", names.len() - ENV_VARS_CAP)
+                } else {
+                    String::new()
+                }
+            );
+            let entry = json!({
+                "id": name(&e.id),
+                "name": name(&e.name),
+                "active": is_active,
+                "variables": shown,
+                "variablesTruncated": names.len() > ENV_VARS_CAP,
+            });
+            used += line.len() + entry.to_string().len();
+            cut |= e.name.chars().count() > NAME_CAP
+                || e.variables.iter().any(|v| v.key.chars().count() > NAME_CAP);
+            lines.push(line);
+            envs.push(entry);
+        }
+        if cut {
+            lines.push(format!(
+                "[Names longer than {NAME_CAP} characters are cut, ending in `…`.]"
+            ));
+        }
+        if total > envs.len() {
+            lines.push(format!(
+                "[{} more environments not listed{}.]",
+                total - envs.len(),
+                if over_budget {
+                    format!(" (a listing stops at {} KB)", LISTING_BUDGET / 1024)
                 } else {
                     String::new()
                 }
             ));
-            envs.push(json!({
-                "id": e.id,
-                "name": e.name,
-                "active": is_active,
-                "variables": shown,
-            }));
         }
         lines.push(
             "Values are never shown. A saved request run with `agent-studio api run` resolves \
@@ -1080,7 +1351,12 @@ fn run_envs(ctx: ToolCtx, _args: Args) -> ToolFuture {
         );
         Ok(ToolOk::new(
             lines.join("\n"),
-            json!({"active": active.map(|e| e.name.clone()), "environments": envs}),
+            json!({
+                "active": active.map(|e| name(&e.name)),
+                "environments": envs,
+                "count": total,
+                "truncated": total > envs.len(),
+            }),
         ))
     })
 }
@@ -1114,6 +1390,11 @@ fn run_history(ctx: ToolCtx, args: Args) -> ToolFuture {
         if total == 0 {
             return Ok(ToolOk::new("The API history is empty.", json!([])));
         }
+        // 🔴 Every field is scrubbed before it is cut or shown: an entry is the user's own send,
+        // and its error can quote the URL as sent — `{{VAR}}`s substituted — or a server's
+        // message. Every Vault value reads as its `{{NAME}}`, a credential in the entry's URL
+        // (or in any URL a text names) as `***`.
+        let vault = Redactor::vault(&load_store(&ctx));
         let recent: Vec<&HistoryEntry> = history.entries.iter().rev().take(limit).collect();
         let mut lines = vec![format!(
             "{} request{} in the API history, newest first{}:",
@@ -1131,45 +1412,53 @@ fn run_history(ctx: ToolCtx, args: Args) -> ToolFuture {
         )];
         let mut data = Vec::new();
         for e in &recent {
+            let redactor = vault.clone().masking(&report::url_secrets(&e.url));
+            let text = |t: &str| report::short(&report::scrub(t, &redactor));
+            let method = text(&e.method);
             let grpc = e.protocol.as_deref() == Some("grpc");
             let what = if grpc {
                 format!(
-                    "gRPC {}/{}",
-                    e.grpc_service.as_deref().unwrap_or("?"),
-                    e.method
+                    "gRPC {}/{method}",
+                    e.grpc_service
+                        .as_deref()
+                        .map(text)
+                        .as_deref()
+                        .unwrap_or("?"),
                 )
             } else {
-                e.method.clone()
+                method.clone()
             };
-            let outcome = match (&e.error, e.status) {
-                (Some(err), _) => format!("failed: {}", report::short(err)),
+            let status_text = e.status_text.as_deref().map(text);
+            let error = e.error.as_deref().map(text);
+            let outcome = match (&error, e.status) {
+                (Some(err), _) => format!("failed: {err}"),
                 (None, Some(s)) => format!(
                     "{s} {}{}",
-                    e.status_text.as_deref().unwrap_or(""),
+                    status_text.as_deref().unwrap_or(""),
                     e.duration_ms
                         .map(|d| format!(", {d} ms"))
                         .unwrap_or_default()
                 ),
                 (None, None) => "no outcome".into(),
             };
-            let url = redact_url(&e.url);
+            let url = report::short(&redact_url(&redactor.apply(&e.url)));
             lines.push(format!(
-                "  {}  {what} {}  →  {}",
+                "  {}  {what} {url}  →  {}",
                 utc(e.at),
-                report::short(&url),
                 outcome.trim_end()
             ));
             data.push(json!({
-                "id": e.id,
+                "id": text(&e.id),
                 "at": e.at,
-                "protocol": e.protocol.clone().unwrap_or_else(|| "http".into()),
-                "method": e.method,
+                "protocol": text(e.protocol.as_deref().unwrap_or("http")),
+                "method": method,
+                "grpcService": e.grpc_service.as_deref().map(text),
                 "url": url,
                 "status": e.status,
-                "statusText": e.status_text,
+                "statusText": status_text,
                 "durationMs": e.duration_ms,
                 "sizeBytes": e.size_bytes,
-                "error": e.error.as_deref().map(report::short),
+                "error": error,
             }));
         }
         Ok(ToolOk::new(lines.join("\n"), Value::Array(data)))
@@ -1187,11 +1476,12 @@ fn run_saved(ctx: ToolCtx, args: Args) -> ToolFuture {
             .as_ref()
             .map(|e| format!("environment \"{}\"", e.name))
             .unwrap_or_else(|| "no environment (none is active)".into());
-        let sent = send_recorded(&ctx, r.wire, r.literal, timeout, &r.redactor).await;
+        let vault = Redactor::vault(&store);
+        let sent = send_recorded(&ctx, r.wire, r.literal, timeout, &r.redactor, &vault).await;
         emit_history(&ctx, &[&sent]);
         let redaction_note = (!r.redactor.is_empty()).then(|| {
-            "Values substituted from the environment are shown as their {{NAME}} wherever the \
-             response repeats them."
+            "Values substituted from the environment are shown as their {{NAME}}, and \
+             credentials written into the request as ***, wherever the response repeats them."
                 .to_string()
         });
         sent_reply(
@@ -1204,12 +1494,12 @@ fn run_saved(ctx: ToolCtx, args: Args) -> ToolFuture {
             ],
             json!({
                 "request": {
-                    "id": saved.id,
-                    "name": saved.name,
-                    "method": saved.method,
-                    "url": redact_url(&saved.url),
-                    "environment": env.as_ref().map(|e| e.name.clone()),
-                    "unsetVariables": r.missing,
+                    "id": report::short_to(&saved.id, NAME_CAP),
+                    "name": report::short_to(&saved.name, NAME_CAP),
+                    "method": report::short_to(&saved.method, NAME_CAP),
+                    "url": report::short(&redact_url(&saved.url)),
+                    "environment": env.as_ref().map(|e| report::short_to(&e.name, NAME_CAP)),
+                    "unsetVariables": r.missing.iter().map(|m| report::short_to(m, NAME_CAP)).collect::<Vec<_>>(),
                 }
             }),
         )
@@ -1283,9 +1573,10 @@ fn run_compare(ctx: ToolCtx, args: Args) -> ToolFuture {
         let pb = prepare_side("B", b, &args, &store, env)?;
         let (timeout, timeout_note) = deadline(&args, None)?;
         // Both at once, as the app's compare sends them: B never waits on A.
+        let vault = Redactor::vault(&store);
         let (sa, sb) = tokio::join!(
-            send_recorded(&ctx, pa.wire, pa.literal, timeout, &pa.redactor),
-            send_recorded(&ctx, pb.wire, pb.literal, timeout, &pb.redactor),
+            send_recorded(&ctx, pa.wire, pa.literal, timeout, &pa.redactor, &vault),
+            send_recorded(&ctx, pb.wire, pb.literal, timeout, &pb.redactor, &vault),
         );
         emit_history(&ctx, &[&sa, &sb]);
         let side = |label: String, s: &Sent| Side {
@@ -1300,8 +1591,8 @@ fn run_compare(ctx: ToolCtx, args: Args) -> ToolFuture {
             .collect();
         if !pa.redactor.is_empty() || !pb.redactor.is_empty() {
             notes.push(
-                "Values substituted from the environment are shown as their {{NAME}} wherever \
-                 a response repeats them."
+                "Values substituted from the environment are shown as their {{NAME}}, and \
+                 credentials written into a request as ***, wherever a response repeats them."
                     .into(),
             );
         }

@@ -77,7 +77,7 @@ fn quoting_follows_bash() {
 #[test]
 fn user_cookie_and_header_shorthands_become_headers() {
     let p = parse(
-        "curl -u ada:pw -b 'a=1' -b b=2 -b cookies.txt -A agent/1 -e https://ref/ \
+        "curl -u ada:pw -b 'a=1' -b b=2 -b '' -A agent/1 -e https://ref/ \
          --oauth2-bearer tok -H 'X-Empty;' -H 'nocolon' https://h/",
     )
     .unwrap();
@@ -154,6 +154,26 @@ fn uploads_files_stdin_and_config_are_refused_not_dropped() {
     assert!(parse("curl -K cfg https://h/")
         .unwrap_err()
         .contains("config file"));
+    // Headers and cookies read from a file are refused too: dropping them would send a request
+    // quietly different from the command. Falsify: skip `@…` headers / file cookies again.
+    for cmd in [
+        "curl -H @headers.txt https://h/",
+        "curl --header=@- https://h/",
+        "curl -H@hdrs https://h/",
+    ] {
+        let err = parse(cmd).unwrap_err();
+        assert!(
+            err.contains("reads its headers from a file"),
+            "{cmd}: {err}"
+        );
+    }
+    for cmd in [
+        "curl -b cookies.txt https://h/",
+        "curl --cookie - https://h/",
+    ] {
+        let err = parse(cmd).unwrap_err();
+        assert!(err.contains("reads cookies from a file"), "{cmd}: {err}");
+    }
     assert_eq!(
         parse("curl -s -L").unwrap_err(),
         "That curl command has no URL."

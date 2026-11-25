@@ -4,13 +4,20 @@
 //!   rows of at most [`VALUE_CAP`] characters, a compare at [`DIFF_CAP`] differences — and every
 //!   cut is said in the output, never silent.
 //! * Secret-free: [`Redactor`] puts `{{NAME}}` back wherever a value Agent Studio substituted into
-//!   a saved request comes back in the response (an echo endpoint, a redirect, an error naming
-//!   the URL); [`redact_url`] hides the password of a `user:password@` URL and the value of a
-//!   query parameter whose name says it is a credential.
+//!   a saved request — or any value the Vault holds ([`Redactor::vault`]) — comes back (an echo
+//!   endpoint, a redirect, an error naming the URL), and `***` wherever a credential typed
+//!   literally into a saved request does ([`Redactor::masking`]); [`redact_url`] hides the
+//!   userinfo of a `user:password@` URL and the value of a query or fragment parameter whose
+//!   name says it is a credential; [`redact_urls_in`] does that to every URL inside free text;
+//!   [`scrub`] is both passes, for text that may carry anything (errors, history).
 
 use serde_json::{json, Value};
 
+use crate::api_store::ApiStore;
 use crate::http::{HttpHeader, HttpResponse};
+
+/// What a credential reads as when it has no `{{NAME}}` to stand for it.
+pub const MASK: &str = "***";
 
 /// The most response-body text an agent is handed (after pretty-printing).
 pub const BODY_CAP: usize = 64 * 1024;
@@ -37,14 +44,19 @@ pub fn cut(text: &str, max: usize) -> (&str, bool) {
 
 /// A value for a one-line listing: newlines flattened, cut at [`VALUE_CAP`] characters.
 pub fn short(text: &str) -> String {
+    short_to(text, VALUE_CAP)
+}
+
+/// [`short`] at `max` characters; a cut ends in `…`, so it is never silent.
+pub fn short_to(text: &str, max: usize) -> String {
     let flat: String = text
         .chars()
         .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
         .collect();
-    if flat.chars().count() <= VALUE_CAP {
+    if flat.chars().count() <= max {
         return flat;
     }
-    let mut s: String = flat.chars().take(VALUE_CAP).collect();
+    let mut s: String = flat.chars().take(max).collect();
     s.push('…');
     s
 }
@@ -140,11 +152,12 @@ pub fn pretty_json(text: &str) -> Option<String> {
     Some(out)
 }
 
-/// Replaces values Agent Studio substituted into a request with the `{{NAME}}` they came from.
+/// Replaces values with what may be shown instead: a value Agent Studio substituted (or one the
+/// Vault holds) with the `{{NAME}}` it came from, a literal credential with [`MASK`].
 #[derive(Debug, Clone, Default)]
 pub struct Redactor {
-    /// `(value, "{{NAME}}")`, longest value first so a value containing another is replaced
-    /// whole.
+    /// `(spelling, replacement)`, longest spelling first so a value containing another is
+    /// replaced whole; for one spelling, the pair added first wins.
     pairs: Vec<(String, String)>,
 }
 
@@ -155,25 +168,63 @@ impl Redactor {
 
     /// `used`: `(NAME, value)` for every variable substituted into the request.
     pub fn new(used: &[(String, String)]) -> Self {
-        let mut pairs: Vec<(String, String)> = Vec::new();
+        let mut r = Self::default();
         for (k, v) in used {
-            if v.chars().count() < Self::MIN_LEN {
-                continue;
-            }
-            let name = format!("{{{{{k}}}}}");
-            for form in Self::forms(v) {
-                pairs.push((form, name.clone()));
-            }
+            r.add(v, &format!("{{{{{k}}}}}"));
         }
-        pairs.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
-        pairs.dedup_by(|a, b| a.0 == b.0);
-        Self { pairs }
+        r.sorted()
     }
 
-    /// The spellings a value can come back in: as sent, percent-encoded the way the URL parser
-    /// encodes a path or a query (a server or an error message echoing the request URL), and
-    /// percent-encoded as a server building a link would (`encodeURIComponent`, RFC 3986
-    /// unreserved, everything).
+    /// Every value the Vault holds — every variable of every environment — read back as its
+    /// `{{NAME}}`. For text whose request is unknown (a history entry) or may carry any of them
+    /// (an error).
+    pub fn vault(store: &ApiStore) -> Self {
+        let all: Vec<(String, String)> = store
+            .environments
+            .iter()
+            .flat_map(|e| e.variables.iter().map(|v| (v.key.clone(), v.value.clone())))
+            .collect();
+        Self::new(&all)
+    }
+
+    /// Also replace each of `values` — credentials written literally, with no name to show —
+    /// by [`MASK`].
+    pub fn masking(mut self, values: &[String]) -> Self {
+        for v in values {
+            self.add(v, MASK);
+        }
+        self.sorted()
+    }
+
+    /// `self` and `other` together; where both know a spelling, `self`'s replacement is kept.
+    pub fn and(mut self, other: &Redactor) -> Self {
+        self.pairs.extend(other.pairs.iter().cloned());
+        self.sorted()
+    }
+
+    fn add(&mut self, value: &str, replacement: &str) {
+        if value.chars().count() < Self::MIN_LEN {
+            return;
+        }
+        for form in Self::forms(value) {
+            self.pairs.push((form, replacement.to_string()));
+        }
+    }
+
+    fn sorted(mut self) -> Self {
+        // A stable sort: for one spelling, the pair added first stays first and is kept.
+        self.pairs
+            .sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+        self.pairs.dedup_by(|later, kept| later.0 == kept.0);
+        self
+    }
+
+    /// The spellings a value can come back in: as sent; read back from a form (`+` as a space);
+    /// percent-encoded the way the URL parser encodes a path or a query (a server or an error
+    /// message echoing the request URL), as a server building a link would
+    /// (`encodeURIComponent`, RFC 3986 unreserved, everything, `application/x-www-form-urlencoded`)
+    /// and with lowercase hex; and every one of those inside a JSON string, also from an encoder
+    /// that escapes `/` as `\/`.
     fn forms(value: &str) -> Vec<String> {
         use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
         /// `encodeURIComponent` leaves `A–Z a–z 0–9 - _ . ! ~ * ' ( )`.
@@ -193,10 +244,17 @@ impl Redactor {
             .remove(b'_')
             .remove(b'.')
             .remove(b'~');
+        /// `application/x-www-form-urlencoded` leaves `A–Z a–z 0–9 * - . _` (and writes a space
+        /// as `+`).
+        const FORM: &AsciiSet = &NON_ALPHANUMERIC
+            .remove(b'*')
+            .remove(b'-')
+            .remove(b'.')
+            .remove(b'_');
         let mut forms = vec![value.to_string()];
-        // Inside a JSON string (`"…"` stripped): an echo endpoint escapes `"` and `\`.
-        if let Ok(quoted) = serde_json::to_string(value) {
-            forms.push(quoted[1..quoted.len() - 1].to_string());
+        // A server that form-decodes the query reads `+` as a space.
+        if value.contains('+') {
+            forms.push(value.replace('+', " "));
         }
         if let Ok(u) = reqwest::Url::parse(&format!("http://h/{value}?{value}")) {
             forms.push(u.path()[1..].to_string());
@@ -215,6 +273,30 @@ impl Redactor {
         for set in [URI_COMPONENT, UNRESERVED, NON_ALPHANUMERIC] {
             forms.push(utf8_percent_encode(value, set).to_string());
         }
+        forms.push(
+            utf8_percent_encode(value, FORM)
+                .to_string()
+                .replace("%20", "+"),
+        );
+        let lower: Vec<String> = forms
+            .iter()
+            .filter(|f| f.contains('%'))
+            .map(|f| lowercase_hex(f))
+            .collect();
+        forms.extend(lower);
+        // Inside a JSON string (`"…"` stripped): an echo endpoint escapes `"` and `\`, and some
+        // encoders (PHP's `json_encode`) also `/`.
+        let mut json_forms = Vec::new();
+        for f in &forms {
+            if let Ok(quoted) = serde_json::to_string(f) {
+                let inner = quoted[1..quoted.len() - 1].to_string();
+                if inner.contains('/') {
+                    json_forms.push(inner.replace('/', "\\/"));
+                }
+                json_forms.push(inner);
+            }
+        }
+        forms.extend(json_forms);
         forms.retain(|f| f.chars().count() >= Self::MIN_LEN);
         forms.sort();
         forms.dedup();
@@ -225,7 +307,7 @@ impl Redactor {
         self.pairs.is_empty()
     }
 
-    /// `text` with every known value (in every spelling) replaced by its `{{NAME}}`.
+    /// `text` with every known value (in every spelling) replaced.
     pub fn apply(&self, text: &str) -> String {
         let mut out = text.to_string();
         for (value, name) in &self.pairs {
@@ -249,15 +331,63 @@ impl Redactor {
     }
 }
 
-/// Is `name` (a query parameter) a credential by its name?
-fn secret_param(name: &str) -> bool {
-    let n: String = name
+/// `%2f` for `%2F`: the hex digits of every percent-escape in lowercase.
+fn lowercase_hex(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit()
+            && b[i + 2].is_ascii_hexdigit()
+        {
+            out.extend_from_slice(&[
+                b'%',
+                b[i + 1].to_ascii_lowercase(),
+                b[i + 2].to_ascii_lowercase(),
+            ]);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| text.to_string())
+}
+
+/// `text` safe to hand an agent when it can carry anything — an engine error, a history entry:
+/// every value `redactor` knows is replaced, and every URL in it (`scheme://…`) is passed
+/// through [`redact_url`].
+///
+/// A URL is found on the text as given, before the redactor runs: a Vault value can be the
+/// URL's whole base (`BASE=https://api.internal:8443`), and once that reads `{{BASE}}` the
+/// scheme that marks the URL is gone — while a credential typed into its query is still there.
+pub fn scrub(text: &str, redactor: &Redactor) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (is_url, piece) in split_urls(text) {
+        let piece = redactor.apply(piece);
+        if is_url {
+            out.push_str(&redact_url(&piece));
+        } else {
+            out.push_str(&piece);
+        }
+    }
+    // A value that straddles a URL's edge.
+    redactor.apply(&out)
+}
+
+/// Is `name` (a query or fragment parameter, or a header) a credential by its name?
+/// Percent-escapes in the name are decoded first; case and punctuation do not count.
+pub fn secret_param(name: &str) -> bool {
+    let decoded = percent_encoding::percent_decode_str(name).decode_utf8_lossy();
+    let n: String = decoded
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
         .collect::<String>()
         .to_ascii_lowercase();
     n.ends_with("key")
-        || n == "sig"
+        || ["sig", "code", "sid", "otp", "cookie"].contains(&n.as_str())
         || [
             "token",
             "secret",
@@ -268,6 +398,9 @@ fn secret_param(name: &str) -> bool {
             "signature",
             "credential",
             "session",
+            "jwt",
+            "bearer",
+            "assertion",
         ]
         .iter()
         .any(|w| n.contains(w))
@@ -278,62 +411,200 @@ fn is_ref(value: &str) -> bool {
     crate::db::secret::is_ref(value)
 }
 
-/// A URL as written, safe to show an agent: the password in `user:password@` and the value of a
-/// credential-named query parameter (`?api_key=…`, `token=…`) become `***`, unless they are a
-/// `{{NAME}}` reference. Works on text, so a URL built from `{{HOST}}` (not parseable) is
-/// handled the same.
-pub fn redact_url(url: &str) -> String {
-    let (before_frag, frag) = match url.find('#') {
-        Some(i) => (&url[..i], &url[i..]),
-        None => (url, ""),
+/// Is this piece of a URL a credential to hide: non-empty and not a `{{NAME}}`?
+fn hidden(value: &str) -> bool {
+    !value.is_empty() && !is_ref(value)
+}
+
+/// A URL cut where its credentials can be: `head` (`https://`, or empty), the userinfo before
+/// the authority's last `@`, the rest of the authority and the path, the query, the fragment.
+struct UrlParts<'a> {
+    head: &'a str,
+    userinfo: Option<&'a str>,
+    rest: &'a str,
+    query: Option<&'a str>,
+    fragment: Option<&'a str>,
+}
+
+/// Works on text, so a URL built from `{{HOST}}` (not parseable) is cut the same way.
+fn url_parts(url: &str) -> UrlParts<'_> {
+    let (before_frag, fragment) = match url.find('#') {
+        Some(i) => (&url[..i], Some(&url[i + 1..])),
+        None => (url, None),
     };
     let (base, query) = match before_frag.find('?') {
         Some(i) => (&before_frag[..i], Some(&before_frag[i + 1..])),
         None => (before_frag, None),
     };
-    let mut out = String::with_capacity(url.len());
-    // userinfo: between `://` and the last `@` of the authority.
-    match base.find("://") {
-        Some(s) => {
-            let auth_start = s + 3;
-            let auth_end = base[auth_start..]
-                .find('/')
-                .map(|i| auth_start + i)
-                .unwrap_or(base.len());
-            let authority = &base[auth_start..auth_end];
-            out.push_str(&base[..auth_start]);
-            match authority.rfind('@') {
-                Some(at) => {
-                    let userinfo = &authority[..at];
-                    match userinfo.split_once(':') {
-                        Some((user, pw)) if !pw.is_empty() && !is_ref(pw) => {
-                            out.push_str(user);
-                            out.push_str(":***");
-                        }
-                        _ => out.push_str(userinfo),
-                    }
-                    out.push_str(&authority[at..]);
-                }
-                None => out.push_str(authority),
-            }
-            out.push_str(&base[auth_end..]);
+    let (head, authority_and_path) = match base.find("://") {
+        Some(s) => base.split_at(s + 3),
+        None => ("", base),
+    };
+    // The userinfo ends at the authority's last `@`; the authority at the first `/`. Without a
+    // scheme (a gRPC endpoint, `token@grpc.example:443`) the authority is what comes first.
+    let auth_end = authority_and_path
+        .find('/')
+        .unwrap_or(authority_and_path.len());
+    let at = authority_and_path[..auth_end].rfind('@');
+    let (userinfo, rest) = match at {
+        Some(at) => (
+            Some(&authority_and_path[..at]),
+            &authority_and_path[at + 1..],
+        ),
+        None => (None, authority_and_path),
+    };
+    UrlParts {
+        head,
+        userinfo,
+        rest,
+        query,
+        fragment,
+    }
+}
+
+/// `k=v` pairs separated by `&` or `;`, in order, separators kept.
+fn params(text: &str) -> Vec<(&str, Option<char>)> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (i, c) in text.char_indices() {
+        if c == '&' || c == ';' {
+            out.push((&text[start..i], Some(c)));
+            start = i + 1;
         }
-        None => out.push_str(base),
     }
-    if let Some(q) = query {
-        out.push('?');
-        let parts: Vec<String> = q
-            .split('&')
-            .map(|pair| match pair.split_once('=') {
-                Some((k, v)) if secret_param(k) && !v.is_empty() && !is_ref(v) => {
-                    format!("{k}=***")
+    out.push((&text[start..], None));
+    out
+}
+
+/// The credentials in `url`: the user and the password of its userinfo, and the value of every
+/// credential-named query or fragment parameter — each as written and percent-decoded, and
+/// skipping `{{NAME}}` references (they name, they do not reveal).
+pub fn url_secrets(url: &str) -> Vec<String> {
+    let p = url_parts(url);
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |v: &str| {
+        if hidden(v) {
+            out.push(v.to_string());
+            let decoded = percent_encoding::percent_decode_str(v)
+                .decode_utf8_lossy()
+                .into_owned();
+            if decoded != v {
+                out.push(decoded);
+            }
+        }
+    };
+    if let Some(ui) = p.userinfo {
+        match ui.split_once(':') {
+            Some((user, pw)) => {
+                push(user);
+                push(pw);
+            }
+            None => push(ui),
+        }
+    }
+    for part in [p.query, p.fragment].into_iter().flatten() {
+        for (pair, _) in params(part) {
+            if let Some((k, v)) = pair.split_once('=') {
+                if secret_param(k) {
+                    push(v);
                 }
-                _ => pair.to_string(),
-            })
-            .collect();
-        out.push_str(&parts.join("&"));
+            }
+        }
     }
-    out.push_str(frag);
+    out
+}
+
+/// A URL as written, safe to show an agent: every piece of its userinfo (`user:password@`,
+/// `token@`, `token:@`) and the value of every credential-named query or fragment parameter
+/// (`?api_key=…`, `#access_token=…`, `;sid=…`) become `***`, unless they are a `{{NAME}}`
+/// reference. Works on text, so a URL built from `{{HOST}}` (not parseable) is handled the same.
+pub fn redact_url(url: &str) -> String {
+    let p = url_parts(url);
+    let mask = |v: &str| if hidden(v) { MASK } else { v }.to_string();
+    let mut out = String::with_capacity(url.len());
+    out.push_str(p.head);
+    if let Some(ui) = p.userinfo {
+        match ui.split_once(':') {
+            Some((user, pw)) => {
+                out.push_str(&mask(user));
+                out.push(':');
+                out.push_str(&mask(pw));
+            }
+            None => out.push_str(&mask(ui)),
+        }
+        out.push('@');
+    }
+    out.push_str(p.rest);
+    let masked_params = |text: &str| -> String {
+        let mut s = String::with_capacity(text.len());
+        for (pair, sep) in params(text) {
+            match pair.split_once('=') {
+                Some((k, v)) if secret_param(k) && hidden(v) => {
+                    s.push_str(k);
+                    s.push('=');
+                    s.push_str(MASK);
+                }
+                _ => s.push_str(pair),
+            }
+            if let Some(c) = sep {
+                s.push(c);
+            }
+        }
+        s
+    };
+    if let Some(q) = p.query {
+        out.push('?');
+        out.push_str(&masked_params(q));
+    }
+    if let Some(f) = p.fragment {
+        out.push('#');
+        out.push_str(&masked_params(f));
+    }
+    out
+}
+
+/// `text` with every URL in it passed through [`redact_url`] ([`scrub`] with nothing else to
+/// replace). An engine error names the URL it failed on; a credential in it must not come back
+/// to an agent.
+pub fn redact_urls_in(text: &str) -> String {
+    scrub(text, &Redactor::default())
+}
+
+/// `text` cut into pieces, each `(is_url, piece)`, in order. A URL is `scheme://` and what
+/// follows up to whitespace or a quote, less trailing punctuation that closes the sentence
+/// around it (`for url (https://…)`): one character of a credential that ends in `)` is all
+/// that can stay outside.
+fn split_urls(text: &str) -> Vec<(bool, &str)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("://") {
+        // Back to where the scheme starts: letters, digits, `+ . -`, starting with a letter.
+        let mut start = i;
+        for (j, c) in rest[..i].char_indices().rev() {
+            if c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-') {
+                start = j;
+            } else {
+                break;
+            }
+        }
+        while start < i && !rest[start..].starts_with(|c: char| c.is_ascii_alphabetic()) {
+            start += 1;
+        }
+        let mut end = rest[i + 3..]
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '<' | '>' | '`'))
+            .map_or(rest.len(), |e| i + 3 + e);
+        while end > i + 3 && rest[..end].ends_with([')', ']', ',', '.', ';', '\'']) {
+            end -= 1;
+        }
+        if start > 0 {
+            out.push((false, &rest[..start]));
+        }
+        out.push((true, &rest[start..end]));
+        rest = &rest[end..];
+    }
+    if !rest.is_empty() {
+        out.push((false, rest));
+    }
     out
 }
 
@@ -360,6 +631,16 @@ pub fn content_type(headers: &[HttpHeader]) -> Option<&str> {
         .map(|h| h.value.as_str())
 }
 
+/// A response's size for a reply: `1.5 KB`, or `over 8.0 MB` when the API client cut the body
+/// (it stopped reading there, so the real size is unknown).
+pub fn size_text(r: &HttpResponse) -> String {
+    if r.truncated {
+        format!("over {}", human_size(crate::http::MAX_BODY_BYTES))
+    } else {
+        human_size(r.size_bytes)
+    }
+}
+
 /// A response, as the agent reads it (`message`) and as `--json` / MCP return it (`data`).
 /// `request_line` is what was sent (`GET https://…`), `note` a line about how it was sent.
 pub fn response_report(r: &HttpResponse, request_line: &str, note: &str) -> (String, Value) {
@@ -373,7 +654,7 @@ pub fn response_report(r: &HttpResponse, request_line: &str, note: &str) -> (Str
             r.status,
             r.status_text,
             r.duration_ms,
-            human_size(r.size_bytes),
+            size_text(r),
             content_type(&r.headers)
                 .map(|t| format!(" ({t})"))
                 .unwrap_or_default()
@@ -397,23 +678,28 @@ pub fn response_report(r: &HttpResponse, request_line: &str, note: &str) -> (Str
         lines.push(shown.to_string());
     }
     let truncated = cut_here || r.truncated;
+    let engine_cut = format!(
+        "the response is over {} and the API client read no further",
+        human_size(crate::http::MAX_BODY_BYTES)
+    );
     if cut_here {
         lines.push(format!(
-            "[Body truncated: showing the first {} of {} bytes{}.]",
+            "[Body truncated: showing the first {} of {} bytes{}{}.]",
             thousands(shown.len()),
             thousands(text.len()),
             if pretty.is_some() {
                 " of the re-indented JSON"
             } else {
                 ""
+            },
+            if r.truncated {
+                format!("; {engine_cut}")
+            } else {
+                String::new()
             }
         ));
     } else if r.truncated {
-        lines.push(format!(
-            "[Body truncated by the API client at {}; the response was {} bytes.]",
-            human_size(crate::http::MAX_BODY_BYTES),
-            thousands(r.size_bytes)
-        ));
+        lines.push(format!("[Body truncated by the API client: {engine_cut}.]"));
     }
     let headers: Vec<Value> = r
         .headers
@@ -549,7 +835,7 @@ pub fn compare_report(a: &Side, b: &Side) -> (String, Value) {
             r.status,
             r.status_text,
             r.duration_ms,
-            human_size(r.size_bytes)
+            size_text(r)
         ),
         Err(e) => format!("failed: {e}"),
     };

@@ -7,9 +7,14 @@
 //! hurting *us*, mirroring `find_in_files`' guardrails:
 //!
 //! * a **30s timeout** ([`REQUEST_TIMEOUT`]) bounds a stuck endpoint,
-//! * an **8 MiB response-body cap** ([`MAX_BODY_BYTES`]) so a huge download can't flood
-//!   the IPC channel / UI (`truncated` flags a cut; `size_bytes` still reports the full
-//!   length),
+//! * an **8 MiB response-body cap** ([`MAX_BODY_BYTES`]) on the *decoded* body, applied while
+//!   reading: the body is read chunk by chunk and reading **stops** as soon as more than the
+//!   cap has arrived, so an endless stream or a small gzip body that inflates to gigabytes
+//!   costs at most the cap in memory and cannot flood the IPC channel / UI (`truncated` flags
+//!   the cut; `size_bytes` is then what was read, a lower bound of the real length),
+//! * no engine error carries the request URL: reqwest appends ` for url (…)` with the URL
+//!   **as sent**, i.e. with every `{{VAR}}` already substituted, and the API history keeps
+//!   the error text ([`map_send_error`]),
 //! * bodies are returned as lossy UTF-8 text (binary responses are not corrupted on the
 //!   wire, just rendered as text for v1).
 //!
@@ -74,9 +79,9 @@ static CLIENT: LazyLock<Result<Client, String>> = LazyLock::new(|| {
         .map_err(|e| format!("could not build HTTP client: {e}"))
 });
 
-/// Response bodies larger than this are truncated to it (`truncated = true`), so a
-/// multi-gigabyte download can't flood the IPC channel / UI. `size_bytes` always
-/// reports the full, pre-cap length.
+/// Response bodies larger than this (decoded) are truncated to it (`truncated = true`), and
+/// reading stops there, so a multi-gigabyte download — or a decompression bomb — can't flood
+/// memory, the IPC channel or the UI.
 pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 /// Whole-request deadline. A stuck or slow endpoint is bounded to this rather than
@@ -118,28 +123,70 @@ pub struct HttpResponse {
     pub body: String,
     /// Wall time of the round-trip (send → full body read), in milliseconds.
     pub duration_ms: u64,
-    /// Full body length in bytes, *before* any cap.
+    /// Decoded body length in bytes. When `truncated`, the bytes read before reading stopped —
+    /// more than the cap, and a lower bound of the real length (the rest was never read).
     pub size_bytes: usize,
-    /// `true` iff the body was truncated at [`MAX_BODY_BYTES`].
+    /// `true` iff the body was longer than the cap ([`MAX_BODY_BYTES`]) and was cut there.
     pub truncated: bool,
 }
 
-/// Cap `bytes` to `limit`, returning the (possibly shortened) bytes and whether a cut
-/// was made. Factored out so the truncation boundary is unit-testable with a tiny
-/// limit — no need to move 8 MiB to prove the flag flips.
-fn cap_body(mut bytes: Vec<u8>, limit: usize) -> (Vec<u8>, bool) {
-    if bytes.len() > limit {
-        bytes.truncate(limit);
-        (bytes, true)
-    } else {
-        (bytes, false)
+/// A response body read under a cap: keeps at most `cap` bytes and says when to stop reading.
+/// Factored out so the truncation boundary is unit-testable with a tiny limit — no need to move
+/// 8 MiB to prove the flag flips.
+#[derive(Debug)]
+struct CappedBody {
+    cap: usize,
+    kept: Vec<u8>,
+    /// Every byte seen so far, kept or not.
+    seen: usize,
+}
+
+impl CappedBody {
+    fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            kept: Vec::new(),
+            seen: 0,
+        }
     }
+
+    /// Take one decoded chunk. `false` once more than the cap has arrived: the caller stops
+    /// reading there, so whatever is still to come — an endless stream, the rest of a
+    /// decompression bomb — is never read, inflated or held.
+    fn push(&mut self, chunk: &[u8]) -> bool {
+        self.seen = self.seen.saturating_add(chunk.len());
+        let room = self.cap.saturating_sub(self.kept.len());
+        self.kept.extend_from_slice(&chunk[..chunk.len().min(room)]);
+        !self.truncated()
+    }
+
+    fn truncated(&self) -> bool {
+        self.seen > self.cap
+    }
+}
+
+/// Read `resp`'s (decoded) body chunk by chunk into a [`CappedBody`], stopping at the cap.
+async fn read_capped(resp: &mut reqwest::Response, cap: usize) -> reqwest::Result<CappedBody> {
+    let mut body = CappedBody::new(cap);
+    while let Some(chunk) = resp.chunk().await? {
+        if !body.push(&chunk) {
+            break;
+        }
+    }
+    Ok(body)
 }
 
 /// Turn a reqwest error into a short, human-readable string. Distinguishes the causes a
 /// user can act on (timeout, unreachable host) from the catch-all. `timeout` is the
 /// deadline the request ran under, so the sentence names the one that fired.
+///
+/// 🔴 The URL is dropped from the error before it is formatted: reqwest's `Display` appends
+/// ` for url (<the URL as sent>)`, which is the URL **after** `{{VAR}}` substitution — the
+/// user's Vault values. The console shows this text, the API history file keeps it, and agents
+/// read the history; the request's own URL is shown next to the error everywhere anyway.
 fn map_send_error(e: reqwest::Error, timeout: Duration) -> String {
+    let host = e.url().and_then(|u| u.host_str()).map(str::to_string);
+    let e = e.without_url();
     if e.is_timeout() {
         if timeout.subsec_millis() == 0 {
             format!("request timed out after {}s", timeout.as_secs())
@@ -147,7 +194,7 @@ fn map_send_error(e: reqwest::Error, timeout: Duration) -> String {
             format!("request timed out after {} ms", timeout.as_millis())
         }
     } else if e.is_connect() {
-        match e.url().and_then(|u| u.host_str()) {
+        match host {
             Some(host) => format!("could not connect: {host}"),
             None => "could not connect".to_string(),
         }
@@ -356,7 +403,7 @@ async fn send_with(
     }
 
     let start = Instant::now();
-    let resp = match req.send().await {
+    let mut resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
             let e = map_send_error(e, timeout);
@@ -365,7 +412,7 @@ async fn send_with(
         }
     };
 
-    // Read status + headers before consuming the response with `.bytes()`.
+    // Read status + headers before reading the body.
     let status = resp.status();
     let status_code = status.as_u16();
     let status_text = status.canonical_reason().unwrap_or("").to_string();
@@ -398,7 +445,9 @@ async fn send_with(
             .collect(),
     );
 
-    let full = match resp.bytes().await {
+    // At most `body_cap` decoded bytes are ever held: reading stops once the cap is passed,
+    // and dropping `resp` then closes the connection instead of draining the rest.
+    let read = match read_capped(&mut resp, body_cap).await {
         Ok(b) => b,
         Err(e) => {
             let e = map_send_error(e, timeout);
@@ -406,15 +455,15 @@ async fn send_with(
             return Err(e);
         }
     };
+    drop(resp);
     let duration_ms = start.elapsed().as_millis() as u64;
-    // The whole (decoded) body is in memory regardless of `body_cap`; the store applies its
-    // own 1 MiB cap. The console and the Network row report the SAME duration.
-    flow.response_body(&full, full.len() as u64);
+    // The store applies its own 1 MiB cap. The console and the Network row report the SAME
+    // duration and size.
+    flow.response_body(&read.kept, read.seen as u64);
     flow.done(Some(duration_ms));
 
-    let size_bytes = full.len();
-    let (capped, truncated) = cap_body(full.to_vec(), body_cap);
-    let body = String::from_utf8_lossy(&capped).into_owned();
+    let (size_bytes, truncated) = (read.seen, read.truncated());
+    let body = String::from_utf8_lossy(&read.kept).into_owned();
 
     Ok(HttpResponse {
         status: status_code,
@@ -704,18 +753,23 @@ mod tests {
     }
 
     #[test]
-    fn cap_body_truncates_only_when_over_the_limit() {
-        let (b, t) = cap_body(vec![1, 2, 3, 4, 5], 3);
-        assert_eq!(b, vec![1, 2, 3]);
-        assert!(t);
+    fn a_capped_body_keeps_the_cap_and_says_stop_once_it_is_passed() {
+        let mut b = CappedBody::new(3);
+        assert!(b.push(&[1, 2]), "under the cap: keep reading");
+        assert!(b.push(&[3]), "exactly at the cap is not truncated");
+        assert!(!b.truncated());
+        assert!(!b.push(&[4, 5]), "past the cap: stop reading");
+        assert_eq!(b.kept, vec![1, 2, 3]);
+        assert_eq!(b.seen, 5);
+        assert!(b.truncated());
 
-        let (b, t) = cap_body(vec![1, 2, 3], 3);
-        assert_eq!(b, vec![1, 2, 3]);
-        assert!(!t, "exactly at the limit is not truncated");
-
-        let (b, t) = cap_body(vec![1, 2], 3);
-        assert_eq!(b.len(), 2);
-        assert!(!t);
+        let mut one = CappedBody::new(3);
+        assert!(!one.push(&[9; 10]), "one chunk larger than the cap");
+        assert_eq!((one.kept.len(), one.seen), (3, 10));
+        let mut empty = CappedBody::new(0);
+        assert!(empty.push(&[]));
+        assert!(!empty.push(&[1]));
+        assert!(empty.kept.is_empty());
     }
 
     #[tokio::test]
@@ -728,10 +782,162 @@ mod tests {
             .unwrap();
         assert!(r.truncated);
         assert_eq!(r.body.len(), cap, "body capped to the limit");
-        assert_eq!(
-            r.size_bytes, 100,
-            "size_bytes reports the full pre-cap length"
+        assert!(
+            r.size_bytes > cap && r.size_bytes <= 100,
+            "size_bytes is what was read before stopping: {}",
+            r.size_bytes
         );
+    }
+
+    /// A server that answers 200 with a chunked body of zeros and writes `limit` bytes of it in
+    /// 64 KiB chunks, then holds the connection open without ever ending the body. Returns the
+    /// port and, once the client has hung up (a write failed) or the limit was written, how
+    /// many body bytes the server managed to write.
+    fn spawn_streaming_server(limit: usize) -> (u16, oneshot::Receiver<usize>) {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel();
+        tauri::async_runtime::spawn(async move {
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            read_request(&mut stream).await;
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+                        Transfer-Encoding: chunked\r\n\r\n";
+            if stream.write_all(head.as_bytes()).await.is_err() {
+                return;
+            }
+            let data = vec![0u8; 64 * 1024];
+            let mut chunk = format!("{:x}\r\n", data.len()).into_bytes();
+            chunk.extend_from_slice(&data);
+            chunk.extend_from_slice(b"\r\n");
+            let mut written = 0usize;
+            while written < limit {
+                if stream.write_all(&chunk).await.is_err() {
+                    break;
+                }
+                written += data.len();
+            }
+            let _ = tx.send(written);
+            // Never end the body: a client that waits for the end waits for its deadline.
+            let mut sink = [0u8; 1];
+            let _ = stream.read(&mut sink).await;
+        });
+        (port, rx)
+    }
+
+    /// 🔴 An endless response cannot fill memory: reading stops once the 8 MiB cap is passed,
+    /// and the call returns at once with the cap and the flag instead of reading until the
+    /// deadline. Measured, not assumed: the client read at most one chunk past the cap, and the
+    /// server — which would write 256 MiB to a client that kept reading — was cut off long
+    /// before. Falsify: read with `resp.bytes()` again — the call waits for the end of a body
+    /// that never ends and fails with the timeout.
+    #[tokio::test]
+    async fn an_endless_body_is_cut_at_the_cap_and_reading_stops_there() {
+        let limit = 256 * 1024 * 1024;
+        let (port, written) = spawn_streaming_server(limit);
+        let started = Instant::now();
+        let r = send_bounded(
+            req("GET", format!("http://127.0.0.1:{port}/stream")),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("a truncated body is a response, not an error");
+        let took = started.elapsed();
+        assert!(r.truncated);
+        assert_eq!(r.body.len(), MAX_BODY_BYTES, "the body is the cap");
+        assert!(
+            r.size_bytes > MAX_BODY_BYTES && r.size_bytes <= MAX_BODY_BYTES + 1024 * 1024,
+            "read at most a chunk past the cap: {}",
+            r.size_bytes
+        );
+        assert!(took < Duration::from_secs(5), "returned after {took:?}");
+        let written = tokio::time::timeout(Duration::from_secs(5), written)
+            .await
+            .expect("the server noticed the client hung up")
+            .unwrap();
+        assert!(
+            written < limit / 4,
+            "the client stopped reading, yet the server wrote {written} bytes"
+        );
+    }
+
+    /// 🔴 A decompression bomb is inflated only up to the cap: a 256 KiB gzip body that inflates
+    /// to 256 MiB comes back as the 8 MiB cap, flagged, having decoded at most a chunk more.
+    /// Falsify: read with `resp.bytes()` again — `size_bytes` is the whole 256 MiB.
+    #[tokio::test]
+    async fn a_small_gzip_body_that_inflates_past_the_cap_is_inflated_only_to_the_cap() {
+        use std::io::Write as _;
+        let inflated = 256 * 1024 * 1024;
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        let zeros = vec![0u8; 1024 * 1024];
+        for _ in 0..inflated / zeros.len() {
+            gz.write_all(&zeros).unwrap();
+        }
+        let gz = gz.finish().unwrap();
+        assert!(
+            gz.len() < 512 * 1024,
+            "the body on the wire is small: {}",
+            gz.len()
+        );
+        let (port, _rx) = spawn_server(canned(
+            "200 OK",
+            &[("Content-Encoding", "gzip"), ("Content-Type", "text/plain")],
+            &gz,
+        ));
+        let started = Instant::now();
+        let r = send_bounded(
+            req("GET", format!("http://127.0.0.1:{port}/bomb")),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+        let took = started.elapsed();
+        assert!(r.truncated);
+        assert_eq!(r.body.len(), MAX_BODY_BYTES);
+        assert!(
+            r.size_bytes > MAX_BODY_BYTES && r.size_bytes <= MAX_BODY_BYTES + 1024 * 1024,
+            "inflated at most a chunk past the cap, not all {inflated}: {}",
+            r.size_bytes
+        );
+        assert!(took < Duration::from_secs(5), "returned after {took:?}");
+    }
+
+    /// 🔴 No engine error carries the URL: reqwest's text adds ` for url (…)` with the URL as
+    /// sent — `{{VAR}}`s substituted — and the API history keeps the error. A failure while
+    /// sending and one while reading the body, both on a URL holding a credential. Falsify:
+    /// drop `without_url()` in `map_send_error` — both errors end in `for url (…secret…)`.
+    #[tokio::test]
+    async fn an_engine_error_never_carries_the_url_it_was_sent_to() {
+        const SECRET: &str = "sk_live_engine_0123456789";
+        // Closes the connection without answering: an error while sending.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tauri::async_runtime::spawn(async move {
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+            if let Ok((mut stream, _)) = listener.accept().await {
+                read_request(&mut stream).await;
+            }
+        });
+        let url = format!("http://u:{SECRET}@127.0.0.1:{port}/x?api_key={SECRET}");
+        let sending = send(req("GET", url), MAX_BODY_BYTES).await.unwrap_err();
+
+        // Promises 100 bytes, sends 5 and hangs up: an error while reading the body.
+        let (port, _rx) = spawn_server(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nshort".to_vec(),
+        );
+        let url = format!("http://127.0.0.1:{port}/x?api_key={SECRET}");
+        let reading = send(req("GET", url), MAX_BODY_BYTES).await.unwrap_err();
+
+        for err in [&sending, &reading] {
+            assert!(!err.contains(SECRET), "the URL leaked into: {err}");
+            assert!(!err.contains("for url"), "{err}");
+            assert!(!err.contains("127.0.0.1"), "{err}");
+        }
+        assert!(sending.starts_with("invalid request: "), "{sending}");
     }
 
     #[tokio::test]

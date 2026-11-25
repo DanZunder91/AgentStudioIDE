@@ -307,6 +307,22 @@ async fn the_binary_refuses_a_vault_reference_and_nothing_happens() {
             "--body-json",
             "{\"t\":\"{{TOKEN}}\"}",
         ],
+        // Spelled without `{{`: the tab's Format button would decode the JSON escapes, and a
+        // percent-escape can be decoded on the way to Send.
+        vec![
+            "http",
+            "open",
+            "http://127.0.0.1:1/",
+            "--body",
+            r#"{"n":"\u007b\u007bTOKEN}}"}"#,
+        ],
+        vec!["http", "send", "http://127.0.0.1:1/?k=%7b%7bTOKEN%7d%7d"],
+        vec![
+            "http",
+            "send",
+            "--curl",
+            r#"curl http://127.0.0.1:1/ --data-raw '{"n":"\u007B\u007BTOKEN}}"}'"#,
+        ],
     ] {
         let out = run_binary(&env, &args).await;
         assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
@@ -482,5 +498,142 @@ async fn the_help_lists_every_http_and_api_command() {
     assert!(one.contains("--body-json <json>"), "{one}");
     assert!(one.contains("[--header <header>]…"), "{one}");
     assert!(one.contains("Vault variable"), "{one}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// 🔴 The API history holds the user's own sends, and an error recorded by an older build (or
+/// quoting a server) can carry the URL as sent — `{{TOKEN}}` substituted. `agent-studio api
+/// history` prints every field scrubbed: the Vault value reads as its name, a literal credential
+/// in a URL as `***`.
+#[tokio::test]
+async fn api_history_never_prints_a_vault_value_an_error_recorded() {
+    let port = serve().await;
+    let dir = temp_dir("history");
+    write_user_store(&dir, port);
+    let (env, _) = start(&dir);
+    let entry = |id: &str, url: &str, error: String| history_store::HistoryEntry {
+        id: id.into(),
+        method: "POST".into(),
+        url: url.into(),
+        headers: Vec::new(),
+        body: String::new(),
+        status: None,
+        status_text: None,
+        duration_ms: None,
+        size_bytes: None,
+        error: Some(error),
+        at: 1_764_000_000_000,
+        protocol: None,
+        grpc_service: None,
+    };
+    let path = history_store::path_in(&dir);
+    history_store::append(
+        &path,
+        entry(
+            "h1",
+            "{{BASE}}/echo?key={{TOKEN}}",
+            format!(
+                "invalid request: error sending request for url \
+                 (http://127.0.0.1:{port}/echo?key={SECRET})"
+            ),
+        ),
+    )
+    .unwrap();
+    history_store::append(
+        &path,
+        entry(
+            "h2",
+            "https://sk_live_literal0001:@api.example.com/v1?access_token=LIT0002",
+            "error decoding response body for url \
+             (https://api.example.com/v1?access_token=LIT0002)"
+                .into(),
+        ),
+    )
+    .unwrap();
+    for json_out in [false, true] {
+        let mut args = vec!["api", "history"];
+        if json_out {
+            args.push("--json");
+        }
+        let out = run_binary(&env, &args).await;
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        for leak in [
+            SECRET,
+            "sk_live_literal0001",
+            "LIT0002",
+            &format!("127.0.0.1:{port}"),
+        ] {
+            assert!(!stdout.contains(leak), "{leak} leaked: {stdout}");
+        }
+        assert!(stdout.contains("{{BASE}}/echo?key={{TOKEN}}"), "{stdout}");
+        assert!(stdout.contains("access_token=***"), "{stdout}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// An agent's request to an endless response: the engine stops reading at its 8 MiB cap, the
+/// call comes back at once, and the reply says what was cut and that the rest was never read.
+#[tokio::test]
+async fn an_endless_response_is_cut_and_the_agent_is_told() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let mut seen = Vec::new();
+                while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => seen.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\
+                            Transfer-Encoding: chunked\r\n\r\n";
+                if stream.write_all(head.as_bytes()).await.is_err() {
+                    return;
+                }
+                let mut chunk = format!("{:x}\r\n", 64 * 1024).into_bytes();
+                chunk.extend_from_slice(&[b'z'; 64 * 1024]);
+                chunk.extend_from_slice(b"\r\n");
+                // Up to 1 GiB, then hold the body open: it never ends.
+                for _ in 0..16 * 1024 {
+                    if stream.write_all(&chunk).await.is_err() {
+                        return;
+                    }
+                }
+                let _ = stream.read(&mut buf).await;
+            });
+        }
+    });
+    let dir = temp_dir("endless");
+    let (env, _) = start(&dir);
+    let started = std::time::Instant::now();
+    let r = send(
+        &env,
+        "http_send",
+        json!({"url": format!("http://127.0.0.1:{port}/endless"), "timeout_ms": 20000}),
+    )
+    .await;
+    let took = started.elapsed();
+    assert!(r.ok, "{}", r.message);
+    assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
+    assert!(r.message.starts_with("200 OK in "), "{}", &r.message[..200]);
+    assert!(r.message.contains(", over 8.0 MB"), "{}", &r.message[..200]);
+    assert!(
+        r.message.contains(
+            "[Body truncated: showing the first 65,536 of 8,388,608 bytes; the response is over \
+             8.0 MB and the API client read no further.]"
+        ),
+        "{}",
+        &r.message[r.message.len() - 300..]
+    );
+    assert_eq!(r.data["bodyTruncated"], true);
+    let size = r.data["sizeBytes"].as_u64().unwrap();
+    assert!(size > 8 * 1024 * 1024 && size <= 9 * 1024 * 1024, "{size}");
     let _ = std::fs::remove_dir_all(dir);
 }

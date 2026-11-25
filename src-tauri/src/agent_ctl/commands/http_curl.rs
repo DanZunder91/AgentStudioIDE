@@ -9,8 +9,9 @@
 //!
 //! Where an agent is concerned it goes further than the paste box, because a request that is
 //! quietly different from the command that described it is worse than a refusal:
-//! * a form upload (`-F`), a file upload (`-T`), a body read from a file or stdin (`-d @file`) and
-//!   a config file (`-K`) are **refused** with a sentence, not dropped;
+//! * a form upload (`-F`), a file upload (`-T`), a body read from a file or stdin (`-d @file`),
+//!   headers read from a file (`-H @file`), cookies read from a file (`-b <file>`) and a config
+//!   file (`-K`) are **refused** with a sentence, not dropped;
 //! * `--json`, `-G`/`--get`, `-I`/`--head`, `-A`/`--user-agent`, `-e`/`--referer`,
 //!   `--oauth2-bearer` and `-m`/`--max-time` are read, and `--data-urlencode` encodes like curl.
 
@@ -331,7 +332,16 @@ pub fn parse(input: &str) -> Result<ParsedCurl, String> {
         match tok {
             "-X" | "--request" => method = take().or(method),
             "-H" | "--header" => {
-                if let Some(h) = take().as_deref().and_then(split_header) {
+                let Some(v) = take() else { continue };
+                if v.starts_with('@') {
+                    return Err(
+                        "That curl command reads its headers from a file or stdin (-H @…). \
+                         Agent Studio does not read files for a request: write each header \
+                         out (-H 'Name: value')."
+                            .to_string(),
+                    );
+                }
+                if let Some(h) = split_header(&v) {
                     headers.push(h);
                 }
             }
@@ -374,8 +384,17 @@ pub fn parse(input: &str) -> Result<ParsedCurl, String> {
                 }
             }
             "-b" | "--cookie" => {
-                // Without `=` curl reads the value as a cookie FILE: no header at all.
-                if let Some(v) = take().filter(|v| v.contains('=')) {
+                // Without `=` curl reads the value as a cookie FILE (`-` is stdin).
+                let Some(v) = take() else { continue };
+                if !v.contains('=') && !v.trim().is_empty() {
+                    return Err(format!(
+                        "That curl command reads cookies from a file (-b {}). Agent Studio \
+                         does not read files for a request: write the cookies out \
+                         (-b 'name=value; other=value').",
+                        super::report::short_to(&v, 80)
+                    ));
+                }
+                if v.contains('=') {
                     match cookie {
                         Some(at) => {
                             headers[at].1.push_str("; ");
