@@ -12,16 +12,21 @@
 //!   user saved it — the agent picks which one and which of the user's environments, and cannot
 //!   change its method, URL, headers or body. Its `{{VAR}}`s are resolved here, in Rust, by the
 //!   API client's own rule (the chosen environment, or the active one; an unset name becomes
-//!   empty). Whatever comes back is passed through [`report::Redactor`], so a substituted value
-//!   an echo endpoint or an error repeats reads as its `{{NAME}}` again, and a credential the user
-//!   typed literally into the request (URL userinfo, a credential-named parameter or header)
-//!   reads as `***`.
+//!   empty). Whatever comes back is passed through [`report::Redactor`], built from that
+//!   request's own substituted values, so a value an echo endpoint or an error repeats reads as
+//!   its `{{NAME}}` again, and a credential the user typed literally into the request (URL
+//!   userinfo, a credential-named parameter or header) reads as `***`.
 //!
 //! Nothing an agent reads carries a Vault value: environments are listed by variable **name**,
 //! saved requests by URL as written ({{HOST}} stays a name) with credential-looking URL parts
-//! masked, history without headers or bodies and with every field scrubbed of every Vault value
-//! and of credentials in URLs ([`report::scrub`]) — an error the user's own send recorded can
-//! hold the URL as sent. Every error a send returns gets the same pass.
+//! masked, and the history by method, URL as written (masked the same way), status and time —
+//! no headers, no bodies, no recorded status text, and of a failure only its kind
+//! ([`report::failure_kind`]): an error the user's own send recorded can quote the URL as sent.
+//!
+//! 🔴 No oracle: nothing an agent wrote — its request, what answers it, its error, its history
+//! entry — is matched against Vault values. A `{{NAME}}` put back there would tell the agent
+//! that a value it guessed (`?q=Summer2024!`, a host) is the user's secret. An agent-authored
+//! request cannot carry a Vault value it does not already know, so there is nothing to hide.
 //!
 //! Bounded: request inputs ([`MAX_URL`], [`MAX_HEADERS`], [`MAX_BODY`]), time
 //! ([`crate::http::REQUEST_TIMEOUT`] at most), and every reply ([`report`]'s caps), each cut said
@@ -149,8 +154,10 @@ pub const TOOLS: &[ToolSpec] = &[
         cli: &["api", "history"],
         summary: "List recent requests from the API history: method, URL, status and time, \
                   newest first.",
-        details: "--limit defaults to 20, at most 200. Values from the user's environments \
-                  read as their {{NAME}} and credentials in URLs as ***, in every field.",
+        details: "--limit defaults to 20, at most 200. URLs are shown as the user wrote them \
+                  ({{VARS}} stay names; credential-looking parts read as ***). A failed \
+                  request shows only its kind of failure (timeout, connection error, …), \
+                  never the error text; a status shows its standard reason phrase.",
         params: &[Param::new(
             "limit",
             ParamKind::Integer,
@@ -878,19 +885,17 @@ fn now_ms() -> i64 {
 /// Send `wire` through the API client's engine, redact what comes back, and append the literal
 /// request and its outcome to the API history.
 ///
-/// A response is redacted with the request's own `redactor`; an error — which can name
-/// anything the request carried — also with every Vault value (`vault`) and with credentials
-/// masked in any URL it names ([`report::scrub`]), before it is returned or recorded.
+/// `redactor` is the request's own: a saved request's substituted values and literal
+/// credentials, or nothing for an agent's request (see the module doc's 🔴 on oracles).
 async fn send_recorded(
     ctx: &ToolCtx,
     wire: HttpRequest,
     literal: Literal,
     timeout: Duration,
     redactor: &Redactor,
-    vault: &Redactor,
 ) -> Sent {
     let at = now_ms();
-    let outcome = redacted(engine::send_bounded(wire, timeout).await, redactor, vault);
+    let outcome = redacted(engine::send_bounded(wire, timeout).await, redactor);
     let history_id = ulid::Ulid::new().to_string();
     let (status, status_text, duration_ms, size_bytes, error) = match &outcome {
         Ok(r) => (
@@ -930,16 +935,16 @@ async fn send_recorded(
     }
 }
 
-/// A send's outcome as it may be returned and recorded: the response through the request's
-/// `redactor`; an error through it, every Vault value (`vault`) and URL masking.
+/// A send's outcome as it may be returned and recorded: the response and an error through the
+/// request's own `redactor`, and every URL an error names masked by its shape
+/// ([`report::scrub`]).
 fn redacted(
     outcome: Result<HttpResponse, String>,
     redactor: &Redactor,
-    vault: &Redactor,
 ) -> Result<HttpResponse, String> {
     outcome
         .map(|r| redactor.response(r))
-        .map_err(|e| report::scrub(&e, &redactor.clone().and(vault)))
+        .map_err(|e| report::scrub(&e, redactor))
 }
 
 /// Bring the History rail into view with the new entries (`handlers/http.ts`).
@@ -993,14 +998,13 @@ fn run_send(ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move {
         let req = agent_request(&args)?;
         let (timeout, timeout_note) = deadline(&args, req.timeout_ms)?;
-        let vault = Redactor::vault(&load_store(&ctx));
+        // The agent wrote every byte: no value-based redaction (it would be a guessing oracle).
         let sent = send_recorded(
             &ctx,
             req.wire(),
             req.literal(),
             timeout,
             &Redactor::default(),
-            &vault,
         )
         .await;
         emit_history(&ctx, &[&sent]);
@@ -1390,11 +1394,13 @@ fn run_history(ctx: ToolCtx, args: Args) -> ToolFuture {
         if total == 0 {
             return Ok(ToolOk::new("The API history is empty.", json!([])));
         }
-        // 🔴 Every field is scrubbed before it is cut or shown: an entry is the user's own send,
-        // and its error can quote the URL as sent — `{{VAR}}`s substituted — or a server's
-        // message. Every Vault value reads as its `{{NAME}}`, a credential in the entry's URL
-        // (or in any URL a text names) as `***`.
-        let vault = Redactor::vault(&load_store(&ctx));
+        // 🔴 Only what cannot carry a substituted value is handed back, and nothing is matched
+        // against Vault values (the agent's own entries are here too: a match would confirm a
+        // value it guessed). The method, service and URL are the request as written (the app
+        // and these tools record the literal request, `{{VAR}}`s unsubstituted), the URL masked
+        // by its shape; the status is a number and its reason phrase comes from the number. A
+        // recorded error or status text can quote the request as sent or a server's message,
+        // so neither is returned: a failure shows only its kind.
         let recent: Vec<&HistoryEntry> = history.entries.iter().rev().take(limit).collect();
         let mut lines = vec![format!(
             "{} request{} in the API history, newest first{}:",
@@ -1412,53 +1418,46 @@ fn run_history(ctx: ToolCtx, args: Args) -> ToolFuture {
         )];
         let mut data = Vec::new();
         for e in &recent {
-            let redactor = vault.clone().masking(&report::url_secrets(&e.url));
-            let text = |t: &str| report::short(&report::scrub(t, &redactor));
-            let method = text(&e.method);
+            let name = |t: &str| report::short_to(t, NAME_CAP);
+            let method = name(&e.method);
             let grpc = e.protocol.as_deref() == Some("grpc");
+            let service = e.grpc_service.as_deref().map(name);
             let what = if grpc {
-                format!(
-                    "gRPC {}/{method}",
-                    e.grpc_service
-                        .as_deref()
-                        .map(text)
-                        .as_deref()
-                        .unwrap_or("?"),
-                )
+                format!("gRPC {}/{method}", service.as_deref().unwrap_or("?"))
             } else {
                 method.clone()
             };
-            let status_text = e.status_text.as_deref().map(text);
-            let error = e.error.as_deref().map(text);
-            let outcome = match (&error, e.status) {
-                (Some(err), _) => format!("failed: {err}"),
+            let reason = e.status.and_then(|s| report::status_reason(grpc, s));
+            let failure = e.error.as_deref().map(report::failure_kind);
+            let outcome = match (failure, e.status) {
+                (Some(kind), _) => format!("failed: {kind}"),
                 (None, Some(s)) => format!(
                     "{s} {}{}",
-                    status_text.as_deref().unwrap_or(""),
+                    reason.unwrap_or(""),
                     e.duration_ms
                         .map(|d| format!(", {d} ms"))
                         .unwrap_or_default()
                 ),
                 (None, None) => "no outcome".into(),
             };
-            let url = report::short(&redact_url(&redactor.apply(&e.url)));
+            let url = report::short(&redact_url(&e.url));
             lines.push(format!(
                 "  {}  {what} {url}  →  {}",
                 utc(e.at),
                 outcome.trim_end()
             ));
             data.push(json!({
-                "id": text(&e.id),
+                "id": name(&e.id),
                 "at": e.at,
-                "protocol": text(e.protocol.as_deref().unwrap_or("http")),
+                "protocol": if grpc { "grpc" } else { "http" },
                 "method": method,
-                "grpcService": e.grpc_service.as_deref().map(text),
+                "grpcService": service,
                 "url": url,
                 "status": e.status,
-                "statusText": status_text,
+                "statusText": reason,
                 "durationMs": e.duration_ms,
                 "sizeBytes": e.size_bytes,
-                "error": error,
+                "error": failure,
             }));
         }
         Ok(ToolOk::new(lines.join("\n"), Value::Array(data)))
@@ -1476,8 +1475,7 @@ fn run_saved(ctx: ToolCtx, args: Args) -> ToolFuture {
             .as_ref()
             .map(|e| format!("environment \"{}\"", e.name))
             .unwrap_or_else(|| "no environment (none is active)".into());
-        let vault = Redactor::vault(&store);
-        let sent = send_recorded(&ctx, r.wire, r.literal, timeout, &r.redactor, &vault).await;
+        let sent = send_recorded(&ctx, r.wire, r.literal, timeout, &r.redactor).await;
         emit_history(&ctx, &[&sent]);
         let redaction_note = (!r.redactor.is_empty()).then(|| {
             "Values substituted from the environment are shown as their {{NAME}}, and \
@@ -1572,11 +1570,11 @@ fn run_compare(ctx: ToolCtx, args: Args) -> ToolFuture {
         let pa = prepare_side("A", a, &args, &store, env)?;
         let pb = prepare_side("B", b, &args, &store, env)?;
         let (timeout, timeout_note) = deadline(&args, None)?;
-        // Both at once, as the app's compare sends them: B never waits on A.
-        let vault = Redactor::vault(&store);
+        // Both at once, as the app's compare sends them: B never waits on A. Each side through
+        // its own redactor only — a URL side's is empty (see the module doc's 🔴 on oracles).
         let (sa, sb) = tokio::join!(
-            send_recorded(&ctx, pa.wire, pa.literal, timeout, &pa.redactor, &vault),
-            send_recorded(&ctx, pb.wire, pb.literal, timeout, &pb.redactor, &vault),
+            send_recorded(&ctx, pa.wire, pa.literal, timeout, &pa.redactor),
+            send_recorded(&ctx, pb.wire, pb.literal, timeout, &pb.redactor),
         );
         emit_history(&ctx, &[&sa, &sb]);
         let side = |label: String, s: &Sent| Side {

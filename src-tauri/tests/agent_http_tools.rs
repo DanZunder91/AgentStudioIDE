@@ -503,8 +503,8 @@ async fn the_help_lists_every_http_and_api_command() {
 
 /// 🔴 The API history holds the user's own sends, and an error recorded by an older build (or
 /// quoting a server) can carry the URL as sent — `{{TOKEN}}` substituted. `agent-studio api
-/// history` prints every field scrubbed: the Vault value reads as its name, a literal credential
-/// in a URL as `***`.
+/// history` never prints a recorded error: a failure reads as its kind, the URL as written with
+/// a literal credential as `***`.
 #[tokio::test]
 async fn api_history_never_prints_a_vault_value_an_error_recorded() {
     let port = serve().await;
@@ -568,8 +568,60 @@ async fn api_history_never_prints_a_vault_value_an_error_recorded() {
         }
         assert!(stdout.contains("{{BASE}}/echo?key={{TOKEN}}"), "{stdout}");
         assert!(stdout.contains("access_token=***"), "{stdout}");
+        assert!(
+            !stdout.contains("for url"),
+            "a recorded error was printed: {stdout}"
+        );
+        if json_out {
+            let v: Value = serde_json::from_str(&stdout).unwrap();
+            assert_eq!(v["data"][0]["error"], "response error");
+            assert_eq!(v["data"][1]["error"], "send error");
+        } else {
+            assert!(stdout.contains("→  failed: send error"), "{stdout}");
+            assert!(stdout.contains("→  failed: response error"), "{stdout}");
+        }
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// 🔴 No guessing oracle, through the real command: an agent that writes a guess of the user's
+/// secret into its own request (a query value, a header name) reads the same replies — the
+/// send's error and `api history` — whether the guess is right or wrong. The sends fail before
+/// any I/O (a header value with a control character).
+#[tokio::test]
+async fn an_agents_right_guess_reads_like_a_wrong_one() {
+    let port = serve().await;
+    let mut outputs = Vec::new();
+    for guess in [SECRET, "sk_it_fedcba9876543210"] {
+        let dir = temp_dir("oracle");
+        write_user_store(&dir, port);
+        let (env, _) = start(&dir);
+        let url = format!("http://127.0.0.1:1/x?q={guess}");
+        let header = format!("{guess}: bad\u{1}value");
+        let send = run_binary(&env, &["http", "send", &url, "--header", &header]).await;
+        assert_eq!(send.status.code(), Some(1), "{send:?}");
+        let history = run_binary(&env, &["api", "history"]).await;
+        assert_eq!(history.status.code(), Some(0), "{history:?}");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&send.stderr),
+            String::from_utf8_lossy(&send.stdout)
+        ) + &String::from_utf8_lossy(&history.stdout)
+            .lines()
+            .map(|l| l.split(" UTC  ").last().unwrap_or_default().to_string() + "\n")
+            .collect::<String>();
+        assert!(
+            text.contains(guess),
+            "the guess is shown as written: {text}"
+        );
+        assert!(
+            !text.contains("{{TOKEN}}"),
+            "a Vault name came back: {text}"
+        );
+        outputs.push(text.replace(guess, "<guess>"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    assert_eq!(outputs[0], outputs[1]);
 }
 
 /// An agent's request to an endless response: the engine stops reading at its 8 MiB cap, the

@@ -1,7 +1,6 @@
 //! The reply shapes: caps that say they cut, order-preserving JSON, redaction of substituted
 //! values and credential-looking URL parts, and the compare diff.
 use super::*;
-use crate::api_store::ApiStore;
 
 fn header(name: &str, value: &str) -> HttpHeader {
     HttpHeader {
@@ -129,10 +128,10 @@ fn the_redactor_catches_form_decoded_slash_escaped_and_lowercase_hex_echoes() {
     }
 }
 
-/// A literal credential reads as `***`, a Vault value as its name, and where both know one
-/// spelling the name wins. `vault` holds every variable of every environment.
+/// A literal credential reads as `***`, a substituted value as its name, and where both know one
+/// spelling the name wins.
 #[test]
-fn masking_vault_and_merging_redactors() {
+fn a_substituted_value_keeps_its_name_over_the_mask() {
     let used = Redactor::new(&[("TOKEN".into(), "tok_shared_123".into())]);
     let r = used.masking(&["tok_shared_123".into(), "literal-pass".into(), "ab".into()]);
     assert_eq!(
@@ -140,40 +139,212 @@ fn masking_vault_and_merging_redactors() {
         "a={{TOKEN}} b=*** c=ab",
         "the name wins over the mask; a two-letter value is left alone"
     );
-    let store = ApiStore {
-        environments: vec![
-            crate::api_store::Environment {
-                id: "e1".into(),
-                name: "dev".into(),
-                variables: vec![crate::api_store::EnvVar {
-                    key: "BASE".into(),
-                    value: "https://dev.internal:8443".into(),
-                }],
-            },
-            crate::api_store::Environment {
-                id: "e2".into(),
-                name: "prod".into(),
-                variables: vec![crate::api_store::EnvVar {
-                    key: "PG_PASSWORD".into(),
-                    value: "pg-prod-hunter2".into(),
-                }],
-            },
-        ],
-        ..ApiStore::default()
-    };
-    let vault = Redactor::vault(&store);
+}
+
+/// 🔴 The URL parser (WHATWG's, which reqwest uses) reads a userinfo after any run of `/` and
+/// `\` behind a special scheme, in any case, with tabs and newlines dropped and the ends
+/// trimmed — and sends it as Basic auth. Each of those spellings is masked, and its credentials
+/// are listed for the redactor. Falsify: find the userinfo only after a literal `://` (as
+/// before) — the one- and three-slash rows go red.
+#[test]
+fn userinfo_is_masked_in_every_spelling_the_url_parser_reads() {
+    let cases = [
+        (
+            "https:///sk_live_TRIPLE:@api.stripe.com/v1",
+            "https:///***:@api.stripe.com/v1",
+        ),
+        (
+            "https:/sk_live_SINGLE:@api.stripe.com/v1",
+            "https:/***:@api.stripe.com/v1",
+        ),
+        (
+            "https:sk_live_NOSLASH:@api.stripe.com/v1",
+            "https:***:@api.stripe.com/v1",
+        ),
+        (
+            "https:\\\\sk_live_BACK:@api.stripe.com/v1",
+            "https:\\\\***:@api.stripe.com/v1",
+        ),
+        (
+            "HTTPS:/\\ghp_MIXED@github.com/o/r",
+            "HTTPS:/\\***@github.com/o/r",
+        ),
+        ("wss:////u:pw@h/socket", "wss:////***:***@h/socket"),
+        (" https:/\t/tab_user:tab_pw@h/x\n", "https://***:***@h/x"),
+        ("https:/{{U}}:{{P}}@h/", "https:/{{U}}:{{P}}@h/"),
+        // A `\` ends a special URL's authority: this `@` is in the path.
+        ("https:\\\\h\\a@b", "https:\\\\h\\a@b"),
+        // Not special: `///` leaves an empty authority, and the `@` is in the path.
+        ("postgres:///u:pw@h/db", "postgres:///u:pw@h/db"),
+    ];
+    for (url, want) in cases {
+        assert_eq!(redact_url(url), want, "{url:?}");
+    }
     assert_eq!(
-        vault.apply("could not connect: dev.internal:8443 (pg-prod-hunter2)"),
-        "could not connect: {{BASE}} ({{PG_PASSWORD}})"
+        url_secrets("https:///sk_live_TRIPLE:@api.stripe.com/v1"),
+        vec!["sk_live_TRIPLE"]
     );
-    let both = Redactor::default()
-        .masking(&["xyzw-literal".into()])
-        .and(&vault);
     assert_eq!(
-        both.apply("xyzw-literal pg-prod-hunter2"),
-        "*** {{PG_PASSWORD}}"
+        url_secrets("https:/sk_live_SINGLE:pw_SINGLE@api.stripe.com/v1"),
+        vec!["sk_live_SINGLE", "pw_SINGLE"]
     );
-    assert!(Redactor::vault(&ApiStore::default()).is_empty());
+    assert_eq!(
+        redact_urls_in("for url (https:///sk_live_X:@h/v1)"),
+        "for url (https:///***:@h/v1)"
+    );
+
+    // Every spelling the parser reads a userinfo from is masked: schemes in any case, every run
+    // of slashes and backslashes, tabs and newlines inside, spaces around.
+    let mut parsed_with_userinfo = 0;
+    for scheme in ["http", "HTTPS", "wss", "Ftp"] {
+        for slashes in [
+            "", "/", "//", "///", "////", "\\", "\\\\", "/\\", "\\/", "/\t/", "\n//",
+        ] {
+            for (before, after) in [("", ""), ("  ", " "), ("\t", "\r\n")] {
+                let url = format!(
+                    "{before}{scheme}:{slashes}usr_SECRET1:pw_SECRET2@h.example/p?q=1{after}"
+                );
+                let Ok(u) = reqwest::Url::parse(&url) else {
+                    continue;
+                };
+                if u.username().is_empty() && u.password().is_none() {
+                    continue;
+                }
+                parsed_with_userinfo += 1;
+                let out = redact_url(&url);
+                for secret in ["usr_SECRET1", "pw_SECRET2"] {
+                    assert!(!out.contains(secret), "{url:?} → {out:?}");
+                    assert!(url_secrets(&url).iter().any(|s| s == secret), "{url:?}");
+                }
+            }
+        }
+    }
+    assert!(parsed_with_userinfo >= 100, "{parsed_with_userinfo}");
+}
+
+/// The webhook URLs Slack and Discord hand out are a credential in their path, and so is a
+/// Telegram bot's token: masked by host and path shape, listed for the redactor; a `{{NAME}}`
+/// stays, and other hosts and paths are left alone. Falsify: make `path_secrets` return nothing
+/// — the masked rows go red.
+#[test]
+fn credentials_in_well_known_webhook_and_bot_paths_are_masked() {
+    let cases = [
+        (
+            "https://hooks.slack.com/services/T000/B000/SLACKPATHSECRET",
+            "https://hooks.slack.com/services/***/***/***",
+        ),
+        (
+            "https://hooks.slack.com/workflows/T1/A2/333/WFSECRET",
+            "https://hooks.slack.com/workflows/***/***/***/***",
+        ),
+        (
+            "https://HOOKS.Slack.com:443/services/T/B/XSECRET",
+            "https://HOOKS.Slack.com:443/services/***/***/***",
+        ),
+        (
+            "https://discord.com/api/webhooks/123456/DISCORDTOKEN?wait=true",
+            "https://discord.com/api/webhooks/***/***?wait=true",
+        ),
+        (
+            "https://discordapp.com/api/v10/webhooks/1/DTOK",
+            "https://discordapp.com/api/v10/webhooks/***/***",
+        ),
+        (
+            "https://canary.discord.com/api/webhooks/1/DTOK",
+            "https://canary.discord.com/api/webhooks/***/***",
+        ),
+        (
+            "https://api.telegram.org/bot123456:ABC-DEF/sendMessage?chat_id=1",
+            "https://api.telegram.org/bot***/sendMessage?chat_id=1",
+        ),
+        (
+            "https://api.telegram.org/file/bot123456:ABC/photos/p.jpg",
+            "https://api.telegram.org/file/bot***/photos/p.jpg",
+        ),
+        (
+            "https://hooks.slack.com/services/{{SLACK_HOOK}}",
+            "https://hooks.slack.com/services/{{SLACK_HOOK}}",
+        ),
+        (
+            "https://api.telegram.org/bot{{TG_TOKEN}}/getMe",
+            "https://api.telegram.org/bot{{TG_TOKEN}}/getMe",
+        ),
+        (
+            "https://discord.com/channels/1/2",
+            "https://discord.com/channels/1/2",
+        ),
+        (
+            "https://notdiscord.com/api/webhooks/1/x",
+            "https://notdiscord.com/api/webhooks/1/x",
+        ),
+        (
+            "https://example.com/services/T/B/X",
+            "https://example.com/services/T/B/X",
+        ),
+        ("https://api.telegram.org/", "https://api.telegram.org/"),
+        ("{{BASE}}/services/T/B/X", "{{BASE}}/services/T/B/X"),
+    ];
+    for (url, want) in cases {
+        assert_eq!(redact_url(url), want, "{url}");
+    }
+    assert_eq!(
+        url_secrets("https://hooks.slack.com/services/T000/B000/SLACKPATHSECRET"),
+        vec!["T000", "B000", "SLACKPATHSECRET"]
+    );
+    assert_eq!(
+        url_secrets("https://api.telegram.org/bot123%3AABC/getMe"),
+        vec!["123%3AABC", "123:ABC"]
+    );
+    assert_eq!(
+        redact_urls_in("posting to https://hooks.slack.com/services/T/B/XYZSECRET failed"),
+        "posting to https://hooks.slack.com/services/***/***/*** failed"
+    );
+}
+
+/// A recorded failure is named by the fixed words the engines start their errors with, never
+/// from the rest; a status reason comes from the number alone.
+#[test]
+fn a_failure_kind_and_a_status_reason_come_from_fixed_words_and_numbers() {
+    for (error, kind) in [
+        ("request timed out after 30s", "timeout"),
+        ("request timed out after 300 ms", "timeout"),
+        ("could not connect: corpdb-prod.invalid", "connection error"),
+        ("could not connect", "connection error"),
+        (
+            "could not connect to https://u:p@h:443: transport error",
+            "connection error",
+        ),
+        (
+            "gRPC channel not ready: transport error",
+            "connection error",
+        ),
+        ("TLS configuration failed: bad certificate", "TLS error"),
+        (
+            "too many redirects: error following redirect",
+            "redirect error",
+        ),
+        ("invalid request: error sending request", "send error"),
+        ("invalid request: builder error", "invalid request"),
+        ("invalid HTTP method: BOGUS METHOD", "invalid request"),
+        (
+            "invalid URL: relative URL without a base",
+            "invalid request",
+        ),
+        ("invalid header value for \"X\"", "invalid request"),
+        ("error decoding response body", "response error"),
+        ("request or response body error", "response error"),
+        ("Unauthenticated: token tok_123 rejected", "request failed"),
+        ("timeout talking to request timed out", "request failed"),
+        ("", "request failed"),
+    ] {
+        assert_eq!(failure_kind(error), kind, "{error}");
+    }
+    assert_eq!(status_reason(false, 200), Some("OK"));
+    assert_eq!(status_reason(false, 404), Some("Not Found"));
+    assert_eq!(status_reason(false, 799), None);
+    assert_eq!(status_reason(true, 0), Some("OK"));
+    assert_eq!(status_reason(true, 16), Some("Unauthenticated"));
+    assert_eq!(status_reason(true, 99), Some("Unknown"));
 }
 
 /// 🔴 Every piece of a userinfo is a credential — a token as the user name (`ghp_…@`), a key
@@ -223,6 +394,12 @@ fn url_credentials_and_secret_named_parameters_are_masked_but_references_stay() 
              &page=1",
         ),
         ("https://h/?a=1;sid=xyz;b=2", "https://h/?a=1;sid=***;b=2"),
+        (
+            "https://h.example/x?pass=PASSVALUE1&pw=PWVALUE22&passphrase=PHRASE333\
+             &private_key=PK4&credentials=CR5&page=2",
+            "https://h.example/x?pass=***&pw=***&passphrase=***&private_key=***\
+             &credentials=***&page=2",
+        ),
         ("https://h/?%74oken=abc", "https://h/?%74oken=***"),
         ("https://h/docs#section-2", "https://h/docs#section-2"),
         ("https://h/a@b", "https://h/a@b"),
@@ -305,10 +482,33 @@ fn credential_names_are_read_through_case_punctuation_and_escapes() {
         "%41pi_Key",
         "CODE",
         "jwt",
+        "pass",
+        "PASS",
+        "db_pass",
+        "pw",
+        "adminPw",
+        "passphrase",
+        "key_passphrase",
+        "passcode",
+        "private_key",
+        "privateKeyId",
+        "credential",
+        "credentials",
+        "X-Credentials",
     ] {
         assert!(secret_param(name), "{name}");
     }
-    for name in ["page", "zipcode", "content-type", "accept", "q", "barcode"] {
+    for name in [
+        "page",
+        "zipcode",
+        "content-type",
+        "accept",
+        "q",
+        "barcode",
+        "passenger",
+        "pwa",
+        "passage_id",
+    ] {
         assert!(!secret_param(name), "{name}");
     }
 }

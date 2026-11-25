@@ -773,6 +773,143 @@ async fn collections_list_names_and_urls_as_written_and_never_values() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// 🔴 A credential the user typed into a saved URL in a spelling the URL parser reads (one or
+/// three slashes, a backslash), under a credential name the list did not know (`pass`, `pw`,
+/// `passphrase`), or in a webhook's path is masked wherever an agent reads the URL: the
+/// collections listing, the history, and `api run`'s label. Falsify: cut the userinfo only after
+/// `://`, or drop the webhook path rule — the matching rows go red.
+#[tokio::test]
+async fn odd_userinfo_spellings_new_credential_names_and_webhook_paths_are_masked_in_listings() {
+    let dir = temp_dir();
+    let (ctx, _) = test_ctx(&dir, "t-odd");
+    let mut store = user_store("https://api.internal.example:8443");
+    let urls = [
+        "https:///sk_live_TRIPLE:@api.stripe.com/v1",
+        "https:/sk_live_SINGLE:@api.stripe.com/v1",
+        "https://h.example/x?pass=PASSVALUE1&pw=PWVALUE22&passphrase=PHRASE333",
+        "https://hooks.slack.com/services/T000/B000/SLACKPATHSECRET",
+        "https://discord.com/api/webhooks/123/DISCORDTOKEN",
+        "https://api.telegram.org/bot123456:TGTOKEN/getMe",
+    ];
+    let path = history_store::path_in(&dir);
+    for (i, u) in urls.iter().enumerate() {
+        store
+            .collections
+            .push(saved(&format!("odd-{i}"), &format!("Odd {i}"), "GET", u));
+        history_store::append(
+            &path,
+            HistoryEntry {
+                id: format!("h-odd-{i}"),
+                method: "GET".into(),
+                url: u.to_string(),
+                headers: Vec::new(),
+                body: String::new(),
+                status: Some(200),
+                status_text: Some("OK".into()),
+                duration_ms: Some(1),
+                size_bytes: Some(1),
+                error: None,
+                at: 1_764_000_000_000,
+                protocol: None,
+                grpc_service: None,
+            },
+        )
+        .unwrap();
+    }
+    write_store(&dir, &store);
+    let secrets = [
+        "sk_live_TRIPLE",
+        "sk_live_SINGLE",
+        "PASSVALUE1",
+        "PWVALUE22",
+        "PHRASE333",
+        "SLACKPATHSECRET",
+        "DISCORDTOKEN",
+        "TGTOKEN",
+    ];
+    for tool in ["api_collections", "api_history"] {
+        let (status, r) = crate::agent_ctl::handle(ctx.clone(), &call(tool, json!({}))).await;
+        assert_eq!(status, 200, "{}", r.message);
+        let text = format!("{}{}", r.message, r.data);
+        for s in secrets {
+            assert!(!text.contains(s), "{tool}: {s} leaked: {}", r.message);
+        }
+        for shown in [
+            "https:///***:@api.stripe.com/v1",
+            "https:/***:@api.stripe.com/v1",
+            "?pass=***&pw=***&passphrase=***",
+            "hooks.slack.com/services/***/***/***",
+            "discord.com/api/webhooks/***/***",
+            "api.telegram.org/bot***/getMe",
+        ] {
+            assert!(r.message.contains(shown), "{tool}: {shown}: {}", r.message);
+        }
+    }
+    // `api run`'s label, and what its redactor masks in a reply (resolved only: nothing is sent
+    // to a real host from a test).
+    let r = resolve(
+        &store.collections[store.collections.len() - urls.len()],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        r.label,
+        "Saved request \"Odd 0\": GET https:///***:@api.stripe.com/v1 (no environment)"
+    );
+    assert_eq!(r.redactor.apply("echo: sk_live_TRIPLE"), "echo: ***");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Every way the HTTP engine fails has a kind the history can show — tied to the engine's own
+/// sentences, so a reworded error cannot silently fall back to "request failed".
+#[tokio::test]
+async fn every_engine_failure_has_a_kind() {
+    let port = serve();
+    let send = |method: &str, url: String, headers: Vec<HttpHeader>, ms: u64| {
+        engine::send_bounded(
+            HttpRequest {
+                method: method.into(),
+                url,
+                headers,
+                body: None,
+            },
+            Duration::from_millis(ms),
+        )
+    };
+    let ok_url = format!("http://127.0.0.1:{port}/json");
+    let bad_header = vec![HttpHeader {
+        name: "X-Probe".into(),
+        value: "bad\u{1}value".into(),
+    }];
+    for (outcome, kind) in [
+        (
+            send("BOGUS METHOD", ok_url.clone(), Vec::new(), 1000).await,
+            "invalid request",
+        ),
+        (
+            send("GET", "not a url".into(), Vec::new(), 1000).await,
+            "invalid request",
+        ),
+        (
+            send("GET", ok_url.clone(), bad_header, 1000).await,
+            "invalid request",
+        ),
+        (
+            send(
+                "GET",
+                format!("http://127.0.0.1:{port}/slow"),
+                Vec::new(),
+                200,
+            )
+            .await,
+            "timeout",
+        ),
+    ] {
+        let err = outcome.expect_err("the send fails");
+        assert_eq!(report::failure_kind(&err), kind, "{err}");
+    }
+}
+
 #[tokio::test]
 async fn a_long_collection_is_cut_and_says_so() {
     let dir = temp_dir();
@@ -887,7 +1024,7 @@ async fn history_lists_the_newest_first_bounded_and_without_headers_or_bodies() 
         .starts_with("The last 20 of 25 requests in the API history, newest first:"));
     let lines: Vec<&str> = r.message.lines().collect();
     assert!(
-        lines[1].contains("GET https://api.example.com/24?token=***  →  failed: could not connect"),
+        lines[1].contains("GET https://api.example.com/24?token=***  →  failed: connection error"),
         "{}",
         lines[1]
     );
@@ -923,13 +1060,14 @@ async fn history_lists_the_newest_first_bounded_and_without_headers_or_bodies() 
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// 🔴 The history is the user's own sends, and an error can quote the URL as sent — reqwest's
-/// ` for url (…)` with the `{{VAR}}`s already substituted — or a server's message. Every field
-/// `api history` returns is scrubbed of every Vault value and of credentials in any URL, before
-/// it is cut (a secret straddling the cut must not leave its first characters behind).
-/// Falsify: return the fields as stored (only `short`) in `run_history` — the secret rows go red.
+/// 🔴 The history is the user's own sends and the agent's, and a recorded error or status text
+/// can quote the request as sent — reqwest's ` for url (…)` with the `{{VAR}}`s substituted, the
+/// gRPC engine's `could not connect to <endpoint>` — or a server's message. `api history` hands
+/// back none of that text: a failure is only its kind, a status only its standard reason phrase,
+/// the URL the request as written (masked by its shape). Falsify: return the recorded error (or
+/// status text) in `run_history` — the leak and kind rows go red.
 #[tokio::test]
-async fn history_never_hands_back_a_vault_value_or_a_url_credential_from_any_field() {
+async fn history_returns_no_recorded_text_that_could_carry_a_secret() {
     let dir = temp_dir();
     let (ctx, _) = test_ctx(&dir, "t-hist-scrub");
     let mut store = user_store("https://api.internal.example:8443");
@@ -968,17 +1106,28 @@ async fn history_never_hands_back_a_vault_value_or_a_url_credential_from_any_fie
          (https://h.example/next?sig=LITERALSIG123&page=2)"
             .into(),
     );
-    let mut c = entry("h-c", "localhost:50051");
+    let mut c = entry("h-c", "{{GRPC_HOST}}:443");
     c.protocol = Some("grpc".into());
     c.grpc_service = Some("svc.Greeter".into());
     c.method = "SayHello".into();
     c.status = Some(16);
-    c.status_text = Some(format!("UNAUTHENTICATED: token {SECRET} rejected"));
+    c.status_text = Some(format!("Unauthenticated: token {SECRET} rejected"));
     let mut d = entry("h-d", "{{BASE}}/db");
     d.error = Some("auth failed for p%40ss%2Fw%2Brd%21-prod at pg".into());
-    let mut e = entry("h-e", "{{BASE}}/long");
-    e.error = Some(format!("{}{SECRET}", "x".repeat(report::VALUE_CAP - 5)));
-    for h in [a, b, c, d, e] {
+    let mut e = entry("h-e", "{{GRPC_HOST}}:443");
+    e.protocol = Some("grpc".into());
+    e.grpc_service = Some("svc.Greeter".into());
+    e.method = "SayHello".into();
+    e.error = Some(format!(
+        "could not connect to https://{SECRET}.internal.example:443: transport error"
+    ));
+    let mut f = entry("h-f", "{{BASE}}/ok");
+    f.status = Some(200);
+    f.status_text = Some(format!("OK {SECRET}"));
+    f.duration_ms = Some(7);
+    let mut g = entry("h-g", "{{BASE}}/slow");
+    g.error = Some("request timed out after 300 ms".into());
+    for h in [a, b, c, d, e, f, g] {
         history_store::append(&path, h).unwrap();
     }
     let (status, r) = crate::agent_ctl::handle(ctx, &call("api_history", json!({}))).await;
@@ -992,63 +1141,232 @@ async fn history_never_hands_back_a_vault_value_or_a_url_credential_from_any_fie
         "LITERALSIG123",
         "p%40ss",
         "p@ss/w+rd",
+        "for url",
+        "rejected",
+        "auth failed",
     ] {
         assert!(!text.contains(leak), "{leak} leaked: {text}");
     }
+    // Newest first: g, f, e, d, c, b, a.
+    let kinds: Vec<Value> = r
+        .data
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["error"].clone())
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            json!("timeout"),
+            Value::Null,
+            json!("connection error"),
+            json!("request failed"),
+            Value::Null,
+            json!("redirect error"),
+            json!("send error"),
+        ]
+    );
+    for line in r.message.lines().skip(1) {
+        let outcome = line.split("  →  ").nth(1).unwrap_or_default();
+        assert!(!outcome.contains("://"), "a URL in an outcome: {line}");
+    }
     assert!(
         r.message
-            .contains("for url ({{BASE}}/v1?api_key={{TOKEN}})"),
+            .contains("GET {{BASE}}/v1?api_key={{TOKEN}}  →  failed: send error"),
         "{}",
         r.message
     );
     assert!(
-        r.message.contains("https://***@h.example/x?sig=***"),
+        r.message
+            .contains("GET https://***@h.example/x?sig=***  →  failed: redirect error"),
         "{}",
         r.message
     );
-    assert!(r.message.contains("next?sig=***&page=2"), "{}", r.message);
     assert!(
         r.message
-            .contains("16 UNAUTHENTICATED: token {{TOKEN}} rejected"),
+            .contains("gRPC svc.Greeter/SayHello {{GRPC_HOST}}:443  →  16 Unauthenticated"),
         "{}",
         r.message
     );
-    assert!(r.message.contains("auth failed for {{PG_PASSWORD}} at pg"));
-    assert_eq!(r.data[2]["grpcService"], "svc.Greeter");
+    assert!(
+        r.message.contains("GET {{BASE}}/ok  →  200 OK, 7 ms"),
+        "{}",
+        r.message
+    );
+    assert_eq!(r.data[1]["statusText"], "OK");
+    assert_eq!(r.data[4]["statusText"], "Unauthenticated");
+    assert_eq!(r.data[4]["grpcService"], "svc.Greeter");
+    assert_eq!(r.data[4]["protocol"], "grpc");
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// 🔴 Every error a send returns — and the history records — goes through the request's
-/// redactor, every Vault value and URL masking; a response through the request's redactor.
-/// Falsify: return the engine's error unchanged in `redacted` — the error rows go red.
+/// 🔴 Nothing an agent wrote is matched against Vault values. If a value it guessed came back as
+/// `{{NAME}}` — in its own error, its echo, its compare, its history entry — the reply would
+/// confirm the guess (`?q=Summer2024!` → `?q={{PG_PASSWORD}}`, a host → `corpdb-{{BASE}}`), a
+/// few thousand guesses per call. So every reply for a right guess reads exactly as for a wrong
+/// one, once the guess itself is set aside. Most sends fail before any I/O (a header value with a
+/// control character), so they need no network; the echo goes to the in-process server.
+/// Falsify: run `run_send`'s error, or `run_history`'s URL, through every Vault value again — the
+/// right guesses come back as names and the two runs differ.
+#[tokio::test]
+async fn an_agent_cannot_confirm_a_guessed_vault_value() {
+    let port = serve();
+    let mut store = user_store("https://api.internal.example:8443");
+    store.environments[1].variables.push(EnvVar {
+        key: "PG_PASSWORD".into(),
+        value: "Summer2024!".into(),
+    });
+    // `(right, wrong)`: a password, the host of prod's `BASE` (https://prod.invalid), dev's token.
+    let pairs = [
+        ("Summer2024!", "Winter2023!"),
+        ("prod.invalid", "test.invalid"),
+        (SECRET, "tok_LIVE_000000000000"),
+    ];
+    let run = |guess: &'static str| {
+        let store = store.clone();
+        async move {
+            let dir = temp_dir();
+            let (ctx, _) = test_ctx(&dir, "t-oracle");
+            write_store(&dir, &store);
+            let mut out: Vec<String> = Vec::new();
+            let bad = format!("{guess}: bad\u{1}value");
+            for url in [
+                format!("http://127.0.0.1:9/x?q={guess}#{guess}"),
+                format!("http://corpdb-{guess}/"),
+            ] {
+                let (status, r) = crate::agent_ctl::handle(
+                    ctx.clone(),
+                    &call("http_send", json!({"url": url, "header": [bad]})),
+                )
+                .await;
+                assert_eq!(status, 422, "{}", r.message);
+                out.push(r.message);
+            }
+            let (_, r) = crate::agent_ctl::handle(
+                ctx.clone(),
+                &call(
+                    "api_compare",
+                    json!({
+                        "a": format!("http://127.0.0.1:9/a?q={guess}"),
+                        "b": format!("http://corpdb-{guess}/b"),
+                        "header": [bad],
+                    }),
+                ),
+            )
+            .await;
+            out.push(r.message);
+            let mut data = r.data;
+            data.as_object_mut().unwrap().remove("historyIds");
+            out.push(data.to_string());
+            let (status, r) = crate::agent_ctl::handle(
+                ctx.clone(),
+                &call(
+                    "http_send",
+                    json!({"url": format!("http://127.0.0.1:{port}/echo?q={guess}")}),
+                ),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            let body = r.data["body"].as_str().unwrap().to_string();
+            assert!(
+                body.contains(&format!("q={guess}")),
+                "an echo is not redacted: {body}"
+            );
+            out.push(body);
+            let (_, r) = crate::agent_ctl::handle(ctx, &call("api_history", json!({}))).await;
+            // A compare's two sides reach the history in either order: compare them as sets.
+            let mut listed: Vec<String> = r
+                .message
+                .lines()
+                .map(|l| {
+                    // Set the time and the duration aside: they vary run to run.
+                    let l = l.split(" UTC  ").last().unwrap_or_default();
+                    l.rsplit_once(", ")
+                        .filter(|(_, ms)| ms.ends_with(" ms"))
+                        .map_or(l, |(kept, _)| kept)
+                        .to_string()
+                })
+                .collect();
+            for mut e in r.data.as_array().unwrap().clone() {
+                let e = e.as_object_mut().unwrap();
+                for varies in ["id", "at", "durationMs", "sizeBytes"] {
+                    e.remove(varies);
+                }
+                listed.push(Value::Object(e.clone()).to_string());
+            }
+            let mut listed: Vec<String> = listed
+                .into_iter()
+                .map(|o| o.replace(guess, "<guess>"))
+                .collect();
+            listed.sort();
+            out.extend(listed);
+            let _ = std::fs::remove_dir_all(dir);
+            out.into_iter()
+                .map(|o| o.replace(guess, "<guess>"))
+                .collect::<Vec<String>>()
+        }
+    };
+    for (right, wrong) in pairs {
+        let (r, w) = (run(right).await, run(wrong).await);
+        for o in &r {
+            assert!(!o.contains("{{"), "a Vault name came back for {right}: {o}");
+        }
+        assert_eq!(r.len(), w.len(), "{r:?} vs {w:?}");
+        for (i, (a, b)) in r.iter().zip(&w).enumerate() {
+            assert_eq!(
+                a, b,
+                "reply {i}: a right guess ({right}) reads unlike a wrong one ({wrong})"
+            );
+        }
+    }
+}
+
+/// 🔴 A send's error goes through the request's own redactor and URL masking — for a saved
+/// request, its substituted values and literal credentials; for an agent's request, nothing by
+/// value (a value it wrote stays as written), only URLs masked by their shape. A response goes
+/// through the request's redactor. Falsify: return the engine's error unchanged in `redacted` —
+/// the saved request's rows go red.
 #[test]
-fn an_error_is_scrubbed_of_vault_values_and_url_credentials() {
-    let vault = Redactor::new(&[("TOKEN".into(), SECRET.into())]);
-    let request = Redactor::default().masking(&["LITERAL-HDR-777".into()]);
+fn an_error_is_redacted_with_the_requests_own_values_and_urls_by_shape() {
+    let saved =
+        Redactor::new(&[("TOKEN".into(), SECRET.into())]).masking(&["LITERAL-HDR-777".into()]);
     let err = format!(
         "invalid request: error sending request for url \
          (https://u:LITPW-123@h/x?api_key={SECRET}&sig=LITSIG-456) LITERAL-HDR-777"
     );
-    let out = redacted(Err(err), &request, &vault).unwrap_err();
+    let out = redacted(Err(err), &saved).unwrap_err();
     for leak in [SECRET, "LITPW-123", "LITSIG-456", "LITERAL-HDR-777"] {
         assert!(!out.contains(leak), "{leak}: {out}");
     }
     assert!(out.contains("api_key={{TOKEN}}&sig=***"), "{out}");
+    let agent = redacted(
+        Err(format!(
+            "invalid header value for \"Summer2024!\" at https://u:pw@h/?token=t&q={SECRET}"
+        )),
+        &Redactor::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        agent,
+        format!(
+            "invalid header value for \"Summer2024!\" at https://***:***@h/?token=***&q={SECRET}"
+        )
+    );
     let ok = redacted(
         Ok(crate::http::HttpResponse {
             status: 200,
             status_text: "OK".into(),
             headers: Vec::new(),
-            body: "LITERAL-HDR-777".into(),
+            body: format!("LITERAL-HDR-777 {SECRET}"),
             duration_ms: 1,
             size_bytes: 15,
             truncated: false,
         }),
-        &request,
-        &vault,
+        &saved,
     )
     .unwrap();
-    assert_eq!(ok.body, "***");
+    assert_eq!(ok.body, "*** {{TOKEN}}");
 }
 
 /// A saved request's literal credentials, as the redactor will mask them: userinfo and the
