@@ -621,3 +621,30 @@ describe("LeftRail — hostile telemetry", () => {
     expect(rows()).toHaveLength(1);
   });
 });
+
+describe("LeftRail — project style (Settings → Interface)", () => {
+  const tree = () => screen.getByRole("tree", { name: "Agents" });
+
+  beforeEach(() => {
+    useAppStore.setState((s) => {
+      s.railGroupStyle = "card";
+    });
+  });
+
+  it("draws projects as framed cards by default", () => {
+    act(() => fleet().applyAgentEvent(started("a")));
+    render(<LeftRail />);
+    expect(tree()).toHaveClass("fleet-tree", "fleet-tree--groups-card");
+  });
+
+  it("switches the whole rail's style with the setting, one class on the tree", () => {
+    act(() => fleet().applyAgentEvent(started("a")));
+    render(<LeftRail />);
+
+    for (const style of ["well", "divider", "pinned", "card"] as const) {
+      act(() => state().workspaceActions.setRailGroupStyle(style));
+      const classes = [...tree().classList].filter((c) => c.startsWith("fleet-tree--groups-"));
+      expect(classes).toEqual([`fleet-tree--groups-${style}`]);
+    }
+  });
+});

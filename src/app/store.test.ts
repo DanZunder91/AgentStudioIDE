@@ -6080,3 +6080,52 @@ describe("views — one bar entry, one whole layout", () => {
     expect(leavesOf(refreshed.layout)).toHaveLength(2);
   });
 });
+
+describe("rail group style (Settings → Interface)", () => {
+  const ws = () => useAppStore.getState().workspaceActions;
+  const savedStyle = () => {
+    const calls = layoutPrefsIpc.saveLayoutPrefs.mock.calls;
+    expect(calls.length, "saveLayoutPrefs should have run").toBeGreaterThan(0);
+    return (calls[calls.length - 1][0] as { railGroupStyle?: string }).railGroupStyle;
+  };
+  const prefsWith = (railGroupStyle: unknown) =>
+    ({ folderOrder: [], collapsedFolders: [], collapsedRoots: [], railGroupStyle }) as Parameters<
+      ReturnType<typeof ws>["applyLayoutPrefs"]
+    >[0];
+
+  beforeEach(() => {
+    useAppStore.setState((s) => {
+      s.railGroupStyle = "card";
+    });
+    layoutPrefsIpc.saveLayoutPrefs.mockClear();
+  });
+
+  it("setRailGroupStyle sets the style and persists it in the prefs blob", () => {
+    ws().setRailGroupStyle("divider");
+    expect(useAppStore.getState().railGroupStyle).toBe("divider");
+    expect(savedStyle()).toBe("divider");
+
+    ws().setRailGroupStyle("card");
+    expect(savedStyle()).toBe("card");
+  });
+
+  it("boot hydration seeds the style from the persisted prefs", () => {
+    ws().applyLayoutPrefs(prefsWith("well"));
+    expect(useAppStore.getState().railGroupStyle).toBe("well");
+  });
+
+  it("boot hydration reads a missing, null or unknown style as Framed card", () => {
+    for (const persisted of [undefined, null, "orbit", 42]) {
+      useAppStore.setState((s) => {
+        s.railGroupStyle = "pinned";
+      });
+      ws().applyLayoutPrefs(prefsWith(persisted));
+      expect(useAppStore.getState().railGroupStyle, `persisted ${String(persisted)}`).toBe("card");
+    }
+  });
+
+  it("hydration does not write the prefs file back", () => {
+    ws().applyLayoutPrefs(prefsWith("well"));
+    expect(layoutPrefsIpc.saveLayoutPrefs).not.toHaveBeenCalled();
+  });
+});

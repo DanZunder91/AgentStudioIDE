@@ -8,6 +8,9 @@
   --text: #c9d1d9;
   --text-dim: #8b949e;
   --border: #21262d;
+  /* The outline around a project in the agent rail: a step brighter than --border so
+     the project's edge reads against the rows inside it. */
+  --group-border: #30363d;
   --accent: #3b82f6;
   --accent-soft: rgba(59, 130, 246, 0.14);
   --green: #3fb950;

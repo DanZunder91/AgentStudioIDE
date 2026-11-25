@@ -31,6 +31,7 @@ import {
   folderPathType,
   type FolderGroupRowProps,
 } from "./FolderGroupRow";
+import { projectColor } from "./projectBadge";
 
 /** The centre-pane tab drag MIME — a folder header must ignore it (distinct MIMEs). */
 const TAB_DND_MIME = "application/x-agentstudio-tab";
@@ -44,6 +45,7 @@ function renderFolder(over: Partial<FolderGroupRowProps> = {}) {
       name={over.name ?? "gazelle"}
       agentCount={over.agentCount ?? 2}
       rollupRunning={over.rollupRunning ?? 0}
+      rollupWaiting={over.rollupWaiting ?? 0}
       rollupDone={over.rollupDone ?? 0}
       rollupError={over.rollupError ?? 0}
       collapsed={over.collapsed ?? false}
@@ -62,11 +64,56 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("FolderGroupRow", () => {
-  it("renders the basename, agent count and a rollup summary", () => {
+  it("renders the basename, agent count and a per-status summary", () => {
     renderFolder({ name: "gazelle", agentCount: 3, rollupRunning: 2, rollupDone: 1 });
     expect(header()).toHaveTextContent("gazelle");
     expect(screen.getByLabelText("3 agents")).toBeInTheDocument();
-    expect(header()).toHaveTextContent("2 running · 1 done");
+    expect(header()).toHaveTextContent("2 running·1 done");
+  });
+
+  it("puts the counts on their own line, outside the header button, so they never crowd the name", () => {
+    renderFolder({ name: "AgentStudioIDE", rollupRunning: 5, rollupDone: 23 });
+    const button = screen.getByRole("button", { name: "Collapse folder AgentStudioIDE" });
+    const stats = header().querySelector(".folder-group__stats");
+    expect(stats).not.toBeNull();
+    expect(button).not.toContainElement(stats as HTMLElement);
+    expect(button).not.toHaveTextContent("running");
+  });
+
+  it("counts waiting agents, each part in its own status class, in a fixed order", () => {
+    renderFolder({ rollupRunning: 5, rollupWaiting: 1, rollupDone: 23, rollupError: 2 });
+    const parts = [...header().querySelectorAll(".folder-group__stat")];
+    expect(parts.map((p) => [p.textContent, p.className])).toEqual([
+      ["5 running", "folder-group__stat folder-group__stat--running"],
+      ["1 waiting", "folder-group__stat folder-group__stat--waiting_input"],
+      ["23 done", "folder-group__stat folder-group__stat--done"],
+      ["2 error", "folder-group__stat folder-group__stat--error"],
+    ]);
+    // A separator between parts, none before the first.
+    expect(header().querySelectorAll(".folder-group__sep")).toHaveLength(3);
+  });
+
+  it("shows only the non-zero parts", () => {
+    renderFolder({ rollupWaiting: 1 });
+    const parts = [...header().querySelectorAll(".folder-group__stat")];
+    expect(parts.map((p) => p.textContent)).toEqual(["1 waiting"]);
+    expect(header().querySelectorAll(".folder-group__sep")).toHaveLength(0);
+  });
+
+  it("marks a collapsed folder with a class the project styles close the shape on", () => {
+    const { unmount } = renderFolder({ collapsed: true });
+    expect(header()).toHaveClass("folder-group--collapsed");
+    unmount();
+    renderFolder({ collapsed: false });
+    expect(header()).not.toHaveClass("folder-group--collapsed");
+  });
+
+  it("carries the project's monogram and colour, derived from the folder", () => {
+    renderFolder({ path: "/w/AgentStudioIDE", name: "AgentStudioIDE" });
+    expect(header().querySelector(".folder-group__mono")).toHaveTextContent("AS");
+    expect(header().style.getPropertyValue("--pc")).toBe(projectColor("/w/AgentStudioIDE"));
+    // Decorative: the name is already read out, the letters would only repeat it.
+    expect(header().querySelector(".folder-group__mono")).toHaveAttribute("aria-hidden", "true");
   });
 
   it("shows ▼ / aria-expanded when open, ▶ when collapsed", () => {
@@ -80,6 +127,7 @@ describe("FolderGroupRow", () => {
         name="gazelle"
         agentCount={2}
         rollupRunning={0}
+        rollupWaiting={0}
         rollupDone={0}
         rollupError={0}
         collapsed
@@ -128,10 +176,11 @@ describe("FolderGroupRow", () => {
     expect(state().agents[state().rootAgentIds[0]].cwd).toBe("/w/gazelle");
   });
 
-  it("omits the rollup text when there is nothing to summarize", () => {
+  it("omits the stats line when there is nothing to summarize", () => {
     renderFolder({ rollupRunning: 0, rollupDone: 0, rollupError: 0 });
     expect(header()).not.toHaveTextContent("running");
     expect(header()).not.toHaveTextContent("done");
+    expect(header().querySelector(".folder-group__stats")).toBeNull();
   });
 });
 
