@@ -51,8 +51,10 @@ pub const METADATA_VALUE_BYTES: usize = 1024;
 pub const REFLECTION_LIMIT: Duration = Duration::from_secs(60);
 /// `grpc services`: services described (each is one reflection round trip).
 pub const MAX_SERVICES: usize = 200;
-/// `grpc describe`: the text kept (the data has the same, bounded by counts).
-pub const DESCRIBE_TEXT_BYTES: usize = 64 * 1024;
+/// `grpc services`: the listing's text, and its data serialized. A server decides how many
+/// methods a service has and how long their names are, so the count cap alone bounds nothing.
+pub const SERVICES_TEXT_BYTES: usize = 64 * 1024;
+pub const SERVICES_DATA_BYTES: usize = 256 * 1024;
 
 const TARGET_PARAM: Param = Param::new(
     "target",
@@ -119,8 +121,9 @@ pub const TOOLS: &[ToolSpec] = &[
         summary: "List a gRPC server's services and methods, with their request and response \
                   types, through server reflection.",
         details: "The server must have reflection enabled. TLS unless --plaintext (or an \
-                  http:// target). At most 200 services are described. A target naming a Vault \
-                  variable ({{…}}) is refused.",
+                  http:// target). At most 200 services are described, and the listing is cut \
+                  at 64 KiB; a cut is said. A target naming a Vault variable ({{…}}) is \
+                  refused.",
         params: &[TARGET_PARAM, PLAINTEXT_PARAM],
         run: run_grpc_services,
     },
@@ -131,8 +134,10 @@ pub const TOOLS: &[ToolSpec] = &[
                   message, with an example request JSON to send.",
         details: "name: package.Service/Method, package.Service.Method, package.Service, or a \
                   message or enum (package.Message). Fields are listed by their JSON names; a \
-                  request may use those or the .proto names. Messages nest at most 40 deep in \
-                  one answer. Through server reflection, like grpc services.",
+                  request may use those or the .proto names. One answer spells out at most 100 \
+                  methods and 40 messages, its example JSON holds at most 2000 values (a \
+                  message nested inside itself is written {}), and it is cut at 64 KiB; every \
+                  cut is said. Through server reflection, like grpc services.",
         params: &[
             TARGET_PARAM,
             Param::new(
@@ -209,15 +214,97 @@ fn run_grpc_call(ctx: ToolCtx, args: Args) -> ToolFuture {
 // Shared argument rules.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Refuse any field that names a Vault variable. Agent-authored text never resolves one: if it
-/// did, an agent could send a saved secret to a host of its choosing.
+/// Rounds of decoding [`names_vault_var`] undoes: enough for an encoding applied two or three
+/// times over, and a bound on the work.
+const DECODE_ROUNDS: usize = 4;
+
+/// Whether `text` names a Vault variable: a `{{`, also when its braces are written encoded —
+/// percent-encoded (`%7B`, any case, encoded again as `%257B`, …) or as a JSON escape
+/// (`\u007b`), alone or mixed with a literal brace. A placeholder that only appears once decoded
+/// is still one: whatever later decodes the text (a URL parser, a JSON parser, the console
+/// replaying History) would hand a Vault resolver a live `{{VAR}}`.
+pub fn names_vault_var(text: &str) -> bool {
+    let mut current = std::borrow::Cow::Borrowed(text);
+    for _ in 0..DECODE_ROUNDS {
+        if current.contains("{{") {
+            return true;
+        }
+        match decode_once(&current) {
+            Some(next) => current = std::borrow::Cow::Owned(next),
+            None => return false,
+        }
+    }
+    current.contains("{{")
+}
+
+/// `text` with one layer of percent-encoding and of JSON `\uXXXX` escapes undone, or `None` when
+/// it holds neither.
+fn decode_once(text: &str) -> Option<String> {
+    fn hex(b: u8) -> Option<u8> {
+        (b as char).to_digit(16).map(|d| d as u8)
+    }
+    if !text.contains('%') && !text.contains("\\u") {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut changed = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let percent = (bytes[i] == b'%')
+            .then(|| Some((hex(*bytes.get(i + 1)?)? << 4) | hex(*bytes.get(i + 2)?)?))
+            .flatten();
+        let unicode = (bytes[i] == b'\\' && bytes.get(i + 1) == Some(&b'u'))
+            .then(|| {
+                let digits = std::str::from_utf8(bytes.get(i + 2..i + 6)?).ok()?;
+                char::from_u32(u32::from_str_radix(digits, 16).ok()?)
+            })
+            .flatten();
+        if let Some(byte) = percent {
+            out.push(byte);
+            i += 3;
+            changed = true;
+        } else if let Some(c) = unicode {
+            out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
+            i += 6;
+            changed = true;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    changed.then(|| String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Whether any string or key in `value`, decoded, names a Vault variable (see
+/// [`names_vault_var`]). The JSON text alone is not enough: `"\u007b\u007bX}}"` holds no `{{`
+/// until it is parsed, and the parsed message is what a server receives.
+pub fn json_names_vault_var(value: &Value) -> bool {
+    match value {
+        Value::String(s) => names_vault_var(s),
+        Value::Array(items) => items.iter().any(json_names_vault_var),
+        Value::Object(map) => map
+            .iter()
+            .any(|(k, v)| names_vault_var(k) || json_names_vault_var(v)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
+/// The refusal for a `what` that names a Vault variable.
+fn vault_refusal(what: &str) -> String {
+    format!(
+        "The {what} contains an Agent Studio Vault variable ({{{{…}}}}, written out or encoded). \
+         Agents cannot use the user's saved secrets: put the value itself in the {what}, or ask \
+         the user to send it from the API client. Nothing was sent."
+    )
+}
+
+/// Refuse any field that names a Vault variable, in any encoding [`names_vault_var`] sees
+/// through. Agent-authored text never resolves one: if it did, an agent could send a saved
+/// secret to a host of its choosing.
 pub fn refuse_vault_refs(fields: &[(&str, &str)]) -> Result<(), String> {
-    match fields.iter().find(|(_, text)| text.contains("{{")) {
-        Some((what, _)) => Err(format!(
-            "The {what} contains an Agent Studio Vault variable ({{{{…}}}}). Agents cannot use \
-             the user's saved secrets: put the value itself in the {what}, or ask the user to \
-             send it from the API client. Nothing was sent."
-        )),
+    match fields.iter().find(|(_, text)| names_vault_var(text)) {
+        Some((what, _)) => Err(vault_refusal(what)),
         None => Ok(()),
     }
 }
@@ -505,21 +592,28 @@ pub fn split_method(text: &str) -> Result<(String, String), String> {
     }
 }
 
-/// The request body as JSON text: `{}` when absent; an object, or a string holding one (some MCP
-/// clients send JSON as a string).
-pub fn body_text(body: Option<&Value>) -> Result<String, String> {
+/// The request body: `{}` when absent; an object, or a string holding one (some MCP clients send
+/// JSON as a string), parsed.
+pub fn body_value(body: Option<&Value>) -> Result<Value, String> {
     let not_an_object = || {
         "`body` must be a JSON object (the request message), like {\"name\":\"ada\"}.".to_string()
     };
     match body {
-        None | Some(Value::Null) => Ok("{}".to_string()),
-        Some(v @ Value::Object(_)) => Ok(v.to_string()),
+        None | Some(Value::Null) => Ok(json!({})),
+        Some(v @ Value::Object(_)) => Ok(v.clone()),
         Some(Value::String(s)) => match serde_json::from_str::<Value>(s) {
-            Ok(Value::Object(_)) => Ok(s.trim().to_string()),
+            Ok(v @ Value::Object(_)) => Ok(v),
             _ => Err(not_an_object()),
         },
         Some(_) => Err(not_an_object()),
     }
+}
+
+/// The request body as the JSON text that is checked, sent and recorded — one text for all
+/// three. It is written from the parsed value, so an escape in what the agent wrote (`\u007b`)
+/// is a plain character here, and a key given twice is there once.
+pub fn body_text(body: Option<&Value>) -> Result<String, String> {
+    body_value(body).map(|v| v.to_string())
 }
 
 fn transport(plaintext: bool) -> &'static str {
@@ -581,7 +675,8 @@ pub async fn grpc_services(args: &Args) -> Result<ToolOk, String> {
     .await
 }
 
-/// The services listing from what reflection returned.
+/// The services listing from what reflection returned: at most [`MAX_SERVICES`] services, the
+/// text within [`SERVICES_TEXT_BYTES`] and the data within [`SERVICES_DATA_BYTES`], each cut said.
 pub fn services_report(
     endpoint: &str,
     plaintext: bool,
@@ -589,59 +684,109 @@ pub fn services_report(
     pool: &prost_reflect::DescriptorPool,
 ) -> ToolOk {
     let shown = &names[..names.len().min(MAX_SERVICES)];
-    let mut lines = vec![format!(
+    let mut text = shape::Lines::new(SERVICES_TEXT_BYTES);
+    text.push(format!(
         "{} at {endpoint} ({}):",
         plural(names.len(), "service", "services"),
         transport(plaintext)
-    )];
+    ));
+    let mut budget = shape::DataBudget::new(SERVICES_DATA_BYTES);
     let mut services = Vec::new();
+    // Services listed in full in the text.
+    let mut listed = 0;
     for name in shown {
-        lines.push(format!("  {name}"));
-        let methods: Option<Vec<_>> = pool
-            .get_service_by_name(name)
-            .map(|s| s.methods().collect());
-        match &methods {
-            Some(methods) => {
-                for m in methods {
-                    let note = if shape::is_unary(m) {
+        if text.is_cut() && budget.is_cut() {
+            break;
+        }
+        let service = pool.get_service_by_name(name);
+        text.push(format!("  {name}"));
+        // The service's entry is admitted on its own, then each method: the work stops where the
+        // budget does, however many methods the server declared.
+        let in_data = budget.admit(&json!({
+            "name": name,
+            "described": service.is_some(),
+            "methods": [],
+            "methodsCut": false,
+        }));
+        let mut methods = Vec::new();
+        let mut methods_cut = false;
+        match &service {
+            Some(s) => {
+                for m in s.methods() {
+                    if text.is_cut() && budget.is_cut() {
+                        methods_cut = true;
+                        break;
+                    }
+                    let note = if shape::is_unary(&m) {
                         ""
                     } else {
                         "  [streaming: not callable with grpc call]"
                     };
-                    lines.push(format!("    {}{note}", shape::signature(m)));
+                    text.push(format!("    {}{note}", shape::signature(&m)));
+                    if in_data {
+                        let d = shape::method_data(&m);
+                        if budget.admit(&d) {
+                            methods.push(d);
+                        } else {
+                            methods_cut = true;
+                        }
+                    }
                 }
             }
-            None => lines.push("    (the server did not describe its methods)".to_string()),
+            None => {
+                text.push("    (the server did not describe its methods)");
+            }
         }
-        services.push(json!({
-            "name": name,
-            "described": methods.is_some(),
-            "methods": methods.unwrap_or_default().iter().map(shape::method_data).collect::<Vec<_>>(),
-        }));
+        if !text.is_cut() {
+            listed += 1;
+        }
+        if in_data {
+            services.push(json!({
+                "name": name,
+                "described": service.is_some(),
+                "methods": methods,
+                "methodsCut": methods_cut,
+            }));
+        }
     }
     if names.len() > shown.len() {
-        lines.push(format!(
+        text.push(format!(
             "…showing the first {MAX_SERVICES} of {} services.",
             names.len()
         ));
     }
     if names.is_empty() {
-        lines.push("  (none listed)".to_string());
+        text.push("  (none listed)");
     } else {
-        lines.push(
+        text.push(
             "Describe a method's messages with `agent-studio grpc describe <target> \
              <package.Service/Method>`; call it with `agent-studio grpc call <target> \
-             <package.Service/Method> --body '<json>'`."
-                .to_string(),
+             <package.Service/Method> --body '<json>'`.",
         );
     }
+    let total = names.len();
+    let data_cut = budget.is_cut();
+    let message = text.finish(|| {
+        format!(
+            "…the listing is cut at {} KiB: {listed} of {total} services are listed in full \
+             ({}). Describe one service with `agent-studio grpc describe <target> \
+             <package.Service>`.",
+            SERVICES_TEXT_BYTES / 1024,
+            if data_cut {
+                "--json is cut too"
+            } else {
+                "--json has the rest"
+            }
+        )
+    });
     ToolOk::new(
-        lines.join("\n"),
+        message,
         json!({
             "target": endpoint,
             "plaintext": plaintext,
-            "total": names.len(),
-            "truncated": names.len() > shown.len(),
+            "total": total,
+            // What this data holds; the text says its own cut.
+            "truncated": names.len() > shown.len() || data_cut,
             "services": services,
         }),
     )
@@ -672,15 +817,9 @@ pub async fn grpc_describe(args: &Args) -> Result<ToolOk, String> {
                 if plaintext { " --plaintext" } else { "" }
             )
         })?;
-        let (text, mut data) = shape::describe(&found);
-        let (cut, was_cut) = ws::cut_text(&text, DESCRIBE_TEXT_BYTES);
-        let mut message = cut.to_string();
-        if was_cut {
-            message.push_str(&format!(
-                "\n…cut at {} KiB; --json has the whole description.",
-                DESCRIBE_TEXT_BYTES / 1024
-            ));
-        }
+        // Bounded by construction (counts, an example budget, text and data budgets): a
+        // schema the server chose cannot make this run long or grow large.
+        let (message, mut data) = shape::describe(&found);
         data["target"] = json!(endpoint);
         data["plaintext"] = json!(plaintext);
         data["name"] = json!(symbol);
@@ -698,11 +837,15 @@ pub struct CallPlan {
 /// The call `args` ask for, every rule checked before anything connects.
 pub fn call_plan(args: &Args) -> Result<CallPlan, String> {
     let method_text = args.req_str("method")?;
-    let body = body_text(args.json("body"))?;
+    let body_json = body_value(args.json("body"))?;
+    let body = body_json.to_string();
     let header_lines = args.list("header");
     let mut extra = vec![("method", method_text), ("body", body.as_str())];
     extra.extend(header_lines.iter().map(|h| ("header", h.as_str())));
     let (endpoint, plaintext) = target_of(args, &extra)?;
+    if json_names_vault_var(&body_json) {
+        return Err(vault_refusal("body"));
+    }
     let (service, method) = split_method(method_text)?;
     if body.len() > MAX_BODY_BYTES {
         return Err(format!(

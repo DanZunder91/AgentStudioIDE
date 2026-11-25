@@ -178,6 +178,53 @@ async fn a_vault_reference_anywhere_is_refused_before_anything_connects() {
             json!({"target": here, "method": "{{M}}", "plaintext": true}),
             "method",
         ),
+        // Encoded: the braces escaped in JSON (a string body is parsed before it is checked)…
+        (
+            "grpc_call",
+            json!({"target": here, "method": "a.B/C", "body": r#"{"t":"\u007b\u007bAPI_TOKEN}}"}"#, "plaintext": true}),
+            "body",
+        ),
+        (
+            "grpc_call",
+            json!({"target": here, "method": "a.B/C", "body": r#"{"\u007B{API_TOKEN}}":1}"#, "plaintext": true}),
+            "body",
+        ),
+        // …or percent-encoded, in any case, mixed, or encoded twice.
+        (
+            "grpc_call",
+            json!({"target": here, "method": "a.B/C", "body": {"t": ["%7B%7BAPI_TOKEN%7D%7D"]}, "plaintext": true}),
+            "body",
+        ),
+        (
+            "grpc_call",
+            json!({"target": here, "method": "a.B/C", "header": ["authorization: Bearer %7b%7bAPI_TOKEN%7d%7d"], "plaintext": true}),
+            "header",
+        ),
+        (
+            "grpc_services",
+            json!({"target": "%7B%7BGRPC_HOST%7D%7D:443"}),
+            "target",
+        ),
+        (
+            "grpc_describe",
+            json!({"target": here, "name": "{%7BX}}", "plaintext": true}),
+            "name",
+        ),
+        (
+            "ws_exchange",
+            json!({"url": format!("ws://{here}/?t=%257B%257BAPI_TOKEN%257D%257D")}),
+            "URL",
+        ),
+        (
+            "ws_exchange",
+            json!({"url": ws_url, "header": ["X-Token: \\u007b\\u007bAPI_TOKEN}}"]}),
+            "header",
+        ),
+        (
+            "ws_exchange",
+            json!({"url": ws_url, "send": [r#"{"token":"\u007b\u007bAPI_TOKEN}}"}"#]}),
+            "message",
+        ),
     ];
     for (tool, a, field) in cases {
         let (status, reply) =
@@ -203,6 +250,46 @@ async fn a_vault_reference_anywhere_is_refused_before_anything_connects() {
 fn text_without_a_reference_passes_and_a_lone_brace_is_not_one() {
     assert!(refuse_vault_refs(&[("message", "{\"a\":{}}"), ("header", "x: {y}")]).is_ok());
     assert!(refuse_vault_refs(&[]).is_ok());
+}
+
+#[test]
+fn a_reference_is_seen_through_every_encoding_and_only_a_reference_is() {
+    for named in [
+        "{{X}}",
+        "a {{ X }} b",
+        "%7B%7BX%7D%7D",
+        "%7b%7bX%7d%7d",
+        "%7B{X}}",
+        "{%7bX}}",
+        "%257B%257BX%257D%257D",
+        "%25257B%25257BX",
+        r"\u007b\u007bX}}",
+        r"\u007B{X}}",
+        r"%5Cu007b%5Cu007bX",
+    ] {
+        assert!(names_vault_var(named), "{named}");
+    }
+    for plain in [
+        "",
+        "{}",
+        "{ {",
+        "{x}{y}",
+        "100% sure",
+        "%7B only one %7D",
+        "%7Bx%7B",
+        "%zz%7",
+        r"\u007b alone",
+        r"\u00",
+        r"\uZZZZ",
+        "%E2%82%AC",
+    ] {
+        assert!(!names_vault_var(plain), "{plain}");
+    }
+    assert!(json_names_vault_var(&json!({"a": [1, {"b": "%7B%7BX"}]})));
+    assert!(json_names_vault_var(&json!({"{{X}}": null})));
+    assert!(!json_names_vault_var(
+        &json!({"a": [1, true, null, {"b": "{x}"}]})
+    ));
 }
 
 // ── arguments ────────────────────────────────────────────────────────────────
@@ -364,9 +451,19 @@ fn the_body_is_a_json_object_or_a_string_holding_one() {
     assert_eq!(body_text(None).unwrap(), "{}");
     assert_eq!(body_text(Some(&Value::Null)).unwrap(), "{}");
     assert_eq!(body_text(Some(&json!({"a": 1}))).unwrap(), r#"{"a":1}"#);
+    // A string body is written from its parsed value: what is checked, sent and recorded is one
+    // text, with escapes undone and a repeated key once.
     assert_eq!(
         body_text(Some(&json!(" {\"a\": 1} "))).unwrap(),
-        "{\"a\": 1}"
+        r#"{"a":1}"#
+    );
+    assert_eq!(
+        body_text(Some(&json!(r#"{"t":"\u007b\u007bTOKEN}}","t":"x"}"#))).unwrap(),
+        r#"{"t":"x"}"#
+    );
+    assert_eq!(
+        body_text(Some(&json!(r#"{"t":"\u007b\u007bTOKEN}}"}"#))).unwrap(),
+        r#"{"t":"{{TOKEN}}"}"#
     );
     for bad in [json!([1]), json!(5), json!("not json"), json!("[1]")] {
         assert!(
@@ -882,18 +979,24 @@ fn a_method_is_described_field_by_field_with_an_example_the_server_can_parse() {
     let input = p.get_message_by_name("test.v1.EchoRequest").unwrap();
     DynamicMessage::deserialize(input, example.clone()).expect("the example parses");
     // The text's example line is the same JSON.
-    let printed = text.lines().last().unwrap();
-    assert_eq!(serde_json::from_str::<Value>(printed).unwrap(), *example);
+    let lines: Vec<&str> = text.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.starts_with("Example JSON for test.v1.Echo/Say"))
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(lines[at + 1]).unwrap(),
+        *example
+    );
 
-    // A recursive message nests to a bounded depth, ending in {}.
-    let mut depth = 0;
-    let mut inner = &example["inner"];
-    while let Some(child) = inner.get("child") {
-        depth += 1;
-        inner = child;
-    }
-    assert!(depth < shape::EXAMPLE_DEPTH, "depth {depth}");
-    assert_eq!(*inner, json!({}));
+    // A message inside itself stops at once: `{}` where it would nest, and the text says so.
+    assert_eq!(example["inner"], json!({"note": "", "child": {}}));
+    assert!(text.lines().any(|l| l
+        == "(Recursive: test.v1.Inner contains itself; the example writes {} where a message \
+            would nest inside itself.)"));
+    assert_eq!(data["recursive"], json!(["test.v1.Inner"]));
+    assert_eq!(data["exampleCut"], false);
+    assert_eq!(data["truncated"], false);
 }
 
 #[test]
@@ -1032,6 +1135,259 @@ fn a_services_listing_marks_streaming_and_undescribed_services_and_its_cut() {
 
     let r = services_report("h:1", true, &[], &p);
     assert_eq!(r.message, "0 services at h:1 (plaintext):\n  (none listed)");
+}
+
+/// Run `work` on a thread of its own and fail if it takes longer than `limit`: a bound that broke
+/// would otherwise hang the test (the thread is left behind; the test process ends anyway).
+fn within<T: Send + 'static>(limit: Duration, work: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+    match rx.recv_timeout(limit) {
+        Ok(out) => out,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("did not finish within {limit:?}: a bound is broken")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("the work panicked"),
+    }
+}
+
+fn data_bytes(v: &Value) -> usize {
+    serde_json::to_string(v).unwrap().len()
+}
+
+/// Field entries in an example (every object entry and array item, nested).
+fn entries(v: &Value) -> usize {
+    match v {
+        Value::Object(m) => m.values().map(|v| 1 + entries(v)).sum(),
+        Value::Array(a) => a.iter().map(|v| 1 + entries(v)).sum(),
+        _ => 0,
+    }
+}
+
+/// A schema built to blow up a naive walk: `bomb.Node` has `width - 1` fields of its own type and
+/// a string; `bomb.L0`…`bomb.L4` each have `width` fields of the next level (distinct types, so
+/// only a budget stops a walk through them); `bomb.Svc` has `methods` unary methods from a
+/// `Node` to an `L0`.
+fn bomb_pool(width: i32, methods: usize) -> DescriptorPool {
+    let mut node: Vec<FieldDescriptorProto> = (1..width)
+        .map(|n| {
+            let name = format!("n{n}");
+            field(&name, &name, n, Type::Message, Some(".bomb.Node"))
+        })
+        .collect();
+    node.push(field("label", "label", width, Type::String, None));
+    let mut messages = vec![message("Node", node)];
+    for level in 0..5 {
+        let next = format!(".bomb.L{}", level + 1);
+        messages.push(message(
+            &format!("L{level}"),
+            (1..=width)
+                .map(|n| {
+                    let name = format!("f{n}");
+                    if level < 4 {
+                        field(&name, &name, n, Type::Message, Some(&next))
+                    } else {
+                        field(&name, &name, n, Type::Bool, None)
+                    }
+                })
+                .collect(),
+        ));
+    }
+    let file = FileDescriptorProto {
+        name: Some("bomb.proto".into()),
+        package: Some("bomb".into()),
+        syntax: Some("proto3".into()),
+        message_type: messages,
+        service: vec![ServiceDescriptorProto {
+            name: Some("Svc".into()),
+            method: (0..methods)
+                .map(|i| MethodDescriptorProto {
+                    name: Some(format!("M{i}")),
+                    input_type: Some(".bomb.Node".into()),
+                    output_type: Some(".bomb.L0".into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut p = DescriptorPool::new();
+    p.add_file_descriptor_proto(file).unwrap();
+    p
+}
+
+/// A message with 199 fields of its own type: walked naively its example is 199^4 objects. It is
+/// described at once, small, with `{}` where it would nest inside itself, and the example is
+/// still a request the method parses.
+#[test]
+fn a_message_that_contains_itself_many_times_is_described_quickly_and_small() {
+    let p = bomb_pool(200, 1);
+    let pool = p.clone();
+    let (text, data) = within(Duration::from_secs(20), move || {
+        shape::describe(&shape::resolve(&pool, "bomb.Svc/M0").unwrap())
+    });
+    assert!(text.len() <= shape::TEXT_BYTES, "{}", text.len());
+    assert!(data_bytes(&data) <= shape::DATA_BYTES + 1024);
+    let example = &data["methods"][0]["requestExample"];
+    assert_eq!(example["n1"], json!({}), "{{}} where Node would nest");
+    assert_eq!(example["n199"], json!({}));
+    assert_eq!(example["label"], "");
+    assert_eq!(
+        entries(example),
+        200,
+        "one level, nothing nested inside itself"
+    );
+    DynamicMessage::deserialize(p.get_message_by_name("bomb.Node").unwrap(), example.clone())
+        .expect("the example parses as the request");
+    assert!(text.contains(
+        "(Recursive: bomb.Node contains itself; the example writes {} where a message would \
+         nest inside itself.)"
+    ));
+    assert_eq!(data["recursive"], json!(["bomb.Node"]));
+    assert_eq!(data["exampleCut"], false);
+}
+
+/// Five levels of 200 fields, each of the next level's type: nothing nests inside itself, so only
+/// the shared example budget stops the walk (200^4 objects without it). It stops there and says
+/// so, and the field lists stay whole.
+#[test]
+fn a_wide_tree_of_distinct_messages_spends_one_example_budget_and_says_so() {
+    let p = bomb_pool(200, 1);
+    let (text, data) = within(Duration::from_secs(20), move || {
+        shape::describe(&shape::resolve(&p, "bomb.L0").unwrap())
+    });
+    let example = &data["example"];
+    assert!(example.is_object());
+    assert!(
+        entries(example) <= shape::EXAMPLE_NODES,
+        "{}",
+        entries(example)
+    );
+    assert!(data_bytes(example) <= shape::EXAMPLE_BYTES * 2);
+    assert_eq!(data["exampleCut"], true);
+    assert!(text.contains(
+        "(The example JSON is cut short: one answer's examples hold at most 2000 values."
+    ));
+    assert!(text.len() <= shape::TEXT_BYTES, "{}", text.len());
+    assert!(data_bytes(&data) <= shape::DATA_BYTES + 1024);
+}
+
+/// A service with more methods than one answer describes: at most [`shape::MAX_METHODS`], the
+/// rest counted; their examples share one budget, so the whole answer is no bigger than one.
+#[test]
+fn a_service_with_many_methods_describes_a_bounded_number_on_one_budget() {
+    let p = bomb_pool(200, shape::MAX_METHODS + 50);
+    let (text, data) = within(Duration::from_secs(20), move || {
+        shape::describe(&shape::resolve(&p, "bomb.Svc").unwrap())
+    });
+    assert!(
+        text.starts_with("service bomb.Svc (150 methods)\n"),
+        "{text}"
+    );
+    assert!(text.contains("…50 more methods not described; describe one by name"));
+    assert_eq!(data["moreMethods"], 50);
+    let methods = data["methods"].as_array().unwrap();
+    assert_eq!(methods.len(), shape::MAX_METHODS);
+    let spent: usize = methods.iter().map(|m| entries(&m["requestExample"])).sum();
+    assert!(spent <= shape::EXAMPLE_NODES, "{spent}");
+    assert_eq!(data["exampleCut"], true);
+    assert!(text.len() <= shape::TEXT_BYTES, "{}", text.len());
+    assert!(data_bytes(&data) <= shape::DATA_BYTES + 1024);
+}
+
+/// Names long enough that the counts alone would allow megabytes: the text stops at its budget
+/// and says so, and so does the data.
+#[test]
+fn long_names_are_cut_at_the_text_and_data_budgets_and_the_cut_is_said() {
+    let long = |n: i32| format!("f{n}_{}", "x".repeat(1500));
+    let file = FileDescriptorProto {
+        name: Some("long.proto".into()),
+        package: Some("long".into()),
+        syntax: Some("proto3".into()),
+        message_type: vec![message(
+            "W",
+            (1..=shape::MAX_FIELDS as i32)
+                .map(|n| field(&long(n), &long(n), n, Type::String, None))
+                .collect(),
+        )],
+        ..Default::default()
+    };
+    let mut p = DescriptorPool::new();
+    p.add_file_descriptor_proto(file).unwrap();
+    let (text, data) = within(Duration::from_secs(20), move || {
+        shape::describe(&shape::resolve(&p, "long.W").unwrap())
+    });
+    assert!(text.len() <= shape::TEXT_BYTES, "{}", text.len());
+    assert!(
+        text.ends_with(
+            "…the description is cut at 64 KiB (--json is cut too); describe one method or \
+             message by name for the rest."
+        ),
+        "{}",
+        &text[text.len() - 300..]
+    );
+    assert!(data_bytes(&data) <= shape::DATA_BYTES + 1024);
+    assert_eq!(data["truncated"], true);
+    assert_eq!(data["exampleCut"], true);
+}
+
+/// A server that declares thousands of methods with long names: the listing stops at its text
+/// and data budgets, and both say so.
+#[test]
+fn a_services_listing_is_cut_at_its_byte_budgets_and_says_so() {
+    let file = FileDescriptorProto {
+        name: Some("many.proto".into()),
+        package: Some("many".into()),
+        syntax: Some("proto3".into()),
+        message_type: vec![message("Req", Vec::new())],
+        service: vec![ServiceDescriptorProto {
+            name: Some("Svc".into()),
+            method: (0..3000)
+                .map(|i| MethodDescriptorProto {
+                    name: Some(format!("Method{i}_{}", "m".repeat(60))),
+                    input_type: Some(".many.Req".into()),
+                    output_type: Some(".many.Req".into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut p = DescriptorPool::new();
+    p.add_file_descriptor_proto(file).unwrap();
+    let names = vec!["many.Svc".to_string(), "other.Svc".to_string()];
+    let r = within(Duration::from_secs(20), move || {
+        services_report("h:1", true, &names, &p)
+    });
+    assert!(
+        r.message.len() <= SERVICES_TEXT_BYTES,
+        "{}",
+        r.message.len()
+    );
+    assert!(r
+        .message
+        .starts_with("2 services at h:1 (plaintext):\n  many.Svc\n"));
+    assert!(
+        r.message.ends_with(
+            "…the listing is cut at 64 KiB: 0 of 2 services are listed in full (--json is cut \
+             too). Describe one service with `agent-studio grpc describe <target> \
+             <package.Service>`."
+        ),
+        "{}",
+        &r.message[r.message.len() - 300..]
+    );
+    assert!(data_bytes(&r.data) <= SERVICES_DATA_BYTES + 1024);
+    assert_eq!(r.data["truncated"], true);
+    assert_eq!(r.data["total"], 2);
+    let services = r.data["services"].as_array().unwrap();
+    assert_eq!(services.len(), 1, "the budget ran out inside the first");
+    assert_eq!(services[0]["methodsCut"], true);
+    let listed = services[0]["methods"].as_array().unwrap().len();
+    assert!(listed > 100 && listed < 3000, "{listed}");
 }
 
 // ── through the dispatcher, against nothing ──────────────────────────────────

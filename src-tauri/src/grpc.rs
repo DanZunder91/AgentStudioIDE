@@ -43,8 +43,9 @@
 //! and `content-type: application/grpc`; tonic's own `user-agent` is not reconstructed), the
 //! request as its canonical JSON once parsed, then either status 200 + `grpcStatus 0` + the
 //! response JSON, or the gRPC status with its trailers (`done` — a status is a response), or
-//! `error` for a dial/reflection/transport failure. The reflection round-trips that resolve the
-//! method are not separate rows. Sizes are protobuf payload bytes (see the record module).
+//! `error` for a dial/reflection/transport failure or a deadline that passed. The reflection
+//! round-trips that resolve the method are not separate rows. Sizes are protobuf payload bytes
+//! (see the record module).
 //!
 //! **Rust API.** The two commands are thin over [`Reflection`] (a reflection session and its
 //! descriptor pool) and [`call`] (a recorded unary call with a deadline, returning the server's
@@ -70,12 +71,24 @@ use crate::netcap::headers::capture_headers;
 use crate::netcap::record::{Flow, Tap};
 use crate::netcap::FlowProto;
 
-/// Whole-call deadline. A wedged endpoint is bounded rather than hanging the UI.
+/// Each request's deadline on a channel (the reflection round trips and the call alike) when
+/// the caller set no limit of its own. A wedged endpoint is bounded rather than hanging the UI.
 /// Mirrors `http.rs`'s `REQUEST_TIMEOUT`.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Dial deadline — a stuck TCP/TLS handshake is bounded separately from the call.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How far past a caller's whole-call limit the channel's own per-request timeout is set.
+const LIMIT_GRACE: Duration = Duration::from_secs(1);
+
+/// The channel's per-request timeout: [`REQUEST_TIMEOUT`], or, for a call with a whole-call
+/// `limit` of its own, just past that limit. A channel timeout under the limit would cut the call
+/// short of the deadline its caller was promised; past it, the caller's deadline — which started
+/// first, before the dial — is always the one that fires.
+fn channel_timeout(limit: Option<Duration>) -> Duration {
+    limit.map_or(REQUEST_TIMEOUT, |limit| limit + LIMIT_GRACE)
+}
 
 /// Response-size sanity cap for a decoded message (mirrors `http.rs`'s body cap in
 /// spirit). tonic's default is 4 MiB; we allow more so large reflected descriptors and
@@ -321,10 +334,14 @@ impl Decoder for DynamicDecoder {
 // Transport: connect a tonic Channel (plaintext h2c or rustls TLS).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Dial the endpoint and return a connected [`Channel`]. TLS (rustls, `ring`, OS ∪ Mozilla
-/// roots) unless `plaintext`. A dial/TLS failure is `Err` (the only transport failure
-/// surfaced as a rejected promise).
-async fn connect_channel(endpoint: &str, plaintext: bool) -> Result<Channel, String> {
+/// Dial the endpoint and return a connected [`Channel`] whose requests time out after
+/// `request_timeout`. TLS (rustls, `ring`, OS ∪ Mozilla roots) unless `plaintext`. A dial/TLS
+/// failure is `Err`.
+async fn connect_channel(
+    endpoint: &str,
+    plaintext: bool,
+    request_timeout: Duration,
+) -> Result<Channel, String> {
     // One provider for the whole process. tonic checks
     // `CryptoProvider::get_default()` before falling back to its own `tls-ring` feature,
     // so installing here is what keeps `grpcs://` provably on the same backend as
@@ -344,7 +361,7 @@ async fn connect_channel(endpoint: &str, plaintext: bool) -> Result<Channel, Str
             .tls_config(tls)
             .map_err(|e| format!("TLS configuration failed: {e}"))?;
     }
-    ep = ep.connect_timeout(CONNECT_TIMEOUT).timeout(REQUEST_TIMEOUT);
+    ep = ep.connect_timeout(CONNECT_TIMEOUT).timeout(request_timeout);
     ep.connect()
         .await
         .map_err(|e| format!("could not connect to {endpoint}: {e}"))
@@ -520,7 +537,7 @@ impl Reflection {
     /// Dial `endpoint` (TLS unless `plaintext`) and negotiate the reflection version (`v1`,
     /// else `v1alpha`).
     pub async fn connect(endpoint: &str, plaintext: bool) -> Result<Self, String> {
-        Self::over(connect_channel(endpoint, plaintext).await?).await
+        Self::over(connect_channel(endpoint, plaintext, REQUEST_TIMEOUT).await?).await
     }
 
     /// The same, over a channel that is already connected.
@@ -685,11 +702,12 @@ fn start_flow(tap: &Tap, request: &GrpcRequest) -> Flow {
 /// Send a unary gRPC request. Frontend: `invoke<GrpcResponse>('grpc_send', { request })`.
 ///
 /// A non-OK gRPC status **resolves** as a [`GrpcResponse`] (`statusCode != 0`,
-/// `statusName` set, `error` carrying the message) — mirroring `http_send`. Only a
-/// failure to *connect* (dial/TLS/reflection) is `Err`. The method's descriptor is
-/// fetched via reflection, the JSON request built into a `DynamicMessage`, the call made
-/// with a dynamic codec, and the response decoded back to JSON. The call is recorded in the
-/// Network view as source `API client`.
+/// `statusName` set, `error` carrying the message) — mirroring `http_send`. A failure to
+/// *connect* (dial/TLS/reflection) is `Err`, and so is a deadline that passed on our side
+/// (the request's timeout): no server sent that status, so none is reported. The method's
+/// descriptor is fetched via reflection, the JSON request built into a `DynamicMessage`, the
+/// call made with a dynamic codec, and the response decoded back to JSON. The call is recorded
+/// in the Network view as source `API client`.
 #[tauri::command]
 pub async fn grpc_send(request: GrpcRequest) -> Result<GrpcResponse, String> {
     send_via(request, &Tap::global()).await
@@ -726,16 +744,18 @@ fn without_status(metadata: &[(String, String)]) -> Vec<(String, String)> {
 /// The unary call behind [`grpc_send`], recorded on `tap`, returning the server's metadata as
 /// well. With a `limit`, the whole call (dial, reflection, the call itself) must finish within
 /// it; past it the call is abandoned and its Network row settles as an error, never left
-/// pending.
+/// pending. The channel's own request timeout is then set past the limit
+/// ([`channel_timeout`]), so a call may take all of it, and the limit is the deadline reported.
 pub async fn call(
     request: GrpcRequest,
     tap: &Tap,
     limit: Option<Duration>,
 ) -> Result<GrpcOutcome, String> {
     let flow = start_flow(tap, &request);
+    let request_timeout = channel_timeout(limit);
     let outcome = match limit {
-        None => unary(request, &flow).await,
-        Some(limit) => tokio::time::timeout(limit, unary(request, &flow))
+        None => unary(request, &flow, request_timeout).await,
+        Some(limit) => tokio::time::timeout(limit, unary(request, &flow, request_timeout))
             .await
             .unwrap_or_else(|_| {
                 Err(format!(
@@ -747,9 +767,28 @@ pub async fn call(
     outcome.inspect_err(|e| flow.fail(e.clone()))
 }
 
-/// The call itself; `flow` gets the request body once parsed and the outcome.
-async fn unary(request: GrpcRequest, flow: &Flow) -> Result<GrpcOutcome, String> {
-    let channel = connect_channel(&request.endpoint, request.plaintext).await?;
+/// Whether `status` is a deadline that passed on our side — the channel's request timeout, or a
+/// `grpc-timeout` the request carried — which tonic reports as a `Cancelled` status although no
+/// server sent one. tonic keeps the error it mapped as the status's source.
+fn deadline_passed(status: &Status) -> bool {
+    let mut source = std::error::Error::source(status);
+    while let Some(e) = source {
+        if e.is::<tonic::TimeoutExpired>() {
+            return true;
+        }
+        source = e.source();
+    }
+    false
+}
+
+/// The call itself; `flow` gets the request body once parsed and the outcome. The channel's
+/// requests time out after `request_timeout`.
+async fn unary(
+    request: GrpcRequest,
+    flow: &Flow,
+    request_timeout: Duration,
+) -> Result<GrpcOutcome, String> {
+    let channel = connect_channel(&request.endpoint, request.plaintext, request_timeout).await?;
 
     // Resolve the method descriptor via reflection.
     let mut reflection = Reflection::over(channel.clone()).await?;
@@ -824,6 +863,11 @@ async fn unary(request: GrpcRequest, flow: &Flow) -> Result<GrpcOutcome, String>
                 metadata: without_status(&headers),
             })
         }
+        // Our own deadline, not an answer: the caller sees a timeout and the row fails.
+        Err(status) if deadline_passed(&status) => Err(format!(
+            "no answer before the request's deadline ({}); the call was abandoned",
+            status.message()
+        )),
         // A gRPC status (incl. a post-connect transport blip surfaced as Unavailable) is
         // a normal response, mirroring `http.rs`'s treatment of a 4xx/5xx.
         Err(status) => {
@@ -1052,6 +1096,18 @@ mod tests {
                 ("x-served-by", "b"),
             ])
         );
+    }
+
+    #[test]
+    fn a_call_with_a_limit_of_its_own_gets_a_channel_that_waits_past_it() {
+        // Without a limit, the channel's own deadline is the only one.
+        assert_eq!(channel_timeout(None), REQUEST_TIMEOUT);
+        // With one, the channel must never cut the call first — including limits past the
+        // default request timeout, which an agent's `grpc call --timeout-ms` allows.
+        for ms in [1, 400, 29_999, 30_000, 45_000, 60_000] {
+            let limit = Duration::from_millis(ms);
+            assert!(channel_timeout(Some(limit)) > limit, "{ms} ms");
+        }
     }
 
     #[test]

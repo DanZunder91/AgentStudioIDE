@@ -1476,6 +1476,62 @@ mod tests {
         );
     }
 
+    /// An exchange is agent-authored, so it never resolves a `{{VAR}}`. With a Vault on disk that
+    /// holds the variable, the console's path (given that Vault) sends its value — the control —
+    /// while an exchange with the same header is refused before it connects, naming the variable
+    /// and no value: it reads no Vault, so it has nothing to resolve the reference with.
+    #[tokio::test]
+    async fn an_exchange_never_resolves_a_vault_variable_nor_reads_the_vault() {
+        let secret = "exchange-vault-token";
+        let vault = VaultFile::new(&[("WS_TOKEN", secret)]);
+        let (addr, seen) = spawn_auth_server("Bearer exchange-vault-token").await;
+        let url = format!("ws://{addr}/ws");
+        let headers = vec![header("Authorization", "Bearer {{WS_TOKEN}}")];
+
+        let (channel, store) = recording_channel();
+        let id = connect_via(
+            url.clone(),
+            headers.clone(),
+            vault.path.clone(),
+            channel,
+            Tap::none(),
+        );
+        assert!(
+            wait_for_kind(&store, "open").await.is_some(),
+            "the control resolves and authenticates; events: {:?}",
+            store.lock().unwrap()
+        );
+        assert_eq!(
+            seen.lock().unwrap().as_deref(),
+            Some("Bearer exchange-vault-token")
+        );
+        let _ = ws_close(id);
+        *seen.lock().unwrap() = None;
+
+        let err = exchange(
+            ExchangeSpec {
+                url,
+                headers,
+                send: vec!["hi".into()],
+                wait: Duration::from_millis(100),
+                max_messages: 5,
+                connect_timeout: Duration::from_secs(5),
+                send_budget: SEND_BUDGET,
+            },
+            &Tap::none(),
+        )
+        .await
+        .expect_err("an exchange has no Vault to resolve a variable from");
+        assert!(err.contains("{{WS_TOKEN}}"), "names the variable: {err}");
+        assert!(!err.contains(secret), "and never a value: {err}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            *seen.lock().unwrap(),
+            None,
+            "the exchange never reached the server"
+        );
+    }
+
     #[tokio::test]
     async fn connect_emits_open_then_echoes_a_text_message() {
         let (addr, _server) = spawn_echo_server().await;

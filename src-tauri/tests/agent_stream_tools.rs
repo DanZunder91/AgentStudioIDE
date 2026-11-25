@@ -1170,6 +1170,46 @@ async fn a_slow_call_is_abandoned_at_its_deadline_and_its_row_settles() {
     assert!(e[0]["transportError"].as_str().unwrap().contains("400 ms"));
 }
 
+/// A deadline that passes on our side — here the request's own `grpc-timeout`, which tonic
+/// enforces in the client and reports as a `Cancelled` status — is the call's timeout, not a
+/// status a server sent: the tool fails, the Network row is an error with no gRPC status, and
+/// History hears a transport error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_deadline_that_passes_on_our_side_is_a_timeout_not_a_server_status() {
+    let port = spawn_grpc().await;
+    let (ctx, events) = ctx();
+    let nc = netcap();
+    let a = args(json!({
+        "target": format!("127.0.0.1:{port}"),
+        "method": "test.v1.Echo/Slow",
+        "header": ["grpc-timeout: 200m"],
+        "plaintext": true,
+        "timeout_ms": 10_000,
+    }));
+    let started = Instant::now();
+    let err = stream::grpc_call_with(&ctx, &a, &Tap::of(&nc))
+        .await
+        .expect_err("a deadline is not an answer");
+    assert!(
+        started.elapsed() < Duration::from_millis(2500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        err.contains("no answer before the request's deadline"),
+        "{err}"
+    );
+    let f = wait_for(&nc, "settled", |f| f.state != FlowState::Pending).await;
+    assert_eq!(f.state, FlowState::Error);
+    assert_eq!(f.grpc_status, None, "no server sent a status");
+    let e = events.all();
+    assert_eq!(e[0]["statusCode"], Value::Null);
+    assert!(e[0]["transportError"]
+        .as_str()
+        .unwrap()
+        .contains("deadline"));
+}
+
 // ── the real binary, end to end ──────────────────────────────────────────────
 
 /// The listener's `/ctl` route over the real dispatcher, as the app wires it.
