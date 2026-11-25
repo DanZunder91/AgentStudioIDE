@@ -1,16 +1,48 @@
-//! Database tools.
+//! Database tools: everything the DB panel and its console do, for an agent.
 //!
 //! Rules on top of the module-wide ones ([`crate::agent_ctl`]):
 //! * A new connection is read-only (the §G.2 default); making it writable is the user's click.
+//!   No tool makes a connection writable, edits or deletes one, or reads a secret back.
 //! * A connection that is already saved (same engine, host, port, database and user) is reported
 //!   and opened, never changed.
 //! * A connection that fails its test is not saved unless the agent passes `force`.
 //! * Nothing an agent sees carries a password, a Vault reference or a connection URL.
+//! * Every other tool names a **saved** connection (id or name, any case — [`db_target`]); its
+//!   password is resolved from the Vault inside Rust, and the agent cannot change where it dials.
+//! * Queries run through the console's own path and guardrails ([`db_run`]); each run is shown to
+//!   the user in that connection's console tab (`dbQueryRun`).
+//! * Everything returned is bounded — rows, bytes, items, time — and every cut is said.
+
+use std::time::Duration;
 
 use crate::agent_ctl::registry::{Args, Param, ParamKind, ToolCtx, ToolFuture, ToolOk, ToolSpec};
 use crate::db::engines::{self, EngineSpec};
 use crate::db::model::{DbConnection, DbConnectionInput, DbTestResult, ParsedUrl, SavePassword};
 use crate::db::{self, url, Paths};
+
+#[path = "db_browse.rs"]
+pub mod db_browse;
+#[path = "db_run.rs"]
+pub mod db_run;
+#[path = "db_saved.rs"]
+pub mod db_saved;
+#[path = "db_target.rs"]
+pub mod db_target;
+
+/// The most text a reply carries (the readable message, and the cell text in the data), in bytes.
+pub const TEXT_BUDGET: usize = 64 * 1024;
+/// Every database tool answers within this. Below the CLI's own reply timeout, so the agent
+/// always hears from the app rather than from a cut connection.
+pub const TOOL_DEADLINE: Duration = Duration::from_secs(120);
+
+/// The connection argument, the same in every tool that takes one.
+const CONNECTION: Param = Param::new(
+    "connection",
+    ParamKind::String,
+    "A saved connection's name (any case) or id, as `db list` shows them.",
+)
+.required()
+.positional();
 
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
@@ -54,7 +86,286 @@ pub const TOOLS: &[ToolSpec] = &[
         params: &[],
         run: run_list,
     },
+    ToolSpec {
+        name: "db_test",
+        cli: &["db", "test"],
+        summary: "Test a saved database connection: dial it with its password from Agent \
+                  Studio's Vault and report the server version and how long it took.",
+        details: "The password is read inside Agent Studio and never shown. A connection that \
+                  does not connect exits 1 with the reason.",
+        params: &[CONNECTION],
+        run: run_test,
+    },
+    ToolSpec {
+        name: "db_schema",
+        cli: &["db", "schema"],
+        summary: "Browse a saved connection's objects one level at a time: databases, schemas, \
+                  tables, views, collections, columns, keys.",
+        details: "Without --path: the top level. --path walks down by name, levels separated by \
+                  / (e.g. maestro/public/Tables/tracks lists the columns of tracks); a folder \
+                  level such as Tables can be left out (maestro/public/tracks). Each item comes \
+                  with the path that looks inside it. At most 500 items per level. A level the \
+                  tree reads one page of (Redis keys, DynamoDB tables) says so.",
+        params: &[
+            CONNECTION,
+            Param::new(
+                "path",
+                ParamKind::String,
+                "Where to look: names from the top level down, separated by /.",
+            ),
+        ],
+        run: run_schema,
+    },
+    ToolSpec {
+        name: "db_search",
+        cli: &["db", "search"],
+        summary: "Find the tables, views, collections, columns and keys of a saved connection \
+                  whose names contain a text (any case).",
+        details: "Walks the object tree breadth-first (every table before any column) from the \
+                  top or from --path, for at most 300 levels, 20 s and 200 matches, and says \
+                  when it stopped early or met a level the tree lists only one page of (Redis \
+                  keys, DynamoDB tables); `db query` searches those directly (e.g. SCAN 0 MATCH \
+                  \"*text*\" COUNT 1000).",
+        params: &[
+            CONNECTION,
+            Param::new(
+                "pattern",
+                ParamKind::String,
+                "The text to look for in names (any case).",
+            )
+            .required()
+            .positional(),
+            Param::new(
+                "path",
+                ParamKind::String,
+                "Search only below this place (names separated by /, as `db schema` shows).",
+            ),
+        ],
+        run: run_search,
+    },
+    ToolSpec {
+        name: "db_query",
+        cli: &["db", "query"],
+        summary: "Run a query or command on a saved connection through Agent Studio's console \
+                  and its guardrails, and show the rows as a table.",
+        details: "The DB console's own path: a read-only connection refuses writes, one \
+                  statement per run unless the connection allows multiple statements, and the \
+                  connection's timeout applies. SQL engines take SQL; MongoDB a JSON command \
+                  document (or SQL that maps to one); Redis and Valkey a command line; DynamoDB \
+                  PartiQL. Another database on the same server is named in the query where the \
+                  engine allows it (db.table, \"$db\"); a PostgreSQL connection is bound to its \
+                  database. Rows: --limit, default 100, at most 1000; the reply is capped at \
+                  64 KB and says what was cut. A query that starts with -- goes in --query. The \
+                  user sees each run, with its results, in the connection's console tab. A \
+                  database error is a result (exit 0); a refusal by Agent Studio exits 1.",
+        params: &[
+            CONNECTION,
+            Param::new(
+                "query",
+                ParamKind::String,
+                "The query or command to run (quote it).",
+            )
+            .required()
+            .positional(),
+            Param::new(
+                "limit",
+                ParamKind::Integer,
+                "Rows to read per statement: default 100, at most 1000.",
+            ),
+        ],
+        run: run_query,
+    },
+    ToolSpec {
+        name: "db_console",
+        cli: &["db", "console"],
+        summary: "Open a query console tab in Agent Studio for a saved connection, with a query \
+                  typed in but not run, for the user to read and run.",
+        details: "",
+        params: &[
+            CONNECTION,
+            Param::new(
+                "query",
+                ParamKind::String,
+                "The query to type into the console (it is not run).",
+            )
+            .positional(),
+        ],
+        run: run_console,
+    },
+    ToolSpec {
+        name: "db_queries",
+        cli: &["db", "queries"],
+        summary: "List the queries saved for a connection in Agent Studio, with their text.",
+        details: "",
+        params: &[CONNECTION],
+        run: run_queries,
+    },
+    ToolSpec {
+        name: "db_save_query",
+        cli: &["db", "save", "query"],
+        summary: "Save a query under a name in a connection's saved queries in Agent Studio, \
+                  where the user finds it in the DB panel. Never overwrites one.",
+        details: "Always adds: a name that is already taken gets a second query beside the \
+                  first, and the reply says so.",
+        params: &[
+            CONNECTION,
+            Param::new("name", ParamKind::String, "What to call it.")
+                .required()
+                .positional(),
+            Param::new("query", ParamKind::String, "The query text (quote it).")
+                .required()
+                .positional(),
+        ],
+        run: run_save_query,
+    },
 ];
+
+/// Drop whole lines from the end of `lines` until what is left fits in `budget` bytes (each
+/// line counted with its newline). Returns how many lines were dropped.
+pub fn text_budget_cut(lines: &mut Vec<String>, budget: usize) -> usize {
+    let mut used = 0usize;
+    let mut keep = 0usize;
+    for line in lines.iter() {
+        let size = line.len() + 1;
+        if used + size > budget {
+            break;
+        }
+        used += size;
+        keep += 1;
+    }
+    let dropped = lines.len() - keep;
+    lines.truncate(keep);
+    dropped
+}
+
+/// The last word on size: a reply longer than [`TEXT_BUDGET`] (plus room for the sentence that
+/// says so) is cut at a character boundary, and says it was.
+pub fn hard_cap(mut text: String) -> String {
+    const ROOM: usize = 4 * 1024;
+    if text.len() <= TEXT_BUDGET + ROOM {
+        return text;
+    }
+    let mut at = TEXT_BUDGET;
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    text.truncate(at);
+    text.push_str("\n… (cut at 64 KB; --json carries the structured data.)");
+    text
+}
+
+fn run_test(ctx: ToolCtx, args: Args) -> ToolFuture {
+    Box::pin(async move {
+        let (message, data) =
+            db_browse::db_test(&ctx.db_paths(), args.req_str("connection")?).await?;
+        Ok(ToolOk::new(message, data))
+    })
+}
+
+fn run_schema(ctx: ToolCtx, args: Args) -> ToolFuture {
+    Box::pin(async move {
+        let (message, data) = db_browse::db_schema(
+            &ctx.db_paths(),
+            args.req_str("connection")?,
+            args.str("path").unwrap_or(""),
+        )
+        .await?;
+        Ok(ToolOk::new(message, data))
+    })
+}
+
+fn run_search(ctx: ToolCtx, args: Args) -> ToolFuture {
+    Box::pin(async move {
+        let (message, data) = db_browse::db_search(
+            &ctx.db_paths(),
+            args.req_str("connection")?,
+            args.str("pattern").unwrap_or(""),
+            args.str("path").unwrap_or(""),
+        )
+        .await?;
+        Ok(ToolOk::new(message, data))
+    })
+}
+
+fn run_query(ctx: ToolCtx, args: Args) -> ToolFuture {
+    Box::pin(async move {
+        let connection = args.req_str("connection")?.to_string();
+        let query = args.str("query").unwrap_or("").to_string();
+        let (target, result) = db_run::run(
+            &ctx.db_paths(),
+            &connection,
+            &query,
+            args.int("limit"),
+            db_run::app_deadline(),
+        )
+        .await;
+        // Every run on a known connection is shown to the user — a refused one too, because an
+        // agent that tried to write to a read-only database is exactly what the user must see.
+        if let Some(c) = &target {
+            let (results, error) = match &result {
+                Ok(report) => (serde_json::to_value(&report.results).ok(), None),
+                Err(e) => (Some(serde_json::json!([])), Some(e.clone())),
+            };
+            ctx.emit(
+                "dbQueryRun",
+                serde_json::json!({
+                    "connectionId": c.id,
+                    "query": query,
+                    "results": results,
+                    "error": error,
+                    "notes": result.as_ref().map(|r| r.notes.clone()).unwrap_or_default(),
+                }),
+            );
+        }
+        let report = result?;
+        Ok(ToolOk::new(report.message(), report.data()))
+    })
+}
+
+fn run_console(ctx: ToolCtx, args: Args) -> ToolFuture {
+    Box::pin(async move {
+        let query = args.str("query").filter(|q| !q.trim().is_empty());
+        let c = db_saved::db_console(&ctx.db_paths(), args.req_str("connection")?, query)?;
+        ctx.emit(
+            "dbConsole",
+            serde_json::json!({ "connectionId": c.id, "query": query }),
+        );
+        Ok(ToolOk::new(
+            db_saved::console_message(&c, query.is_some()),
+            serde_json::json!({
+                "connection": summary(&c),
+                "query": query,
+                "run": false,
+            }),
+        ))
+    })
+}
+
+fn run_queries(ctx: ToolCtx, args: Args) -> ToolFuture {
+    Box::pin(async move {
+        let (message, data) = db_saved::db_queries(&ctx.db_paths(), args.req_str("connection")?)?;
+        Ok(ToolOk::new(message, data))
+    })
+}
+
+fn run_save_query(ctx: ToolCtx, args: Args) -> ToolFuture {
+    Box::pin(async move {
+        let report = db_saved::db_save_query(
+            &ctx.db_paths(),
+            args.req_str("connection")?,
+            args.str("name").unwrap_or(""),
+            args.str("query").unwrap_or(""),
+        )?;
+        ctx.emit(
+            "dbSavedQuery",
+            serde_json::json!({
+                "connectionId": report.connection.id,
+                "queryId": report.saved.id,
+            }),
+        );
+        Ok(ToolOk::new(report.message(), report.data()))
+    })
+}
 
 fn run_connect(ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move {
@@ -420,3 +731,7 @@ fn list_message(connections: &[DbConnection]) -> String {
 #[cfg(test)]
 #[path = "db_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "db_tools_tests.rs"]
+mod tools_tests;

@@ -6071,4 +6071,519 @@ mod db_live_agent_ctl {
         );
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    /* ── the tools after `db connect`: an agent browsing and querying the saved connection ── */
+
+    use agent_studio_scaffold_lib::agent_ctl::commands::db::db_run;
+    use agent_studio_scaffold_lib::agent_ctl::{self, CtlEvent, CtlResponse, ToolCtx, UiSink};
+
+    /// A write probe of this module's own, in the 9000 range the seed never uses.
+    const PROBE_AGENT_WRITE: i32 = 9101;
+
+    #[derive(Default)]
+    struct Events(std::sync::Mutex<Vec<CtlEvent>>);
+
+    impl UiSink for Events {
+        fn emit(&self, event: CtlEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    /// The fixture saved the way an agent saves it (`db connect`, read-only), in a temp dir.
+    async fn saved(tag: &str) -> (std::path::PathBuf, agent_studio_scaffold_lib::db::Paths) {
+        let (dir, paths) = temp_paths(tag);
+        let url = format!("postgresql://{USER}:{PASSWORD}@{HOST}:{PORT}/{DATABASE}");
+        agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+            &paths,
+            &url,
+            Some("Maestro"),
+            false,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("db connect refused the fixture: {e}"));
+        (dir, paths)
+    }
+
+    /// One tool call through the real dispatcher, as the CLI or MCP would make it.
+    async fn tool(
+        dir: &std::path::Path,
+        name: &str,
+        args: serde_json::Value,
+    ) -> (u16, CtlResponse, Vec<CtlEvent>) {
+        let events = std::sync::Arc::new(Events::default());
+        let ctx = ToolCtx {
+            dir: dir.to_path_buf(),
+            terminal_id: "term-live".into(),
+            ui: events.clone(),
+        };
+        let body = serde_json::to_vec(&serde_json::json!({"tool": name, "args": args})).unwrap();
+        let (status, reply) = agent_ctl::handle(ctx, &body).await;
+        assert!(
+            !reply.message.contains(PASSWORD) && !reply.data.to_string().contains(PASSWORD),
+            "the password reached an agent: {}",
+            reply.message
+        );
+        let seen = events.0.lock().unwrap().clone();
+        (status, reply, seen)
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn an_agent_tests_and_browses_the_saved_connection_level_by_level() {
+        rt().block_on(async {
+            let (dir, _paths) = saved("schema").await;
+            let (status, r, _) = tool(
+                &dir,
+                "db_test",
+                serde_json::json!({"connection": "maestro"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(r.message.contains(": PostgreSQL "), "{}", r.message);
+
+            let (status, r, _) = tool(
+                &dir,
+                "db_schema",
+                serde_json::json!({"connection": "MAESTRO"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(
+                r.message
+                    .contains("database  maestro  — the connected database"),
+                "{}",
+                r.message
+            );
+
+            let (_, r, _) = tool(
+                &dir,
+                "db_schema",
+                serde_json::json!({"connection": "Maestro", "path": "maestro/public"}),
+            )
+            .await;
+            let names: Vec<&str> = r.data["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| i["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(names, ["Tables", "Views"], "{}", r.message);
+
+            let (_, r, _) = tool(
+                &dir,
+                "db_schema",
+                serde_json::json!({"connection": "Maestro", "path": "maestro/public/Tables"}),
+            )
+            .await;
+            for table in ["tall", "tracks", "wide"] {
+                assert!(
+                    r.message.contains(&format!("table  {table}")),
+                    "{}",
+                    r.message
+                );
+            }
+
+            // The folder level left out, and the columns with the server's own type names.
+            let (status, r, _) = tool(
+                &dir,
+                "db_schema",
+                serde_json::json!({"connection": "Maestro", "path": "maestro/public/tracks"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["path"], "maestro/public/Tables/tracks");
+            assert!(
+                r.message
+                    .contains("column  title  — character varying(16) · not null"),
+                "{}",
+                r.message
+            );
+            assert!(r.message.contains("11 items."), "{}", r.message);
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn an_agent_searches_table_view_and_column_names() {
+        rt().block_on(async {
+            let (dir, _paths) = saved("search").await;
+            let (status, r, _) = tool(
+                &dir,
+                "db_search",
+                serde_json::json!({"connection": "maestro", "pattern": "TRACK"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            let paths: Vec<&str> = r.data["matches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["path"].as_str().unwrap())
+                .collect();
+            assert!(
+                paths.contains(&"maestro/public/Tables/tracks"),
+                "{paths:?}"
+            );
+            assert!(
+                paths.contains(&"maestro/public/Views/v_tracks"),
+                "{paths:?}"
+            );
+            assert_eq!(r.data["complete"], true, "{}", r.message);
+
+            let (_, r, _) = tool(
+                &dir,
+                "db_search",
+                serde_json::json!({"connection": "maestro", "pattern": "label"}),
+            )
+            .await;
+            assert!(
+                r.message.contains("column  maestro/public/Tables/tall/label"),
+                "{}",
+                r.message
+            );
+
+            // 200 columns of `wide` match "c1": the walk stops at its match limit and says so.
+            let (_, r, _) = tool(
+                &dir,
+                "db_search",
+                serde_json::json!({"connection": "maestro", "pattern": "c", "path": "maestro/public/wide"}),
+            )
+            .await;
+            assert_eq!(r.data["matches"].as_array().unwrap().len(), 200);
+            assert_eq!(r.data["cutShort"], "matches", "{}", r.message);
+            assert!(r.message.contains("The search stopped early"), "{}", r.message);
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn an_agent_queries_rows_and_the_user_is_shown_the_run() {
+        rt().block_on(async {
+            let (dir, _paths) = saved("query").await;
+            let (status, r, events) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({
+                    "connection": "maestro",
+                    "query": "SELECT id, title, tag FROM tracks ORDER BY id",
+                }),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(
+                r.message.starts_with(
+                    "Ran on \"Maestro\" (PostgreSQL at 127.0.0.1:55432/maestro, read-only)"
+                ),
+                "{}",
+                r.message
+            );
+            assert!(r.message.contains("(6 rows)"), "{}", r.message);
+            assert!(
+                r.message.contains("2  | Bluewater   | NULL"),
+                "{}",
+                r.message
+            );
+            assert!(
+                r.message
+                    .contains("4  | Driftwood   | ünïcode ✓ 中文\\tand a\\nnewline"),
+                "{}",
+                r.message
+            );
+            // NULL and '' stay apart in the data (rows 2 and 3).
+            assert_eq!(r.data["rows"][1][2], serde_json::Value::Null);
+            assert_eq!(r.data["rows"][2][2], "");
+            assert_eq!(r.data["columns"], serde_json::json!(["id", "title", "tag"]));
+
+            assert_eq!(events.len(), 1);
+            let e = serde_json::to_value(&events[0]).unwrap();
+            assert_eq!(e["kind"], "dbQueryRun");
+            assert_eq!(e["terminalId"], "term-live");
+            assert_eq!(e["results"][0]["rows"].as_array().unwrap().len(), 6);
+
+            // A `{{…}}` in a query is text, never a Vault lookup.
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": "SELECT '{{PROD_PW}}' AS t"}),
+            )
+            .await;
+            assert_eq!(r.data["rows"], serde_json::json!([["{{PROD_PW}}"]]));
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn the_row_limit_and_the_byte_cap_are_measured_and_said() {
+        rt().block_on(async {
+            let (dir, _paths) = saved("limits").await;
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": "SELECT id FROM tall ORDER BY id"}),
+            )
+            .await;
+            assert_eq!(r.data["rows"].as_array().unwrap().len(), 100, "the default");
+            assert_eq!(r.data["truncated"], true);
+            assert!(r.message.contains("(100 rows, more exist)"), "{}", r.message);
+
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": "SELECT id FROM tall ORDER BY id", "limit": 10}),
+            )
+            .await;
+            assert_eq!(r.data["rows"].as_array().unwrap().len(), 10);
+            assert_eq!(r.data["rows"][9][0], "10");
+            assert!(
+                r.message
+                    .contains("Only the first 10 rows were read: that is the limit (10)."),
+                "{}",
+                r.message
+            );
+
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": "SELECT id FROM tall", "limit": 5000}),
+            )
+            .await;
+            assert_eq!(r.data["rows"].as_array().unwrap().len(), 1000);
+            assert!(r.message.contains("--limit 5000 was lowered to 1000"));
+
+            // 500 rows of 1000 characters: what fits in 64 KB, and a sentence for the rest.
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({
+                    "connection": "maestro",
+                    "query": "SELECT repeat('x', 1000) AS v FROM generate_series(1, 500)",
+                    "limit": 500,
+                }),
+            )
+            .await;
+            assert_eq!(r.data["rows"].as_array().unwrap().len(), 65);
+            assert!(
+                r.message.contains(
+                    "Rows after the first 65 (of 500 read) were left out: the reply is capped at 64 KB."
+                ),
+                "{}",
+                &r.message[r.message.len().saturating_sub(400)..]
+            );
+            assert!(r.message.len() <= 64 * 1024 + 4096);
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn a_write_through_a_read_only_connection_is_refused_and_the_row_is_absent() {
+        rt().block_on(async {
+            let (dir, _paths) = saved("ro").await;
+            let insert = format!(
+                "INSERT INTO tracks (id, title, ensemble, duration, tag) \
+                 VALUES ({PROBE_AGENT_WRITE}, 'agent', 'duo', 1, 'agent-write')"
+            );
+            let (status, r, events) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": insert}),
+            )
+            .await;
+            assert_eq!(status, 200, "the server's refusal is a result: {}", r.message);
+            assert!(
+                r.message.contains("The database said: The server refused that statement because the transaction is read-only"),
+                "{}",
+                r.message
+            );
+            assert_eq!(events.len(), 1, "the attempt is shown to the user");
+
+            // The guard's half: an access-mode change is refused before it is sent.
+            let (status, r, events) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({
+                    "connection": "maestro",
+                    "query": "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE",
+                }),
+            )
+            .await;
+            assert_eq!(status, 422, "{}", r.message);
+            assert!(r.message.contains("would change its access mode"), "{}", r.message);
+            assert!(events[0].payload["error"].as_str().unwrap().contains("access mode"));
+
+            // Two statements on a connection that allows one.
+            let (status, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": "SELECT 1; SELECT 2"}),
+            )
+            .await;
+            assert_eq!(status, 422);
+            assert!(r.message.contains("That is 2 statements"), "{}", r.message);
+
+            // Proven by absence, not by the error.
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({
+                    "connection": "maestro",
+                    "query": format!("SELECT count(*) FROM tracks WHERE id = {PROBE_AGENT_WRITE}"),
+                }),
+            )
+            .await;
+            assert_eq!(r.data["rows"], serde_json::json!([["0"]]), "{}", r.message);
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn a_query_past_the_deadline_is_cancelled_on_the_server() {
+        rt().block_on(async {
+            let (dir, paths) = saved("deadline").await;
+            let started = std::time::Instant::now();
+            let (_, result) = db_run::run(
+                &paths,
+                "maestro",
+                "SELECT pg_sleep(25) AS agent_deadline_probe",
+                None,
+                std::time::Duration::from_secs(1),
+            )
+            .await;
+            let err = result.unwrap_err();
+            assert!(err.contains("stopped waiting for the query"), "{err}");
+            assert!(started.elapsed() < std::time::Duration::from_secs(10));
+
+            // The statement is gone from the server, not left running for 25 s.
+            let mut still = String::new();
+            for _ in 0..30 {
+                let (_, r, _) = tool(
+                    &dir,
+                    "db_query",
+                    serde_json::json!({
+                        "connection": "maestro",
+                        "query": "SELECT count(*) FROM pg_stat_activity \
+                                  WHERE query LIKE 'SELECT pg_sleep(25) AS agent_deadline_probe%' \
+                                  AND state = 'active'",
+                    }),
+                )
+                .await;
+                still = r.data["rows"][0][0].as_str().unwrap_or("?").to_string();
+                if still == "0" {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            assert_eq!(still, "0", "the abandoned statement is still running");
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    /// The same tools on an engine without SQL: the Redis fixture (`127.0.0.1:56379`,
+    /// `requirepass` only), saved by `db connect` from a `redis://:password@…` URL.
+    #[test]
+    #[ignore = "needs the Docker fixture (redis) — run with --ignored"]
+    fn an_agent_reads_redis_and_its_read_only_list_refuses_a_write_before_it_is_sent() {
+        const REDIS_PORT: u16 = 56379;
+        rt().block_on(async {
+            let (dir, paths) = temp_paths("redis");
+            let url = format!("redis://:{PASSWORD}@{HOST}:{REDIS_PORT}/0");
+            agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+                &paths,
+                &url,
+                Some("Cache"),
+                false,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("db connect refused the redis fixture: {e}"));
+
+            let (status, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "cache", "query": "GET fixture:string"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["rows"], serde_json::json!([["hello"]]));
+
+            let (status, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "cache", "query": "SET fixture:agent-probe x"}),
+            )
+            .await;
+            assert_eq!(status, 422, "{}", r.message);
+            assert!(
+                r.message.contains("not on this app's read-only list"),
+                "{}",
+                r.message
+            );
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "cache", "query": "EXISTS fixture:agent-probe"}),
+            )
+            .await;
+            assert_eq!(r.data["rows"], serde_json::json!([["0"]]), "{}", r.message);
+
+            // The fixture holds ~5000 keys and the tree reads one page of 500: both tools must
+            // say so rather than let a name past the page read as a name that does not exist.
+            let (status, r, _) = tool(
+                &dir,
+                "db_schema",
+                serde_json::json!({"connection": "cache", "path": "db0/Keys"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["items"].as_array().unwrap().len(), 500);
+            assert_eq!(r.data["items"][0]["kind"], "key");
+            assert!(
+                r.data["partial"].as_str().unwrap().starts_with("500 of "),
+                "{}",
+                r.data
+            );
+            assert!(
+                r.message.contains("This level lists 500 of "),
+                "{}",
+                r.message
+            );
+
+            let (status, r, _) = tool(
+                &dir,
+                "db_search",
+                serde_json::json!({"connection": "cache", "pattern": "fixture:"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["complete"], false, "{}", r.message);
+            assert!(
+                r.message
+                    .contains("1 level list only one page of what the database holds"),
+                "{}",
+                r.message
+            );
+            assert!(r.message.contains("\"db0/Keys\" (500 of "), "{}", r.message);
+
+            // What the tree cannot page through, the console's own command can.
+            let (status, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({
+                    "connection": "cache",
+                    "query": "SCAN 0 MATCH \"fixture:key with*\" COUNT 10000",
+                }),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(
+                r.message.contains("fixture:key with spaces"),
+                "{}",
+                r.message
+            );
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
 }

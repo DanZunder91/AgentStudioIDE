@@ -2418,6 +2418,21 @@ export interface DbActions {
    * notice naming the agent.
    */
   showAgentDbConnection(event: { connectionId: string; terminalId: string; created: boolean }): void;
+  /**
+   * An agent ran a query through `agent-studio db query`: show the user what ran and what came
+   * back, in that connection's console, WITHOUT taking focus from the terminal they are watching.
+   *
+   * The console tab is opened in the background when it is not open yet (activated only in a
+   * pane with no active tab), its results become `results` (the agent's note first, built by the
+   * caller), and an empty buffer gets the query so the user can re-run it. A buffer the user typed
+   * in is never overwritten, and a run the user is waiting on is never replaced. A write refreshes
+   * the object tree, as a console write does.
+   */
+  showAgentDbQuery(event: {
+    connectionId: string;
+    query: string;
+    results: DbResultSet[];
+  }): Promise<void>;
   /** Dismiss the agent notice. */
   dismissDbAgentNotice(): void;
   /** Delete a connection (Rust cascades its live sessions) and drop our mirror of it. */
@@ -5465,6 +5480,37 @@ export const useAppStore = create<AppStore>()(
           });
           // A mounted panel only loads on mount, so re-issue it; it never rejects.
           void get().dbActions.loadDbStore();
+        },
+
+        showAgentDbQuery: async ({ connectionId, query, results }) => {
+          // The connection record names the tab and configures the console; a no-op when loaded,
+          // and it never rejects.
+          await get().dbActions.loadDbStore();
+          set((s) => {
+            const c = (s.dbConsoles[connectionId] ??= blankDbConsole());
+            if (c.text.trim() === "") c.text = query;
+            if (!c.running) {
+              c.results = results;
+              c.error = null;
+            }
+            const open = Object.values(s.tabs).some(
+              (t) => t.ref.kind === "db-console" && t.ref.connectionId === connectionId,
+            );
+            if (open) return;
+            const tabId = asTabId(newId());
+            s.tabs[tabId] = {
+              id: tabId,
+              kind: "db-console",
+              title: s.dbConnections.find((x) => x.id === connectionId)?.name ?? "Database",
+              ref: { kind: "db-console", connectionId },
+            };
+            const leaf = targetLeaf(s, s.focusedPaneId);
+            leaf.tabIds.push(tabId);
+            if (leaf.activeTabId === null) activateTab(s, tabId);
+          });
+          if (results.some((r) => r.kind === "affected")) {
+            get().dbActions.refreshDbTree(connectionId);
+          }
         },
 
         dismissDbAgentNotice: () =>
