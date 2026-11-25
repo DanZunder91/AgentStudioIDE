@@ -2441,9 +2441,15 @@ export interface DbActions {
    * already written `db-connections.json` and, for a password, the Vault in `api-store.json`,
    * underneath two slices whose load-once gates say they are current — so both gates are
    * re-armed (LESSONS §34), the list is reloaded, and the DB tab is brought into view with a
-   * notice naming the agent.
+   * notice naming the agent. The notice is set at once; the promise settles when the list has
+   * been read again (it never rejects), which is when a connection `db connect` just added
+   * can be connected (`openDbSession` fails as "no longer exists" on an id it does not hold).
    */
-  showAgentDbConnection(event: { connectionId: string; terminalId: string; created: boolean }): void;
+  showAgentDbConnection(event: {
+    connectionId: string;
+    terminalId: string;
+    created: boolean;
+  }): Promise<void>;
   /**
    * An agent ran a query through `agent-studio db query`: show the user what ran and what came
    * back, WITHOUT taking focus from the terminal they are watching.
@@ -5530,7 +5536,7 @@ export const useAppStore = create<AppStore>()(
           }
         },
 
-        showAgentDbConnection: ({ connectionId, terminalId, created }) => {
+        showAgentDbConnection: async ({ connectionId, terminalId, created }) => {
           const agent = agentName(get().agents[terminalId as AgentId]);
           set((s) => {
             s.dbLoaded = false;
@@ -5544,7 +5550,7 @@ export const useAppStore = create<AppStore>()(
             };
           });
           // A mounted panel only loads on mount, so re-issue it; it never rejects.
-          void get().dbActions.loadDbStore();
+          await get().dbActions.loadDbStore();
         },
 
         showAgentDbQuery: async ({ connectionId, terminalId, query, error, outcome, results }) => {

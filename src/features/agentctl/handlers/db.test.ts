@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbIpc = vi.hoisted(() => ({
   connectionInput: vi.fn(),
@@ -506,26 +506,65 @@ describe("dbConsole / dbSavedQuery", () => {
 });
 
 describe("dbConnection / dbOpen: shown connected", () => {
-  it("connects a new connection whose test passed, and not a forced dead one", () => {
+  // Two tests stub `openDbSession`, and `resetStore` resets state, not actions: put it back.
+  const realOpen = useAppStore.getState().dbActions.openDbSession;
+  afterEach(() =>
+    useAppStore.setState((s) => {
+      s.dbActions.openDbSession = realOpen;
+    }),
+  );
+
+  it("connects a new connection whose test passed, and not a forced dead one", async () => {
     const open = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState((s) => {
       s.dbActions.openDbSession = open;
     });
     dispatchAgentCtl({ kind: "dbConnection", terminalId: "t1", connectionId: "c1", created: true, open: true });
     dispatchAgentCtl({ kind: "dbConnection", terminalId: "t1", connectionId: "c2", created: true, open: false });
-    expect(open.mock.calls).toEqual([["c1"]]);
     expect(useAppStore.getState().dbAgentNotice?.connectionId).toBe("c2");
+    await vi.waitFor(() => expect(open.mock.calls).toEqual([["c1"]]));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(open.mock.calls).toEqual([["c1"]]);
   });
 
-  it("db open shows the connection in the DB panel and connects it", () => {
+  it("db open shows the connection in the DB panel and connects it", async () => {
     const open = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState((s) => {
       s.dbActions.openDbSession = open;
     });
     dispatchAgentCtl({ kind: "dbOpen", terminalId: "t1", connectionId: "c2" });
-    expect(open).toHaveBeenCalledWith("c2");
     const s = useAppStore.getState();
     expect(s.rightRailTab).toBe("db");
     expect(s.dbAgentNotice).toMatchObject({ connectionId: "c2", created: false });
+    await vi.waitFor(() => expect(open).toHaveBeenCalledWith("c2"));
+  });
+
+  it("connects a connection the agent just added, once the panel's list holds it", async () => {
+    // The panel loaded its list before the agent's `db connect` wrote "Cache" (c3).
+    await useAppStore.getState().dbActions.loadDbStore();
+    expect(useAppStore.getState().dbConnections.map((c) => c.id)).toEqual(["c1", "c2"]);
+    dbIpc.dbConnectionsLoad.mockResolvedValue({
+      version: 1,
+      connections: [conn("c1", "Orders"), conn("c2", "Analytics"), conn("c3", "Cache")],
+    });
+    dbIpc.dbOpen.mockResolvedValue({ sessionId: "s3", serverVersion: "Redis 8.10", latencyMs: 2 });
+
+    dispatchAgentCtl({ kind: "dbConnection", terminalId: "t1", connectionId: "c3", created: true, open: true });
+
+    // Not "That connection or session no longer exists": the connect waited for the list.
+    await vi.waitFor(() => expect(useAppStore.getState().dbSessions.c3?.status).toBe("open"));
+    expect(useAppStore.getState().dbSessions.c3).toMatchObject({ sessionId: "s3", error: null });
+    expect(dbIpc.dbOpen.mock.calls).toEqual([["c3", null]]);
+  });
+
+  it("leaves a connection the panel already has open on its session", async () => {
+    connected("c1");
+    dispatchAgentCtl({ kind: "dbOpen", terminalId: "t1", connectionId: "c1" });
+    dispatchAgentCtl({ kind: "dbConnection", terminalId: "t1", connectionId: "c1", created: false, open: true });
+    await vi.waitFor(() => expect(dbIpc.dbConnectionsLoad).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(dbIpc.dbOpen).not.toHaveBeenCalled();
+    expect(useAppStore.getState().dbSessions.c1).toMatchObject({ status: "open", sessionId: "s1" });
+    expect(useAppStore.getState().dbAgentNotice).toMatchObject({ connectionId: "c1" });
   });
 });

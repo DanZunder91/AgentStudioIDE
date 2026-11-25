@@ -98,31 +98,48 @@ async function openAgentConsole(
   }
 }
 
+/**
+ * Show a connection an agent named in the DB panel, and connect it when `open` says so.
+ *
+ * The connect waits for the panel's list to be read again: a connection `db connect` has just
+ * added is not in it until then, and `openDbSession` on an id the list does not hold fails at
+ * once as "That connection or session no longer exists". A connection the panel already has
+ * open (or opening) keeps that session: dialling again would replace the session id the
+ * console uses and leave the old session, with any transaction the user has open in it,
+ * running where nothing shows it.
+ */
+async function showAgentConnection(
+  connectionId: string,
+  terminalId: string,
+  created: boolean,
+  open: boolean,
+): Promise<void> {
+  await useAppStore
+    .getState()
+    .dbActions.showAgentDbConnection({ connectionId, terminalId, created });
+  if (!open) return;
+  const { dbSessions, dbActions } = useAppStore.getState();
+  const status = dbSessions[connectionId]?.status;
+  if (status === "open" || status === "opening") return;
+  await dbActions.openDbSession(connectionId);
+}
+
 export const DB_HANDLERS: Readonly<Record<string, AgentCtlHandler>> = {
-  /** `db_connect`: a connection was added (or an already-saved one re-opened). */
-  dbConnection: (e) => {
-    const { dbActions } = useAppStore.getState();
-    const connectionId = String(e.connectionId);
-    dbActions.showAgentDbConnection({
-      connectionId,
-      terminalId: e.terminalId,
-      created: e.created === true,
-    });
-    // Connected and expanded when Rust knows it connects (a passing test, or already saved).
-    if (e.open === true) void dbActions.openDbSession(connectionId);
-  },
+  /**
+   * `db_connect`: a connection was added (or an already-saved one re-opened). Connected and
+   * expanded when Rust knows it connects (a passing test, or already saved).
+   */
+  dbConnection: (e) =>
+    void showAgentConnection(
+      String(e.connectionId),
+      e.terminalId,
+      e.created === true,
+      e.open === true,
+    ),
 
   /** `db_open`: show a saved connection, connected, with its tables. */
-  dbOpen: (e) => {
-    const { dbActions } = useAppStore.getState();
-    const connectionId = String(e.connectionId);
-    dbActions.showAgentDbConnection({
-      connectionId,
-      terminalId: e.terminalId,
-      created: false,
-    });
-    void dbActions.openDbSession(connectionId);
-  },
+  dbOpen: (e) =>
+    void showAgentConnection(String(e.connectionId), e.terminalId, false, true),
 
   /** `db_console`: open the connection's console with the agent's query typed in, not run. */
   dbConsole: (e) =>
