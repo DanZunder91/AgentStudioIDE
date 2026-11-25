@@ -1,13 +1,27 @@
-//! `db_query`: run a query on a saved connection, the way the console runs it.
+//! `db_query`: run a query on a saved connection, the way the console runs it — and tighter where
+//! an agent needs it.
 //!
-//! # The same path as the console, on purpose
+//! # The console's path, plus what an agent needs on top
 //!
 //! [`crate::db::open`] then [`crate::db::query`] — the two calls the console tab makes — so every
 //! guardrail the user sees in the console holds for an agent without a second copy of it: a
 //! read-only connection's writes are refused by the engine (the server setting, the access-mode
 //! filter, Redis's and MongoDB's allowlists), one statement per run unless the connection allows
 //! multiple statements (then the run is a script, as the console's Script button sends it), and
-//! the connection's own timeout bounds the statement. Nothing here inspects or rewrites a query.
+//! the connection's own timeout bounds the statement.
+//!
+//! Those guardrails are written against a user's mistakes. An agent can be prompt-injected, so
+//! two of them are not enough on their own, and this path adds:
+//!
+//! * **A read-only PostgreSQL or MySQL connection runs the agent's statements in a `READ ONLY`
+//!   transaction that is always rolled back** ([`crate::db::query_strict`]).
+//!   The session setting alone is a default a `DO` block or a `set_config` + `COMMIT` can turn
+//!   off; inside the transaction they are refused by the server.
+//! * **Redis and Valkey commands that read credentials or the server's auth set-up are refused**
+//!   ([`redis_refusal`]): `CONFIG GET requirepass` returns the very password Agent Studio dialled
+//!   with, read from the Vault.
+//! * **Whatever comes back has the connection's secrets masked** ([`target::secrets_of`]) before
+//!   anything is cut, so no cut can leave half a password behind.
 //!
 //! Query text is never resolved against the Vault: the DB client has no `{{VAR}}` substitution in
 //! statements, so a `{{…}}` in a query is sent to the database as the characters it is and can
@@ -17,15 +31,16 @@
 //!
 //! Rows: [`DEFAULT_LIMIT`] unless the agent asks, never more than [`MAX_LIMIT`] (the engine reads
 //! one more to *measure* truncation). Then two byte budgets, because a thousand rows of JSON
-//! documents is megabytes: the structured data carries cell text up to [`TEXT_BUDGET`] (each
-//! value cut at [`CELL_CHARS`]), and the readable table is cut at [`TEXT_BUDGET`] too. Every cut
-//! is a sentence in the reply.
+//! documents is megabytes: the structured data carries cells up to [`TEXT_BUDGET`] — each value
+//! cut at [`CELL_CHARS`], and every cell, NULL and empty included, costing at least
+//! [`CELL_COST`] — and the readable table is cut at [`TEXT_BUDGET`] too. Every cut is a sentence in
+//! the reply.
 
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::db::model::{DbConnection, DbRunMode};
+use crate::db::model::{DbConnection, DbFamily, DbRunMode};
 use crate::db::result::{DbResultKind, DbResultSet};
 use crate::db::{self, Paths};
 
@@ -44,6 +59,75 @@ pub const COLUMN_CHARS: usize = 40;
 pub const MAX_RESULT_SETS: usize = 20;
 /// The longest query text accepted, in bytes.
 pub const MAX_QUERY_BYTES: usize = 256 * 1024;
+/// What one cell costs against [`TEXT_BUDGET`] on top of its text: its share of the JSON around
+/// it (`null,` or `"",`) and of the absent-mask beside it. Without it a NULL or empty cell cost
+/// nothing, and a thousand rows of hundreds of empty columns went out whole.
+pub const CELL_COST: usize = 8;
+
+/// The Redis and Valkey commands an agent may not run, whatever the connection allows: each one
+/// reads a credential or the server's auth set-up, or acts with one.
+///
+/// * `CONFIG` (every subcommand): `CONFIG GET requirepass` / `masterauth` / `*` return the server's
+///   passwords — the one Agent Studio dialled with, read from the Vault, among them.
+/// * `ACL` (every subcommand): users, their rules and their password hashes.
+/// * `AUTH`, and `HELLO … AUTH`: log in as someone, with a password the agent supplies.
+/// * `MONITOR`: every other client's commands, as they arrive.
+/// * `SENTINEL`: a sentinel's view of the servers it watches, auth settings included.
+const REDIS_REFUSED: &[(&str, &str)] = &[
+    (
+        "CONFIG",
+        "it reads and changes the server's configuration, which holds its passwords",
+    ),
+    (
+        "ACL",
+        "it reads and changes the server's users, their rules and their password hashes",
+    ),
+    ("AUTH", "it logs the connection in with a password"),
+    (
+        "MONITOR",
+        "it streams every other client's commands, credentials included",
+    ),
+    (
+        "SENTINEL",
+        "it reads a sentinel's view of the servers it watches, their auth settings included",
+    ),
+];
+
+/// `Some(reason)` when a Redis/Valkey command in `text` reads a credential or the server's auth
+/// set-up (see [`REDIS_REFUSED`]).
+///
+/// Read with the engine's own line splitter and tokenizer ([`db::redis::command_lines`],
+/// [`db::redis::tokenize`]), so the words checked here are exactly the words the engine sends:
+/// quoting, escaping or case cannot make the two disagree. A line the tokenizer cannot read is
+/// refused by the engine before anything runs.
+pub fn redis_refusal(text: &str) -> Option<String> {
+    for line in db::redis::command_lines(text) {
+        let Ok(tokens) = db::redis::tokenize(&line) else {
+            continue;
+        };
+        let words: Vec<String> = tokens
+            .iter()
+            .map(|t| t.trim().to_ascii_uppercase())
+            .collect();
+        let Some(head) = words.first() else {
+            continue;
+        };
+        if let Some((name, why)) = REDIS_REFUSED.iter().find(|(name, _)| name == head) {
+            return Some(format!(
+                "`{name}` is not available to an agent: {why}. A password Agent Studio keeps in \
+                 its Vault never reaches an agent."
+            ));
+        }
+        if head == "HELLO" && words.iter().skip(1).any(|w| w == "AUTH") {
+            return Some(
+                "`HELLO … AUTH` is not available to an agent: it logs the connection in with a \
+                 password. `HELLO` without AUTH is."
+                    .to_string(),
+            );
+        }
+    }
+    None
+}
 
 /// What a run returned, after the caps.
 #[derive(Debug, Clone, PartialEq)]
@@ -125,17 +209,27 @@ async fn run_on(
         ));
     }
     let (limit, limit_note) = effective_limit(limit)?;
+    if c.family == DbFamily::Redis {
+        if let Some(why) = redis_refusal(query) {
+            return Err(format!(
+                "Agent Studio did not run that on {}: {why}",
+                target::describe(c)
+            ));
+        }
+    }
+    let secrets = target::secrets_of(paths, c);
     let started = Instant::now();
     let until = started + deadline;
     let sess = tokio::time::timeout(deadline, ToolSession::open(paths, c))
         .await
         .map_err(|_| target::stopped_waiting("the connection", deadline))??;
+    // Strict: read-only held by a transaction where the engine needs one (decided on the session).
     let ran = tokio::time::timeout(
         target::remaining(until),
-        db::query(sess.id(), query.to_string(), mode_for(c), Some(limit)),
+        db::query_strict(sess.id(), query.to_string(), mode_for(c), Some(limit)),
     )
     .await;
-    let sets = match ran {
+    let mut sets = match ran {
         Ok(Ok(sets)) => {
             sess.close().await;
             sets
@@ -153,6 +247,10 @@ async fn run_on(
             return Err(target::stopped_waiting("the query", deadline));
         }
     };
+    // Masked before anything is cut, so a cut can never leave part of a secret behind.
+    for set in &mut sets {
+        redact_set(set, &secrets);
+    }
     let (results, mut notes) = bound(sets, limit);
     if let Some(n) = limit_note {
         notes.insert(0, n);
@@ -165,6 +263,28 @@ async fn run_on(
         notes,
         elapsed: started.elapsed(),
     })
+}
+
+/// Every text of `set` — cells, column names, the statement, the notice — with `secrets` masked.
+pub fn redact_set(set: &mut DbResultSet, secrets: &[String]) {
+    if secrets.is_empty() {
+        return;
+    }
+    let mask = |s: &mut String| {
+        let masked = target::redact(s, secrets);
+        if masked != *s {
+            *s = masked;
+        }
+    };
+    set.rows.iter_mut().flatten().flatten().for_each(mask);
+    set.columns.iter_mut().for_each(|c| {
+        mask(&mut c.name);
+        mask(&mut c.type_name);
+    });
+    mask(&mut set.statement);
+    if let Some(n) = set.notice.as_mut() {
+        mask(n);
+    }
 }
 
 /// The deadline the app uses.
@@ -213,13 +333,18 @@ pub fn bound(mut sets: Vec<DbResultSet>, limit: u32) -> (Vec<DbResultSet>, Vec<S
         }
         let mut keep = 0usize;
         for row in set.rows.iter_mut() {
-            let mut size = 0usize;
+            // Every cell costs, NULL and empty included (see [`CELL_COST`]), and the row its
+            // brackets.
+            let mut size = 2usize;
             let mut cut_here = 0usize;
-            for cell in row.iter_mut().flatten() {
-                if cut_chars(cell, CELL_CHARS) {
-                    cut_here += 1;
+            for cell in row.iter_mut() {
+                size += CELL_COST;
+                if let Some(text) = cell.as_mut() {
+                    if cut_chars(text, CELL_CHARS) {
+                        cut_here += 1;
+                    }
+                    size += text.len();
                 }
-                size += cell.len();
             }
             if size > budget {
                 break;
@@ -420,14 +545,12 @@ impl QueryReport {
 
     /// The structured reply.
     pub fn data(&self) -> Value {
+        // The rows once, in their result: a second copy at the top level doubled the reply.
         let results: Vec<Value> = self.results.iter().map(result_json).collect();
-        let first_rows = self.results.iter().find(|s| s.kind == DbResultKind::Rows);
         json!({
             "connection": summary(&self.connection),
             "limit": self.limit,
             "results": results,
-            "columns": first_rows.map(|s| s.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()),
-            "rows": first_rows.map(|s| s.rows.clone()),
             "truncated": self.results.iter().any(|s| s.truncated),
             "notes": self.notes,
             "elapsedMs": u64::try_from(self.elapsed.as_millis()).unwrap_or(u64::MAX),

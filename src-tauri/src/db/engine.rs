@@ -291,6 +291,45 @@ pub trait DbSession: Send {
     /// alongside whatever succeeded; only a transport failure is an `Err` (the `http_send`
     /// contract — a 500 is a response, not an exception).
     async fn run(&mut self, script: &Script, limits: &Limits) -> Result<Vec<DbResultSet>, DbError>;
+    /// Run `script` the way [`DbSession::run`] does, but with read-only as a **boundary** rather
+    /// than a default: on a session opened read-only, an engine whose read-only is session state
+    /// holds the run in a `READ ONLY` transaction that is always rolled back. The agent tools'
+    /// path. Decided on the session itself, so a connection made read-only a moment before the
+    /// open still gets it.
+    ///
+    /// Why a second path at all: a read-only session is only `SET SESSION CHARACTERISTICS AS
+    /// TRANSACTION READ ONLY` (a *default* for later transactions) plus
+    /// [`guard::read_only_escape`], which by its own doc is a speed bump and not a boundary. An
+    /// agent can be prompt-injected, so for an agent the boundary has to hold against a hostile
+    /// statement: `DO $$ … set_config('default_transaction_read_only','off',false); COMMIT;
+    /// INSERT … $$` passed the filter and wrote. Inside an explicit read-only transaction block
+    /// that same `COMMIT` is "invalid transaction termination", `set_config('transaction_read_only'
+    /// …)` is refused, and every write is refused by the server.
+    ///
+    /// What keeps the transaction in place, statement by statement (the SQL engines' contract):
+    /// * the guards of [`DbSession::run`] first, unchanged;
+    /// * each statement is sent on its own, after **the server** confirmed it is exactly one
+    ///   statement (a prepare, which executes nothing). The splitter cannot be talked into sending
+    ///   `SELECT '\''; COMMIT; …` as "one statement", because the server is asked, not the
+    ///   splitter;
+    /// * after each statement, a check that the run is still inside its own transaction (and, on
+    ///   MySQL, that the session is still read-only). A statement that ended it — `COMMIT`,
+    ///   `ROLLBACK`, an implicit commit — stops the run there with a refusal, so nothing runs
+    ///   outside the transaction;
+    /// * on MySQL, `CALL`, `EXECUTE` and executable comments are refused up front: a MySQL
+    ///   procedure may `COMMIT` inside the one statement (see `mysql_unheld`);
+    /// * `ROLLBACK` at the end, whatever happened.
+    ///
+    /// A session opened read-write has nothing to hold, and the run is [`DbSession::run`]'s. So is
+    /// the default's: the other engines enforce read-only per command (Redis's and MongoDB's
+    /// allowlists) or per request (ClickHouse's `readonly`, DynamoDB), which `run` already is.
+    async fn run_strict(
+        &mut self,
+        script: &Script,
+        limits: &Limits,
+    ) -> Result<Vec<DbResultSet>, DbError> {
+        self.run(script, limits).await
+    }
     /// A handle that can cancel this session's running statement, or `None` when the engine has
     /// no server-side cancel at all.
     ///
@@ -958,23 +997,7 @@ impl DbSession for MySqlSession {
     }
 
     async fn run(&mut self, script: &Script, limits: &Limits) -> Result<Vec<DbResultSet>, DbError> {
-        let statements = guard::split_statements(&script.text);
-        if statements.is_empty() {
-            return Err(DbError::invalid_statement("There is nothing to run."));
-        }
-        if let Some(blocked) = guard::multi_statement_refusal(&statements, script.mode, limits) {
-            return Err(blocked);
-        }
-
-        // A read-only session's access mode is only a *default for later transactions*, and the
-        // user's own SQL can change it — measured on both engines. Refuses the whole run rather
-        // than the one statement: a script that flips the mode and then writes must not execute
-        // halfway. See `guard::read_only_escape` for what this does and does not guarantee.
-        if self.read_only {
-            if let Some(blocked) = guard::read_only_escape(&statements) {
-                return Err(blocked);
-            }
-        }
+        let statements = vet_sql_script(script, limits, self.read_only)?;
         let sql = if matches!(script.mode, DbRunMode::Statement) {
             statements[0].clone()
         } else {
@@ -998,6 +1021,28 @@ impl DbSession for MySqlSession {
                 ),
             )),
         }
+    }
+
+    async fn run_strict(
+        &mut self,
+        script: &Script,
+        limits: &Limits,
+    ) -> Result<Vec<DbResultSet>, DbError> {
+        if !self.read_only {
+            return self.run(script, limits).await;
+        }
+        let pieces = run_pieces(script, vet_sql_script(script, limits, self.read_only)?);
+        if let Some(refused) = mysql_unheld(&pieces) {
+            return Err(refused);
+        }
+        let secrets = self.owned_secrets();
+        let deadline = Duration::from_millis(u64::from(limits.timeout_ms));
+        tokio::time::timeout(
+            deadline,
+            mysql_read_only_run(&mut self.conn, &pieces, limits, &as_refs(&secrets)),
+        )
+        .await
+        .unwrap_or_else(|_| Err(run_timed_out(limits)))
     }
 
     async fn children(&mut self, node: &DbNodeRef) -> Result<Vec<DbNode>, DbError> {
@@ -1480,25 +1525,7 @@ impl DbSession for PgSession {
     }
 
     async fn run(&mut self, script: &Script, limits: &Limits) -> Result<Vec<DbResultSet>, DbError> {
-        let statements = guard::split_statements(&script.text);
-        if statements.is_empty() {
-            return Err(DbError::invalid_statement("There is nothing to run."));
-        }
-        // The multi-statement guard, shared with every other engine so two engines
-        // cannot drift into disagreeing about when a script is refused.
-        if let Some(blocked) = guard::multi_statement_refusal(&statements, script.mode, limits) {
-            return Err(blocked);
-        }
-
-        // A read-only session's access mode is only a *default for later transactions*, and the
-        // user's own SQL can change it — measured on both engines. Refuses the whole run rather
-        // than the one statement: a script that flips the mode and then writes must not execute
-        // halfway. See `guard::read_only_escape` for what this does and does not guarantee.
-        if self.read_only {
-            if let Some(blocked) = guard::read_only_escape(&statements) {
-                return Err(blocked);
-            }
-        }
+        let statements = vet_sql_script(script, limits, self.read_only)?;
 
         // In `statement` mode we send exactly the one statement, not the surrounding text: the
         // console's editor may hold a whole script and only one of them was asked for.
@@ -1525,6 +1552,25 @@ impl DbSession for PgSession {
                 ),
             )),
         }
+    }
+
+    async fn run_strict(
+        &mut self,
+        script: &Script,
+        limits: &Limits,
+    ) -> Result<Vec<DbResultSet>, DbError> {
+        if !self.read_only {
+            return self.run(script, limits).await;
+        }
+        let pieces = run_pieces(script, vet_sql_script(script, limits, self.read_only)?);
+        let secrets = self.owned_secrets();
+        let deadline = Duration::from_millis(u64::from(limits.timeout_ms));
+        tokio::time::timeout(
+            deadline,
+            pg_read_only_run(&mut self.conn, &pieces, limits, &as_refs(&secrets)),
+        )
+        .await
+        .unwrap_or_else(|_| Err(run_timed_out(limits)))
     }
 
     async fn children(&mut self, node: &DbNodeRef) -> Result<Vec<DbNode>, DbError> {
@@ -1682,6 +1728,319 @@ impl DbSession for PgSession {
     async fn close(self: Box<Self>) {
         let _ = self.conn.close().await;
     }
+}
+
+/* ───────────────────── the checks both SQL engines run before sending ───────────────────── */
+
+/// What every SQL run is checked against before anything is sent, in one place for both engines
+/// and both run paths: something to run, the multi-statement setting, and — on a read-only session
+/// — the access-mode filter. Returns the statements.
+///
+/// The access-mode filter refuses the whole run rather than the one statement: a script that flips
+/// the mode and then writes must not execute halfway. See [`guard::read_only_escape`] for what it
+/// does and does not guarantee.
+fn vet_sql_script(
+    script: &Script,
+    limits: &Limits,
+    read_only: bool,
+) -> Result<Vec<String>, DbError> {
+    let statements = guard::split_statements(&script.text);
+    if statements.is_empty() {
+        return Err(DbError::invalid_statement("There is nothing to run."));
+    }
+    // The multi-statement guard, shared with every other engine so two engines cannot drift into
+    // disagreeing about when a script is refused.
+    if let Some(blocked) = guard::multi_statement_refusal(&statements, script.mode, limits) {
+        return Err(blocked);
+    }
+    if read_only {
+        if let Some(blocked) = guard::read_only_escape(&statements) {
+            return Err(blocked);
+        }
+    }
+    Ok(statements)
+}
+
+/* ───────────────── a run held in a read-only transaction (the agent tools' path) ───────────────── */
+
+/// The transaction-local setting a PostgreSQL read-only run sets when it begins and reads after
+/// every statement. `set_config(…, true)` lasts until the transaction ends, so a value that is
+/// gone means a statement ended the transaction (see [`DbSession::run_strict`]).
+const PG_RUN_MARKER: &str = "agent_studio.read_only_run";
+
+/// MySQL's "this command is not supported in the prepared statement protocol yet". The server
+/// says it only after reading the text as ONE statement (a second statement is a syntax error,
+/// 1064, measured on 8.4), so for the one-statement check it counts as a yes.
+const MYSQL_ER_UNSUPPORTED_PS: u16 = 1295;
+
+/// The statements a run sends, in order: the first one in `statement` mode (the console's Run),
+/// all of them in `script` mode.
+fn run_pieces(script: &Script, mut statements: Vec<String>) -> Vec<String> {
+    if matches!(script.mode, DbRunMode::Statement) {
+        statements.truncate(1);
+    }
+    statements
+}
+
+fn run_timed_out(limits: &Limits) -> DbError {
+    DbError::new(
+        DbErrorCode::Timeout,
+        format!(
+            "The query exceeded this connection's {} ms timeout.",
+            limits.timeout_ms
+        ),
+    )
+}
+
+/// The refusal for a statement after which the run was no longer inside its read-only
+/// transaction (or, on MySQL, the session was no longer read-only).
+fn left_the_transaction(index: usize, statement: &str) -> DbError {
+    DbError::blocked(format!(
+        "Statement {} (`{}`) ended the read-only transaction this run is held in, or turned the \
+         session's read-only off, so Agent Studio stopped there: nothing after it ran, and the \
+         run was rolled back. On a read-only connection a run cannot commit, end or change the \
+         transaction it is held in.",
+        index + 1,
+        guard::first_line(statement)
+    ))
+}
+
+/// The server's answer to "is this exactly one statement?", as a result: the prepare's error,
+/// stated, and nothing run.
+fn not_prepared(
+    statement: &str,
+    e: &sqlx::Error,
+    limits: &Limits,
+    secrets: &[&str],
+) -> DbResultSet {
+    let mapped = map_sqlx_error(e).redacted(secrets);
+    let several = e
+        .as_database_error()
+        .is_some_and(|d| d.message().contains("multiple commands"));
+    let text = if several {
+        format!(
+            "{} The server reads this text as more than one statement, so it was not run: on a \
+             read-only connection each statement is sent on its own.",
+            mapped.message
+        )
+    } else {
+        mapped.message
+    };
+    DbResultSet::message(statement, text, limits.row_limit)
+}
+
+fn failed(sets: &[DbResultSet]) -> bool {
+    sets.iter().any(|s| s.kind == DbResultKind::Message)
+}
+
+/// PostgreSQL: `BEGIN TRANSACTION READ ONLY`, the statements, `ROLLBACK` — always.
+async fn pg_read_only_run(
+    conn: &mut PgConnection,
+    pieces: &[String],
+    limits: &Limits,
+    secrets: &[&str],
+) -> Result<Vec<DbResultSet>, DbError> {
+    exec_one(&mut *conn, "BEGIN TRANSACTION READ ONLY", secrets).await?;
+    let ran = pg_read_only_statements(conn, pieces, limits, secrets).await;
+    // Whatever happened above. A failed ROLLBACK leaves nothing to undo that closing the
+    // connection would not: the callers of this path close their session when the run ends.
+    let _ = exec_one(&mut *conn, "ROLLBACK", secrets).await;
+    ran
+}
+
+async fn pg_read_only_statements(
+    conn: &mut PgConnection,
+    pieces: &[String],
+    limits: &Limits,
+    secrets: &[&str],
+) -> Result<Vec<DbResultSet>, DbError> {
+    // A ULID is digits and capitals only, so it is safe inside the literal.
+    let marker = ulid::Ulid::new().to_string();
+    exec_one(
+        &mut *conn,
+        &format!("SELECT set_config('{PG_RUN_MARKER}', '{marker}', true)"),
+        secrets,
+    )
+    .await?;
+    let mut sets = Vec::new();
+    for (i, piece) in pieces.iter().enumerate() {
+        // One statement, by the server's reading. A Parse executes nothing; a second statement in
+        // the text is "cannot insert multiple commands into a prepared statement".
+        if let Err(e) = sqlx::Executor::prepare(
+            &mut *conn,
+            sqlx::SqlSafeStr::into_sql_str(AssertSqlSafe(piece.clone())),
+        )
+        .await
+        {
+            sets.push(not_prepared(piece, &e, limits, secrets));
+            break;
+        }
+        let got = collect(
+            &mut *conn,
+            piece.clone(),
+            std::slice::from_ref(piece),
+            limits,
+            secrets,
+        )
+        .await;
+        let stop = failed(&got);
+        sets.extend(got);
+        if stop {
+            break;
+        }
+        let held = sqlx::query_scalar::<_, Option<String>>(AssertSqlSafe(format!(
+            "SELECT current_setting('{PG_RUN_MARKER}', true)"
+        )))
+        .persistent(false)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|e| map_sqlx_error(&e).redacted(secrets))?;
+        if held.as_deref() != Some(marker.as_str()) {
+            return Err(left_the_transaction(i, piece));
+        }
+    }
+    Ok(sets)
+}
+
+/// MySQL: `START TRANSACTION READ ONLY`, the statements, `ROLLBACK` — always.
+async fn mysql_read_only_run(
+    conn: &mut MySqlConnection,
+    pieces: &[String],
+    limits: &Limits,
+    secrets: &[&str],
+) -> Result<Vec<DbResultSet>, DbError> {
+    exec_one(&mut *conn, "START TRANSACTION READ ONLY", secrets).await?;
+    let ran = mysql_read_only_statements(conn, pieces, limits, secrets).await;
+    let _ = exec_one(&mut *conn, "ROLLBACK", secrets).await;
+    ran
+}
+
+async fn mysql_read_only_statements(
+    conn: &mut MySqlConnection,
+    pieces: &[String],
+    limits: &Limits,
+    secrets: &[&str],
+) -> Result<Vec<DbResultSet>, DbError> {
+    // MySQL has no transaction-local variable, but a savepoint lives exactly as long as its
+    // transaction: `RELEASE SAVEPOINT` of one that is gone is error 1305.
+    let savepoint = format!(
+        "agent_studio_{}",
+        ulid::Ulid::new().to_string().to_ascii_lowercase()
+    );
+    exec_one(&mut *conn, &format!("SAVEPOINT {savepoint}"), secrets).await?;
+    // Read after every statement as well: inside a read-only transaction MySQL still lets
+    // `SET SESSION TRANSACTION READ WRITE` (say, through `PREPARE`/`EXECUTE`, which the access-mode
+    // filter does not read) change the session, and the next DDL's implicit commit would then run
+    // read-write. Measured on 8.4.
+    let check = format!(
+        "RELEASE SAVEPOINT {savepoint}; SAVEPOINT {savepoint}; \
+         SELECT @@SESSION.transaction_read_only"
+    );
+    let mut sets = Vec::new();
+    for (i, piece) in pieces.iter().enumerate() {
+        match sqlx::Executor::prepare(
+            &mut *conn,
+            sqlx::SqlSafeStr::into_sql_str(AssertSqlSafe(piece.clone())),
+        )
+        .await
+        {
+            Ok(_) => {}
+            Err(e) if mysql_error_number(&e) == Some(MYSQL_ER_UNSUPPORTED_PS) => {}
+            Err(e) => {
+                sets.push(not_prepared(piece, &e, limits, secrets));
+                break;
+            }
+        }
+        let got = collect(
+            &mut *conn,
+            piece.clone(),
+            std::slice::from_ref(piece),
+            limits,
+            secrets,
+        )
+        .await;
+        let stop = failed(&got);
+        sets.extend(got);
+        if stop {
+            break;
+        }
+        let held = sqlx::raw_sql(AssertSqlSafe(check.clone()))
+            .fetch_all(&mut *conn)
+            .await
+            .ok()
+            .and_then(|rows| {
+                rows.first()
+                    .and_then(|r| r.try_get_unchecked::<Option<String>, _>(0).ok().flatten())
+            });
+        if held.as_deref() != Some("1") {
+            return Err(left_the_transaction(i, piece));
+        }
+    }
+    Ok(sets)
+}
+
+/// What a read-only MySQL run refuses before anything is sent, because no transaction can hold it.
+///
+/// * `CALL` (and `EXECUTE`, which can run a prepared `CALL`): MySQL lets a procedure `COMMIT`, so
+///   one `CALL` can end the transaction, turn the session read-write and write — inside a single
+///   statement, before any check between statements can see it. PostgreSQL refuses a `COMMIT` in
+///   a procedure called inside a transaction block, so it needs no such rule.
+/// * An executable comment (`/*! … */`): MySQL runs what is inside it, so it hides SQL from every
+///   check that reads the text.
+fn mysql_unheld(pieces: &[String]) -> Option<DbError> {
+    for piece in pieces {
+        if piece.contains("/*!") {
+            return Some(DbError::blocked(format!(
+                "On a read-only connection a run cannot hold an executable comment (`/*! … */`): \
+                 MySQL runs what is inside it, where no check reads it. Write the SQL without \
+                 one: {}",
+                guard::first_line(piece)
+            )));
+        }
+        let keyword = mysql_leading_keyword(piece);
+        if keyword == "call" || keyword == "execute" {
+            return Some(DbError::blocked(format!(
+                "On a read-only MySQL connection a run cannot `{}`: a procedure can commit and turn \
+                 read-only off inside one statement, which no read-only transaction can hold. \
+                 Run the procedure's SELECTs directly.",
+                keyword.to_ascii_uppercase()
+            )));
+        }
+    }
+    None
+}
+
+/// The first word of a MySQL statement, lower-cased, after MySQL's comments (`#`, `-- `, `/* */`).
+fn mysql_leading_keyword(statement: &str) -> String {
+    let after_line = |s: &str| -> String { s.split_once('\n').map_or("", |(_, t)| t).to_string() };
+    let mut rest = statement.to_string();
+    loop {
+        let trimmed = rest.trim_start().to_string();
+        // `#` always starts a comment; `--` only when whitespace (or the end) follows it.
+        let line_comment = trimmed.starts_with('#')
+            || trimmed
+                .strip_prefix("--")
+                .is_some_and(|after| after.chars().next().is_none_or(char::is_whitespace));
+        if line_comment {
+            rest = after_line(&trimmed);
+        } else if let Some(r) = trimmed.strip_prefix("/*") {
+            rest = r.split_once("*/").map_or("", |(_, t)| t).to_string();
+        } else {
+            rest = trimmed;
+            break;
+        }
+    }
+    rest.chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+/// The server's error number of a MySQL error, when `e` is one.
+fn mysql_error_number(e: &sqlx::Error) -> Option<u16> {
+    e.as_database_error()?
+        .try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()
+        .map(|d| d.number())
 }
 
 /// Drive the driver's per-statement stream into one [`DbResultSet`] per statement.
@@ -2293,6 +2652,91 @@ mod tests {
             "the default `ensure_live` must touch NOTHING. ClickHouse, DynamoDB and MongoDB take it \
              precisely because their transports need no liveness check, and a default that quietly \
              made one would spend a round trip per query on all three."
+        );
+    }
+
+    #[tokio::test]
+    async fn an_engine_whose_read_only_is_per_command_runs_strictly_as_it_always_does() {
+        let mut s = DefaultSession::default();
+        let script = Script {
+            text: "GET k".into(),
+            mode: DbRunMode::Statement,
+        };
+        assert!(s.run_strict(&script, &test_limits()).await.is_ok());
+        assert_eq!(s.runs, 1, "its own run, once");
+    }
+
+    #[test]
+    fn a_read_only_run_sends_the_first_statement_or_all_of_them() {
+        let statements = vec!["SELECT 1".to_string(), "SELECT 2".to_string()];
+        let script = |mode| Script {
+            text: String::new(),
+            mode,
+        };
+        assert_eq!(
+            run_pieces(&script(DbRunMode::Statement), statements.clone()),
+            ["SELECT 1"]
+        );
+        assert_eq!(
+            run_pieces(&script(DbRunMode::Script), statements),
+            ["SELECT 1", "SELECT 2"]
+        );
+    }
+
+    #[test]
+    fn a_read_only_mysql_run_refuses_what_no_transaction_can_hold() {
+        for refused in [
+            "CALL p()",
+            "call p()",
+            "  -- why\nCALL p()",
+            "# why\nCALL p()",
+            "/* why */ call p()",
+            "/* a */ /* b */\n\tEXECUTE s",
+            "EXECUTE s USING @a",
+            "SELECT 1 /*! ; COMMIT */",
+            "/*!50000 CALL p() */",
+        ] {
+            let err = mysql_unheld(&[refused.to_string()])
+                .unwrap_or_else(|| panic!("{refused:?} was not refused"));
+            assert_eq!(err.code, DbErrorCode::Blocked, "{refused:?}");
+        }
+        for allowed in [
+            "SELECT 1",
+            "SELECT 'call me'",
+            "SELECT callback FROM t",
+            "PREPARE s FROM 'SELECT 1'",
+            "--1",
+            "/*+ MAX_EXECUTION_TIME(10) */ SELECT 1",
+            "WITH call AS (SELECT 1) SELECT * FROM call",
+        ] {
+            assert!(
+                mysql_unheld(&[allowed.to_string()]).is_none(),
+                "{allowed:?}"
+            );
+        }
+        assert_eq!(
+            mysql_leading_keyword("# a\n-- b\n/* c */ Select 1"),
+            "select"
+        );
+        assert_eq!(mysql_leading_keyword("--1"), "");
+        assert_eq!(mysql_leading_keyword("/* never closed"), "");
+        assert_eq!(mysql_leading_keyword("# never ends"), "");
+    }
+
+    #[test]
+    fn the_read_only_run_refusal_names_the_statement_and_what_did_not_run() {
+        let err = left_the_transaction(1, "COMMIT");
+        assert_eq!(err.code, DbErrorCode::Blocked);
+        assert!(
+            err.message
+                .starts_with("Statement 2 (`COMMIT`) ended the read-only transaction"),
+            "{}",
+            err.message
+        );
+        assert!(
+            err.message.contains("nothing after it ran"),
+            "{}",
+            err.message
         );
     }
 

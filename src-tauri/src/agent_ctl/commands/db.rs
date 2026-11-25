@@ -6,14 +6,21 @@
 //! * A connection that is already saved (same engine, host, port, database and user) is reported
 //!   and opened, never changed.
 //! * A connection that fails its test is not saved unless the agent passes `force`.
-//! * Nothing an agent sees carries a password, a Vault reference or a connection URL.
+//! * Nothing an agent sees carries a password, a Vault reference or a connection URL. Commands
+//!   that read credentials (Redis `CONFIG`, `ACL`, `AUTH`, …) are refused, and every reply and
+//!   event of a tool that names a saved connection has that connection's secrets masked
+//!   ([`db_target::secrets_of`]) as the backstop.
 //! * Every other tool names a **saved** connection (id or name, any case — [`db_target`]); its
 //!   password is resolved from the Vault inside Rust, and the agent cannot change where it dials.
-//! * Queries run through the console's own path and guardrails ([`db_run`]); each run is shown to
+//! * Queries run through the console's own path and guardrails ([`db_run`]), and on a read-only
+//!   PostgreSQL or MySQL connection inside a `READ ONLY` transaction that is always rolled back
+//!   (the session setting alone can be turned off by a hostile statement); each run is shown to
 //!   the user in that connection's console tab (`dbQueryRun`).
 //! * Everything returned is bounded — rows, bytes, items, time — and every cut is said.
 
 use std::time::Duration;
+
+use serde_json::Value;
 
 use crate::agent_ctl::registry::{Args, Param, ParamKind, ToolCtx, ToolFuture, ToolOk, ToolSpec};
 use crate::db::engines::{self, EngineSpec};
@@ -103,15 +110,17 @@ pub const TOOLS: &[ToolSpec] = &[
                   tables, views, collections, columns, keys.",
         details: "Without --path: the top level. --path walks down by name, levels separated by \
                   / (e.g. maestro/public/Tables/tracks lists the columns of tracks); a folder \
-                  level such as Tables can be left out (maestro/public/tracks). Each item comes \
-                  with the path that looks inside it. At most 500 items per level. A level the \
-                  tree reads one page of (Redis keys, DynamoDB tables) says so.",
+                  level such as Tables can be left out (maestro/public/tracks). A / or \\ inside \
+                  a name is written \\/ or \\\\ (the Redis key user/1 is db0/Keys/user\\/1). Each \
+                  item comes with the path that looks inside it. At most 500 items per level. A \
+                  level the tree reads one page of (Redis keys, DynamoDB tables) says so.",
         params: &[
             CONNECTION,
             Param::new(
                 "path",
                 ParamKind::String,
-                "Where to look: names from the top level down, separated by /.",
+                "Where to look: names from the top level down, separated by / (a / or \\ in a \
+                 name escaped with \\).",
             ),
         ],
         run: run_schema,
@@ -148,9 +157,13 @@ pub const TOOLS: &[ToolSpec] = &[
         cli: &["db", "query"],
         summary: "Run a query or command on a saved connection through Agent Studio's console \
                   and its guardrails, and show the rows as a table.",
-        details: "The DB console's own path: a read-only connection refuses writes, one \
-                  statement per run unless the connection allows multiple statements, and the \
-                  connection's timeout applies. SQL engines take SQL; MongoDB a JSON command \
+        details: "The DB console's own path: a read-only connection refuses writes (on \
+                  PostgreSQL and MySQL each run is also held in a read-only transaction that is \
+                  rolled back, so it cannot commit or end it), one statement per run unless the \
+                  connection allows multiple statements, and the connection's timeout applies. \
+                  Redis/Valkey commands that read credentials or auth settings (CONFIG, ACL, \
+                  AUTH, HELLO … AUTH, MONITOR, SENTINEL) are refused, and the connection's \
+                  password never appears in a reply. SQL engines take SQL; MongoDB a JSON command \
                   document (or SQL that maps to one); Redis and Valkey a command line; DynamoDB \
                   PartiQL. Another database on the same server is named in the query where the \
                   engine allows it (db.table, \"$db\"); a PostgreSQL connection is bound to its \
@@ -180,7 +193,8 @@ pub const TOOLS: &[ToolSpec] = &[
         cli: &["db", "console"],
         summary: "Open a query console tab in Agent Studio for a saved connection, with a query \
                   typed in but not run, for the user to read and run.",
-        details: "",
+        details: "What the user already typed in that console is kept: the query is added \
+                  below it.",
         params: &[
             CONNECTION,
             Param::new(
@@ -254,36 +268,54 @@ pub fn hard_cap(mut text: String) -> String {
     text
 }
 
+/// The secrets of the connection `arg` names (none when it names none): what [`scrubbed`] masks.
+fn secrets_for(paths: &Paths, arg: &str) -> Vec<String> {
+    db_target::load_and_resolve(paths, arg)
+        .map(|c| db_target::secrets_of(paths, &c))
+        .unwrap_or_default()
+}
+
+/// A tool's reply — message, data or refusal — with `secrets` masked in every string of it. The
+/// last word on secrets for every tool that names a saved connection, whatever the server sent.
+fn scrubbed(result: Result<(String, Value), String>, secrets: &[String]) -> Result<ToolOk, String> {
+    match result {
+        Ok((message, mut data)) => {
+            db_target::redact_json(&mut data, secrets);
+            Ok(ToolOk::new(db_target::redact(&message, secrets), data))
+        }
+        Err(e) => Err(db_target::redact(&e, secrets)),
+    }
+}
+
 fn run_test(ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move {
-        let (message, data) =
-            db_browse::db_test(&ctx.db_paths(), args.req_str("connection")?).await?;
-        Ok(ToolOk::new(message, data))
+        let (paths, connection) = (ctx.db_paths(), args.req_str("connection")?);
+        let secrets = secrets_for(&paths, connection);
+        scrubbed(db_browse::db_test(&paths, connection).await, &secrets)
     })
 }
 
 fn run_schema(ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move {
-        let (message, data) = db_browse::db_schema(
-            &ctx.db_paths(),
-            args.req_str("connection")?,
-            args.str("path").unwrap_or(""),
-        )
-        .await?;
-        Ok(ToolOk::new(message, data))
+        let (paths, connection) = (ctx.db_paths(), args.req_str("connection")?);
+        let secrets = secrets_for(&paths, connection);
+        let read = db_browse::db_schema(&paths, connection, args.str("path").unwrap_or("")).await;
+        scrubbed(read, &secrets)
     })
 }
 
 fn run_search(ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move {
-        let (message, data) = db_browse::db_search(
-            &ctx.db_paths(),
-            args.req_str("connection")?,
+        let (paths, connection) = (ctx.db_paths(), args.req_str("connection")?);
+        let secrets = secrets_for(&paths, connection);
+        let found = db_browse::db_search(
+            &paths,
+            connection,
             args.str("pattern").unwrap_or(""),
             args.str("path").unwrap_or(""),
         )
-        .await?;
-        Ok(ToolOk::new(message, data))
+        .await;
+        scrubbed(found, &secrets)
     })
 }
 
@@ -291,14 +323,19 @@ fn run_query(ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move {
         let connection = args.req_str("connection")?.to_string();
         let query = args.str("query").unwrap_or("").to_string();
+        let paths = ctx.db_paths();
         let (target, result) = db_run::run(
-            &ctx.db_paths(),
+            &paths,
             &connection,
             &query,
             args.int("limit"),
             db_run::app_deadline(),
         )
         .await;
+        let secrets = target
+            .as_ref()
+            .map(|c| db_target::secrets_of(&paths, c))
+            .unwrap_or_default();
         // Every run on a known connection is shown to the user — a refused one too, because an
         // agent that tried to write to a read-only database is exactly what the user must see.
         if let Some(c) = &target {
@@ -306,52 +343,54 @@ fn run_query(ctx: ToolCtx, args: Args) -> ToolFuture {
                 Ok(report) => (serde_json::to_value(&report.results).ok(), None),
                 Err(e) => (Some(serde_json::json!([])), Some(e.clone())),
             };
-            ctx.emit(
-                "dbQueryRun",
-                serde_json::json!({
-                    "connectionId": c.id,
-                    "query": query,
-                    "results": results,
-                    "error": error,
-                    "notes": result.as_ref().map(|r| r.notes.clone()).unwrap_or_default(),
-                }),
-            );
+            let mut payload = serde_json::json!({
+                "connectionId": c.id,
+                "query": query,
+                "results": results,
+                "error": error,
+                "notes": result.as_ref().map(|r| r.notes.clone()).unwrap_or_default(),
+            });
+            db_target::redact_json(&mut payload, &secrets);
+            ctx.emit("dbQueryRun", payload);
         }
-        let report = result?;
-        Ok(ToolOk::new(report.message(), report.data()))
+        scrubbed(result.map(|r| (r.message(), r.data())), &secrets)
     })
 }
 
 fn run_console(ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move {
         let query = args.str("query").filter(|q| !q.trim().is_empty());
-        let c = db_saved::db_console(&ctx.db_paths(), args.req_str("connection")?, query)?;
+        let paths = ctx.db_paths();
+        let c = db_saved::db_console(&paths, args.req_str("connection")?, query)?;
         ctx.emit(
             "dbConsole",
             serde_json::json!({ "connectionId": c.id, "query": query }),
         );
-        Ok(ToolOk::new(
+        let reply = (
             db_saved::console_message(&c, query.is_some()),
             serde_json::json!({
                 "connection": summary(&c),
                 "query": query,
                 "run": false,
             }),
-        ))
+        );
+        scrubbed(Ok(reply), &db_target::secrets_of(&paths, &c))
     })
 }
 
 fn run_queries(ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move {
-        let (message, data) = db_saved::db_queries(&ctx.db_paths(), args.req_str("connection")?)?;
-        Ok(ToolOk::new(message, data))
+        let (paths, connection) = (ctx.db_paths(), args.req_str("connection")?);
+        let secrets = secrets_for(&paths, connection);
+        scrubbed(db_saved::db_queries(&paths, connection), &secrets)
     })
 }
 
 fn run_save_query(ctx: ToolCtx, args: Args) -> ToolFuture {
     Box::pin(async move {
+        let paths = ctx.db_paths();
         let report = db_saved::db_save_query(
-            &ctx.db_paths(),
+            &paths,
             args.req_str("connection")?,
             args.str("name").unwrap_or(""),
             args.str("query").unwrap_or(""),
@@ -363,7 +402,8 @@ fn run_save_query(ctx: ToolCtx, args: Args) -> ToolFuture {
                 "queryId": report.saved.id,
             }),
         );
-        Ok(ToolOk::new(report.message(), report.data()))
+        let secrets = db_target::secrets_of(&paths, &report.connection);
+        scrubbed(Ok((report.message(), report.data())), &secrets)
     })
 }
 

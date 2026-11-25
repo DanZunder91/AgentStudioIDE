@@ -23,12 +23,12 @@ const dbIpc = vi.hoisted(() => ({
 }));
 vi.mock("../../db/dbIpc", () => dbIpc);
 
-import { useAppStore } from "../../../app/store";
+import { blankDbConsole, useAppStore } from "../../../app/store";
 import { resetStore } from "../../../test/store-harness";
 import { POSTGRES_ENGINE } from "../../db/dbFixtures";
 import type { DbConnection, DbResultSet } from "../../db/types";
 import { dispatchAgentCtl } from "../dispatch";
-import { agentRunNote, agentWho } from "./db";
+import { agentRunNote, agentWho, withAgentQuery } from "./db";
 
 const conn = (id: string, name: string): DbConnection => ({
   id,
@@ -72,6 +72,15 @@ const agentNamed = (id: string, title: string, customTitle: string | null = null
     (s.agents as Record<string, unknown>)[id] = { id, title, customTitle };
   });
 
+/** A `showAgentDbQuery` event from terminal t1 that was not refused. */
+const agentRun = (event: {
+  connectionId: string;
+  query: string;
+  results?: DbResultSet[];
+  error?: string | null;
+  terminalId?: string;
+}) => ({ terminalId: "t1", error: null, results: [], ...event });
+
 /** The db-console tabs, as `[connectionId, title]`, in creation order. */
 const consoleTabs = (): Array<[string, string]> =>
   Object.values(useAppStore.getState().tabs).flatMap((t) =>
@@ -88,9 +97,11 @@ const activeTitle = (): string | null => {
 
 beforeEach(() => {
   resetStore();
-  // The store harness leaves agents alone; a name from one test must not answer in the next.
+  // The store harness leaves agents and the DB panel's notice alone; neither may leak from one
+  // test into the next.
   useAppStore.setState((s) => {
     s.agents = {};
+    s.dbAgentNotice = null;
   });
   vi.clearAllMocks();
   dbIpc.dbEngines.mockResolvedValue([POSTGRES_ENGINE]);
@@ -176,19 +187,19 @@ describe("dbQueryRun", () => {
 
   it("activates the tab only in a pane that shows nothing, and reuses an open one", async () => {
     const { showAgentDbQuery } = useAppStore.getState().dbActions;
-    await showAgentDbQuery({ connectionId: "c1", query: "SELECT 1", results: [] });
+    await showAgentDbQuery(agentRun({ connectionId: "c1", query: "SELECT 1", results: [] }));
     expect(activeTitle()).toBe("Orders");
-    await showAgentDbQuery({ connectionId: "c1", query: "SELECT 2", results: [] });
+    await showAgentDbQuery(agentRun({ connectionId: "c1", query: "SELECT 2", results: [] }));
     expect(consoleTabs()).toEqual([["c1", "Orders"]]);
     // A connection the store does not know (deleted meanwhile) still gets a tab, honestly named.
-    await showAgentDbQuery({ connectionId: "gone", query: "SELECT 3", results: [] });
+    await showAgentDbQuery(agentRun({ connectionId: "gone", query: "SELECT 3", results: [] }));
     expect(consoleTabs()[1]).toEqual(["gone", "Database"]);
   });
 
   it("never overwrites what the user typed or replaces a run they are waiting on", async () => {
     const { showAgentDbQuery, setDbConsoleText } = useAppStore.getState().dbActions;
     setDbConsoleText("c1", "SELECT my_own_work");
-    await showAgentDbQuery({ connectionId: "c1", query: "SELECT 1", results: [rows()] });
+    await showAgentDbQuery(agentRun({ connectionId: "c1", query: "SELECT 1", results: [rows()] }));
     expect(useAppStore.getState().dbConsoles.c1.text).toBe("SELECT my_own_work");
     expect(useAppStore.getState().dbConsoles.c1.results).toHaveLength(1);
 
@@ -196,8 +207,68 @@ describe("dbQueryRun", () => {
       s.dbConsoles.c1.running = true;
       s.dbConsoles.c1.results = [];
     });
-    await showAgentDbQuery({ connectionId: "c1", query: "SELECT 1", results: [rows()] });
+    await showAgentDbQuery(agentRun({ connectionId: "c1", query: "SELECT 1", results: [rows()] }));
     expect(useAppStore.getState().dbConsoles.c1.results).toEqual([]);
+  });
+
+  it("tells the user in the DB panel about a run the busy console could not show", async () => {
+    agentNamed("t1", "claude · shop");
+    useAppStore.setState((s) => {
+      s.rightRailTab = "files";
+      s.rightRailCollapsed = true;
+      s.dbConsoles.c1 = { ...blankDbConsole(), text: "SELECT mine", running: true };
+    });
+    dispatchAgentCtl({
+      kind: "dbQueryRun",
+      terminalId: "t1",
+      connectionId: "c1",
+      query: "INSERT INTO t VALUES (1)",
+      results: [],
+      error: "This connection is read-only.",
+    });
+    await vi.waitFor(() => expect(useAppStore.getState().dbAgentNotice).not.toBeNull());
+    const s = useAppStore.getState();
+    expect(s.dbAgentNotice).toEqual({
+      connectionId: "c1",
+      created: false,
+      agent: "claude · shop",
+      ran: { query: "INSERT INTO t VALUES (1)", error: "This connection is read-only." },
+    });
+    expect(s.rightRailTab).toBe("db");
+    expect(s.rightRailCollapsed).toBe(false);
+    // The user's run and buffer are untouched.
+    expect(s.dbConsoles.c1.text).toBe("SELECT mine");
+    expect(s.dbConsoles.c1.results).toEqual([]);
+
+    // A run that was not refused, from a terminal that is not a known agent.
+    await useAppStore
+      .getState()
+      .dbActions.showAgentDbQuery(
+        agentRun({ connectionId: "c1", query: "SELECT 2", terminalId: "unknown" }),
+      );
+    expect(useAppStore.getState().dbAgentNotice).toEqual({
+      connectionId: "c1",
+      created: false,
+      agent: null,
+      ran: { query: "SELECT 2", error: null },
+    });
+  });
+
+  it("puts the query in an empty buffer as a new one, unlinked from a saved query", async () => {
+    useAppStore.setState((s) => {
+      s.dbConsoles.c1 = {
+        ...blankDbConsole(),
+        text: "  ",
+        savedQuery: { id: "Q1", name: "Mine" },
+      };
+    });
+    await useAppStore
+      .getState()
+      .dbActions.showAgentDbQuery(agentRun({ connectionId: "c1", query: "SELECT 1" }));
+    const c = useAppStore.getState().dbConsoles.c1;
+    expect(c.text).toBe("SELECT 1");
+    expect(c.savedQuery).toBeNull();
+    expect(useAppStore.getState().dbAgentNotice).toBeNull();
   });
 
   it("refreshes the object tree after a write, and only then", async () => {
@@ -206,13 +277,15 @@ describe("dbQueryRun", () => {
       s.dbActions.refreshDbTree = refresh;
     });
     const { showAgentDbQuery } = useAppStore.getState().dbActions;
-    await showAgentDbQuery({ connectionId: "c1", query: "SELECT 1", results: [rows()] });
+    await showAgentDbQuery(agentRun({ connectionId: "c1", query: "SELECT 1", results: [rows()] }));
     expect(refresh).not.toHaveBeenCalled();
-    await showAgentDbQuery({
-      connectionId: "c1",
-      query: "UPDATE t SET a = 1",
-      results: [rows({ kind: "affected", rowsAffected: 3 })],
-    });
+    await showAgentDbQuery(
+      agentRun({
+        connectionId: "c1",
+        query: "UPDATE t SET a = 1",
+        results: [rows({ kind: "affected", rowsAffected: 3 })],
+      }),
+    );
     expect(refresh).toHaveBeenCalledWith("c1");
   });
 
@@ -247,6 +320,59 @@ describe("dbConsole / dbSavedQuery", () => {
     expect(activeTitle()).toBe("Orders");
     expect(useAppStore.getState().dbConsoles.c1.text).toBe("SELECT * FROM orders");
     expect(useAppStore.getState().dbConsoles.c1.results).toEqual([]);
+  });
+
+  it("keeps what the user typed, and its saved-query link, and adds the query below it", async () => {
+    await useAppStore.getState().dbActions.loadDbStore();
+    useAppStore.setState((s) => {
+      s.dbConsoles.c1 = {
+        ...blankDbConsole(),
+        text: "SELECT my_unsaved_work",
+        savedQuery: { id: "Q1", name: "Mine" },
+      };
+    });
+    const show = (query: string) =>
+      dispatchAgentCtl({ kind: "dbConsole", terminalId: "t1", connectionId: "c1", query });
+    show("SELECT * FROM orders");
+    await vi.waitFor(() => expect(consoleTabs()).toEqual([["c1", "Orders"]]));
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().dbConsoles.c1.text).toBe(
+        "SELECT my_unsaved_work\n\nSELECT * FROM orders",
+      ),
+    );
+    expect(activeTitle()).toBe("Orders");
+    expect(useAppStore.getState().dbConsoles.c1.savedQuery).toEqual({ id: "Q1", name: "Mine" });
+
+    // The same query again is already there: nothing is added twice.
+    show("SELECT * FROM orders");
+    await new Promise((r) => setTimeout(r, 0));
+    await vi.waitFor(() =>
+      expect(useAppStore.getState().dbConsoles.c1.text).toBe(
+        "SELECT my_unsaved_work\n\nSELECT * FROM orders",
+      ),
+    );
+
+    // An empty buffer linked to a saved query takes the query as a NEW buffer: ⌘S must not
+    // write the agent's text over the user's saved query.
+    useAppStore.setState((s) => {
+      s.dbConsoles.c2 = { ...blankDbConsole(), text: "", savedQuery: { id: "Q2", name: "Other" } };
+    });
+    dispatchAgentCtl({
+      kind: "dbConsole",
+      terminalId: "t1",
+      connectionId: "c2",
+      query: "SELECT 2",
+    });
+    await vi.waitFor(() => expect(useAppStore.getState().dbConsoles.c2.text).toBe("SELECT 2"));
+    expect(useAppStore.getState().dbConsoles.c2.savedQuery).toBeNull();
+  });
+
+  it("adds a query below the user's text after exactly one blank line", () => {
+    expect(withAgentQuery("SELECT 1", "SELECT 2")).toBe("SELECT 1\n\nSELECT 2");
+    expect(withAgentQuery("SELECT 1\n", "SELECT 2")).toBe("SELECT 1\n\nSELECT 2");
+    expect(withAgentQuery("SELECT 1\n\n", "SELECT 2")).toBe("SELECT 1\n\nSELECT 2");
+    expect(withAgentQuery("SELECT 2", " SELECT 2 ")).toBeNull();
+    expect(withAgentQuery("SELECT 1\n\nSELECT 2\n", "SELECT 2")).toBeNull();
   });
 
   it("opens an empty console when no query came with it", async () => {

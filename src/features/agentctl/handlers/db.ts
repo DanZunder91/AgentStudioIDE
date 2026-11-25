@@ -40,12 +40,38 @@ export function agentRunNote(event: AgentCtlEvent, results: DbResultSet[]): DbRe
   };
 }
 
-/** Open a console for a connection the store may not have loaded yet (it names the tab). */
+/**
+ * The console text once the agent's query is added to what the user has there, or `null` when it
+ * is already there.
+ *
+ * Added below, after a blank line, never in place of the user's text: what they were writing is
+ * theirs, and appending is the simplest change they can see and undo — no new control, and the
+ * query is right there to select and run.
+ */
+export function withAgentQuery(text: string, query: string): string | null {
+  const wanted = query.trim();
+  if (text.trimEnd().endsWith(wanted)) return null;
+  const gap = text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
+  return `${text}${gap}${query}`;
+}
+
+/**
+ * Open a console for a connection the store may not have loaded yet (it names the tab), with the
+ * agent's query typed in. An empty console takes the query as a new buffer (which also unlinks a
+ * saved query, so ⌘S cannot write the agent's text over it); a console holding the user's text
+ * keeps it, and its saved-query link, and gets the query added below.
+ */
 async function openAgentConsole(connectionId: string, query: string | null): Promise<void> {
   await useAppStore.getState().dbActions.loadDbStore();
-  const { dbActions, layoutActions } = useAppStore.getState();
+  const { dbActions, layoutActions, dbConsoles } = useAppStore.getState();
+  const text = dbConsoles[connectionId]?.text ?? "";
   if (query === null) layoutActions.openDbConsoleTab(connectionId);
-  else dbActions.openDbQueryInConsole(connectionId, query);
+  else if (text.trim() === "") dbActions.openDbQueryInConsole(connectionId, query);
+  else {
+    layoutActions.openDbConsoleTab(connectionId);
+    const next = withAgentQuery(text, query);
+    if (next !== null) dbActions.setDbConsoleText(connectionId, next);
+  }
 }
 
 export const DB_HANDLERS: Readonly<Record<string, AgentCtlHandler>> = {
@@ -69,7 +95,9 @@ export const DB_HANDLERS: Readonly<Record<string, AgentCtlHandler>> = {
     const results = Array.isArray(e.results) ? (e.results as DbResultSet[]) : [];
     void useAppStore.getState().dbActions.showAgentDbQuery({
       connectionId: String(e.connectionId),
+      terminalId: e.terminalId,
       query: typeof e.query === "string" ? e.query : "",
+      error: typeof e.error === "string" ? e.error : null,
       results: [agentRunNote(e, results), ...results],
     });
   },

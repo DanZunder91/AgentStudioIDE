@@ -116,10 +116,22 @@ impl FakeRedis {
     }
 }
 
+/// The password a test connection to the fake can carry. It goes to the Vault like any other,
+/// and the fake hands it back — from `GET leak` and inside a key's name — so the masking of every
+/// reply can be seen.
+const FAKE_PW: &str = "fake-redis-pw-7Q";
+
 /// The keys the fake holds: `greeting` (a string), `big` (a 1500-item list), `slow` (a string
-/// whose `GET` never answers in time).
+/// whose `GET` never answers in time), `user/1` (a name with a `/` in it) and one named after
+/// [`FAKE_PW`].
 fn keys() -> BTreeMap<&'static str, &'static str> {
-    BTreeMap::from([("big", "list"), ("greeting", "string"), ("slow", "string")])
+    BTreeMap::from([
+        ("big", "list"),
+        ("greeting", "string"),
+        ("slow", "string"),
+        ("token:fake-redis-pw-7Q", "string"),
+        ("user/1", "hash"),
+    ])
 }
 
 async fn serve(mut sock: tokio::net::TcpStream, seen: Arc<Mutex<Vec<String>>>) {
@@ -183,6 +195,8 @@ async fn answer(cmd: &[String]) -> Vec<u8> {
             bulk("late")
         }
         "GET" if arg(1) == "greeting" => bulk("hello\tworld"),
+        "GET" if arg(1) == "leak" => bulk(FAKE_PW),
+        "CONFIG" => array(&["requirepass".to_string(), FAKE_PW.to_string()]),
         "GET" => b"$-1\r\n".to_vec(),
         "DBSIZE" => format!(":{}\r\n", keys().len()).into_bytes(),
         "SCAN" => {
@@ -522,7 +536,7 @@ async fn a_level_lists_names_kinds_details_and_the_path_inside_each() {
     );
     assert!(message.contains("1 item."), "{message}");
     assert!(
-        message.contains("agent-studio db schema \"Orders\" --path \"maestro\""),
+        message.contains("agent-studio db schema 'Orders' --path 'maestro'"),
         "{message}"
     );
     assert_eq!(data["items"][0]["expandable"], true);
@@ -986,21 +1000,21 @@ fn the_row_limit_defaults_to_100_and_never_exceeds_1000() {
 
 #[test]
 fn rows_past_the_byte_budget_are_dropped_with_a_note_and_long_values_are_cut() {
-    // 100 rows of 1000 bytes: 65 fit in 64 KB.
+    // 100 rows of 1000 bytes, each costing 1010 with its cell and brackets: 64 fit in 64 KB.
     let rows: Vec<Vec<Option<String>>> = (0..100).map(|_| vec![Some("x".repeat(1000))]).collect();
     let mut set = rows_set(&["v"], rows);
     set.absent = Some(vec![vec![false]; 100]);
     let (sets, notes) = db_run::bound(vec![set], 100);
-    assert_eq!(sets[0].rows.len(), 65);
+    assert_eq!(sets[0].rows.len(), 64);
     assert_eq!(
         sets[0].absent.as_ref().unwrap().len(),
-        65,
+        64,
         "the mask is cut with the rows"
     );
     assert!(sets[0].truncated);
     assert_eq!(
         notes,
-        ["Rows after the first 65 (of 100 read) were left out: the reply is capped at 64 KB."]
+        ["Rows after the first 64 (of 100 read) were left out: the reply is capped at 64 KB."]
     );
 
     // A value longer than 2000 characters is cut, marked, and counted.
@@ -1153,14 +1167,44 @@ fn the_message_shows_each_result_and_every_note() {
 }
 
 #[test]
-fn a_table_longer_than_64_kb_is_cut_in_the_message_and_whole_in_the_data() {
-    // Three 20-character columns: 60 bytes of cell text a row fits the data's 64 KB, while the
-    // table's 67-byte lines do not fit the message's.
-    let cell = |i: usize, c: char| Some(format!("{i:04}{}", c.to_string().repeat(16)));
+fn null_and_empty_cells_count_toward_the_budget() {
+    // 1000 rows of 300 NULL or empty columns: no text at all, and still far past 64 KB as JSON.
     let rows: Vec<Vec<Option<String>>> = (0..1000)
-        .map(|i| vec![cell(i, 'a'), cell(i, 'b'), cell(i, 'c')])
+        .map(|i| {
+            (0..300)
+                .map(|j| ((i + j) % 2 == 0).then(String::new))
+                .collect()
+        })
         .collect();
-    let (sets, notes) = db_run::bound(vec![rows_set(&["a", "b", "c"], rows)], 1000);
+    let columns: Vec<String> = (0..300).map(|j| format!("c{j}")).collect();
+    let names: Vec<&str> = columns.iter().map(String::as_str).collect();
+    let (sets, notes) = db_run::bound(vec![rows_set(&names, rows)], 1000);
+    // 2 + 300 × 8 bytes a row.
+    let kept = TEXT_BUDGET / (2 + 300 * db_run::CELL_COST);
+    assert_eq!(sets[0].rows.len(), kept);
+    assert!(sets[0].truncated);
+    assert_eq!(
+        notes,
+        [format!(
+            "Rows after the first {kept} (of 1000 read) were left out: the reply is capped at 64 KB."
+        )]
+    );
+    let r = report(sets, notes);
+    let data = r.data().to_string();
+    assert!(
+        data.len() <= TEXT_BUDGET + 4096,
+        "the data is bounded as JSON: {} bytes",
+        data.len()
+    );
+}
+
+#[test]
+fn a_table_longer_than_64_kb_is_cut_in_the_message_and_whole_in_the_data() {
+    // Two 20-byte columns of tabs: 58 bytes a row in the data (1000 rows fit its 64 KB), while
+    // the table shows each tab as `\t`, and its 76-byte lines do not fit the message's.
+    let cell = |i: usize| Some(format!("{i:04}{}", "\t".repeat(16)));
+    let rows: Vec<Vec<Option<String>>> = (0..1000).map(|i| vec![cell(i), cell(i)]).collect();
+    let (sets, notes) = db_run::bound(vec![rows_set(&["a", "b"], rows)], 1000);
     assert!(notes.is_empty(), "{notes:?}");
     let r = report(sets, notes);
     let m = r.message();
@@ -1171,9 +1215,13 @@ fn a_table_longer_than_64_kb_is_cut_in_the_message_and_whole_in_the_data() {
         &m[m.len() - 300..]
     );
     let data = r.data();
-    assert_eq!(data["rows"].as_array().unwrap().len(), 1000);
+    assert_eq!(data["results"][0]["rows"].as_array().unwrap().len(), 1000);
     assert_eq!(data["results"][0]["rowCount"], 1000);
-    assert_eq!(data["columns"], serde_json::json!(["a", "b", "c"]));
+    assert_eq!(data["results"][0]["columns"], serde_json::json!(["a", "b"]));
+    assert!(
+        data.get("rows").is_none(),
+        "the rows are in their result, once"
+    );
 }
 
 #[test]
@@ -1187,12 +1235,12 @@ fn the_data_carries_names_types_rows_the_mask_and_no_secret() {
     let d = r.data();
     assert_eq!(d["connection"]["name"], "Orders");
     assert_eq!(d["limit"], 100);
-    assert_eq!(
-        d["columns"],
-        serde_json::json!(["id"]),
-        "the first ROWS result"
+    assert_eq!(d["results"][1]["columns"], serde_json::json!(["id"]));
+    assert_eq!(d["results"][1]["rows"], serde_json::json!([[null]]));
+    assert!(
+        d.get("rows").is_none() && d.get("columns").is_none(),
+        "no second copy of the rows: {d}"
     );
-    assert_eq!(d["rows"], serde_json::json!([[null]]));
     assert_eq!(d["results"][1]["columnTypes"], serde_json::json!(["text"]));
     assert_eq!(d["results"][1]["absent"], serde_json::json!([[true]]));
     assert!(d["results"][0].get("absent").is_none());
@@ -1204,8 +1252,6 @@ fn the_data_carries_names_types_rows_the_mask_and_no_secret() {
         !text.contains("{{") && !text.contains("postgresql://"),
         "{text}"
     );
-    let none = report(vec![DbResultSet::message("x", "y", 1)], vec![]).data();
-    assert_eq!(none["columns"], serde_json::Value::Null);
 }
 
 #[test]
@@ -1282,14 +1328,26 @@ fn saved_queries_are_listed_with_their_text_and_bounded() {
         "{message}"
     );
     assert!(message.len() <= TEXT_BUDGET + 4096);
-    assert_eq!(data["queries"].as_array().unwrap().len(), 200);
-    assert_eq!(data["total"], 260);
-
-    let huge = vec![saved_query(1, &"q".repeat(db_run::MAX_QUERY_BYTES + 10))];
-    assert_eq!(
-        db_saved::queries_reply(&c, &huge).1["queries"][0]["cut"],
-        true
+    // The data's query text shares the 64 KB budget too: 200 queries of 500 bytes do not fit.
+    let listed = data["queries"].as_array().unwrap().len();
+    assert!((100..200).contains(&listed), "{listed}");
+    assert!(
+        message.contains(&format!(
+            "The data lists the first {listed}: query text is capped at 64 KB."
+        )),
+        "{message}"
     );
+    assert_eq!(data["truncated"], true);
+    assert_eq!(data["total"], 260);
+    assert!(data.to_string().len() <= TEXT_BUDGET + 32 * 1024);
+
+    // Cut in bytes, at a character boundary: 2-byte characters past the budget.
+    let huge = vec![saved_query(1, &"é".repeat(db_run::MAX_QUERY_BYTES))];
+    let (_, data) = db_saved::queries_reply(&c, &huge);
+    assert_eq!(data["queries"][0]["cut"], true);
+    let text = data["queries"][0]["query"].as_str().unwrap();
+    assert!(text.len() <= TEXT_BUDGET + '…'.len_utf8(), "{}", text.len());
+    assert!(text.ends_with('…'));
 }
 
 #[test]
@@ -1427,7 +1485,10 @@ async fn a_query_runs_through_the_console_path_and_the_user_is_shown_it() {
         "{}",
         reply.message
     );
-    assert_eq!(reply.data["rows"], serde_json::json!([["hello\tworld"]]));
+    assert_eq!(
+        reply.data["results"][0]["rows"],
+        serde_json::json!([["hello\tworld"]])
+    );
     assert_eq!(reply.data["connection"]["readOnly"], true);
     assert!(redis.names().contains(&"GET".to_string()));
 
@@ -1557,7 +1618,10 @@ async fn the_row_limit_is_measured_and_said() {
     )
     .await;
     assert_eq!(status, 200, "{}", reply.message);
-    assert_eq!(reply.data["rows"].as_array().unwrap().len(), 100);
+    assert_eq!(
+        reply.data["results"][0]["rows"].as_array().unwrap().len(),
+        100
+    );
     assert_eq!(reply.data["truncated"], true);
     assert!(
         reply.message.contains("(100 rows, more exist)"),
@@ -1579,7 +1643,10 @@ async fn the_row_limit_is_measured_and_said() {
     )
     .await;
     assert_eq!(reply.data["limit"], 1000);
-    assert_eq!(reply.data["rows"].as_array().unwrap().len(), 1000);
+    assert_eq!(
+        reply.data["results"][0]["rows"].as_array().unwrap().len(),
+        1000
+    );
     assert!(
         reply.message.contains("--limit 5000 was lowered to 1000"),
         "{}",
@@ -1725,7 +1792,7 @@ async fn test_schema_and_search_read_the_real_engines_tree() {
         "{}",
         reply.message
     );
-    assert_eq!(reply.data["items"].as_array().unwrap().len(), 3);
+    assert_eq!(reply.data["items"].as_array().unwrap().len(), keys().len());
 
     let (status, reply, _) = call(
         &dir,
@@ -1924,4 +1991,389 @@ fn no_tool_can_make_a_connection_writable_edit_or_delete_one_or_export_a_secret(
             );
         }
     }
+}
+
+/* ────────────────── secrets: refused where they are asked for, masked everywhere ────────────────── */
+
+#[test]
+fn redis_commands_that_read_credentials_are_recognised_in_every_spelling() {
+    for refused in [
+        "CONFIG GET requirepass",
+        "config get *",
+        "Config Get masterauth",
+        "CONFIG",
+        "CONFIG SET requirepass x",
+        "\"CONFIG\" GET *",
+        "'config' 'get' '*pass*'",
+        "C\\ONFIG GET *",
+        "   CONFIG    GET   requirepass   ",
+        "ACL LIST",
+        "acl getuser default",
+        "ACL WHOAMI",
+        "AUTH default guess",
+        "auth guess",
+        "HELLO 3 AUTH default guess",
+        "hello 2 auth default guess setname x",
+        "MONITOR",
+        "SENTINEL masters",
+        "GET greeting\nCONFIG GET requirepass",
+        "MULTI\nconfig get *\nEXEC",
+        "# a comment\nACL LIST",
+    ] {
+        let why =
+            db_run::redis_refusal(refused).unwrap_or_else(|| panic!("{refused:?} was not refused"));
+        assert!(why.contains("is not available to an agent"), "{why}");
+        assert!(
+            why.contains("Vault never reaches an agent") || why.contains("HELLO"),
+            "{why}"
+        );
+    }
+    for allowed in [
+        "GET greeting",
+        "GET config",
+        "HELLO",
+        "HELLO 2",
+        "SCAN 0 MATCH config:* COUNT 100",
+        "HGET auth token",
+        "SET acl 1",
+        "",
+        "# CONFIG GET * in a comment",
+        // An unclosed quote: the engine refuses the whole run before anything is sent.
+        "GET \"x",
+    ] {
+        assert_eq!(db_run::redis_refusal(allowed), None, "{allowed:?}");
+    }
+}
+
+#[tokio::test]
+async fn redis_credential_commands_never_reach_the_server_on_any_connection() {
+    let redis = FakeRedis::start().await;
+    let (dir, paths) = temp_paths();
+    save(
+        &paths,
+        &format!("redis://:{FAKE_PW}@127.0.0.1:{}/0", redis.port),
+        "Cache",
+        true,
+        true,
+    );
+    save(
+        &paths,
+        &format!("redis://:{FAKE_PW}@127.0.0.1:{}/1", redis.port),
+        "Writable",
+        false,
+        true,
+    );
+    for connection in ["cache", "writable"] {
+        for query in [
+            "CONFIG GET requirepass",
+            "config get *",
+            "ACL LIST",
+            "AUTH default guess",
+            "HELLO 3 AUTH default guess",
+            "MONITOR",
+            "MULTI\nCONFIG GET *\nEXEC",
+        ] {
+            let (status, reply, events) = call(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": connection, "query": query}),
+            )
+            .await;
+            assert_eq!(status, 422, "{query}: {}", reply.message);
+            assert!(
+                reply.message.contains("is not available to an agent"),
+                "{}",
+                reply.message
+            );
+            assert!(!reply.message.contains(FAKE_PW), "{}", reply.message);
+            assert_eq!(events.len(), 1, "the user is shown the attempt");
+            assert!(!serde_json::to_string(&events).unwrap().contains(FAKE_PW));
+        }
+    }
+    assert!(
+        redis.names().is_empty(),
+        "nothing reached the server, not even a connect: {:?}",
+        redis.names()
+    );
+
+    // Negative control: HELLO without AUTH is a read like any other, and does reach it.
+    let (status, reply, _) = call(
+        &dir,
+        "db_query",
+        serde_json::json!({"connection": "cache", "query": "HELLO 2"}),
+    )
+    .await;
+    assert_eq!(status, 200, "{}", reply.message);
+    assert!(redis.names().contains(&"HELLO".to_string()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn the_connections_password_is_masked_in_every_reply_and_event_whatever_the_server_sends() {
+    use crate::db::error::MASK;
+    let redis = FakeRedis::start().await;
+    let (dir, paths) = temp_paths();
+    save(
+        &paths,
+        &format!("redis://:{FAKE_PW}@127.0.0.1:{}/0", redis.port),
+        "Cache",
+        true,
+        false,
+    );
+    let everything =
+        |reply: &crate::agent_ctl::CtlResponse, events: &[crate::agent_ctl::CtlEvent]| -> String {
+            format!(
+                "{}\n{}\n{}",
+                reply.message,
+                reply.data,
+                serde_json::to_string(events).unwrap()
+            )
+        };
+
+    // A value that IS the password (what `CONFIG GET requirepass` would have answered).
+    let (status, reply, events) = call(
+        &dir,
+        "db_query",
+        serde_json::json!({"connection": "cache", "query": "GET leak"}),
+    )
+    .await;
+    assert_eq!(status, 200, "{}", reply.message);
+    assert!(
+        !everything(&reply, &events).contains(FAKE_PW),
+        "{}",
+        everything(&reply, &events)
+    );
+    assert_eq!(
+        reply.data["results"][0]["rows"],
+        serde_json::json!([[MASK]])
+    );
+    assert_eq!(
+        events[0].payload["results"][0]["rows"],
+        serde_json::json!([[MASK]])
+    );
+    assert!(reply.message.contains(MASK), "{}", reply.message);
+    // The engine really dialled with it: the fake saw the real password, the agent never did.
+    assert!(redis
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|c| c.contains(FAKE_PW)));
+
+    // A key named after it, in the tree and in a search.
+    let (status, reply, events) = call(
+        &dir,
+        "db_schema",
+        serde_json::json!({"connection": "cache", "path": "db0/Keys"}),
+    )
+    .await;
+    assert_eq!(status, 200, "{}", reply.message);
+    assert!(!everything(&reply, &events).contains(FAKE_PW));
+    assert!(
+        reply.message.contains(&format!("key  token:{MASK}")),
+        "{}",
+        reply.message
+    );
+    let (status, reply, events) = call(
+        &dir,
+        "db_search",
+        serde_json::json!({"connection": "cache", "pattern": "token"}),
+    )
+    .await;
+    assert_eq!(status, 200, "{}", reply.message);
+    assert!(!everything(&reply, &events).contains(FAKE_PW));
+    assert_eq!(reply.data["matches"][0]["name"], format!("token:{MASK}"));
+
+    // And in the agent's own text, echoed back.
+    let (_, reply, events) = call(
+        &dir,
+        "db_query",
+        serde_json::json!({"connection": "cache", "query": format!("GET {FAKE_PW}")}),
+    )
+    .await;
+    assert!(!everything(&reply, &events).contains(FAKE_PW));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_connections_secrets_are_its_vault_password_and_any_password_its_url_carries() {
+    let (dir, paths) = temp_paths();
+    let c = save(
+        &paths,
+        &format!("postgres://app:s3cret-pw@127.0.0.1:{}/shop", dead_port()),
+        "Shop",
+        true,
+        false,
+    );
+    assert!(c.password_ref.starts_with("{{"), "moved to the Vault");
+    assert_eq!(db_target::secrets_of(&paths, &c), ["s3cret-pw"]);
+
+    // A record edited by hand: a literal password in the URL, or in the reference field.
+    let mut literal = conn("01HLIT", "Literal");
+    literal.url = Some("postgresql://app:in-the-url@db.example.com/shop".into());
+    literal.password_ref = "in-the-field".into();
+    assert_eq!(
+        db_target::secrets_of(&paths, &literal),
+        ["in-the-field", "in-the-url"]
+    );
+    // A reference the Vault has no value for is nothing to mask, and no password is nothing.
+    let mut missing = conn("01HNONE", "None");
+    missing.password_ref = "{{NO_SUCH_VAR}}".into();
+    missing.url = Some("postgresql://app:{{NO_SUCH_VAR}}@db.example.com/shop".into());
+    assert!(db_target::secrets_of(&paths, &missing).is_empty());
+    missing.password_ref = String::new();
+    missing.url = None;
+    assert!(db_target::secrets_of(&paths, &missing).is_empty());
+
+    let mut v = serde_json::json!({"a": ["x s3cret-pw y", {"s3cret-pw": "s3cret%2Dpw"}], "n": 1});
+    db_target::redact_json(&mut v, &["s3cret-pw".to_string()]);
+    assert_eq!(
+        v,
+        serde_json::json!({"a": ["x •••• y", {"••••": "s3cret%2Dpw"}], "n": 1})
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/* ──────────────────────── a name with a `/` in it ──────────────────────── */
+
+#[test]
+fn a_label_with_a_slash_or_a_backslash_is_one_segment_and_round_trips() {
+    for label in [
+        "user/1",
+        "a/b/c",
+        "back\\slash",
+        "\\/",
+        "/",
+        "\\",
+        "plain",
+        "",
+    ] {
+        let path = db_browse::join("db0/Keys", label);
+        assert_eq!(
+            db_browse::split_path(&path),
+            ["db0", "Keys", label],
+            "{label:?} → {path:?}"
+        );
+    }
+    assert_eq!(db_browse::escape_label("user/1"), "user\\/1");
+    assert_eq!(db_browse::escape_label("a\\b"), "a\\\\b");
+    assert_eq!(
+        db_browse::split_path("a\\"),
+        ["a\\"],
+        "a trailing lone backslash is kept"
+    );
+}
+
+#[tokio::test]
+async fn schema_and_search_paths_with_a_slash_in_a_name_can_be_passed_back_as_they_are() {
+    let c = conn("01HAAA", "Orders");
+    let slashed = table_ref("a/b");
+    let mut tree = fake_tree();
+    for (r, kids) in tree.levels.iter_mut() {
+        if *r == group_ref(DbGroup::Tables) {
+            kids.as_mut().unwrap().push(DbNode::new(
+                slashed.clone(),
+                "a/b",
+                DbNodeKind::Table,
+                true,
+            ));
+        }
+    }
+    tree.levels
+        .push((slashed, Ok(vec![column("a/b", "x/y", "integer")])));
+
+    let (_, data) = db_browse::schema(&mut tree, &c, "maestro/public/Tables")
+        .await
+        .unwrap();
+    let item = data["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["name"] == "a/b")
+        .unwrap()
+        .clone();
+    let path = item["path"].as_str().unwrap();
+    assert_eq!(path, "maestro/public/Tables/a\\/b");
+
+    // The printed path, passed back as it is, opens that table.
+    let (message, data) = db_browse::schema(&mut tree, &c, path).await.unwrap();
+    assert_eq!(data["path"], "maestro/public/Tables/a\\/b");
+    assert_eq!(
+        data["items"][0]["path"],
+        "maestro/public/Tables/a\\/b/x\\/y"
+    );
+    assert!(message.contains("column  x/y  — integer"), "{message}");
+    // The folder can still be left out.
+    let (_, data) = db_browse::schema(&mut tree, &c, "maestro/public/a\\/b")
+        .await
+        .unwrap();
+    assert_eq!(data["path"], "maestro/public/Tables/a\\/b");
+
+    let out = db_browse::search(
+        &mut tree,
+        DbNodeRef::Root,
+        "",
+        None,
+        "/",
+        SearchLimits::default(),
+    )
+    .await;
+    let found: Vec<&str> = out.found.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        found,
+        [
+            "maestro/public/Tables/a\\/b",
+            "maestro/public/Tables/a\\/b/x\\/y"
+        ]
+    );
+    // An unescaped slash is two levels, and the error shows how the name is written.
+    let err = db_browse::walk_to(&mut tree, "maestro/public/Tables/a/b")
+        .await
+        .unwrap_err();
+    assert!(err.contains("There is no \"a\""), "{err}");
+    assert!(err.contains("a\\/b"), "{err}");
+}
+
+#[tokio::test]
+async fn a_redis_key_with_a_slash_round_trips_between_schema_search_and_path() {
+    let redis = FakeRedis::start().await;
+    let (dir, paths) = temp_paths();
+    save(&paths, &redis.url(), "Cache", true, false);
+
+    let (_, reply, _) = call(
+        &dir,
+        "db_schema",
+        serde_json::json!({"connection": "cache", "path": "db0/Keys"}),
+    )
+    .await;
+    let item = reply.data["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["name"] == "user/1")
+        .unwrap()
+        .clone();
+    assert_eq!(item["path"], "db0/Keys/user\\/1");
+
+    let (_, reply, _) = call(
+        &dir,
+        "db_search",
+        serde_json::json!({"connection": "cache", "pattern": "user/"}),
+    )
+    .await;
+    assert_eq!(reply.data["matches"][0]["path"], "db0/Keys/user\\/1");
+
+    // Passed back as `--path`, it names the key (a leaf), not a "user" level that is not there.
+    let (status, reply, _) = call(
+        &dir,
+        "db_schema",
+        serde_json::json!({"connection": "cache", "path": item["path"]}),
+    )
+    .await;
+    assert_eq!(status, 422);
+    assert_eq!(
+        reply.message,
+        "\"db0/Keys/user\\/1\" is a key and has nothing below it."
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }

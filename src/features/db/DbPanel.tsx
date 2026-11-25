@@ -100,16 +100,35 @@ export function sessionTitle(session: {
   return "How long this connection took to open — DNS, TLS, authentication and the version query.";
 }
 
+/** A query's first non-blank line, capped, for a one-line notice. */
+function queryLine(query: string): string {
+  const line = query.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
+  return line.length <= 80 ? line : `${line.slice(0, 79)}…`;
+}
+
 /**
- * What an agent just did through `agent-studio db connect`, in words: which agent, which
- * connection, and that it is read-only — so a connection never appears in the list unexplained.
+ * What an agent just did, in words: which agent, which connection, and that it is read-only — so a
+ * connection never appears in the list unexplained — or the query it ran (`ran`) while the
+ * user's own run held the console, so a run is never lost, a refused one least of all.
  */
 export function agentNoticeText(
-  notice: { created: boolean; agent: string | null },
+  notice: {
+    created: boolean;
+    agent: string | null;
+    ran?: { query: string; error: string | null };
+  },
   connection: DbConnection | null,
 ): string {
   const who = notice.agent === null ? "An agent" : `The agent "${notice.agent}"`;
   const what = connection === null ? "a connection" : `"${connection.name}"`;
+  if (notice.ran !== undefined) {
+    const line = queryLine(notice.ran.query);
+    return notice.ran.error === null
+      ? `${who} ran a query on ${what} while your own query was running, so the console did not ` +
+          `show it${line === "" ? "." : `: ${line}`}`
+      : `${who} tried to run a query on ${what} while your own query was running, and it was ` +
+          `refused: ${notice.ran.error}${line === "" ? "" : ` (${line})`}`;
+  }
   if (!notice.created) return `${who} opened ${what}, which was already saved. Nothing changed.`;
   const access =
     connection === null || connection.readOnly
@@ -123,7 +142,7 @@ function AgentNotice({
   connection,
   onDismiss,
 }: {
-  notice: { created: boolean; agent: string | null };
+  notice: Parameters<typeof agentNoticeText>[0];
   connection: DbConnection | null;
   onDismiss: () => void;
 }): React.JSX.Element {

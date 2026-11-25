@@ -700,6 +700,45 @@ describe("DbPanel — a connection an agent added", () => {
     );
   });
 
+  it("tells of a query an agent ran while the user's own query held the console", async () => {
+    const ran = (query: string, error: string | null) => ({
+      created: false,
+      agent: "claude · shop",
+      ran: { query, error },
+    });
+    expect(agentNoticeText(ran("\n  SELECT 1\nFROM t", null), conn())).toBe(
+      'The agent "claude · shop" ran a query on "Prod Postgres" while your own query was ' +
+        "running, so the console did not show it: SELECT 1",
+    );
+    expect(
+      agentNoticeText({ ...ran("INSERT INTO t VALUES (1)", "It is read-only."), agent: null }, null),
+    ).toBe(
+      "An agent tried to run a query on a connection while your own query was running, and it " +
+        "was refused: It is read-only. (INSERT INTO t VALUES (1))",
+    );
+    // No query text at all: the sentence still ends cleanly.
+    expect(agentNoticeText(ran(" \n ", null), conn())).toBe(
+      'The agent "claude · shop" ran a query on "Prod Postgres" while your own query was ' +
+        "running, so the console did not show it.",
+    );
+    expect(agentNoticeText(ran("", "Refused."), conn())).toBe(
+      'The agent "claude · shop" tried to run a query on "Prod Postgres" while your own query ' +
+        "was running, and it was refused: Refused.",
+    );
+    const long = `SELECT ${"x".repeat(200)}`;
+    expect(agentNoticeText(ran(long, null), conn())).toContain(`${long.slice(0, 79)}…`);
+
+    // Rendered in the panel like any agent notice.
+    await mount();
+    useAppStore.setState((s) => {
+      s.dbAgentNotice = { connectionId: "c1", ...ran("SELECT 2", null) };
+    });
+    expect(await screen.findByTestId("db-agent-notice")).toBeTruthy();
+    expect(screen.getByTestId("db-agent-notice").textContent).toContain(
+      "ran a query on a connection while your own query was running",
+    );
+  });
+
   it("brings the DB tab into view, re-arms both stores Rust wrote, and reloads the list", async () => {
     await mount();
     useAppStore.setState((s) => {

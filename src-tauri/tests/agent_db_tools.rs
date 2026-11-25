@@ -278,7 +278,10 @@ async fn live_an_agent_queries_postgres_from_its_terminal() {
     .await;
     assert_eq!(out.code, Some(0), "{}", out.stderr);
     let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
-    assert_eq!(v["data"]["rows"], serde_json::json!([["2000"]]));
+    assert_eq!(
+        v["data"]["results"][0]["rows"],
+        serde_json::json!([["2000"]])
+    );
 
     // Agent Studio's guard refuses: exit 1, the reason on stderr, and the user is shown it.
     let out = run(

@@ -3,7 +3,9 @@
 //! The tree is the DB panel's own (`DbSession::children`, one level per call, every engine's
 //! hierarchy as that engine describes it), read through [`crate::db::children`] on a session the
 //! tool opened for itself. Nothing here knows an engine's levels: a path is the labels the tree
-//! shows, separated by `/`.
+//! shows, separated by `/` — a `/` or `\` inside a label written `\/` or `\\` ([`escape_label`]),
+//! so a Redis key like `user/1` is one level, and every path a reply prints can be passed back as
+//! `--path` as it is. Labels have the connection's secrets masked ([`SessionTree`]).
 //!
 //! Everything returned is bounded: a level lists at most [`MAX_ITEMS`] items, and a search stops
 //! after [`MAX_LOOKUPS`] levels read, [`SEARCH_TIME`] or [`MAX_MATCHES`] matches — and says
@@ -43,13 +45,24 @@ pub trait TreeSource: Send {
     async fn children(&mut self, node: &DbNodeRef) -> Result<Vec<DbNode>, DbError>;
 }
 
-/// The tree of an open session, as the DB panel reads it.
-pub struct SessionTree<'a>(pub &'a ToolSession);
+/// The tree of an open session, as the DB panel reads it — each label and detail with the
+/// connection's secrets masked (a key or a table can be named anything).
+pub struct SessionTree<'a> {
+    pub session: &'a ToolSession,
+    pub secrets: Vec<String>,
+}
 
 #[async_trait]
 impl TreeSource for SessionTree<'_> {
     async fn children(&mut self, node: &DbNodeRef) -> Result<Vec<DbNode>, DbError> {
-        db::children(self.0.id(), node).await
+        let mut kids = db::children(self.session.id(), node).await?;
+        for k in &mut kids {
+            k.label = target::redact(&k.label, &self.secrets);
+            if let Some(sub) = k.sub_label.as_mut() {
+                *sub = target::redact(sub, &self.secrets);
+            }
+        }
+        Ok(kids)
     }
 }
 
@@ -97,12 +110,48 @@ pub fn shortfall(stated: Option<usize>, kids: &[DbNode]) -> Option<String> {
     })
 }
 
-fn join(path: &str, label: &str) -> String {
-    if path.is_empty() {
-        label.to_string()
-    } else {
-        format!("{path}/{label}")
+/// `label` as one path segment: `\` → `\\`, `/` → `\/`. [`split_path`] reads it back.
+pub fn escape_label(label: &str) -> String {
+    let mut out = String::with_capacity(label.len());
+    for ch in label.chars() {
+        if ch == '\\' || ch == '/' {
+            out.push('\\');
+        }
+        out.push(ch);
     }
+    out
+}
+
+/// A path's segments: split at each `/` that is not escaped, each `\x` read as `x` (a trailing
+/// lone `\` is kept as itself).
+pub fn split_path(path: &str) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut chars = path.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => match chars.next() {
+                Some(next) => out.last_mut().expect("never empty").push(next),
+                None => out.last_mut().expect("never empty").push('\\'),
+            },
+            '/' => out.push(String::new()),
+            other => out.last_mut().expect("never empty").push(other),
+        }
+    }
+    out
+}
+
+/// `path` with `label` as one more segment.
+pub fn join(path: &str, label: &str) -> String {
+    if path.is_empty() {
+        escape_label(label)
+    } else {
+        format!("{path}/{}", escape_label(label))
+    }
+}
+
+/// `s` quoted for a POSIX shell, so a hint line can be pasted as it is.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// The node at `path` (labels separated by `/`), its canonical path, and the count its label
@@ -119,7 +168,11 @@ pub async fn walk_to(
     let mut node = DbNodeRef::Root;
     let mut canonical = String::new();
     let mut stated = None;
-    for segment in path.split('/').map(str::trim).filter(|s| !s.is_empty()) {
+    for segment in split_path(path) {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
         let kids = tree
             .children(&node)
             .await
@@ -191,7 +244,11 @@ fn label_list(kids: &[DbNode]) -> String {
     if kids.is_empty() {
         return "nothing".to_string();
     }
-    let mut names: Vec<String> = kids.iter().take(40).map(|k| k.label.clone()).collect();
+    let mut names: Vec<String> = kids
+        .iter()
+        .take(40)
+        .map(|k| escape_label(&k.label))
+        .collect();
     if kids.len() > 40 {
         names.push(format!("and {} more", kids.len() - 40));
     }
@@ -288,9 +345,9 @@ pub async fn schema(
     }
     if let Some(next) = shown.iter().find(|k| k.expandable) {
         tail.push(format!(
-            "Look inside one with: agent-studio db schema \"{}\" --path \"{}\"",
-            c.name,
-            join(&canonical, &next.label)
+            "Look inside one with: agent-studio db schema {} --path {}",
+            shell_quote(&c.name),
+            shell_quote(&join(&canonical, &next.label))
         ));
     }
     let cut = text_budget_cut(&mut lines, TEXT_BUDGET);
@@ -586,11 +643,11 @@ pub async fn db_schema(
     let c = target::load_and_resolve(paths, connection)?;
     let deadline = target::deadline();
     let sess = open_within(paths, &c, deadline).await?;
-    let read = tokio::time::timeout(
-        target::remaining(deadline),
-        schema(&mut SessionTree(&sess), &c, path),
-    )
-    .await;
+    let mut tree = SessionTree {
+        session: &sess,
+        secrets: target::secrets_of(paths, &c),
+    };
+    let read = tokio::time::timeout(target::remaining(deadline), schema(&mut tree, &c, path)).await;
     match read {
         Ok(r) => {
             sess.close().await;
@@ -620,7 +677,10 @@ pub async fn db_search(
     let c = target::load_and_resolve(paths, connection)?;
     let deadline = target::deadline();
     let sess = open_within(paths, &c, deadline).await?;
-    let mut tree = SessionTree(&sess);
+    let mut tree = SessionTree {
+        session: &sess,
+        secrets: target::secrets_of(paths, &c),
+    };
     let started = Instant::now();
     // The walk down to --path is bounded by the call's deadline; the search below bounds itself.
     let walked = tokio::time::timeout(target::remaining(deadline), walk_to(&mut tree, path)).await;

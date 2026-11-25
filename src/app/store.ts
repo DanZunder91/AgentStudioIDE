@@ -2261,11 +2261,18 @@ export interface DbState {
    */
   dbDialog: { connectionId: string | null } | null;
   /**
-   * The connection an agent just added or opened through `agent-studio db connect`, shown as a
-   * notice at the top of the DB panel until dismissed. `agent` is the agent's name when its
-   * terminal is an agent we know, else `null` ("an agent").
+   * What an agent just did that the user must hear about, shown as a notice at the top of the DB
+   * panel until dismissed: a connection it added or opened through `agent-studio db connect`, or
+   * (`ran`) a query it ran through `agent-studio db query` while the user's own run held the
+   * console, so the console could not show it. `agent` is the agent's name when its terminal is an
+   * agent we know, else `null` ("an agent").
    */
-  dbAgentNotice: { connectionId: string; created: boolean; agent: string | null } | null;
+  dbAgentNotice: {
+    connectionId: string;
+    created: boolean;
+    agent: string | null;
+    ran?: { query: string; error: string | null };
+  } | null;
   /**
    * The lazily-loaded object tree, one subtree per connection id.
    *
@@ -2424,13 +2431,17 @@ export interface DbActions {
    *
    * The console tab is opened in the background when it is not open yet (activated only in a
    * pane with no active tab), its results become `results` (the agent's note first, built by the
-   * caller), and an empty buffer gets the query so the user can re-run it. A buffer the user typed
-   * in is never overwritten, and a run the user is waiting on is never replaced. A write refreshes
-   * the object tree, as a console write does.
+   * caller), and an empty buffer gets the query so the user can re-run it (unlinked from any saved
+   * query, so ⌘S cannot write it over one). A buffer the user typed in is never overwritten, and a
+   * run the user is waiting on is never replaced — the run is told in the DB panel's notice
+   * instead (`error` when it was refused), so it is never lost. A write refreshes the object tree,
+   * as a console write does.
    */
   showAgentDbQuery(event: {
     connectionId: string;
+    terminalId: string;
     query: string;
+    error: string | null;
     results: DbResultSet[];
   }): Promise<void>;
   /** Dismiss the agent notice. */
@@ -5482,16 +5493,32 @@ export const useAppStore = create<AppStore>()(
           void get().dbActions.loadDbStore();
         },
 
-        showAgentDbQuery: async ({ connectionId, query, results }) => {
+        showAgentDbQuery: async ({ connectionId, terminalId, query, error, results }) => {
           // The connection record names the tab and configures the console; a no-op when loaded,
           // and it never rejects.
           await get().dbActions.loadDbStore();
+          const agent = get().agents[terminalId as AgentId];
           set((s) => {
             const c = (s.dbConsoles[connectionId] ??= blankDbConsole());
-            if (c.text.trim() === "") c.text = query;
+            if (c.text.trim() === "") {
+              c.text = query;
+              // A new buffer: a saved query it was linked to must not take the agent's text on ⌘S.
+              c.savedQuery = null;
+              c.saveError = null;
+            }
             if (!c.running) {
               c.results = results;
               c.error = null;
+            } else {
+              // The user's own run holds the console: say so in the DB panel rather than drop it.
+              s.rightRailCollapsed = false;
+              s.rightRailTab = "db";
+              s.dbAgentNotice = {
+                connectionId,
+                created: false,
+                agent: agent === undefined ? null : (agent.customTitle ?? agent.title),
+                ran: { query, error },
+              };
             }
             const open = Object.values(s.tabs).some(
               (t) => t.ref.kind === "db-console" && t.ref.connectionId === connectionId,

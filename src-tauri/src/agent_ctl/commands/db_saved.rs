@@ -23,7 +23,7 @@ pub const MAX_NAME_CHARS: usize = 200;
 /// The most saved queries a listing returns.
 pub const MAX_LISTED: usize = 200;
 /// The longest query text a listing shows per query, in characters (the data carries up to
-/// [`MAX_QUERY_BYTES`]).
+/// [`MAX_QUERY_BYTES`] of each, and [`TEXT_BUDGET`] of query text in all).
 pub const PREVIEW_CHARS: usize = 2000;
 
 /// The queries saved for the connection `connection` names, newest first.
@@ -71,22 +71,54 @@ pub fn queries_reply(c: &DbConnection, all: &[SavedQuery]) -> (String, Value) {
     if total > MAX_LISTED {
         head.push(format!("Only the newest {MAX_LISTED} are listed."));
     }
+    // The query text in the data shares one budget, as the message does: 200 queries of 256 KB
+    // each would otherwise be 50 MB of reply.
+    let mut budget = TEXT_BUDGET;
+    let mut queries = Vec::new();
+    for q in listed {
+        if budget == 0 {
+            break;
+        }
+        let mut sql = q.sql.clone();
+        let cut = cut_bytes(&mut sql, MAX_QUERY_BYTES.min(budget));
+        budget = budget.saturating_sub(sql.len() + q.name.len());
+        queries.push(json!({
+            "id": q.id,
+            "name": q.name,
+            "query": sql,
+            "cut": cut,
+            "updatedAtMs": q.updated_at_ms,
+        }));
+    }
+    let shown = queries.len();
+    if shown < listed.len() {
+        head.push(format!(
+            "The data lists the first {shown}: query text is capped at {} KB.",
+            TEXT_BUDGET / 1024
+        ));
+    }
     let data = json!({
         "connection": summary(c),
-        "queries": listed.iter().map(|q| {
-            let mut sql = q.sql.clone();
-            let cut = cut_to(&mut sql, MAX_QUERY_BYTES);
-            json!({
-                "id": q.id,
-                "name": q.name,
-                "query": sql,
-                "cut": cut,
-                "updatedAtMs": q.updated_at_ms,
-            })
-        }).collect::<Vec<_>>(),
+        "queries": queries,
         "total": total,
+        "truncated": shown < total,
     });
     (hard_cap(head.join("\n")), data)
+}
+
+/// Cut `text` to at most `max` bytes at a character boundary (marking the cut); `true` when it was
+/// cut.
+fn cut_bytes(text: &mut String, max: usize) -> bool {
+    if text.len() <= max {
+        return false;
+    }
+    let mut at = max;
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    text.truncate(at);
+    text.push('…');
+    true
 }
 
 /// Cut `text` to `max` characters (marking the cut); `true` when it was cut.
@@ -223,8 +255,9 @@ pub fn db_console(
 pub fn console_message(c: &DbConnection, with_query: bool) -> String {
     if with_query {
         format!(
-            "Opened a query console for {} in Agent Studio with the query typed in. It was NOT \
-             run: the user reads it and presses Run (Connect first, if the console asks).",
+            "Opened a query console for {} in Agent Studio with the query typed in (below \
+             anything the user already had there, which is kept). It was NOT run: the user reads \
+             it and presses Run (Connect first, if the console asks).",
             target::describe(c)
         )
     } else {

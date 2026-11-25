@@ -175,6 +175,74 @@ pub fn connect_failure(c: &DbConnection, reason: &str) -> String {
     text
 }
 
+/// The values no reply or event of a database tool may carry: the connection's password as the
+/// Vault resolves it, a Vault reference its URL names, and a password written into its URL.
+///
+/// The backstop behind every refusal: whatever a server returns (a `CONFIG GET requirepass`, a
+/// table the user keeps a password in, an error that echoes a DSN) has these replaced by
+/// [`crate::db::error::MASK`] before an agent or the UI sees it — the percent-encoded form too
+/// ([`crate::db::secret::redact`]).
+pub fn secrets_of(paths: &Paths, c: &DbConnection) -> Vec<String> {
+    let vault = crate::api_store::load(&paths.vault);
+    let mut refs = vec![c.password_ref.clone()];
+    let mut out = Vec::new();
+    if let Some(split) = c
+        .url
+        .as_deref()
+        .and_then(|u| db::url::split_url_credentials(u).ok())
+    {
+        out.extend(split.password);
+        refs.extend(split.password_ref);
+    }
+    for r in refs.iter().filter(|r| db::secret::is_ref(r)) {
+        if let Ok(v) = db::secret::resolve(r, &vault) {
+            out.push(v);
+        }
+    }
+    // A literal (hand-edited) password in the record is still the password.
+    if !c.password_ref.is_empty() && !db::secret::is_ref(&c.password_ref) {
+        out.push(c.password_ref.clone());
+    }
+    out.retain(|s| !s.is_empty());
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// `text` with every one of `secrets` masked.
+pub fn redact(text: &str, secrets: &[String]) -> String {
+    if secrets.is_empty() {
+        return text.to_string();
+    }
+    let refs: Vec<&str> = secrets.iter().map(String::as_str).collect();
+    db::secret::redact(text, &refs)
+}
+
+/// Every string inside `value` (keys included) with every one of `secrets` masked.
+pub fn redact_json(value: &mut serde_json::Value, secrets: &[String]) {
+    use serde_json::Value;
+    if secrets.is_empty() {
+        return;
+    }
+    match value {
+        Value::String(s) => {
+            let masked = redact(s, secrets);
+            if masked != *s {
+                *s = masked;
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|v| redact_json(v, secrets)),
+        Value::Object(map) => {
+            let old = std::mem::take(map);
+            for (k, mut v) in old {
+                redact_json(&mut v, secrets);
+                map.insert(redact(&k, secrets), v);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
 /// The point by which a tool must answer.
 pub fn deadline() -> Instant {
     Instant::now() + TOOL_DEADLINE
