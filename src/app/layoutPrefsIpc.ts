@@ -91,6 +91,12 @@ export interface LayoutPrefs {
   collapsedFolders: string[];
   collapsedRoots: string[];
   focusFollowsAgent?: boolean;
+  /**
+   * How the agent rail draws projects (`railGroupStyle.ts`), as written to disk. Kept as
+   * a plain string here, not the union: the store decides what it means, so a value from
+   * a newer build round-trips untouched instead of failing to load.
+   */
+  railGroupStyle?: string | null;
   collapsedApiFolders?: string[];
   /**
    * The **center layout**: every view in bar order, with its name and its pane
@@ -113,6 +119,7 @@ export const EMPTY_LAYOUT_PREFS: LayoutPrefs = {
   collapsedFolders: [],
   collapsedRoots: [],
   focusFollowsAgent: false,
+  railGroupStyle: null,
   collapsedApiFolders: [],
   views: [],
   activeViewId: null,
@@ -132,6 +139,7 @@ export async function loadLayoutPrefs(): Promise<LayoutPrefs> {
       collapsedFolders: prefs.collapsedFolders ?? [],
       collapsedRoots: prefs.collapsedRoots ?? [],
       focusFollowsAgent: prefs.focusFollowsAgent ?? false,
+      railGroupStyle: prefs.railGroupStyle ?? null,
       collapsedApiFolders: prefs.collapsedApiFolders ?? [],
       views: prefs.views ?? [],
       activeViewId: prefs.activeViewId ?? null,

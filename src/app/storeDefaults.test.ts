@@ -124,6 +124,8 @@ describe("store boot defaults (pristine module registry)", () => {
     // A shipped behaviour choice, not bookkeeping: booting with this true would
     // make the Files tree jump whenever the agent selection changes.
     expect(boot.focusFollowsAgent).toBe(false);
+    // Framed card until the user picks another style in Settings → Interface.
+    expect(boot.railGroupStyle).toBe("card");
   });
 
   it("editors + LSP: nothing open, nothing hinted, no references panel", () => {
