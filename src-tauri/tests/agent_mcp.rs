@@ -360,6 +360,73 @@ fn install_status_and_uninstall_run_claudes_cli_with_this_binarys_absolute_path(
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The real `claude mcp add|get|remove` behind `agent-studio mcp install|status|uninstall`, in a
+/// throwaway `CLAUDE_CONFIG_DIR` so the user's Claude Code config is never read or written. Checks
+/// the reading of Claude's real `get` output, and that Claude's own health check starts this
+/// binary as a server and connects. No model call, but it needs the real `claude`, so:
+///
+/// `cargo test --test agent_mcp -- --ignored --nocapture`
+#[test]
+#[ignore = "runs the real claude CLI (in a throwaway config dir)"]
+fn real_claude_adds_checks_and_removes_the_server_in_a_throwaway_config() {
+    let dir = temp_dir("real-config");
+    let config = dir.join("claude-config");
+    std::fs::create_dir_all(&config).unwrap();
+    let home_config = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude.json"));
+    let before = home_config
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.contains(&format!("\"command\": \"{EXE}\"")));
+    let run = |args: &[&str]| {
+        let out = binary(args, None)
+            .env("CLAUDE_CONFIG_DIR", &config)
+            .output()
+            .unwrap();
+        eprintln!(
+            "{args:?} → {:?}\n{}{}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    };
+    let report = |out: &Output| -> Value { serde_json::from_slice(&out.stdout).unwrap() };
+
+    assert_eq!(
+        report(&run(&["mcp", "status", "--json"]))["state"],
+        "notInstalled"
+    );
+    let added = run(&["mcp", "install", "--json"]);
+    assert_eq!(report(&added)["state"], "installed", "{added:?}");
+    let saved = std::fs::read_to_string(config.join(".claude.json")).unwrap();
+    assert!(
+        saved.contains("agent-studio"),
+        "Claude wrote its own config: {saved}"
+    );
+    // Claude's `get` health-checks the entry: it starts this binary with `mcp` and connects.
+    let status = run(&["mcp", "status", "--json"]);
+    assert_eq!(report(&status)["state"], "installed", "{status:?}");
+    assert!(report(&status)["scope"].as_str().unwrap().contains("User"));
+    let again = run(&["mcp", "install"]);
+    assert!(String::from_utf8_lossy(&again.stdout).contains("already added"));
+    assert_eq!(
+        report(&run(&["mcp", "uninstall", "--json"]))["state"],
+        "notInstalled"
+    );
+    assert_eq!(
+        report(&run(&["mcp", "status", "--json"]))["state"],
+        "notInstalled"
+    );
+
+    // The user's own config did not gain an entry for this binary.
+    let after = home_config
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.contains(&format!("\"command\": \"{EXE}\"")));
+    assert_eq!(before, after);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// The real thing: the signed-in `claude`, told about the built binary as an MCP server, asked to
 /// call `db_list` — inside an environment where a test listener stands in for the app, so the
 /// call goes all the way through. Uses the user's Claude account (one tiny prompt), so it is not
