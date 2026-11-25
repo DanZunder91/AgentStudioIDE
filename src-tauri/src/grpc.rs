@@ -43,10 +43,17 @@
 //! and `content-type: application/grpc`; tonic's own `user-agent` is not reconstructed), the
 //! request as its canonical JSON once parsed, then either status 200 + `grpcStatus 0` + the
 //! response JSON, or the gRPC status with its trailers (`done` — a status is a response), or
-//! `error` for a dial/reflection/transport failure. The reflection round-trips that resolve the
-//! method are not separate rows. Sizes are protobuf payload bytes (see the record module).
+//! `error` for a dial/reflection/transport failure or a deadline that passed. The reflection
+//! round-trips that resolve the method are not separate rows. Sizes are protobuf payload bytes
+//! (see the record module).
+//!
+//! **Rust API.** The two commands are thin over [`Reflection`] (a reflection session and its
+//! descriptor pool) and [`call`] (a recorded unary call with a deadline, returning the server's
+//! metadata too). An agent's `grpc_services` / `grpc_describe` / `grpc_call` tools
+//! (`agent_ctl::commands::stream`) use the same two, so a call an agent makes is the call the
+//! console makes, recorded the same way.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use prost::Message as _;
@@ -64,17 +71,36 @@ use crate::netcap::headers::capture_headers;
 use crate::netcap::record::{Flow, Tap};
 use crate::netcap::FlowProto;
 
-/// Whole-call deadline. A wedged endpoint is bounded rather than hanging the UI.
+/// Each request's deadline on a channel (the reflection round trips and the call alike) when
+/// the caller set no limit of its own. A wedged endpoint is bounded rather than hanging the UI.
 /// Mirrors `http.rs`'s `REQUEST_TIMEOUT`.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Dial deadline — a stuck TCP/TLS handshake is bounded separately from the call.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How far past a caller's whole-call limit the channel's own per-request timeout is set.
+const LIMIT_GRACE: Duration = Duration::from_secs(1);
+
+/// The channel's per-request timeout: `default` (the app passes [`REQUEST_TIMEOUT`]), or, for a
+/// call with a whole-call `limit` of its own, just past that limit. A channel timeout under the
+/// limit would cut the call short of the deadline its caller was promised; past it, the caller's
+/// deadline — which started first, before the dial — is always the one that fires.
+fn channel_timeout(limit: Option<Duration>, default: Duration) -> Duration {
+    limit.map_or(default, |limit| limit + LIMIT_GRACE)
+}
+
 /// Response-size sanity cap for a decoded message (mirrors `http.rs`'s body cap in
 /// spirit). tonic's default is 4 MiB; we allow more so large reflected descriptors and
 /// fat responses still come through, but a runaway response can't exhaust memory.
 const MAX_DECODING_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Descriptor files one reflection session fetches at most — a request counts as one even when
+/// its answer holds none — and their bytes. A server answers each `import` with whatever file it
+/// likes, which may import one more, so following imports is bounded here rather than by how long
+/// the server keeps answering.
+pub const MAX_REFLECTED_FILES: usize = 500;
+pub const MAX_REFLECTED_BYTES: usize = 16 * 1024 * 1024;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire contract (PINNED — the frontend builds against exactly these; camelCase).
@@ -315,10 +341,14 @@ impl Decoder for DynamicDecoder {
 // Transport: connect a tonic Channel (plaintext h2c or rustls TLS).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Dial the endpoint and return a connected [`Channel`]. TLS (rustls, `ring`, OS ∪ Mozilla
-/// roots) unless `plaintext`. A dial/TLS failure is `Err` (the only transport failure
-/// surfaced as a rejected promise).
-async fn connect_channel(endpoint: &str, plaintext: bool) -> Result<Channel, String> {
+/// Dial the endpoint and return a connected [`Channel`] whose requests time out after
+/// `request_timeout`. TLS (rustls, `ring`, OS ∪ Mozilla roots) unless `plaintext`. A dial/TLS
+/// failure is `Err`.
+async fn connect_channel(
+    endpoint: &str,
+    plaintext: bool,
+    request_timeout: Duration,
+) -> Result<Channel, String> {
     // One provider for the whole process. tonic checks
     // `CryptoProvider::get_default()` before falling back to its own `tls-ring` feature,
     // so installing here is what keeps `grpcs://` provably on the same backend as
@@ -338,7 +368,7 @@ async fn connect_channel(endpoint: &str, plaintext: bool) -> Result<Channel, Str
             .tls_config(tls)
             .map_err(|e| format!("TLS configuration failed: {e}"))?;
     }
-    ep = ep.connect_timeout(CONNECT_TIMEOUT).timeout(REQUEST_TIMEOUT);
+    ep = ep.connect_timeout(CONNECT_TIMEOUT).timeout(request_timeout);
     ep.connect()
         .await
         .map_err(|e| format!("could not connect to {endpoint}: {e}"))
@@ -502,15 +532,104 @@ impl Reflect {
     }
 }
 
-/// Assemble a fresh [`DescriptorPool`] describing `symbol` (a fully-qualified service
-/// name) by fetching its file over reflection and chasing `import` dependencies.
-async fn build_pool_for_symbol(
-    reflect: &mut Reflect,
-    symbol: &str,
-) -> Result<DescriptorPool, String> {
-    let mut pool = DescriptorPool::new();
-    build_pool_into(reflect, symbol, &mut pool).await?;
-    Ok(pool)
+/// A server-reflection session on one connection, and the descriptors it has loaded so far in
+/// one pool. What [`grpc_reflect`], [`grpc_send`] and the agent tools
+/// (`agent_ctl::commands::stream`) share, so a schema means the same thing to all of them.
+pub struct Reflection {
+    reflect: Reflect,
+    pool: DescriptorPool,
+    fetched: Fetched,
+}
+
+/// What a reflection session has fetched, against [`MAX_REFLECTED_FILES`] and
+/// [`MAX_REFLECTED_BYTES`].
+#[derive(Debug, Default)]
+struct Fetched {
+    files: usize,
+    bytes: usize,
+    /// A limit was reached: nothing more is fetched.
+    stopped: bool,
+}
+
+impl Fetched {
+    /// Count one request about to go out; refused once the limit is reached.
+    fn request(&mut self) -> Result<(), String> {
+        if self.stopped || self.files >= MAX_REFLECTED_FILES {
+            return Err(self.stop());
+        }
+        self.files += 1;
+        Ok(())
+    }
+
+    /// Count the files of one answer (its request already counted one); refused past a limit.
+    fn answer(&mut self, raw_files: &[Vec<u8>]) -> Result<(), String> {
+        self.files += raw_files.len().saturating_sub(1);
+        self.bytes = raw_files
+            .iter()
+            .fold(self.bytes, |sum, f| sum.saturating_add(f.len()));
+        if self.files > MAX_REFLECTED_FILES || self.bytes > MAX_REFLECTED_BYTES {
+            return Err(self.stop());
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> String {
+        self.stopped = true;
+        format!(
+            "reflection stopped: the server's descriptors go past what one reflection loads \
+             ({MAX_REFLECTED_FILES} files or {} MiB)",
+            MAX_REFLECTED_BYTES / (1024 * 1024)
+        )
+    }
+}
+
+impl Reflection {
+    /// Dial `endpoint` (TLS unless `plaintext`) and negotiate the reflection version (`v1`,
+    /// else `v1alpha`).
+    pub async fn connect(endpoint: &str, plaintext: bool) -> Result<Self, String> {
+        Self::over(connect_channel(endpoint, plaintext, REQUEST_TIMEOUT).await?).await
+    }
+
+    /// The same, over a channel that is already connected.
+    async fn over(channel: Channel) -> Result<Self, String> {
+        Ok(Self {
+            reflect: Reflect::negotiate(channel).await?,
+            pool: DescriptorPool::new(),
+            fetched: Fetched::default(),
+        })
+    }
+
+    /// Every service the server lists, fully qualified.
+    pub async fn list_services(&mut self) -> Result<Vec<String>, String> {
+        self.reflect
+            .list_services()
+            .await
+            .map_err(|e| e.into_string())
+    }
+
+    /// Load the file that declares `symbol` (a service, method, message or enum, fully
+    /// qualified), with its imports, into [`Self::pool`] — nothing to fetch when an earlier load
+    /// brought it. At most [`MAX_REFLECTED_FILES`] files ([`MAX_REFLECTED_BYTES`]) are fetched in
+    /// one session; past that every load fails, saying so.
+    pub async fn load(&mut self, symbol: &str) -> Result<(), String> {
+        let known = self.pool.get_service_by_name(symbol).is_some()
+            || self.pool.get_message_by_name(symbol).is_some()
+            || self.pool.get_enum_by_name(symbol).is_some();
+        if known {
+            return Ok(());
+        }
+        build_pool_into(&mut self.reflect, symbol, &mut self.pool, &mut self.fetched).await
+    }
+
+    /// Whether this session reached its limit, so a load failed for that reason.
+    pub fn stopped(&self) -> bool {
+        self.fetched.stopped
+    }
+
+    /// Everything loaded so far.
+    pub fn pool(&self) -> &DescriptorPool {
+        &self.pool
+    }
 }
 
 /// Turn a fully-reflected [`DescriptorPool`] into the pinned [`GrpcSchema`] (services +
@@ -546,40 +665,38 @@ fn schema_from_pool(pool: &DescriptorPool, service_names: &[String]) -> GrpcSche
 /// disabled) — there is no schema to show.
 #[tauri::command]
 pub async fn grpc_reflect(endpoint: String, plaintext: bool) -> Result<GrpcSchema, String> {
-    let channel = connect_channel(&endpoint, plaintext).await?;
-    let mut reflect = Reflect::negotiate(channel).await?;
-
-    let service_names = reflect.list_services().await.map_err(|e| e.into_string())?;
+    let mut reflection = Reflection::connect(&endpoint, plaintext).await?;
+    let service_names = reflection.list_services().await?;
 
     // Reflect each service's file to enumerate its methods. A service whose descriptor
     // can't be fetched degrades to an empty method list rather than failing the reflect.
-    let mut pool = DescriptorPool::new();
-    let mut resolved = Vec::with_capacity(service_names.len());
     for name in &service_names {
-        match build_pool_into(&mut reflect, name, &mut pool).await {
-            Ok(()) => resolved.push(name.clone()),
-            Err(_) => resolved.push(name.clone()), // keep the service; methods may be empty
-        }
+        let _ = reflection.load(name).await;
     }
 
-    Ok(schema_from_pool(&pool, &resolved))
+    Ok(schema_from_pool(reflection.pool(), &service_names))
 }
 
 /// Fetch `symbol`'s file (and imports) into an existing pool. Used by [`grpc_reflect`] to
-/// accumulate every service's descriptors into one pool without rebuilding it per service.
+/// accumulate every service's descriptors into one pool without rebuilding it per service. Each
+/// import is asked for once, and every request and file is counted in `fetched` first.
 async fn build_pool_into(
     reflect: &mut Reflect,
     symbol: &str,
     pool: &mut DescriptorPool,
+    fetched: &mut Fetched,
 ) -> Result<(), String> {
     let mut collected: HashMap<String, FileDescriptorProto> = HashMap::new();
+    let mut asked: HashSet<String> = HashSet::new();
     let mut pending = vec![FileQuery::Symbol(symbol.to_string())];
 
     while let Some(query) = pending.pop() {
+        fetched.request()?;
         let raw_files = reflect
             .fetch_files(&query)
             .await
             .map_err(|e| e.into_string())?;
+        fetched.answer(&raw_files)?;
         for raw in raw_files {
             let fd = FileDescriptorProto::decode(raw.as_slice())
                 .map_err(|e| format!("invalid file descriptor: {e}"))?;
@@ -588,7 +705,10 @@ async fn build_pool_into(
                 continue;
             }
             for dep in &fd.dependency {
-                if !collected.contains_key(dep) && pool.get_file_by_name(dep).is_none() {
+                if !collected.contains_key(dep)
+                    && pool.get_file_by_name(dep).is_none()
+                    && asked.insert(dep.clone())
+                {
                     pending.push(FileQuery::Filename(dep.clone()));
                 }
             }
@@ -654,11 +774,12 @@ fn start_flow(tap: &Tap, request: &GrpcRequest) -> Flow {
 /// Send a unary gRPC request. Frontend: `invoke<GrpcResponse>('grpc_send', { request })`.
 ///
 /// A non-OK gRPC status **resolves** as a [`GrpcResponse`] (`statusCode != 0`,
-/// `statusName` set, `error` carrying the message) — mirroring `http_send`. Only a
-/// failure to *connect* (dial/TLS/reflection) is `Err`. The method's descriptor is
-/// fetched via reflection, the JSON request built into a `DynamicMessage`, the call made
-/// with a dynamic codec, and the response decoded back to JSON. The call is recorded in the
-/// Network view as source `API client`.
+/// `statusName` set, `error` carrying the message) — mirroring `http_send`. A failure to
+/// *connect* (dial/TLS/reflection) is `Err`, and so is a deadline that passed on our side
+/// (the request's timeout): no server sent that status, so none is reported. The method's
+/// descriptor is fetched via reflection, the JSON request built into a `DynamicMessage`, the
+/// call made with a dynamic codec, and the response decoded back to JSON. The call is recorded
+/// in the Network view as source `API client`.
 #[tauri::command]
 pub async fn grpc_send(request: GrpcRequest) -> Result<GrpcResponse, String> {
     send_via(request, &Tap::global()).await
@@ -667,23 +788,96 @@ pub async fn grpc_send(request: GrpcRequest) -> Result<GrpcResponse, String> {
 /// [`grpc_send`] with the Network tap injected instead of taken from the app — the seam
 /// `tests/netcap_record.rs` drives: the real call, recorded into a test's own `Netcap`.
 pub async fn send_via(request: GrpcRequest, tap: &Tap) -> Result<GrpcResponse, String> {
-    let flow = start_flow(tap, &request);
-    match unary(request, &flow).await {
-        Ok(r) => Ok(r),
-        Err(e) => {
-            flow.fail(e.clone());
-            Err(e)
-        }
-    }
+    call(request, tap, None)
+        .await
+        .map(|outcome| outcome.response)
 }
 
-/// The call itself; `flow` gets the request body once parsed and the outcome.
-async fn unary(request: GrpcRequest, flow: &Flow) -> Result<GrpcResponse, String> {
-    let channel = connect_channel(&request.endpoint, request.plaintext).await?;
+/// A unary call's [`GrpcResponse`] and the metadata the server sent with it: on OK the
+/// response headers and trailers (tonic merges them), otherwise the status's metadata — with
+/// `grpc-status`, `grpc-message` and `grpc-status-details-bin` left out, as they are the
+/// response's status fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrpcOutcome {
+    pub response: GrpcResponse,
+    pub metadata: Vec<(String, String)>,
+}
+
+/// `metadata` without the status entries [`GrpcResponse`] already carries.
+fn without_status(metadata: &[(String, String)]) -> Vec<(String, String)> {
+    const STATUS: [&str; 3] = ["grpc-status", "grpc-message", "grpc-status-details-bin"];
+    metadata
+        .iter()
+        .filter(|(k, _)| !STATUS.contains(&k.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// The unary call behind [`grpc_send`], recorded on `tap`, returning the server's metadata as
+/// well. With a `limit`, the whole call (dial, reflection, the call itself) must finish within
+/// it; past it the call is abandoned and its Network row settles as an error, never left
+/// pending. The channel's own request timeout is then set past the limit
+/// ([`channel_timeout`]), so a call may take all of it, and the limit is the deadline reported.
+pub async fn call(
+    request: GrpcRequest,
+    tap: &Tap,
+    limit: Option<Duration>,
+) -> Result<GrpcOutcome, String> {
+    call_with_default_timeout(request, tap, limit, REQUEST_TIMEOUT).await
+}
+
+/// [`call`] with the channel's request timeout for a call without a limit given as `default`
+/// instead of [`REQUEST_TIMEOUT`]: the seam a test uses to make that default short, and see that a
+/// call's own limit — not the default — is what its channel waits.
+pub async fn call_with_default_timeout(
+    request: GrpcRequest,
+    tap: &Tap,
+    limit: Option<Duration>,
+    default: Duration,
+) -> Result<GrpcOutcome, String> {
+    let flow = start_flow(tap, &request);
+    let request_timeout = channel_timeout(limit, default);
+    let outcome = match limit {
+        None => unary(request, &flow, request_timeout).await,
+        Some(limit) => tokio::time::timeout(limit, unary(request, &flow, request_timeout))
+            .await
+            .unwrap_or_else(|_| {
+                Err(format!(
+                    "no answer within {} ms; the call was abandoned",
+                    limit.as_millis()
+                ))
+            }),
+    };
+    outcome.inspect_err(|e| flow.fail(e.clone()))
+}
+
+/// Whether `status` is a deadline that passed on our side — the channel's request timeout, or a
+/// `grpc-timeout` the request carried — which tonic reports as a `Cancelled` status although no
+/// server sent one. tonic keeps the error it mapped as the status's source.
+fn deadline_passed(status: &Status) -> bool {
+    let mut source = std::error::Error::source(status);
+    while let Some(e) = source {
+        if e.is::<tonic::TimeoutExpired>() {
+            return true;
+        }
+        source = e.source();
+    }
+    false
+}
+
+/// The call itself; `flow` gets the request body once parsed and the outcome. The channel's
+/// requests time out after `request_timeout`.
+async fn unary(
+    request: GrpcRequest,
+    flow: &Flow,
+    request_timeout: Duration,
+) -> Result<GrpcOutcome, String> {
+    let channel = connect_channel(&request.endpoint, request.plaintext, request_timeout).await?;
 
     // Resolve the method descriptor via reflection.
-    let mut reflect = Reflect::negotiate(channel.clone()).await?;
-    let pool = build_pool_for_symbol(&mut reflect, &request.service).await?;
+    let mut reflection = Reflection::over(channel.clone()).await?;
+    reflection.load(&request.service).await?;
+    let pool = reflection.pool();
 
     let service = pool
         .get_service_by_name(&request.service)
@@ -736,23 +930,28 @@ async fn unary(request: GrpcRequest, flow: &Flow) -> Result<GrpcResponse, String
     match grpc.unary(tonic_request, path, codec).await {
         Ok(response) => {
             let message = dynamic_to_json(response.get_ref())?;
-            // tonic only resolves `Ok` on an HTTP 200 whose grpc-status was OK; the response
-            // headers are its metadata (the trailers are consumed by tonic and not exposed).
-            flow.response_head(
-                200,
-                "HTTP/2",
-                capture_headers(&response.metadata().clone().into_headers()),
-            );
+            // tonic only resolves `Ok` on an HTTP 200 whose grpc-status was OK; its metadata is
+            // the response headers with the trailers merged in (so `grpc-status: 0` is there).
+            let headers = capture_headers(&response.metadata().clone().into_headers());
+            flow.response_head(200, "HTTP/2", headers.clone());
             flow.grpc_status(0);
             flow.response_body(message.as_bytes(), response.get_ref().encoded_len() as u64);
             flow.done(None);
-            Ok(GrpcResponse {
-                message,
-                status_code: 0,
-                status_name: status_name_for(0).to_string(),
-                error: None,
+            Ok(GrpcOutcome {
+                response: GrpcResponse {
+                    message,
+                    status_code: 0,
+                    status_name: status_name_for(0).to_string(),
+                    error: None,
+                },
+                metadata: without_status(&headers),
             })
         }
+        // Our own deadline, not an answer: the caller sees a timeout and the row fails.
+        Err(status) if deadline_passed(&status) => Err(format!(
+            "no answer before the request's deadline ({}); the call was abandoned",
+            status.message()
+        )),
         // A gRPC status (incl. a post-connect transport blip surfaced as Unavailable) is
         // a normal response, mirroring `http.rs`'s treatment of a 4xx/5xx.
         Err(status) => {
@@ -765,6 +964,7 @@ async fn unary(request: GrpcRequest, flow: &Flow) -> Result<GrpcResponse, String
                 message.to_string()
             };
             flow.grpc_status(number as i32);
+            let metadata = capture_headers(&status.metadata().clone().into_headers());
             if std::error::Error::source(&status).is_some() {
                 // Wrapped by tonic around an h2/transport error: nothing came back from the
                 // server, so the row is an error, not a response.
@@ -778,15 +978,18 @@ async fn unary(request: GrpcRequest, flow: &Flow) -> Result<GrpcResponse, String
                 if !message.is_empty() {
                     trailers.push(("grpc-message".to_string(), message.to_string()));
                 }
-                trailers.extend(capture_headers(&status.metadata().clone().into_headers()));
+                trailers.extend(metadata.iter().cloned());
                 flow.response_trailers(trailers);
                 flow.done(None);
             }
-            Ok(GrpcResponse {
-                message: String::new(),
-                status_code: number,
-                status_name,
-                error: Some(error),
+            Ok(GrpcOutcome {
+                response: GrpcResponse {
+                    message: String::new(),
+                    status_code: number,
+                    status_name,
+                    error: Some(error),
+                },
+                metadata: without_status(&metadata),
             })
         }
     }
@@ -953,6 +1156,72 @@ mod tests {
     fn build_metadata_rejects_binary_metadata_for_now() {
         let err = build_metadata(&[header("trace-bin", "AAAA")]).unwrap_err();
         assert!(err.contains("binary metadata"), "got: {err}");
+    }
+
+    #[test]
+    fn an_outcomes_metadata_leaves_out_the_status_it_already_carries() {
+        let pairs = |p: &[(&str, &str)]| -> Vec<(String, String)> {
+            p.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        assert_eq!(
+            without_status(&pairs(&[
+                ("content-type", "application/grpc"),
+                ("grpc-status", "0"),
+                ("x-served-by", "a"),
+                ("grpc-message", "m"),
+                ("grpc-status-details-bin", "AAAA"),
+                ("x-served-by", "b"),
+            ])),
+            pairs(&[
+                ("content-type", "application/grpc"),
+                ("x-served-by", "a"),
+                ("x-served-by", "b"),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_call_with_a_limit_of_its_own_gets_a_channel_that_waits_past_it() {
+        // Without a limit, the channel's own deadline is the only one.
+        assert_eq!(channel_timeout(None, REQUEST_TIMEOUT), REQUEST_TIMEOUT);
+        // With one, the channel must never cut the call first — including limits past the
+        // default request timeout, which an agent's `grpc call --timeout-ms` allows.
+        for ms in [1, 400, 29_999, 30_000, 45_000, 60_000] {
+            let limit = Duration::from_millis(ms);
+            assert!(
+                channel_timeout(Some(limit), REQUEST_TIMEOUT) > limit,
+                "{ms} ms"
+            );
+        }
+    }
+
+    /// Every request counts as a file even when its answer holds none, every file of an answer
+    /// counts, and every byte; past either limit the session stops, for good.
+    #[test]
+    fn a_reflection_session_counts_requests_files_and_bytes_and_stops_for_good() {
+        let mut f = Fetched::default();
+        for _ in 0..MAX_REFLECTED_FILES {
+            f.request().unwrap();
+            f.answer(&[]).unwrap();
+        }
+        let e = f.request().unwrap_err();
+        assert!(e.starts_with("reflection stopped: "), "{e}");
+        assert!(f.stopped);
+
+        let mut f = Fetched::default();
+        f.request().unwrap();
+        assert!(f
+            .answer(&vec![Vec::new(); MAX_REFLECTED_FILES + 1])
+            .is_err());
+
+        let mut f = Fetched::default();
+        f.request().unwrap();
+        f.answer(&[vec![0; MAX_REFLECTED_BYTES]]).unwrap();
+        f.request().unwrap();
+        assert!(f.answer(&[vec![0; 1]]).is_err());
+        assert!(f.request().is_err(), "a stopped session stays stopped");
     }
 
     #[test]
