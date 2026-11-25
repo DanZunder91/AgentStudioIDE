@@ -77,11 +77,12 @@ static CLIENT: LazyLock<Result<Client, String>> = LazyLock::new(|| {
 /// Response bodies larger than this are truncated to it (`truncated = true`), so a
 /// multi-gigabyte download can't flood the IPC channel / UI. `size_bytes` always
 /// reports the full, pre-cap length.
-const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 /// Whole-request deadline. A stuck or slow endpoint is bounded to this rather than
-/// hanging the UI on a request that never completes.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// hanging the UI on a request that never completes. A caller may ask for less
+/// ([`send_bounded`]), never more: it is also the shared client's own timeout.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One request/response header. Duplicates are kept as separate rows (HTTP allows a
 /// header name to repeat), so this is a flat list, not a map.
@@ -136,10 +137,15 @@ fn cap_body(mut bytes: Vec<u8>, limit: usize) -> (Vec<u8>, bool) {
 }
 
 /// Turn a reqwest error into a short, human-readable string. Distinguishes the causes a
-/// user can act on (timeout, unreachable host) from the catch-all.
-fn map_send_error(e: reqwest::Error) -> String {
+/// user can act on (timeout, unreachable host) from the catch-all. `timeout` is the
+/// deadline the request ran under, so the sentence names the one that fired.
+fn map_send_error(e: reqwest::Error, timeout: Duration) -> String {
     if e.is_timeout() {
-        format!("request timed out after {}s", REQUEST_TIMEOUT.as_secs())
+        if timeout.subsec_millis() == 0 {
+            format!("request timed out after {}s", timeout.as_secs())
+        } else {
+            format!("request timed out after {} ms", timeout.as_millis())
+        }
     } else if e.is_connect() {
         match e.url().and_then(|u| u.host_str()) {
             Some(host) => format!("could not connect: {host}"),
@@ -295,14 +301,21 @@ fn start_flow(tap: &Tap, method: &Method, url: &Url, map: &HeaderMap, body: Opti
     flow
 }
 
-/// Testable core: send `request`, capping the response body at `body_cap`, recording the
-/// flow into `tap`. The `#[tauri::command]` wrapper passes the production [`MAX_BODY_BYTES`]
-/// and the app's tap; tests inject a tiny cap to exercise truncation without a huge payload.
+/// Testable core: send `request`, capping the response body at `body_cap` and the whole
+/// exchange at `timeout`, recording the flow into `tap`. The `#[tauri::command]` wrapper
+/// passes the production [`MAX_BODY_BYTES`], [`REQUEST_TIMEOUT`] and the app's tap; tests
+/// inject a tiny cap to exercise truncation without a huge payload.
+///
+/// The deadline is reqwest's per-request timeout rather than a future dropped from outside,
+/// so a timed-out request still ends its Network row as an error instead of leaving it
+/// pending forever.
 async fn send_with(
     request: HttpRequest,
     body_cap: usize,
+    timeout: Duration,
     tap: &Tap,
 ) -> Result<HttpResponse, String> {
+    let timeout = timeout.min(REQUEST_TIMEOUT);
     // Validate the verb up front (uppercased, so `get` → `GET`). An internal space or
     // other non-token byte — e.g. `"BOGUS METHOD"` — is rejected here, before any I/O.
     let method = Method::from_bytes(request.method.trim().to_ascii_uppercase().as_bytes())
@@ -336,7 +349,8 @@ async fn send_with(
 
     let mut req = client
         .request(method.clone(), url.clone())
-        .headers(header_map.clone());
+        .headers(header_map.clone())
+        .timeout(timeout);
     if let Some(b) = body {
         req = req.body(b.to_string());
     }
@@ -345,7 +359,7 @@ async fn send_with(
     let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            let e = map_send_error(e);
+            let e = map_send_error(e, timeout);
             flow.fail(e.clone());
             return Err(e);
         }
@@ -387,7 +401,7 @@ async fn send_with(
     let full = match resp.bytes().await {
         Ok(b) => b,
         Err(e) => {
-            let e = map_send_error(e);
+            let e = map_send_error(e, timeout);
             flow.fail(e.clone());
             return Err(e);
         }
@@ -417,13 +431,21 @@ async fn send_with(
 /// proxy never starts. The unit tests' entry point (they inject a tiny body cap).
 #[cfg(test)]
 async fn send(request: HttpRequest, body_cap: usize) -> Result<HttpResponse, String> {
-    send_with(request, body_cap, &Tap::global()).await
+    send_with(request, body_cap, REQUEST_TIMEOUT, &Tap::global()).await
 }
 
 /// [`http_send`] with the Network tap injected instead of taken from the app — the seam
 /// `tests/netcap_record.rs` drives: the real send, recorded into a test's own `Netcap`.
 pub async fn send_via(request: HttpRequest, tap: &Tap) -> Result<HttpResponse, String> {
-    send_with(request, MAX_BODY_BYTES, tap).await
+    send_with(request, MAX_BODY_BYTES, REQUEST_TIMEOUT, tap).await
+}
+
+/// The same send under a caller's deadline: `timeout` is clamped to [`REQUEST_TIMEOUT`].
+/// Recorded in the Network view like every API-client send. The agent tools
+/// (`agent_ctl::commands::http`) send through here, so an agent's request takes exactly the
+/// path the user's Send button takes.
+pub async fn send_bounded(request: HttpRequest, timeout: Duration) -> Result<HttpResponse, String> {
+    send_with(request, MAX_BODY_BYTES, timeout, &Tap::global()).await
 }
 
 /// Send an HTTP request and return its response.
@@ -779,6 +801,34 @@ mod tests {
         );
         assert_eq!(r.status, 200, "unexpected status from example.com");
         assert!(!r.body.is_empty(), "an HTTPS body must come back decoded");
+    }
+
+    /// A caller's shorter deadline fires, and the sentence names it — not the 30 s default.
+    #[tokio::test]
+    async fn a_caller_deadline_bounds_a_silent_server_and_is_named_in_the_error() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tauri::async_runtime::spawn(async move {
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+            // Accept and hold the connection open without ever answering.
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+        let started = Instant::now();
+        let err = send_bounded(
+            req("GET", format!("http://127.0.0.1:{port}/slow")),
+            Duration::from_millis(300),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, "request timed out after 300 ms");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the deadline did not fire"
+        );
     }
 
     #[tokio::test]

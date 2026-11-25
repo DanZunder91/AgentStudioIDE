@@ -99,6 +99,22 @@ fn save(path: &Path, store: &HistoryStore) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The history file inside the app config dir `dir` — where [`store_path`] puts it, for a
+/// caller that already holds the dir (the agent tools, whose tests pass a temp dir).
+pub fn path_in(dir: &Path) -> PathBuf {
+    dir.join(FILE_NAME)
+}
+
+/// Append one entry under the file's lock: re-read, push, write. A request sent outside the
+/// webview (an agent's, through `agent_ctl`) is recorded here, and the lock keeps it from
+/// interleaving with the webview's wholesale [`api_history_save`].
+pub fn append(path: &Path, entry: HistoryEntry) -> std::io::Result<()> {
+    let _guard = crate::store_file::lock(path);
+    let mut store = load(path);
+    store.entries.push(entry);
+    save(path, &store)
+}
+
 /// The history file's path: the Tauri app config dir if available, else a
 /// `home_dir()`-based fallback. **Always outside any workspace/repo** — the
 /// secret-safety guarantee. Mirrors [`crate::api_store`]'s path resolution.
@@ -266,6 +282,34 @@ mod tests {
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0].protocol, None);
         assert_eq!(loaded.entries[0].grpc_service, None);
+    }
+
+    /// An append keeps every entry already on disk and adds one at the end, concurrent appends
+    /// included (each re-reads under the lock). Falsify: drop the guard in `append`.
+    #[test]
+    fn append_adds_to_what_is_on_disk_and_loses_nothing_under_concurrency() {
+        let f = Fixture::new("append");
+        assert_eq!(path_in(&f.dir), f.store);
+        save(
+            &f.store,
+            &HistoryStore {
+                entries: vec![ok_entry("first")],
+            },
+        )
+        .unwrap();
+        let path = std::sync::Arc::new(f.store.clone());
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let path = path.clone();
+                std::thread::spawn(move || append(&path, ok_entry(&format!("t{i}"))).unwrap())
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let loaded = load(&f.store);
+        assert_eq!(loaded.entries.len(), 9, "an append was lost");
+        assert_eq!(loaded.entries[0].id, "first", "appends go at the end");
     }
 
     #[test]
