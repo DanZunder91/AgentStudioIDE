@@ -645,11 +645,14 @@ input.db-dialog__input[type="checkbox"] {
   color: var(--text-dim, #8b949e);
 }
 
-/* What an agent just did through `agent-studio db connect` (DbPanel's AgentNotice). */
+/* What an agent just did through the `agent-studio db` tools (DbPanel's AgentNotice). The
+   buttons keep their size (`.db-dialog__btn`), so in the side panel's default width they wrap
+   below the text instead of squeezing it to a word per line; a wider panel keeps one row. */
 .db-panel__agent-notice {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   margin: 0 0 8px;
   padding: 6px 8px;
   border: 1px solid var(--accent, #4c8bf5);
@@ -659,6 +662,8 @@ input.db-dialog__input[type="checkbox"] {
 }
 
 .db-panel__agent-notice > span {
-  flex: 1;
+  flex: 1 1 14em;
   min-width: 0;
+  /* A query line can hold one long token (an identifier, a URL): break it, never overflow. */
+  overflow-wrap: anywhere;
 }
