@@ -4,20 +4,33 @@
 //! Field names are the protobuf-JSON names (`lowerCamelCase`), the ones a response uses; a
 //! request may use either those or the `.proto` names.
 //!
-//! A schema comes from the server, so it may be huge or built to blow up a naive walk (a message
-//! with hundreds of fields of its own type grows as fields^depth). Everything here is bounded by
-//! construction, never cut after the fact: at most [`MAX_METHODS`] methods, [`MAX_MESSAGES`]
-//! messages, [`MAX_FIELDS`] fields each and [`MAX_ENUM_VALUES`] values per enum are described; the
-//! examples of one answer hold at most [`EXAMPLE_NODES`] values ([`EXAMPLE_BYTES`]) together,
-//! nest [`EXAMPLE_DEPTH`] deep, and write `{}` where a message would nest inside itself; the text
-//! stops at [`TEXT_BYTES`] and the data at [`DATA_BYTES`]. Every cut is said, in the text and in
-//! the data.
+//! A schema comes from the server, so it may be huge or built to blow up a naive walk: a message
+//! with hundreds of fields of its own type grows as fields^depth, and a name declared once (an
+//! enum's values, a oneof, a package) is repeated in every field that refers to it. Everything
+//! here is bounded by construction, never cut after the fact:
+//! * the walk visits at most [`MAX_VISITS`] schema nodes (messages, fields, enum values), and
+//!   describes at most [`MAX_METHODS`] methods, [`MAX_MESSAGES`] messages, [`MAX_FIELDS`] fields
+//!   each and [`MAX_ENUM_VALUES`] values per enum;
+//! * a server-chosen name is written whole up to [`NAME_BYTES`] and cut past it, and a field's
+//!   type lists about [`VALUES_BYTES`] of its enum's values, so no line of text and no entry of
+//!   data is more than a few KiB, whatever the schema;
+//! * the examples of one answer hold at most [`EXAMPLE_NODES`] values ([`EXAMPLE_BYTES`])
+//!   together, nest [`EXAMPLE_DEPTH`] deep, and write `{}` where a message would nest inside
+//!   itself;
+//! * the text ([`TEXT_BYTES`]) and the data ([`DATA_BYTES`]) are checked line by line and entry
+//!   by entry — each field on its own — before the next is built, so the work stops where the
+//!   budgets do.
+//!
+//! Every cut is said, in the text and in the data.
 
-use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::borrow::Cow;
+use std::collections::{HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
+use std::io;
 
 use prost_reflect::{
     DescriptorPool, EnumDescriptor, FieldDescriptor, Kind, MessageDescriptor, MethodDescriptor,
-    ServiceDescriptor,
+    OneofDescriptor, ServiceDescriptor,
 };
 use serde_json::{json, Map, Value};
 
@@ -29,6 +42,13 @@ pub const MAX_FIELDS: usize = 200;
 pub const MAX_ENUM_VALUES: usize = 20;
 /// Methods described in one answer (a service's).
 pub const MAX_METHODS: usize = 100;
+/// Schema nodes (messages, fields, enum values, example values) one answer visits, whatever the
+/// schema. Lower than what the counts above allow together, so it is the bound that holds.
+pub const MAX_VISITS: usize = 6_000;
+/// The longest server-chosen name written whole; a longer one is cut and ends in `…`.
+pub const NAME_BYTES: usize = 256;
+/// Bytes (about) of enum values written into one field's type.
+pub const VALUES_BYTES: usize = 1024;
 /// How deep an example nests messages.
 pub const EXAMPLE_DEPTH: usize = 4;
 /// Values in all the example JSON of one answer together.
@@ -39,8 +59,10 @@ pub const EXAMPLE_BYTES: usize = 32 * 1024;
 pub const TEXT_BYTES: usize = 64 * 1024;
 /// The description's data, serialized.
 pub const DATA_BYTES: usize = 256 * 1024;
-/// Room kept in a text budget for the closing note that says it was cut.
-const NOTE_ROOM: usize = 512;
+/// Room kept in a data budget for an answer's own keys and flags, around the entries it admits.
+pub const ENVELOPE_ROOM: usize = 512;
+/// Room kept in a text budget for the closing notes that say what was cut.
+const NOTE_ROOM: usize = 1024;
 /// Names listed in a note (messages that nest inside themselves).
 const NOTE_NAMES: usize = 5;
 
@@ -80,11 +102,11 @@ fn find_method(pool: &DescriptorPool, service: &str, method: &str) -> Option<Met
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Budgets: text and data kept within a size, each cut said.
+// Budgets: text and data kept within a size, names within a length, the walk within a count.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Lines of text kept within a byte budget. Once a line does not fit, nothing more is kept and
-/// [`Lines::is_cut`] says so; callers check it before building more, so the work stops too.
+/// [`Lines::is_cut`] says so; callers check it before building a line, so the work stops too.
 #[derive(Debug)]
 pub struct Lines {
     lines: Vec<String>,
@@ -93,7 +115,7 @@ pub struct Lines {
 }
 
 impl Lines {
-    /// Room for `bytes` of text in all, a closing note included.
+    /// Room for `bytes` of text in all, the closing notes included.
     pub fn new(bytes: usize) -> Self {
         Self {
             lines: Vec::new(),
@@ -104,8 +126,11 @@ impl Lines {
 
     /// Keep `line` if it fits; false once one did not.
     pub fn push(&mut self, line: impl Into<String>) -> bool {
+        if self.cut {
+            return false;
+        }
         let line = line.into();
-        if self.cut || line.len() + 1 > self.left {
+        if line.len() + 1 > self.left {
             self.cut = true;
             return false;
         }
@@ -119,11 +144,16 @@ impl Lines {
         self.cut
     }
 
-    /// The kept lines, then `note` when something was cut (the room for it was kept).
-    pub fn finish(mut self, note: impl FnOnce() -> String) -> String {
-        if self.cut {
-            let note = note();
-            let (note, _) = crate::ws::cut_text(&note, NOTE_ROOM - 1);
+    /// The kept lines, then the closing notes `closing` gives — told whether a line was left out
+    /// — in the room kept for them.
+    pub fn finish(mut self, closing: impl FnOnce(bool) -> Vec<String>) -> String {
+        let mut room = NOTE_ROOM;
+        for note in closing(self.cut) {
+            if room < 2 {
+                break;
+            }
+            let (note, _) = crate::ws::cut_text(&note, room - 1);
+            room -= note.len() + 1;
             self.lines.push(note.to_string());
         }
         self.lines.join("\n")
@@ -146,14 +176,21 @@ impl DataBudget {
         }
     }
 
-    /// Whether `value` fits, spending its size (and a separator's) when it does.
+    /// Whether `value` fits, spending its size (and a separator's) when it does. It is measured
+    /// as it is written out, and the measuring stops as soon as it is past what is left.
     pub fn admit(&mut self, value: &Value) -> bool {
-        let size = serde_json::to_string(value).map_or(usize::MAX, |s| s.len() + 1);
-        if self.cut || size > self.left {
+        if self.cut {
+            return false;
+        }
+        let mut counter = Counter {
+            bytes: 0,
+            max: self.left,
+        };
+        if serde_json::to_writer(&mut counter, value).is_err() || counter.bytes >= self.left {
             self.cut = true;
             return false;
         }
-        self.left -= size;
+        self.left -= counter.bytes + 1;
         true
     }
 
@@ -163,25 +200,144 @@ impl DataBudget {
     }
 }
 
+/// Counts the bytes written to it, and refuses them once they pass `max`.
+struct Counter {
+    bytes: usize,
+    max: usize,
+}
+
+impl io::Write for Counter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.bytes += buf.len();
+        if self.bytes > self.max {
+            return Err(io::Error::other("past the budget"));
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Server-chosen names as they are written into an answer: whole up to [`NAME_BYTES`], cut and
+/// ended with `…` past it. Remembers a cut, and counts the bytes it wrote — what building an
+/// answer cost in names, kept or not.
+#[derive(Debug, Default)]
+pub struct Names {
+    cut: bool,
+    written: usize,
+}
+
+impl Names {
+    /// `name` as written into an answer.
+    pub fn show<'a>(&mut self, name: &'a str) -> Cow<'a, str> {
+        let (head, cut) = crate::ws::cut_text(name, NAME_BYTES);
+        self.written += head.len();
+        if cut {
+            self.cut = true;
+            Cow::Owned(format!("{head}…"))
+        } else {
+            Cow::Borrowed(head)
+        }
+    }
+
+    /// Whether a name was cut.
+    pub fn any_cut(&self) -> bool {
+        self.cut
+    }
+
+    /// Bytes of names written so far.
+    pub fn written(&self) -> usize {
+        self.written
+    }
+}
+
+/// The note for an answer whose names were cut.
+pub fn names_cut_note() -> String {
+    format!(
+        "(Names longer than {NAME_BYTES} bytes are cut and end in …, in the text and in --json.)"
+    )
+}
+
+/// Schema nodes an answer may still visit: once they run out, the walk stops where it is.
+#[derive(Debug)]
+pub struct Visits {
+    left: usize,
+    used: usize,
+    cut: bool,
+}
+
+impl Visits {
+    pub fn new(nodes: usize) -> Self {
+        Self {
+            left: nodes,
+            used: 0,
+            cut: false,
+        }
+    }
+
+    /// Visit one node; false, and nothing more is visited, once they ran out.
+    fn take(&mut self) -> bool {
+        if self.left == 0 {
+            self.cut = true;
+            return false;
+        }
+        self.left -= 1;
+        self.used += 1;
+        true
+    }
+
+    /// Whether the walk ran out of nodes.
+    pub fn is_cut(&self) -> bool {
+        self.cut
+    }
+}
+
+/// What building one answer cost: the schema nodes it visited and the bytes of server-chosen
+/// names it wrote (into the text and the data, kept or not). Both are bounded by the constants
+/// above, whatever the schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cost {
+    pub visits: usize,
+    pub name_bytes: usize,
+}
+
+/// A message as a set member: equal as a descriptor (a pool and an index), hashed by the address
+/// of the one copy of its name the pool keeps — so a server's long name is neither hashed nor
+/// copied, however often the message is met.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Msg(MessageDescriptor);
+
+impl Hash for Msg {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self.0.full_name().as_ptr(), state);
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Names and labels.
+// Names and labels. Every server-chosen name goes through [`Names::show`].
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `pkg.Service/Method`: the form `grpc call` takes.
-pub fn method_path(m: &MethodDescriptor) -> String {
-    format!("{}/{}", m.parent_service().full_name(), m.name())
+pub fn method_path(m: &MethodDescriptor, names: &mut Names) -> String {
+    format!(
+        "{}/{}",
+        names.show(m.parent_service().full_name()),
+        names.show(m.name())
+    )
 }
 
 /// `rpc pkg.Service/Method(pkg.Req) returns (stream pkg.Res)`.
-pub fn signature(m: &MethodDescriptor) -> String {
+pub fn signature(m: &MethodDescriptor, names: &mut Names) -> String {
     let stream = |s: bool| if s { "stream " } else { "" };
     format!(
         "rpc {}({}{}) returns ({}{})",
-        method_path(m),
+        method_path(m, names),
         stream(m.is_client_streaming()),
-        m.input().full_name(),
+        names.show(m.input().full_name()),
         stream(m.is_server_streaming()),
-        m.output().full_name()
+        names.show(m.output().full_name())
     )
 }
 
@@ -191,11 +347,11 @@ pub fn is_unary(m: &MethodDescriptor) -> bool {
 }
 
 /// A method as structured data.
-pub fn method_data(m: &MethodDescriptor) -> Value {
+pub fn method_data(m: &MethodDescriptor, names: &mut Names) -> Value {
     json!({
-        "method": method_path(m),
-        "input": m.input().full_name(),
-        "output": m.output().full_name(),
+        "method": method_path(m, names),
+        "input": names.show(m.input().full_name()),
+        "output": names.show(m.output().full_name()),
         "clientStreaming": m.is_client_streaming(),
         "serverStreaming": m.is_server_streaming(),
     })
@@ -228,8 +384,17 @@ fn well_known(m: &MessageDescriptor) -> Option<(&'static str, Value)> {
     })
 }
 
+/// A map field's key and value fields. A server's schema may mark a message as a map entry
+/// without giving it both, so they are looked up, never assumed.
+fn map_parts(f: &FieldDescriptor) -> Option<(FieldDescriptor, FieldDescriptor)> {
+    match f.kind() {
+        Kind::Message(entry) if f.is_map() => Some((entry.get_field(1)?, entry.get_field(2)?)),
+        _ => None,
+    }
+}
+
 /// A scalar's or a reference's name, with the JSON form when it is not the obvious one.
-fn kind_label(kind: &Kind) -> String {
+fn kind_label(kind: &Kind, names: &mut Names) -> String {
     match kind {
         Kind::Double => "double".into(),
         Kind::Float => "float".into(),
@@ -246,75 +411,94 @@ fn kind_label(kind: &Kind) -> String {
         Kind::Bool => "bool".into(),
         Kind::String => "string".into(),
         Kind::Bytes => "bytes (JSON: a base64 string)".into(),
-        Kind::Enum(e) => format!("enum {} ({})", e.full_name(), enum_values(e)),
+        Kind::Enum(e) => format!(
+            "enum {} ({})",
+            names.show(e.full_name()),
+            enum_values(e, names, VALUES_BYTES)
+        ),
         Kind::Message(m) => match well_known(m) {
             Some((form, _)) => format!("{} (JSON: {form})", m.full_name()),
-            None => m.full_name().to_string(),
+            None => names.show(m.full_name()).into_owned(),
         },
     }
 }
 
-/// `A | B | C`, at most [`MAX_ENUM_VALUES`] of them.
-fn enum_values(e: &EnumDescriptor) -> String {
-    let mut shown = e
-        .values()
-        .take(MAX_ENUM_VALUES)
-        .map(|v| v.name().to_string())
-        .collect::<Vec<_>>()
-        .join(" | ");
-    let more = e.values().len().saturating_sub(MAX_ENUM_VALUES);
+/// `A | B | C`: at most [`MAX_ENUM_VALUES`] values and about `max_bytes` of them (the first is
+/// always there), the rest counted.
+fn enum_values(e: &EnumDescriptor, names: &mut Names, max_bytes: usize) -> String {
+    let mut shown = String::new();
+    let mut count = 0;
+    for v in e.values().take(MAX_ENUM_VALUES) {
+        if count > 0 {
+            if shown.len() + v.name().len().min(NAME_BYTES) > max_bytes {
+                break;
+            }
+            shown.push_str(" | ");
+        }
+        shown.push_str(&names.show(v.name()));
+        count += 1;
+    }
+    let more = e.values().len().saturating_sub(count);
     if more > 0 {
         shown.push_str(&format!(" | …{more} more"));
     }
     shown
 }
 
+/// Whether a field holds a list: a repeated field, or a map whose entry lacks its fields
+/// ([`map_parts`]) and so is the list of entries it is on the wire.
+fn is_repeated(f: &FieldDescriptor) -> bool {
+    f.is_list() || f.is_map()
+}
+
 /// `repeated X`, `map<K, V>` or `X`.
-pub fn type_label(f: &FieldDescriptor) -> String {
-    if let (true, Kind::Message(entry)) = (f.is_map(), f.kind()) {
+fn type_label(f: &FieldDescriptor, names: &mut Names) -> String {
+    if let Some((key, value)) = map_parts(f) {
         return format!(
             "map<{}, {}>",
-            kind_label(&entry.map_entry_key_field().kind()),
-            kind_label(&entry.map_entry_value_field().kind())
+            kind_label(&key.kind(), names),
+            kind_label(&value.kind(), names)
         );
     }
-    if f.is_list() {
-        format!("repeated {}", kind_label(&f.kind()))
+    if is_repeated(f) {
+        format!("repeated {}", kind_label(&f.kind(), names))
     } else {
-        kind_label(&f.kind())
+        kind_label(&f.kind(), names)
     }
 }
 
 /// The real oneof a field belongs to (not proto3 `optional`'s synthetic one).
-fn oneof(f: &FieldDescriptor) -> Option<String> {
-    f.containing_oneof()
-        .filter(|o| !o.is_synthetic())
-        .map(|o| o.name().to_string())
+fn real_oneof(f: &FieldDescriptor) -> Option<OneofDescriptor> {
+    f.containing_oneof().filter(|o| !o.is_synthetic())
 }
 
 /// One field line: `jsonName: type  [notes]`.
-fn field_line(f: &FieldDescriptor) -> String {
+fn field_line(f: &FieldDescriptor, names: &mut Names) -> String {
     let mut notes = Vec::new();
     if f.json_name() != f.name() {
-        notes.push(format!("proto name {}", f.name()));
+        notes.push(format!("proto name {}", names.show(f.name())));
     }
-    if let Some(o) = oneof(f) {
-        notes.push(format!("oneof {o}: set at most one"));
+    if let Some(o) = real_oneof(f) {
+        notes.push(format!("oneof {}: set at most one", names.show(o.name())));
     }
     let notes = if notes.is_empty() {
         String::new()
     } else {
         format!("  [{}]", notes.join("; "))
     };
-    format!("  {}: {}{notes}", f.json_name(), type_label(f))
+    format!(
+        "  {}: {}{notes}",
+        names.show(f.json_name()),
+        type_label(f, names)
+    )
 }
 
-fn field_data(f: &FieldDescriptor) -> Value {
+fn field_data(f: &FieldDescriptor, names: &mut Names) -> Value {
     json!({
-        "name": f.json_name(),
-        "protoName": f.name(),
-        "type": type_label(f),
-        "oneof": oneof(f),
+        "name": names.show(f.json_name()),
+        "protoName": names.show(f.name()),
+        "type": type_label(f, names),
+        "oneof": real_oneof(f).map(|o| names.show(o.name()).into_owned()),
     })
 }
 
@@ -331,8 +515,10 @@ pub struct Examples {
     bytes: usize,
     /// The budget ran out: some example stops short.
     pub cut: bool,
-    /// Messages written as `{}` where they would nest inside themselves.
-    pub recursive: BTreeSet<String>,
+    /// The first [`NOTE_NAMES`] messages written as `{}` where they would nest inside themselves.
+    recursive: Vec<MessageDescriptor>,
+    /// Every such message, counted once.
+    recursive_seen: HashSet<Msg>,
 }
 
 impl Default for Examples {
@@ -347,13 +533,15 @@ impl Examples {
             nodes,
             bytes,
             cut: false,
-            recursive: BTreeSet::new(),
+            recursive: Vec::new(),
+            recursive_seen: HashSet::new(),
         }
     }
 
-    /// Spend one value of about `bytes`; false, and nothing more is spent, once that is too much.
-    fn spend(&mut self, bytes: usize) -> bool {
-        if self.cut || self.nodes == 0 || bytes > self.bytes {
+    /// Spend one value of about `bytes`, and a visit; false, and nothing more is spent, once
+    /// either is too much.
+    fn spend(&mut self, visits: &mut Visits, bytes: usize) -> bool {
+        if self.cut || self.nodes == 0 || bytes > self.bytes || !visits.take() {
             self.cut = true;
             return false;
         }
@@ -365,50 +553,59 @@ impl Examples {
     /// An example value for `message`: every field at a placeholder value, the first member of
     /// each oneof only (setting two is an error), nested messages down to [`EXAMPLE_DEPTH`]
     /// levels, `{}` where a message would nest inside itself or the budget ran out.
-    pub fn example(&mut self, message: &MessageDescriptor) -> Value {
-        self.message(message, EXAMPLE_DEPTH, &mut Vec::new())
+    pub fn example(&mut self, visits: &mut Visits, message: &MessageDescriptor) -> Value {
+        self.message(visits, message, EXAMPLE_DEPTH, &mut Vec::new())
     }
 
     fn message(
         &mut self,
+        visits: &mut Visits,
         message: &MessageDescriptor,
         depth: usize,
-        path: &mut Vec<String>,
+        path: &mut Vec<MessageDescriptor>,
     ) -> Value {
         if let Some((_, value)) = well_known(message) {
             return value;
         }
         let mut map = Map::new();
-        let name = message.full_name();
-        if path.iter().any(|p| p == name) {
-            self.recursive.insert(name.to_string());
+        if path.contains(message) {
+            if self.recursive_seen.insert(Msg(message.clone())) && self.recursive.len() < NOTE_NAMES
+            {
+                self.recursive.push(message.clone());
+            }
             return Value::Object(map);
         }
         if depth == 0 {
             return Value::Object(map);
         }
-        path.push(name.to_string());
-        let mut oneofs = HashSet::new();
+        path.push(message.clone());
         for f in message.fields().take(MAX_FIELDS) {
-            if let Some(o) = oneof(&f) {
-                if !oneofs.insert(o) {
+            // A oneof is written as its first member.
+            if let Some(o) = real_oneof(&f) {
+                if o.fields().next().as_ref() != Some(&f) {
                     continue;
                 }
             }
             // The key with its quotes, colon and comma, and room for a scalar or a wrapper.
-            if !self.spend(f.json_name().len() + 16) {
+            if !self.spend(visits, f.json_name().len() + 16) {
                 break;
             }
-            let value = self.field(&f, depth - 1, path);
+            let value = self.field(visits, &f, depth - 1, path);
             map.insert(f.json_name().to_string(), value);
         }
         path.pop();
         Value::Object(map)
     }
 
-    fn field(&mut self, f: &FieldDescriptor, depth: usize, path: &mut Vec<String>) -> Value {
-        if let (true, Kind::Message(entry)) = (f.is_map(), f.kind()) {
-            let key = match entry.map_entry_key_field().kind() {
+    fn field(
+        &mut self,
+        visits: &mut Visits,
+        f: &FieldDescriptor,
+        depth: usize,
+        path: &mut Vec<MessageDescriptor>,
+    ) -> Value {
+        if let Some((key, value)) = map_parts(f) {
+            let key = match key.kind() {
                 Kind::String => "key",
                 Kind::Bool => "true",
                 _ => "0",
@@ -416,19 +613,25 @@ impl Examples {
             let mut m = Map::new();
             m.insert(
                 key.to_string(),
-                self.kind(&entry.map_entry_value_field().kind(), depth, path),
+                self.kind(visits, &value.kind(), depth, path),
             );
             return Value::Object(m);
         }
-        let one = self.kind(&f.kind(), depth, path);
-        if f.is_list() {
+        let one = self.kind(visits, &f.kind(), depth, path);
+        if is_repeated(f) {
             json!([one])
         } else {
             one
         }
     }
 
-    fn kind(&mut self, kind: &Kind, depth: usize, path: &mut Vec<String>) -> Value {
+    fn kind(
+        &mut self,
+        visits: &mut Visits,
+        kind: &Kind,
+        depth: usize,
+        path: &mut Vec<MessageDescriptor>,
+    ) -> Value {
         match kind {
             Kind::Double | Kind::Float => json!(0.0),
             Kind::Int32 | Kind::Sint32 | Kind::Sfixed32 | Kind::Uint32 | Kind::Fixed32 => json!(0),
@@ -439,25 +642,29 @@ impl Examples {
             Kind::String | Kind::Bytes => json!(""),
             // The first value's name, or its number when the name is more than the budget has.
             Kind::Enum(e) => match e.values().next() {
-                Some(v) if self.spend(v.name().len() + 2) => json!(v.name()),
+                Some(v) if self.spend(visits, v.name().len() + 2) => json!(v.name()),
                 Some(v) => json!(v.number()),
                 None => json!(0),
             },
-            Kind::Message(m) => self.message(m, depth, path),
+            Kind::Message(m) => self.message(visits, m, depth, path),
         }
     }
 
+    /// Messages written as `{}` where they would nest inside themselves, counted once each.
+    fn recursive_count(&self) -> usize {
+        self.recursive_seen.len()
+    }
+
     /// What the examples left out, as sentences for the text.
-    fn notes(&self) -> Vec<String> {
+    fn notes(&self, names: &mut Names) -> Vec<String> {
         let mut notes = Vec::new();
         if !self.recursive.is_empty() {
-            let names: Vec<&str> = self
+            let shown: Vec<String> = self
                 .recursive
                 .iter()
-                .take(NOTE_NAMES)
-                .map(String::as_str)
+                .map(|m| names.show(m.full_name()).into_owned())
                 .collect();
-            let more = self.recursive.len().saturating_sub(NOTE_NAMES);
+            let more = self.recursive_count().saturating_sub(shown.len());
             let more = if more > 0 {
                 format!(" and {more} more")
             } else {
@@ -466,8 +673,8 @@ impl Examples {
             notes.push(format!(
                 "(Recursive: {}{more} {}; the example writes {{}} where a message would nest \
                  inside itself.)",
-                names.join(", "),
-                if self.recursive.len() == 1 {
+                shown.join(", "),
+                if self.recursive_count() == 1 {
                     "contains itself"
                 } else {
                     "contain themselves"
@@ -489,36 +696,26 @@ impl Examples {
 // Describing.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The messages to spell out, starting from `roots`, breadth first: each one's message-typed
-/// fields after it, well-known types and map entries left out (their form is in the field
-/// line). Returns them and whether [`MAX_MESSAGES`] cut the walk short.
-fn reachable(roots: Vec<MessageDescriptor>) -> (Vec<MessageDescriptor>, bool) {
-    fn push(queue: &mut VecDeque<MessageDescriptor>, kind: Kind) {
-        if let Kind::Message(m) = kind {
+/// Queue the message a field of `kind` refers to, to be spelled out once: not a well-known type
+/// (its form is in the field line), and for a map, its value type (nobody writes the entry).
+fn enqueue(
+    queue: &mut VecDeque<MessageDescriptor>,
+    queued: &mut HashSet<Msg>,
+    f: &FieldDescriptor,
+) {
+    let kind = match map_parts(f) {
+        Some((_, value)) => value.kind(),
+        None => f.kind(),
+    };
+    enqueue_kind(queue, queued, kind);
+}
+
+fn enqueue_kind(queue: &mut VecDeque<MessageDescriptor>, queued: &mut HashSet<Msg>, kind: Kind) {
+    if let Kind::Message(m) = kind {
+        if well_known(&m).is_none() && queued.insert(Msg(m.clone())) {
             queue.push_back(m);
         }
     }
-    let mut queue: VecDeque<MessageDescriptor> = roots.into();
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    while let Some(m) = queue.pop_front() {
-        if well_known(&m).is_some() || !seen.insert(m.full_name().to_string()) {
-            continue;
-        }
-        if m.is_map_entry() {
-            // A map's entry is not a message anyone writes; its value type may be.
-            push(&mut queue, m.map_entry_value_field().kind());
-            continue;
-        }
-        if out.len() == MAX_MESSAGES {
-            return (out, true);
-        }
-        for f in m.fields().take(MAX_FIELDS) {
-            push(&mut queue, f.kind());
-        }
-        out.push(m);
-    }
-    (out, false)
 }
 
 /// The note that closes a text cut at [`TEXT_BYTES`], saying whether the data was cut as well.
@@ -535,84 +732,137 @@ fn text_cut_note(data_cut: bool) -> String {
     )
 }
 
-/// An enum: its values, in order.
-fn describe_enum(e: &EnumDescriptor) -> (String, Value) {
-    let mut text = Lines::new(TEXT_BYTES);
-    text.push(format!("enum {} {{ {} }}", e.full_name(), enum_values(e)));
-    text.push("In JSON, use the value's name as a string.");
-    let mut budget = DataBudget::new(DATA_BYTES);
-    let mut values = Vec::new();
-    for v in e.values().take(MAX_ENUM_VALUES) {
-        let value = json!({"name": v.name(), "number": v.number()});
-        if !budget.admit(&value) {
-            break;
-        }
-        values.push(value);
-    }
-    let more = e.values().len().saturating_sub(values.len());
-    (
-        text.finish(|| text_cut_note(budget.is_cut())),
-        json!({
-            "enum": e.full_name(),
-            "values": values,
-            "moreValues": more,
-            "truncated": budget.is_cut(),
-        }),
+/// The note for an answer whose walk ran out of [`MAX_VISITS`].
+fn walk_cut_note() -> String {
+    format!(
+        "(The schema is too large to walk whole: this description stopped after {MAX_VISITS} \
+         schema nodes; describe one method or message by name.)"
     )
+}
+
+/// The closing notes of a description: the text's cut, the walk's, the names'.
+fn closing_notes(text_cut: bool, data_cut: bool, walk_cut: bool, names_cut: bool) -> Vec<String> {
+    let mut notes = Vec::new();
+    if text_cut {
+        notes.push(text_cut_note(data_cut));
+    }
+    if walk_cut {
+        notes.push(walk_cut_note());
+    }
+    if names_cut {
+        notes.push(names_cut_note());
+    }
+    notes
 }
 
 /// The description of what `found` names: text for the agent, and the same as data, both
 /// bounded (see the module docs) and each saying what it left out.
 pub fn describe(found: &Found) -> (String, Value) {
+    let (text, data, _) = describe_costed(found);
+    (text, data)
+}
+
+/// [`describe`], and what it cost to build.
+pub fn describe_costed(found: &Found) -> (String, Value, Cost) {
+    let mut names = Names::default();
+    let mut visits = Visits::new(MAX_VISITS);
+    let (text, data) = match found {
+        Found::Enum(e) => describe_enum(e, &mut names, &mut visits),
+        _ => describe_messages(found, &mut names, &mut visits),
+    };
+    let cost = Cost {
+        visits: visits.used,
+        name_bytes: names.written(),
+    };
+    (text, data, cost)
+}
+
+/// An enum: its values, in order.
+fn describe_enum(e: &EnumDescriptor, names: &mut Names, visits: &mut Visits) -> (String, Value) {
+    let mut text = Lines::new(TEXT_BYTES);
+    text.push(format!(
+        "enum {} {{ {} }}",
+        names.show(e.full_name()),
+        enum_values(e, names, MAX_ENUM_VALUES * (NAME_BYTES + 8))
+    ));
+    text.push("In JSON, use the value's name as a string.");
+    let mut data = DataBudget::new(DATA_BYTES - ENVELOPE_ROOM);
+    let name = names.show(e.full_name()).into_owned();
+    data.admit(&json!(name));
+    let mut values = Vec::new();
+    for v in e.values().take(MAX_ENUM_VALUES) {
+        if data.is_cut() || !visits.take() {
+            break;
+        }
+        let value = json!({"name": names.show(v.name()), "number": v.number()});
+        if !data.admit(&value) {
+            break;
+        }
+        values.push(value);
+    }
+    let more = e.values().len().saturating_sub(values.len());
+    let (data_cut, walk_cut, names_cut) = (data.is_cut(), visits.is_cut(), names.any_cut());
+    (
+        text.finish(|text_cut| closing_notes(text_cut, data_cut, walk_cut, names_cut)),
+        json!({
+            "enum": name,
+            "values": values,
+            "moreValues": more,
+            "namesCut": names_cut,
+            "walkCut": walk_cut,
+            "truncated": data_cut || walk_cut || names_cut,
+        }),
+    )
+}
+
+/// A service, a method or a message: the methods, then the messages they take and return,
+/// breadth first, each checked against the budgets before it is built.
+fn describe_messages(found: &Found, names: &mut Names, visits: &mut Visits) -> (String, Value) {
     let (methods, total_methods): (Vec<MethodDescriptor>, usize) = match found {
-        Found::Enum(e) => return describe_enum(e),
         Found::Service(s) => (s.methods().take(MAX_METHODS).collect(), s.methods().len()),
         Found::Method(m) => (vec![m.clone()], 1),
-        Found::Message(_) => (Vec::new(), 0),
+        Found::Message(_) | Found::Enum(_) => (Vec::new(), 0),
     };
     let more_methods = total_methods - methods.len();
-    let roots: Vec<MessageDescriptor> = match found {
-        Found::Message(m) => vec![m.clone()],
-        _ => methods
-            .iter()
-            .flat_map(|m| [m.input(), m.output()])
-            .collect(),
-    };
 
     // Each example is built once, from one budget, and used for the text and the data alike.
-    let mut budget = Examples::default();
-    let examples: Vec<(String, Value)> = match found {
-        Found::Message(m) => vec![(m.full_name().to_string(), budget.example(m))],
-        _ => methods
-            .iter()
-            .filter(|m| is_unary(m))
-            .map(|m| (method_path(m), budget.example(&m.input())))
-            .collect(),
-    };
+    let mut examples = Examples::default();
+    let mut built: Vec<(String, Value)> = Vec::new();
+    match found {
+        Found::Message(m) => {
+            let example = examples.example(visits, m);
+            built.push((names.show(m.full_name()).into_owned(), example));
+        }
+        _ => {
+            for m in methods.iter().filter(|m| is_unary(m)) {
+                let example = examples.example(visits, &m.input());
+                built.push((method_path(m, names), example));
+            }
+        }
+    }
 
     // The data: the methods (with their examples) first, as what an agent calls; then the
     // messages, while the budget lasts.
-    let mut data_budget = DataBudget::new(DATA_BYTES);
-    let mut unary_examples = examples.iter().map(|(_, v)| v);
-    let mut method_data_out = Vec::new();
+    let mut data = DataBudget::new(DATA_BYTES - ENVELOPE_ROOM);
+    let mut unary_examples = built.iter().map(|(_, v)| v);
+    let mut method_out = Vec::new();
     for m in &methods {
-        let mut d = method_data(m);
+        if data.is_cut() {
+            break;
+        }
+        let mut d = method_data(m, names);
         if is_unary(m) {
             if let Some(example) = unary_examples.next() {
                 d["requestExample"] = example.clone();
             }
         }
-        if !data_budget.admit(&d) {
+        if !data.admit(&d) {
             break;
         }
-        method_data_out.push(d);
+        method_out.push(d);
     }
-    let message_example = match found {
-        Found::Message(_) => examples
-            .first()
-            .map(|(_, v)| v.clone())
-            .filter(|v| data_budget.admit(v))
-            .unwrap_or(Value::Null),
+    let message_example = match (found, built.first()) {
+        (Found::Message(_), Some((_, v))) if data.admit(v) => v.clone(),
         _ => Value::Null,
     };
 
@@ -620,15 +870,16 @@ pub fn describe(found: &Found) -> (String, Value) {
     if let Found::Service(s) = found {
         text.push(format!(
             "service {} ({} method{})",
-            s.full_name(),
+            names.show(s.full_name()),
             total_methods,
             if total_methods == 1 { "" } else { "s" }
         ));
     }
     for m in &methods {
-        if !text.push(signature(m)) {
+        if text.is_cut() {
             break;
         }
+        text.push(signature(m, names));
     }
     if more_methods > 0 {
         text.push(format!(
@@ -640,38 +891,70 @@ pub fn describe(found: &Found) -> (String, Value) {
         text.push("(`grpc call` makes unary calls only; a stream method cannot be called.)");
     }
 
-    let (messages, messages_cut) = reachable(roots);
+    // The messages, breadth first from what the methods take and return (or the message named),
+    // each spelled out once. The walk is done as the messages are written, so it stops with them.
+    let mut queue = VecDeque::new();
+    let mut queued = HashSet::new();
+    match found {
+        Found::Message(m) => enqueue_kind(&mut queue, &mut queued, Kind::Message(m.clone())),
+        _ => {
+            for m in &methods {
+                enqueue_kind(&mut queue, &mut queued, Kind::Message(m.input()));
+                enqueue_kind(&mut queue, &mut queued, Kind::Message(m.output()));
+            }
+        }
+    }
+    let mut listed = 0;
+    let mut messages_cut = false;
     let mut message_data = Vec::new();
-    for m in &messages {
-        if text.is_cut() && data_budget.is_cut() {
+    while let Some(m) = queue.pop_front() {
+        if text.is_cut() && data.is_cut() {
             break;
         }
+        if listed == MAX_MESSAGES {
+            messages_cut = true;
+            break;
+        }
+        if !visits.take() {
+            break;
+        }
+        listed += 1;
         let more = m.fields().len().saturating_sub(MAX_FIELDS);
-        text.push(String::new());
-        text.push(format!("message {} {{", m.full_name()));
+        let name = names.show(m.full_name()).into_owned();
+        if !text.is_cut() {
+            text.push(String::new());
+            text.push(format!("message {name} {{"));
+        }
+        // The message's entry is admitted before any field is built, then each field on its
+        // own: nothing is built past the budget.
+        let in_data = data.admit(&json!({"name": name, "fields": [], "moreFields": more}));
         let mut fields = Vec::new();
         for f in m.fields().take(MAX_FIELDS) {
-            if text.is_cut() && data_budget.is_cut() {
+            if text.is_cut() && (!in_data || data.is_cut()) {
+                break;
+            }
+            if !visits.take() {
                 break;
             }
             if !text.is_cut() {
-                text.push(field_line(&f));
+                text.push(field_line(&f, names));
             }
-            if !data_budget.is_cut() {
-                fields.push(field_data(&f));
+            if in_data && !data.is_cut() {
+                let d = field_data(&f, names);
+                if data.admit(&d) {
+                    fields.push(d);
+                }
             }
+            enqueue(&mut queue, &mut queued, &f);
         }
-        if more > 0 {
+        if more > 0 && !text.is_cut() {
             text.push(format!("  …{more} more fields not listed"));
         }
-        text.push("}");
-        let item = json!({
-            "name": m.full_name(),
-            "fields": fields,
-            "moreFields": more,
-        });
-        if data_budget.admit(&item) {
-            message_data.push(item);
+        if !text.is_cut() {
+            text.push("}");
+        }
+        if in_data {
+            message_data.push(json!({"name": name, "fields": fields, "moreFields": more}));
         }
     }
     if messages_cut {
@@ -682,36 +965,52 @@ pub fn describe(found: &Found) -> (String, Value) {
         ));
     }
 
-    for (name, value) in &examples {
+    for (name, value) in &built {
+        if text.is_cut() {
+            break;
+        }
         text.push(String::new());
         text.push(format!(
             "Example JSON for {name} (every field is optional; drop what you do not need):"
         ));
         text.push(value.to_string());
     }
-    let notes = budget.notes();
-    if !notes.is_empty() {
-        text.push(String::new());
-        for note in notes {
-            text.push(note);
+    if !text.is_cut() {
+        let notes = examples.notes(names);
+        if !notes.is_empty() {
+            text.push(String::new());
+            for note in notes {
+                text.push(note);
+            }
         }
     }
+    let mut recursive = Vec::new();
+    for m in &examples.recursive {
+        let name = json!(names.show(m.full_name()));
+        if !data.admit(&name) {
+            break;
+        }
+        recursive.push(name);
+    }
 
-    let data = json!({
-        "methods": method_data_out,
+    let (data_cut, walk_cut, names_cut) = (data.is_cut(), visits.is_cut(), names.any_cut());
+    let json = json!({
+        "methods": method_out,
         "moreMethods": more_methods,
         "messages": message_data,
         "messagesCut": messages_cut,
         "example": message_example,
-        "exampleCut": budget.cut,
-        "recursive": budget.recursive.iter().take(NOTE_NAMES).collect::<Vec<_>>(),
-        "truncated": data_budget.is_cut(),
+        "exampleCut": examples.cut,
+        "recursive": recursive,
+        "moreRecursive": examples.recursive_count() - recursive.len(),
+        "namesCut": names_cut,
+        "walkCut": walk_cut,
+        "truncated": data_cut || walk_cut || names_cut,
     });
-    let data_cut = data_budget.is_cut();
     (
-        text.finish(|| text_cut_note(data_cut))
+        text.finish(|text_cut| closing_notes(text_cut, data_cut, walk_cut, names_cut))
             .trim_start()
             .to_string(),
-        data,
+        json,
     )
 }

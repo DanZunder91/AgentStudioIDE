@@ -1103,7 +1103,7 @@ fn a_services_listing_marks_streaming_and_undescribed_services_and_its_cut() {
         "test.v1.Echo".to_string(),
         "grpc.reflection.v1.ServerReflection".to_string(),
     ];
-    let r = services_report("h:1", true, &names, &p);
+    let r = services_report("h:1", true, &names, &p, None);
     assert_eq!(
         r.message.lines().take(5).collect::<Vec<_>>(),
         [
@@ -1125,7 +1125,7 @@ fn a_services_listing_marks_streaming_and_undescribed_services_and_its_cut() {
     assert_eq!(r.data["truncated"], false);
 
     let many: Vec<String> = (0..MAX_SERVICES + 1).map(|i| format!("s.S{i}")).collect();
-    let r = services_report("h:1", false, &many, &p);
+    let r = services_report("h:1", false, &many, &p, None);
     assert!(r.message.starts_with("201 services at h:1 (TLS):"));
     assert!(r
         .message
@@ -1133,7 +1133,7 @@ fn a_services_listing_marks_streaming_and_undescribed_services_and_its_cut() {
     assert_eq!(r.data["services"].as_array().unwrap().len(), MAX_SERVICES);
     assert_eq!(r.data["truncated"], true);
 
-    let r = services_report("h:1", true, &[], &p);
+    let r = services_report("h:1", true, &[], &p, None);
     assert_eq!(r.message, "0 services at h:1 (plaintext):\n  (none listed)");
 }
 
@@ -1226,11 +1226,10 @@ fn bomb_pool(width: i32, methods: usize) -> DescriptorPool {
 fn a_message_that_contains_itself_many_times_is_described_quickly_and_small() {
     let p = bomb_pool(200, 1);
     let pool = p.clone();
-    let (text, data) = within(Duration::from_secs(20), move || {
-        shape::describe(&shape::resolve(&pool, "bomb.Svc/M0").unwrap())
+    let (text, data, cost) = within(Duration::from_secs(20), move || {
+        shape::describe_costed(&shape::resolve(&pool, "bomb.Svc/M0").unwrap())
     });
-    assert!(text.len() <= shape::TEXT_BYTES, "{}", text.len());
-    assert!(data_bytes(&data) <= shape::DATA_BYTES + 1024);
+    assert_bounded(&text, &data, cost);
     let example = &data["methods"][0]["requestExample"];
     assert_eq!(example["n1"], json!({}), "{{}} where Node would nest");
     assert_eq!(example["n199"], json!({}));
@@ -1256,9 +1255,10 @@ fn a_message_that_contains_itself_many_times_is_described_quickly_and_small() {
 #[test]
 fn a_wide_tree_of_distinct_messages_spends_one_example_budget_and_says_so() {
     let p = bomb_pool(200, 1);
-    let (text, data) = within(Duration::from_secs(20), move || {
-        shape::describe(&shape::resolve(&p, "bomb.L0").unwrap())
+    let (text, data, cost) = within(Duration::from_secs(20), move || {
+        shape::describe_costed(&shape::resolve(&p, "bomb.L0").unwrap())
     });
+    assert_bounded(&text, &data, cost);
     let example = &data["example"];
     assert!(example.is_object());
     assert!(
@@ -1272,7 +1272,7 @@ fn a_wide_tree_of_distinct_messages_spends_one_example_budget_and_says_so() {
         "(The example JSON is cut short: one answer's examples hold at most 2000 values."
     ));
     assert!(text.len() <= shape::TEXT_BYTES, "{}", text.len());
-    assert!(data_bytes(&data) <= shape::DATA_BYTES + 1024);
+    assert!(data_bytes(&data) <= shape::DATA_BYTES);
 }
 
 /// A service with more methods than one answer describes: at most [`shape::MAX_METHODS`], the
@@ -1280,9 +1280,10 @@ fn a_wide_tree_of_distinct_messages_spends_one_example_budget_and_says_so() {
 #[test]
 fn a_service_with_many_methods_describes_a_bounded_number_on_one_budget() {
     let p = bomb_pool(200, shape::MAX_METHODS + 50);
-    let (text, data) = within(Duration::from_secs(20), move || {
-        shape::describe(&shape::resolve(&p, "bomb.Svc").unwrap())
+    let (text, data, cost) = within(Duration::from_secs(20), move || {
+        shape::describe_costed(&shape::resolve(&p, "bomb.Svc").unwrap())
     });
+    assert_bounded(&text, &data, cost);
     assert!(
         text.starts_with("service bomb.Svc (150 methods)\n"),
         "{text}"
@@ -1295,32 +1296,68 @@ fn a_service_with_many_methods_describes_a_bounded_number_on_one_budget() {
     assert!(spent <= shape::EXAMPLE_NODES, "{spent}");
     assert_eq!(data["exampleCut"], true);
     assert!(text.len() <= shape::TEXT_BYTES, "{}", text.len());
-    assert!(data_bytes(&data) <= shape::DATA_BYTES + 1024);
+    assert!(data_bytes(&data) <= shape::DATA_BYTES);
 }
 
-/// Names long enough that the counts alone would allow megabytes: the text stops at its budget
-/// and says so, and so does the data.
+/// The bound every description keeps, whatever the schema: the text and the data within their
+/// budgets, the walk within its visits, and the bytes of server-chosen names written — kept or not
+/// — within what the answer kept, plus each described method's path (its example's heading) and a
+/// few lines or entries past the budgets. Names built for lines or entries that were never going
+/// to be kept would show here.
+fn assert_bounded(text: &str, data: &Value, cost: shape::Cost) {
+    assert!(text.len() <= shape::TEXT_BYTES, "text {}", text.len());
+    assert!(
+        data_bytes(data) <= shape::DATA_BYTES,
+        "data {}",
+        data_bytes(data)
+    );
+    assert!(cost.visits <= shape::MAX_VISITS, "{cost:?}");
+    let methods = data["methods"].as_array().map_or(0, Vec::len)
+        + data["moreMethods"].as_u64().unwrap_or(0) as usize;
+    let names = text.len()
+        + data_bytes(data)
+        + methods.min(shape::MAX_METHODS) * 2 * shape::NAME_BYTES
+        + 16 * 1024;
+    assert!(cost.name_bytes <= names, "{cost:?}, at most {names}");
+}
+
+/// Five messages of 200 fields with 200-byte names, each field of the next message's type: the
+/// text stops at its budget and the data at its own, both inside a message. Each field is
+/// admitted on its own, so the message the data budget runs out in is there with the fields that
+/// fit, and every cut is said.
 #[test]
-fn long_names_are_cut_at_the_text_and_data_budgets_and_the_cut_is_said() {
-    let long = |n: i32| format!("f{n}_{}", "x".repeat(1500));
+fn long_lists_are_cut_at_the_text_and_data_budgets_field_by_field_and_the_cut_is_said() {
+    let long = |n: i32| format!("f{n}_{}", "x".repeat(200));
+    let messages = (0..5)
+        .map(|i| {
+            let next = format!(".long.W{}", i + 1);
+            message(
+                &format!("W{i}"),
+                (1..=shape::MAX_FIELDS as i32)
+                    .map(|n| {
+                        if i < 4 {
+                            field(&long(n), &long(n), n, Type::Message, Some(&next))
+                        } else {
+                            field(&long(n), &long(n), n, Type::String, None)
+                        }
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
     let file = FileDescriptorProto {
         name: Some("long.proto".into()),
         package: Some("long".into()),
         syntax: Some("proto3".into()),
-        message_type: vec![message(
-            "W",
-            (1..=shape::MAX_FIELDS as i32)
-                .map(|n| field(&long(n), &long(n), n, Type::String, None))
-                .collect(),
-        )],
+        message_type: messages,
         ..Default::default()
     };
     let mut p = DescriptorPool::new();
     p.add_file_descriptor_proto(file).unwrap();
-    let (text, data) = within(Duration::from_secs(20), move || {
-        shape::describe(&shape::resolve(&p, "long.W").unwrap())
+    let (text, data, cost) = within(Duration::from_secs(20), move || {
+        shape::describe_costed(&shape::resolve(&p, "long.W0").unwrap())
     });
-    assert!(text.len() <= shape::TEXT_BYTES, "{}", text.len());
+    assert_bounded(&text, &data, cost);
     assert!(
         text.ends_with(
             "…the description is cut at 64 KiB (--json is cut too); describe one method or \
@@ -1329,9 +1366,342 @@ fn long_names_are_cut_at_the_text_and_data_budgets_and_the_cut_is_said() {
         "{}",
         &text[text.len() - 300..]
     );
-    assert!(data_bytes(&data) <= shape::DATA_BYTES + 1024);
     assert_eq!(data["truncated"], true);
+    assert_eq!(data["namesCut"], false, "no name is over the limit");
     assert_eq!(data["exampleCut"], true);
+    let messages = data["messages"].as_array().unwrap();
+    let (last, whole) = messages.split_last().unwrap();
+    for m in whole {
+        assert_eq!(m["fields"].as_array().unwrap().len(), shape::MAX_FIELDS);
+    }
+    let fit = last["fields"].as_array().unwrap().len();
+    assert!(
+        fit > 0 && fit < shape::MAX_FIELDS,
+        "the budget ran out inside {}: {fit} of its fields fit",
+        last["name"]
+    );
+}
+
+/// A schema built so that names it declares once are repeated in every field that refers to them:
+/// an enum whose 20 values have 64 KiB names (an enum-typed field's type lists its values), a
+/// oneof with a 256 KiB name (each member's line names it), and a 64 KiB package that each
+/// relative type reference spells out in full. Described naively it writes hundreds of megabytes
+/// to answer with a few bytes.
+fn amplifying_pool() -> (DescriptorPool, String) {
+    let package = format!("p{}", "x".repeat(64 * 1024));
+    let fields = (1..=shape::MAX_FIELDS as i32)
+        .map(|n| {
+            let name = format!("f{n}");
+            match n % 3 {
+                0 => field(&name, &name, n, Type::Enum, Some("E")),
+                1 => in_oneof(field(&name, &name, n, Type::String, None), 0),
+                _ => field(&name, &name, n, Type::Message, Some("Leaf")),
+            }
+        })
+        .collect();
+    let mut root = message("Root", fields);
+    root.oneof_decl = vec![OneofDescriptorProto {
+        name: Some(format!("o{}", "y".repeat(256 * 1024))),
+        ..Default::default()
+    }];
+    let file = FileDescriptorProto {
+        name: Some("amp.proto".into()),
+        package: Some(package.clone()),
+        syntax: Some("proto3".into()),
+        message_type: vec![
+            root,
+            message("Leaf", vec![field("s", "s", 1, Type::String, None)]),
+        ],
+        enum_type: vec![EnumDescriptorProto {
+            name: Some("E".into()),
+            value: (0..20)
+                .map(|i| EnumValueDescriptorProto {
+                    name: Some(format!("V{i}_{}", "z".repeat(64 * 1024))),
+                    number: Some(i),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }],
+        service: vec![ServiceDescriptorProto {
+            name: Some("Svc".into()),
+            method: vec![MethodDescriptorProto {
+                name: Some("Call".into()),
+                input_type: Some("Root".into()),
+                output_type: Some("Leaf".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut p = DescriptorPool::new();
+    p.add_file_descriptor_proto(file).unwrap();
+    (p, package)
+}
+
+/// Whether `name` is a server name as an answer writes it when it was too long: cut, then `…`.
+fn cut_name(name: &str) -> bool {
+    name.ends_with('…') && name.len() <= shape::NAME_BYTES + '…'.len_utf8()
+}
+
+/// Every name the amplifying schema repeats is written once per use at most [`shape::NAME_BYTES`]
+/// long, and a field's enum values at about [`shape::VALUES_BYTES`]: describing the method, the
+/// message, the enum and listing the service each costs no more than the budgets, at once, and
+/// says that names were cut.
+#[test]
+fn names_a_schema_repeats_in_every_field_cost_no_more_than_the_budgets() {
+    let (p, package) = amplifying_pool();
+    for name in [
+        format!("{package}.Svc/Call"),
+        format!("{package}.Root"),
+        format!("{package}.Svc"),
+    ] {
+        let pool = p.clone();
+        let started = std::time::Instant::now();
+        let (text, data, cost) = within(Duration::from_secs(10), move || {
+            shape::describe_costed(&shape::resolve(&pool, &name).unwrap())
+        });
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(5), "{took:?}");
+        assert_bounded(&text, &data, cost);
+        assert_eq!(data["namesCut"], true);
+        assert_eq!(data["truncated"], true);
+        assert!(text.contains(&shape::names_cut_note()), "{}", text.len());
+        let root = data["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["fields"].as_array().unwrap().len() == shape::MAX_FIELDS)
+            .expect("Root is listed whole");
+        assert!(cut_name(root["name"].as_str().unwrap()));
+        // f1: a member of the oneof; f2: a Leaf; f3: an enum.
+        let fields = root["fields"].as_array().unwrap();
+        assert!(cut_name(fields[0]["oneof"].as_str().unwrap()));
+        assert!(cut_name(fields[1]["type"].as_str().unwrap()));
+        let enum_type = fields[2]["type"].as_str().unwrap();
+        assert!(
+            enum_type.len() <= shape::VALUES_BYTES + 2 * (shape::NAME_BYTES + 3) + 32,
+            "{}",
+            enum_type.len()
+        );
+        assert!(enum_type.ends_with(" more)"), "the rest are counted");
+    }
+
+    let pool = p.clone();
+    let enum_name = format!("{package}.E");
+    let (text, data, cost) = within(Duration::from_secs(10), move || {
+        shape::describe_costed(&shape::resolve(&pool, &enum_name).unwrap())
+    });
+    assert_bounded(&text, &data, cost);
+    assert!(cut_name(data["enum"].as_str().unwrap()));
+    let values = data["values"].as_array().unwrap();
+    assert_eq!(values.len(), 20);
+    assert!(values.iter().all(|v| cut_name(v["name"].as_str().unwrap())));
+    assert_eq!(data["truncated"], true, "its names are cut");
+    assert!(text.ends_with(&shape::names_cut_note()));
+
+    let names = vec![format!("{package}.Svc")];
+    let r = within(Duration::from_secs(10), move || {
+        services_report("h:1", true, &names, &p, None)
+    });
+    assert!(r.message.len() <= SERVICES_TEXT_BYTES);
+    assert!(data_bytes(&r.data) <= SERVICES_DATA_BYTES);
+    assert!(r.message.ends_with(&shape::names_cut_note()));
+    assert!(cut_name(r.data["services"][0]["name"].as_str().unwrap()));
+    let method = &r.data["services"][0]["methods"][0];
+    assert!(cut_name(method["input"].as_str().unwrap()));
+    assert_eq!(r.data["namesCut"], true);
+    assert_eq!(r.data["truncated"], true);
+}
+
+/// `count` messages `R0`… in a package with a long name, each holding a field of its own type and
+/// `filler` string fields with short JSON names (cheap in an example) and 200-byte proto names
+/// (not cheap in the data), and a `Root` with a field of each.
+fn recursive_pool(count: i32, filler: i32) -> DescriptorPool {
+    let package = format!("r{}", "q".repeat(4096));
+    let mut messages: Vec<DescriptorProto> = (0..count)
+        .map(|i| {
+            let own = format!("R{i}");
+            let mut fields = vec![field("again", "again", 1, Type::Message, Some(&own))];
+            fields.extend((0..filler).map(|n| {
+                let name = format!("s{n}_{}", "w".repeat(200));
+                field(&name, &format!("a{n}"), n + 2, Type::String, None)
+            }));
+            message(&own, fields)
+        })
+        .collect();
+    messages.push(message(
+        "Root",
+        (0..count)
+            .map(|i| {
+                let name = format!("r{i}");
+                field(&name, &name, i + 1, Type::Message, Some(&format!("R{i}")))
+            })
+            .collect(),
+    ));
+    let file = FileDescriptorProto {
+        name: Some("rec.proto".into()),
+        package: Some(package),
+        syntax: Some("proto3".into()),
+        message_type: messages,
+        ..Default::default()
+    };
+    let mut p = DescriptorPool::new();
+    p.add_file_descriptor_proto(file).unwrap();
+    p
+}
+
+/// The messages written `{}` because they nest inside themselves are data too: their names are cut
+/// like any other, at most five are given and the rest counted, and they are admitted against the
+/// data budget like every other entry — when it ran out, they are counted, not added past it.
+#[test]
+fn recursive_names_are_cut_counted_and_within_the_data_budget() {
+    let p = recursive_pool(6, 0);
+    let root = format!("r{}.Root", "q".repeat(4096));
+    let (text, data, cost) = shape::describe_costed(&shape::resolve(&p, &root).unwrap());
+    assert_bounded(&text, &data, cost);
+    let recursive = data["recursive"].as_array().unwrap();
+    assert_eq!(recursive.len(), 5);
+    assert!(recursive.iter().all(|n| cut_name(n.as_str().unwrap())));
+    assert_eq!(data["moreRecursive"], 1);
+    assert!(
+        text.contains(" and 1 more contain themselves; the example writes {} where"),
+        "{text}"
+    );
+
+    // Enough filler to spend the data budget before the names come.
+    let p = recursive_pool(60, 30);
+    let (text, data, cost) = within(Duration::from_secs(20), move || {
+        shape::describe_costed(&shape::resolve(&p, &root).unwrap())
+    });
+    assert_bounded(&text, &data, cost);
+    assert_eq!(data["truncated"], true);
+    let given = data["recursive"].as_array().unwrap().len() as u64;
+    assert!(given < 5, "{given}: the data was full");
+    assert!(data["moreRecursive"].as_u64().unwrap() + given > 5);
+}
+
+/// A server may mark a message as a map entry without giving it a value field (or a key). Such a
+/// field is described as the repeated message it is, never by assuming the entry's fields.
+#[test]
+fn a_map_entry_without_its_value_field_is_described_not_a_panic() {
+    let mut holder = message(
+        "Holder",
+        vec![repeated(field(
+            "odd",
+            "odd",
+            1,
+            Type::Message,
+            Some(".odd.Holder.OddEntry"),
+        ))],
+    );
+    holder.nested_type = vec![DescriptorProto {
+        name: Some("OddEntry".into()),
+        field: vec![field("key", "key", 1, Type::String, None)],
+        options: Some(MessageOptions {
+            map_entry: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }];
+    let file = FileDescriptorProto {
+        name: Some("odd.proto".into()),
+        package: Some("odd".into()),
+        syntax: Some("proto3".into()),
+        message_type: vec![holder],
+        ..Default::default()
+    };
+    let mut p = DescriptorPool::new();
+    p.add_file_descriptor_proto(file).unwrap();
+    let (text, data) = within(Duration::from_secs(10), move || {
+        shape::describe(&shape::resolve(&p, "odd.Holder").unwrap())
+    });
+    assert!(
+        text.lines()
+            .any(|l| l == "  odd: repeated odd.Holder.OddEntry"),
+        "{text}"
+    );
+    assert_eq!(data["example"]["odd"], json!([{"key": ""}]));
+}
+
+/// Forty-one messages of 200 short fields, chained: every line and entry is small, so the budgets
+/// alone would let the walk go on through 8000 fields. The visit bound stops it, and says so.
+#[test]
+fn a_walk_stops_at_its_visit_bound_and_says_so() {
+    let short = |n: i32| {
+        format!(
+            "{}{}",
+            (b'a' + (n / 26) as u8) as char,
+            (b'a' + (n % 26) as u8) as char
+        )
+    };
+    let messages = (0..=shape::MAX_MESSAGES as i32)
+        .map(|i| {
+            let mut fields: Vec<FieldDescriptorProto> = (1..shape::MAX_FIELDS as i32)
+                .map(|n| field(&short(n), &short(n), n, Type::Bool, None))
+                .collect();
+            let next = format!(".chain.C{}", i + 1);
+            if i < shape::MAX_MESSAGES as i32 {
+                fields.push(field(
+                    "n",
+                    "n",
+                    shape::MAX_FIELDS as i32,
+                    Type::Message,
+                    Some(&next),
+                ));
+            }
+            message(&format!("C{i}"), fields)
+        })
+        .collect();
+    let file = FileDescriptorProto {
+        name: Some("chain.proto".into()),
+        package: Some("chain".into()),
+        syntax: Some("proto3".into()),
+        message_type: messages,
+        ..Default::default()
+    };
+    let mut p = DescriptorPool::new();
+    p.add_file_descriptor_proto(file).unwrap();
+    let (text, data, cost) = within(Duration::from_secs(20), move || {
+        shape::describe_costed(&shape::resolve(&p, "chain.C0").unwrap())
+    });
+    assert_bounded(&text, &data, cost);
+    assert_eq!(cost.visits, shape::MAX_VISITS);
+    assert_eq!(data["walkCut"], true);
+    assert_eq!(data["truncated"], true);
+    assert_eq!(data["messagesCut"], false, "the walk stopped first");
+    assert!(
+        text.ends_with(
+            "(The schema is too large to walk whole: this description stopped after 6000 schema \
+             nodes; describe one method or message by name.)"
+        ),
+        "{}",
+        &text[text.len() - 300..]
+    );
+}
+
+/// A listing whose reflection reached its limit says which services it could not load, and why.
+#[test]
+fn a_services_listing_says_when_reflection_stopped_at_its_limit() {
+    let p = pool();
+    let names = vec![
+        "test.v1.Echo".to_string(),
+        "other.Svc".to_string(),
+        "third.Svc".to_string(),
+    ];
+    let r = services_report("h:1", true, &names, &p, Some(1));
+    assert!(r.message.contains(
+        "  other.Svc\n    (not described: reflection stopped at its limit)\n  third.Svc\n    \
+         (not described: reflection stopped at its limit)"
+    ));
+    assert!(r.message.ends_with(
+        "(Reflection stops at 500 descriptor files or 16 MiB per listing; the services after \
+         that are listed without their methods.)"
+    ));
+    assert_eq!(r.data["reflectionStopped"], true);
+    assert_eq!(r.data["truncated"], true);
+    assert_eq!(r.data["services"][0]["described"], true);
 }
 
 /// A server that declares thousands of methods with long names: the listing stops at its text
@@ -1361,7 +1731,7 @@ fn a_services_listing_is_cut_at_its_byte_budgets_and_says_so() {
     p.add_file_descriptor_proto(file).unwrap();
     let names = vec!["many.Svc".to_string(), "other.Svc".to_string()];
     let r = within(Duration::from_secs(20), move || {
-        services_report("h:1", true, &names, &p)
+        services_report("h:1", true, &names, &p, None)
     });
     assert!(
         r.message.len() <= SERVICES_TEXT_BYTES,
@@ -1380,7 +1750,7 @@ fn a_services_listing_is_cut_at_its_byte_budgets_and_says_so() {
         "{}",
         &r.message[r.message.len() - 300..]
     );
-    assert!(data_bytes(&r.data) <= SERVICES_DATA_BYTES + 1024);
+    assert!(data_bytes(&r.data) <= SERVICES_DATA_BYTES);
     assert_eq!(r.data["truncated"], true);
     assert_eq!(r.data["total"], 2);
     let services = r.data["services"].as_array().unwrap();

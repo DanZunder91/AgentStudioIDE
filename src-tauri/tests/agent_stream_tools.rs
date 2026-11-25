@@ -7,8 +7,9 @@
 //! Hermetic: every server is started here on 127.0.0.1 — WebSocket servers with one behaviour
 //! each, and a hand-rolled h2c gRPC server that speaks server reflection v1 (tonic's server
 //! feature is not in the build; adding it would lock new crates for a test, so the fixture answers
-//! the reflection queries and five unary methods itself). Nothing reads or writes the user's
-//! config: the tools that need a directory get a temp one, and none of these tools writes.
+//! the reflection queries and five unary methods itself, and serves two import chains built to
+//! push reflection's limits). Nothing reads or writes the user's config: the tools that need a
+//! directory get a temp one, and none of these tools writes.
 
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -17,6 +18,7 @@ use std::time::{Duration, Instant};
 use agent_studio_scaffold_lib::agent_ctl::commands::stream;
 use agent_studio_scaffold_lib::agent_ctl::registry::Args;
 use agent_studio_scaffold_lib::agent_ctl::{self, cli, CtlEvent, CtlResponse, ToolCtx, UiSink};
+use agent_studio_scaffold_lib::grpc::{self, GrpcHeader, GrpcRequest};
 use agent_studio_scaffold_lib::hook_listener::{CtlFuture, CtlHandler, HookListener};
 use agent_studio_scaffold_lib::netcap::record::Tap;
 use agent_studio_scaffold_lib::netcap::{
@@ -612,6 +614,35 @@ mod proto {
         }
     }
 
+    /// Link `n` of the import chain `chain` (`chain/<n>.proto`, package `chain`): it imports link
+    /// `n + 1` while `n + 1 < links`, and carries `pad` bytes of options. Link 0 declares the
+    /// service `<chain>.Svc`, which is what an agent asks for.
+    pub fn chain_link(chain: &str, n: usize, links: usize, pad: usize) -> FileDescriptorProto {
+        FileDescriptorProto {
+            name: Some(format!("{chain}/{n}.proto")),
+            package: Some(chain.into()),
+            syntax: Some("proto3".into()),
+            dependency: if n + 1 < links {
+                vec![format!("{chain}/{}.proto", n + 1)]
+            } else {
+                Vec::new()
+            },
+            service: if n == 0 {
+                vec![ServiceDescriptorProto {
+                    name: Some("Svc".into()),
+                    ..Default::default()
+                }]
+            } else {
+                Vec::new()
+            },
+            options: Some(prost_types::FileOptions {
+                java_package: Some("p".repeat(pad)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
     pub const TIMESTAMP_FILE: &str = "google/protobuf/timestamp.proto";
     pub const ECHO_FILE: &str = "test/v1/echo.proto";
 
@@ -781,6 +812,18 @@ const KNOWN: [&str; 5] = [
     "test.v1.Kind",
 ];
 
+/// Links in the `heavy` import chain.
+const HEAVY_LINKS: usize = 40;
+
+/// `n` for `<chain>/<n>.proto`.
+fn chain_link_number(file: &str, chain: &str) -> Option<usize> {
+    file.strip_prefix(chain)?
+        .strip_prefix('/')?
+        .strip_suffix(".proto")?
+        .parse()
+        .ok()
+}
+
 fn reflection_answer(msg: &[u8]) -> Bytes {
     use tonic_reflection::pb::v1::server_reflection_request::MessageRequest;
     use tonic_reflection::pb::v1::server_reflection_response::MessageResponse;
@@ -817,6 +860,22 @@ fn reflection_answer(msg: &[u8]) -> Bytes {
             file(proto::timestamp())
         }
         Some(MessageRequest::FileByFilename(f)) if f == proto::ECHO_FILE => file(proto::echo()),
+        // Every link imports the next, without end.
+        Some(MessageRequest::FileContainingSymbol(s)) if s == "endless.Svc" => {
+            file(proto::chain_link("endless", 0, usize::MAX, 0))
+        }
+        Some(MessageRequest::FileByFilename(f)) if chain_link_number(&f, "endless").is_some() => {
+            let n = chain_link_number(&f, "endless").unwrap();
+            file(proto::chain_link("endless", n, usize::MAX, 0))
+        }
+        // Forty links of a megabyte each: an end, but 40 MiB away.
+        Some(MessageRequest::FileContainingSymbol(s)) if s == "heavy.Svc" => {
+            file(proto::chain_link("heavy", 0, HEAVY_LINKS, 1024 * 1024))
+        }
+        Some(MessageRequest::FileByFilename(f)) if chain_link_number(&f, "heavy").is_some() => {
+            let n = chain_link_number(&f, "heavy").unwrap();
+            file(proto::chain_link("heavy", n, HEAVY_LINKS, 1024 * 1024))
+        }
         _ => not_found(),
     };
     let resp = ServerReflectionResponse {
@@ -848,6 +907,12 @@ async fn grpc_service(req: Request<Incoming>) -> Result<Response<UBody>, Infalli
         .headers()
         .get("x-tenant")
         .map(|v| v.to_str().unwrap().to_string());
+    // How long `Slow` takes: 3 s unless the request says.
+    let delay = req
+        .headers()
+        .get("x-delay-ms")
+        .and_then(|v| v.to_str().ok()?.parse().ok())
+        .unwrap_or(3_000);
     let body = req.into_body().collect().await.unwrap().to_bytes();
     let msg = body.get(5..).unwrap_or_default();
     let ok = [("grpc-status", "0")];
@@ -892,7 +957,7 @@ async fn grpc_service(req: Request<Incoming>) -> Result<Response<UBody>, Infalli
             grpc_response(Some(reply(&pool, &"b".repeat(100 * 1024), 1)), &ok, &[])
         }
         "/test.v1.Echo/Slow" => {
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            tokio::time::sleep(Duration::from_millis(delay)).await;
             grpc_response(Some(reply(&pool, "late", 1)), &ok, &[])
         }
         _ => grpc_response(None, &[("grpc-status", "12")], &[]),
@@ -1208,6 +1273,84 @@ async fn a_deadline_that_passes_on_our_side_is_a_timeout_not_a_server_status() {
         .as_str()
         .unwrap()
         .contains("deadline"));
+}
+
+/// A call's own limit is what its channel waits, not the channel's default request timeout. With
+/// the default made short (300 ms), a call limited to 5 s still gets the answer of a server that
+/// takes 800 ms; a call with no limit of its own is cut at the default — so the default is in
+/// force, and the call's limit is what lifts it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_calls_own_limit_is_what_its_channel_waits_not_the_default() {
+    let port = spawn_grpc().await;
+    let nc = netcap();
+    let request = || GrpcRequest {
+        endpoint: format!("127.0.0.1:{port}"),
+        service: "test.v1.Echo".into(),
+        method: "Slow".into(),
+        message: "{}".into(),
+        metadata: vec![GrpcHeader {
+            name: "x-delay-ms".into(),
+            value: "800".into(),
+        }],
+        plaintext: true,
+    };
+    let short = Duration::from_millis(300);
+    let limit = Duration::from_secs(5);
+    let answered = grpc::call_with_default_timeout(request(), &Tap::of(&nc), Some(limit), short)
+        .await
+        .expect("the call's limit, not the short default, is what its channel waits");
+    assert_eq!(answered.response.status_code, 0);
+    assert_eq!(
+        serde_json::from_str::<Value>(&answered.response.message).unwrap()["text"],
+        "late"
+    );
+
+    let started = Instant::now();
+    let err = grpc::call_with_default_timeout(request(), &Tap::of(&nc), None, short)
+        .await
+        .expect_err("without a limit of its own, the default cuts the call");
+    assert!(
+        err.contains("no answer before the request's deadline"),
+        "{err}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// Reflection follows a server's imports only so far. A server whose every file imports one
+/// more, and one whose files are a megabyte each, stop at the session's limit — files, then bytes
+/// — with an error that says so, at once rather than when the reflection deadline passes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_import_chain_stops_at_the_reflection_limit_and_says_so() {
+    let port = spawn_grpc().await;
+    let (ctx, events) = ctx();
+    let target = format!("127.0.0.1:{port}");
+    for name in ["endless.Svc", "heavy.Svc"] {
+        let a = json!({"target": target, "name": name, "plaintext": true});
+        let started = Instant::now();
+        let (status, r) =
+            tokio::time::timeout(Duration::from_secs(20), handle(&ctx, "grpc_describe", a))
+                .await
+                .unwrap_or_else(|_| panic!("{name}: still fetching after 20 s"));
+        assert_eq!(status, 422, "{name}: {}", r.message);
+        assert!(
+            r.message.starts_with(&format!(
+                "{target} does not describe `{name}` (reflection stopped: the server's \
+                 descriptors go past what one reflection loads (500 files or 16 MiB))."
+            )),
+            "{name}: {}",
+            r.message
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "{name}: {:?}",
+            started.elapsed()
+        );
+    }
+    assert!(events.all().is_empty(), "a read emits nothing");
 }
 
 // ── the real binary, end to end ──────────────────────────────────────────────

@@ -121,9 +121,10 @@ pub const TOOLS: &[ToolSpec] = &[
         summary: "List a gRPC server's services and methods, with their request and response \
                   types, through server reflection.",
         details: "The server must have reflection enabled. TLS unless --plaintext (or an \
-                  http:// target). At most 200 services are described, and the listing is cut \
-                  at 64 KiB; a cut is said. A target naming a Vault variable ({{…}}) is \
-                  refused.",
+                  http:// target). At most 200 services are described, reflection loads at most \
+                  500 descriptor files (16 MiB), names longer than 256 bytes are cut, and the \
+                  listing is cut at 64 KiB (--json at 256 KiB); every cut is said. A target \
+                  naming a Vault variable ({{…}}) is refused.",
         params: &[TARGET_PARAM, PLAINTEXT_PARAM],
         run: run_grpc_services,
     },
@@ -135,9 +136,11 @@ pub const TOOLS: &[ToolSpec] = &[
         details: "name: package.Service/Method, package.Service.Method, package.Service, or a \
                   message or enum (package.Message). Fields are listed by their JSON names; a \
                   request may use those or the .proto names. One answer spells out at most 100 \
-                  methods and 40 messages, its example JSON holds at most 2000 values (a \
-                  message nested inside itself is written {}), and it is cut at 64 KiB; every \
-                  cut is said. Through server reflection, like grpc services.",
+                  methods and 40 messages of 200 fields, walks at most 6000 schema nodes, cuts \
+                  names longer than 256 bytes, and its example JSON holds at most 2000 values (a \
+                  message nested inside itself is written {}); the text is cut at 64 KiB and \
+                  --json at 256 KiB. Every cut is said. Through server reflection, like grpc \
+                  services (at most 500 descriptor files, 16 MiB).",
         params: &[
             TARGET_PARAM,
             Param::new(
@@ -666,44 +669,63 @@ pub async fn grpc_services(args: &Args) -> Result<ToolOk, String> {
             .list_services()
             .await
             .map_err(|e| format!("{endpoint} did not list its services: {e}"))?;
-        for name in names.iter().take(MAX_SERVICES) {
-            // A service the server will not describe is still listed, without methods.
-            let _ = r.load(name).await;
+        let mut stopped_at = None;
+        for (i, name) in names.iter().take(MAX_SERVICES).enumerate() {
+            // A service the server will not describe is still listed, without methods; once the
+            // session's limit is reached, nothing more is loaded.
+            if r.load(name).await.is_err() && r.stopped() {
+                stopped_at = Some(i);
+                break;
+            }
         }
-        Ok(services_report(&endpoint, plaintext, &names, r.pool()))
+        Ok(services_report(
+            &endpoint,
+            plaintext,
+            &names,
+            r.pool(),
+            stopped_at,
+        ))
     })
     .await
 }
 
 /// The services listing from what reflection returned: at most [`MAX_SERVICES`] services, the
-/// text within [`SERVICES_TEXT_BYTES`] and the data within [`SERVICES_DATA_BYTES`], each cut said.
+/// text within [`SERVICES_TEXT_BYTES`] and the data within [`SERVICES_DATA_BYTES`], names cut at
+/// [`shape::NAME_BYTES`], each cut said. Each line and entry is checked against its budget before
+/// it is built. `stopped_at`: the first service reflection did not load because the session
+/// reached its limit ([`grpc::MAX_REFLECTED_FILES`]).
 pub fn services_report(
     endpoint: &str,
     plaintext: bool,
     names: &[String],
     pool: &prost_reflect::DescriptorPool,
+    stopped_at: Option<usize>,
 ) -> ToolOk {
     let shown = &names[..names.len().min(MAX_SERVICES)];
+    let mut labels = shape::Names::default();
     let mut text = shape::Lines::new(SERVICES_TEXT_BYTES);
     text.push(format!(
         "{} at {endpoint} ({}):",
         plural(names.len(), "service", "services"),
         transport(plaintext)
     ));
-    let mut budget = shape::DataBudget::new(SERVICES_DATA_BYTES);
+    let mut budget = shape::DataBudget::new(SERVICES_DATA_BYTES - shape::ENVELOPE_ROOM);
     let mut services = Vec::new();
     // Services listed in full in the text.
     let mut listed = 0;
-    for name in shown {
+    for (i, name) in shown.iter().enumerate() {
         if text.is_cut() && budget.is_cut() {
             break;
         }
         let service = pool.get_service_by_name(name);
-        text.push(format!("  {name}"));
+        let label = labels.show(name).into_owned();
+        if !text.is_cut() {
+            text.push(format!("  {label}"));
+        }
         // The service's entry is admitted on its own, then each method: the work stops where the
         // budget does, however many methods the server declared.
         let in_data = budget.admit(&json!({
-            "name": name,
+            "name": label,
             "described": service.is_some(),
             "methods": [],
             "methodsCut": false,
@@ -713,25 +735,31 @@ pub fn services_report(
         match &service {
             Some(s) => {
                 for m in s.methods() {
-                    if text.is_cut() && budget.is_cut() {
+                    if text.is_cut() && (!in_data || budget.is_cut()) {
                         methods_cut = true;
                         break;
                     }
-                    let note = if shape::is_unary(&m) {
-                        ""
-                    } else {
-                        "  [streaming: not callable with grpc call]"
-                    };
-                    text.push(format!("    {}{note}", shape::signature(&m)));
-                    if in_data {
-                        let d = shape::method_data(&m);
+                    if !text.is_cut() {
+                        let note = if shape::is_unary(&m) {
+                            ""
+                        } else {
+                            "  [streaming: not callable with grpc call]"
+                        };
+                        text.push(format!("    {}{note}", shape::signature(&m, &mut labels)));
+                    }
+                    if in_data && !budget.is_cut() {
+                        let d = shape::method_data(&m, &mut labels);
                         if budget.admit(&d) {
                             methods.push(d);
-                        } else {
-                            methods_cut = true;
                         }
                     }
+                    if in_data && budget.is_cut() {
+                        methods_cut = true;
+                    }
                 }
+            }
+            None if stopped_at.is_some_and(|at| i >= at) => {
+                text.push("    (not described: reflection stopped at its limit)");
             }
             None => {
                 text.push("    (the server did not describe its methods)");
@@ -742,7 +770,7 @@ pub fn services_report(
         }
         if in_data {
             services.push(json!({
-                "name": name,
+                "name": label,
                 "described": service.is_some(),
                 "methods": methods,
                 "methodsCut": methods_cut,
@@ -766,18 +794,35 @@ pub fn services_report(
     }
     let total = names.len();
     let data_cut = budget.is_cut();
-    let message = text.finish(|| {
-        format!(
-            "…the listing is cut at {} KiB: {listed} of {total} services are listed in full \
-             ({}). Describe one service with `agent-studio grpc describe <target> \
-             <package.Service>`.",
-            SERVICES_TEXT_BYTES / 1024,
-            if data_cut {
-                "--json is cut too"
-            } else {
-                "--json has the rest"
-            }
-        )
+    let names_cut = labels.any_cut();
+    let stopped = stopped_at.is_some();
+    let message = text.finish(|text_cut| {
+        let mut notes = Vec::new();
+        if text_cut {
+            notes.push(format!(
+                "…the listing is cut at {} KiB: {listed} of {total} services are listed in full \
+                 ({}). Describe one service with `agent-studio grpc describe <target> \
+                 <package.Service>`.",
+                SERVICES_TEXT_BYTES / 1024,
+                if data_cut {
+                    "--json is cut too"
+                } else {
+                    "--json has the rest"
+                }
+            ));
+        }
+        if stopped {
+            notes.push(format!(
+                "(Reflection stops at {} descriptor files or {} MiB per listing; the services \
+                 after that are listed without their methods.)",
+                grpc::MAX_REFLECTED_FILES,
+                grpc::MAX_REFLECTED_BYTES / (1024 * 1024)
+            ));
+        }
+        if names_cut {
+            notes.push(shape::names_cut_note());
+        }
+        notes
     });
     ToolOk::new(
         message,
@@ -785,8 +830,10 @@ pub fn services_report(
             "target": endpoint,
             "plaintext": plaintext,
             "total": total,
+            "reflectionStopped": stopped,
+            "namesCut": names_cut,
             // What this data holds; the text says its own cut.
-            "truncated": names.len() > shown.len() || data_cut,
+            "truncated": names.len() > shown.len() || data_cut || names_cut || stopped,
             "services": services,
         }),
     )
@@ -817,8 +864,10 @@ pub async fn grpc_describe(args: &Args) -> Result<ToolOk, String> {
                 if plaintext { " --plaintext" } else { "" }
             )
         })?;
-        // Bounded by construction (counts, an example budget, text and data budgets): a
-        // schema the server chose cannot make this run long or grow large.
+        // Loading is bounded (`grpc::MAX_REFLECTED_FILES`, `MAX_REFLECTED_BYTES`) and so is
+        // describing (a walk of `shape::MAX_VISITS` nodes, names cut at `shape::NAME_BYTES`, every
+        // line and entry checked against its budget before it is built): a schema the server
+        // chose cannot make this run long or grow large.
         let (message, mut data) = shape::describe(&found);
         data["target"] = json!(endpoint);
         data["plaintext"] = json!(plaintext);

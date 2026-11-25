@@ -53,7 +53,7 @@
 //! (`agent_ctl::commands::stream`) use the same two, so a call an agent makes is the call the
 //! console makes, recorded the same way.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use prost::Message as _;
@@ -82,18 +82,25 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// How far past a caller's whole-call limit the channel's own per-request timeout is set.
 const LIMIT_GRACE: Duration = Duration::from_secs(1);
 
-/// The channel's per-request timeout: [`REQUEST_TIMEOUT`], or, for a call with a whole-call
-/// `limit` of its own, just past that limit. A channel timeout under the limit would cut the call
-/// short of the deadline its caller was promised; past it, the caller's deadline — which started
-/// first, before the dial — is always the one that fires.
-fn channel_timeout(limit: Option<Duration>) -> Duration {
-    limit.map_or(REQUEST_TIMEOUT, |limit| limit + LIMIT_GRACE)
+/// The channel's per-request timeout: `default` (the app passes [`REQUEST_TIMEOUT`]), or, for a
+/// call with a whole-call `limit` of its own, just past that limit. A channel timeout under the
+/// limit would cut the call short of the deadline its caller was promised; past it, the caller's
+/// deadline — which started first, before the dial — is always the one that fires.
+fn channel_timeout(limit: Option<Duration>, default: Duration) -> Duration {
+    limit.map_or(default, |limit| limit + LIMIT_GRACE)
 }
 
 /// Response-size sanity cap for a decoded message (mirrors `http.rs`'s body cap in
 /// spirit). tonic's default is 4 MiB; we allow more so large reflected descriptors and
 /// fat responses still come through, but a runaway response can't exhaust memory.
 const MAX_DECODING_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Descriptor files one reflection session fetches at most — a request counts as one even when
+/// its answer holds none — and their bytes. A server answers each `import` with whatever file it
+/// likes, which may import one more, so following imports is bounded here rather than by how long
+/// the server keeps answering.
+pub const MAX_REFLECTED_FILES: usize = 500;
+pub const MAX_REFLECTED_BYTES: usize = 16 * 1024 * 1024;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire contract (PINNED — the frontend builds against exactly these; camelCase).
@@ -531,6 +538,49 @@ impl Reflect {
 pub struct Reflection {
     reflect: Reflect,
     pool: DescriptorPool,
+    fetched: Fetched,
+}
+
+/// What a reflection session has fetched, against [`MAX_REFLECTED_FILES`] and
+/// [`MAX_REFLECTED_BYTES`].
+#[derive(Debug, Default)]
+struct Fetched {
+    files: usize,
+    bytes: usize,
+    /// A limit was reached: nothing more is fetched.
+    stopped: bool,
+}
+
+impl Fetched {
+    /// Count one request about to go out; refused once the limit is reached.
+    fn request(&mut self) -> Result<(), String> {
+        if self.stopped || self.files >= MAX_REFLECTED_FILES {
+            return Err(self.stop());
+        }
+        self.files += 1;
+        Ok(())
+    }
+
+    /// Count the files of one answer (its request already counted one); refused past a limit.
+    fn answer(&mut self, raw_files: &[Vec<u8>]) -> Result<(), String> {
+        self.files += raw_files.len().saturating_sub(1);
+        self.bytes = raw_files
+            .iter()
+            .fold(self.bytes, |sum, f| sum.saturating_add(f.len()));
+        if self.files > MAX_REFLECTED_FILES || self.bytes > MAX_REFLECTED_BYTES {
+            return Err(self.stop());
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> String {
+        self.stopped = true;
+        format!(
+            "reflection stopped: the server's descriptors go past what one reflection loads \
+             ({MAX_REFLECTED_FILES} files or {} MiB)",
+            MAX_REFLECTED_BYTES / (1024 * 1024)
+        )
+    }
 }
 
 impl Reflection {
@@ -545,6 +595,7 @@ impl Reflection {
         Ok(Self {
             reflect: Reflect::negotiate(channel).await?,
             pool: DescriptorPool::new(),
+            fetched: Fetched::default(),
         })
     }
 
@@ -557,9 +608,22 @@ impl Reflection {
     }
 
     /// Load the file that declares `symbol` (a service, method, message or enum, fully
-    /// qualified), with its imports, into [`Self::pool`].
+    /// qualified), with its imports, into [`Self::pool`] — nothing to fetch when an earlier load
+    /// brought it. At most [`MAX_REFLECTED_FILES`] files ([`MAX_REFLECTED_BYTES`]) are fetched in
+    /// one session; past that every load fails, saying so.
     pub async fn load(&mut self, symbol: &str) -> Result<(), String> {
-        build_pool_into(&mut self.reflect, symbol, &mut self.pool).await
+        let known = self.pool.get_service_by_name(symbol).is_some()
+            || self.pool.get_message_by_name(symbol).is_some()
+            || self.pool.get_enum_by_name(symbol).is_some();
+        if known {
+            return Ok(());
+        }
+        build_pool_into(&mut self.reflect, symbol, &mut self.pool, &mut self.fetched).await
+    }
+
+    /// Whether this session reached its limit, so a load failed for that reason.
+    pub fn stopped(&self) -> bool {
+        self.fetched.stopped
     }
 
     /// Everything loaded so far.
@@ -614,20 +678,25 @@ pub async fn grpc_reflect(endpoint: String, plaintext: bool) -> Result<GrpcSchem
 }
 
 /// Fetch `symbol`'s file (and imports) into an existing pool. Used by [`grpc_reflect`] to
-/// accumulate every service's descriptors into one pool without rebuilding it per service.
+/// accumulate every service's descriptors into one pool without rebuilding it per service. Each
+/// import is asked for once, and every request and file is counted in `fetched` first.
 async fn build_pool_into(
     reflect: &mut Reflect,
     symbol: &str,
     pool: &mut DescriptorPool,
+    fetched: &mut Fetched,
 ) -> Result<(), String> {
     let mut collected: HashMap<String, FileDescriptorProto> = HashMap::new();
+    let mut asked: HashSet<String> = HashSet::new();
     let mut pending = vec![FileQuery::Symbol(symbol.to_string())];
 
     while let Some(query) = pending.pop() {
+        fetched.request()?;
         let raw_files = reflect
             .fetch_files(&query)
             .await
             .map_err(|e| e.into_string())?;
+        fetched.answer(&raw_files)?;
         for raw in raw_files {
             let fd = FileDescriptorProto::decode(raw.as_slice())
                 .map_err(|e| format!("invalid file descriptor: {e}"))?;
@@ -636,7 +705,10 @@ async fn build_pool_into(
                 continue;
             }
             for dep in &fd.dependency {
-                if !collected.contains_key(dep) && pool.get_file_by_name(dep).is_none() {
+                if !collected.contains_key(dep)
+                    && pool.get_file_by_name(dep).is_none()
+                    && asked.insert(dep.clone())
+                {
                     pending.push(FileQuery::Filename(dep.clone()));
                 }
             }
@@ -751,8 +823,20 @@ pub async fn call(
     tap: &Tap,
     limit: Option<Duration>,
 ) -> Result<GrpcOutcome, String> {
+    call_with_default_timeout(request, tap, limit, REQUEST_TIMEOUT).await
+}
+
+/// [`call`] with the channel's request timeout for a call without a limit given as `default`
+/// instead of [`REQUEST_TIMEOUT`]: the seam a test uses to make that default short, and see that a
+/// call's own limit — not the default — is what its channel waits.
+pub async fn call_with_default_timeout(
+    request: GrpcRequest,
+    tap: &Tap,
+    limit: Option<Duration>,
+    default: Duration,
+) -> Result<GrpcOutcome, String> {
     let flow = start_flow(tap, &request);
-    let request_timeout = channel_timeout(limit);
+    let request_timeout = channel_timeout(limit, default);
     let outcome = match limit {
         None => unary(request, &flow, request_timeout).await,
         Some(limit) => tokio::time::timeout(limit, unary(request, &flow, request_timeout))
@@ -1101,13 +1185,43 @@ mod tests {
     #[test]
     fn a_call_with_a_limit_of_its_own_gets_a_channel_that_waits_past_it() {
         // Without a limit, the channel's own deadline is the only one.
-        assert_eq!(channel_timeout(None), REQUEST_TIMEOUT);
+        assert_eq!(channel_timeout(None, REQUEST_TIMEOUT), REQUEST_TIMEOUT);
         // With one, the channel must never cut the call first — including limits past the
         // default request timeout, which an agent's `grpc call --timeout-ms` allows.
         for ms in [1, 400, 29_999, 30_000, 45_000, 60_000] {
             let limit = Duration::from_millis(ms);
-            assert!(channel_timeout(Some(limit)) > limit, "{ms} ms");
+            assert!(
+                channel_timeout(Some(limit), REQUEST_TIMEOUT) > limit,
+                "{ms} ms"
+            );
         }
+    }
+
+    /// Every request counts as a file even when its answer holds none, every file of an answer
+    /// counts, and every byte; past either limit the session stops, for good.
+    #[test]
+    fn a_reflection_session_counts_requests_files_and_bytes_and_stops_for_good() {
+        let mut f = Fetched::default();
+        for _ in 0..MAX_REFLECTED_FILES {
+            f.request().unwrap();
+            f.answer(&[]).unwrap();
+        }
+        let e = f.request().unwrap_err();
+        assert!(e.starts_with("reflection stopped: "), "{e}");
+        assert!(f.stopped);
+
+        let mut f = Fetched::default();
+        f.request().unwrap();
+        assert!(f
+            .answer(&vec![Vec::new(); MAX_REFLECTED_FILES + 1])
+            .is_err());
+
+        let mut f = Fetched::default();
+        f.request().unwrap();
+        f.answer(&[vec![0; MAX_REFLECTED_BYTES]]).unwrap();
+        f.request().unwrap();
+        assert!(f.answer(&[vec![0; 1]]).is_err());
+        assert!(f.request().is_err(), "a stopped session stays stopped");
     }
 
     #[test]
