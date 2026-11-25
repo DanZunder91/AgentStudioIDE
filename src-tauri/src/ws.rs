@@ -69,22 +69,33 @@
 //! close. The flow's `error` text is the transport's, unredacted — the store already holds the
 //! header the server disliked, verbatim, by design; only the UI *event* is
 //! scrubbed.
+//!
+//! **One-shot exchanges.** [`exchange`] is the same engine without a live console: connect, send
+//! a list of messages in order, collect what the server sends for a bounded time and count, close,
+//! and return the transcript. It is what an agent's `ws_exchange` tool runs
+//! (`agent_ctl::commands::stream`). It shares [`handshake`] (request → socket + Network row) with
+//! [`ws_connect`], so both are recorded alike, and it never reads the Vault: header values go out
+//! exactly as given.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio_tungstenite::connect_async_with_config;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::api_store::ApiStore;
 use crate::netcap::headers::capture_headers;
@@ -357,6 +368,79 @@ pub fn connect_via(
     connection_id
 }
 
+/// A connected client socket.
+type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// The client settings every socket uses: incoming messages capped at [`MAX_MESSAGE_BYTES`],
+/// frame size left at tungstenite's default (16 MiB ≤ cap).
+fn client_config() -> WebSocketConfig {
+    WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE_BYTES))
+}
+
+/// Open the socket `request` describes and record it as a Network row: pending with the
+/// handshake as it goes out, then status 101 and the server's headers on success. A rejected
+/// handshake IS a response (a 401, say): its status, headers and body go on the row before the
+/// error that ends it. On `Err` the row is already settled (`error`); the text is the
+/// transport's, unredacted, for the caller to scrub if it resolved secrets.
+///
+/// `limit` bounds the TCP connect, TLS and HTTP upgrade together; `None` waits as long as the OS
+/// does (the console's behaviour).
+async fn handshake(
+    request: Request,
+    tap: &Tap,
+    limit: Option<Duration>,
+) -> Result<(WsStream, Flow), String> {
+    // One provider for the whole process. tungstenite builds its default
+    // `ClientConfig` with `ClientConfig::builder()`, which prefers the installed process
+    // default over its own crate-feature fallback — installing here is what keeps `wss://`
+    // on the same `ring` backend as `http_send` and gRPC. Idempotent; `run()` also does it
+    // at startup, but tests never go through `run()`.
+    crate::tls::install_crypto_provider();
+
+    // The Network row: pending from here, with the handshake exactly as it goes out.
+    let flow = start_flow(tap, &request);
+    let connecting = connect_async_with_config(request, Some(client_config()), false);
+    let outcome = match limit {
+        None => connecting.await,
+        Some(limit) => match tokio::time::timeout(limit, connecting).await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                let message = format!(
+                    "the WebSocket handshake did not finish within {} ms",
+                    limit.as_millis()
+                );
+                flow.fail(message.clone());
+                return Err(message);
+            }
+        },
+    };
+    match outcome {
+        Ok((stream, response)) => {
+            flow.response_head(
+                response.status().as_u16(),
+                &record::http_version(response.version()),
+                capture_headers(response.headers()),
+            );
+            flow.ws_open();
+            Ok((stream, flow))
+        }
+        Err(e) => {
+            if let tokio_tungstenite::tungstenite::Error::Http(resp) = &e {
+                flow.response_head(
+                    resp.status().as_u16(),
+                    &record::http_version(resp.version()),
+                    capture_headers(resp.headers()),
+                );
+                if let Some(body) = resp.body() {
+                    flow.response_body(body, body.len() as u64);
+                }
+            }
+            flow.fail(e.to_string());
+            Err(e.to_string())
+        }
+    }
+}
+
 /// The pending Network row for a handshake about to go out: a `ws`/`wss` flow with the
 /// request exactly as tungstenite will write it. Nothing for a scheme tungstenite refuses.
 fn start_flow(tap: &Tap, request: &Request) -> Flow {
@@ -427,16 +511,6 @@ async fn run_connection(
     mut out_rx: mpsc::Receiver<String>,
     tap: Tap,
 ) {
-    // One provider for the whole process. tungstenite builds its default
-    // `ClientConfig` with `ClientConfig::builder()`, which prefers the installed process
-    // default over its own crate-feature fallback — installing here is what keeps `wss://`
-    // on the same `ring` backend as `http_send` and gRPC. Idempotent; `run()` also does it
-    // at startup, but tests never go through `run()`.
-    crate::tls::install_crypto_provider();
-
-    // Cap incoming message size; leave frame size at tungstenite's default (16 MiB ≤ cap).
-    let config = WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE_BYTES));
-
     // Build the handshake request (headers applied, `{{VAR}}`s resolved) before any I/O. These
     // messages are secret-free by construction — they name headers and variables, never values
     // — so there is nothing to redact with yet.
@@ -452,34 +526,10 @@ async fn run_connection(
         }
     };
 
-    // The Network row: pending from here, with the handshake exactly as it goes out.
-    let flow = start_flow(&tap, &request);
-
-    let stream = match connect_async_with_config(request, Some(config), false).await {
-        Ok((stream, response)) => {
-            flow.response_head(
-                response.status().as_u16(),
-                &record::http_version(response.version()),
-                capture_headers(response.headers()),
-            );
-            flow.ws_open();
-            stream
-        }
-        Err(e) => {
-            // A rejected handshake IS a response (a 401, say): its status, headers and
-            // body go on the row before the error that ends it.
-            if let tokio_tungstenite::tungstenite::Error::Http(resp) = &e {
-                flow.response_head(
-                    resp.status().as_u16(),
-                    &record::http_version(resp.version()),
-                    capture_headers(resp.headers()),
-                );
-                if let Some(body) = resp.body() {
-                    flow.response_body(body, body.len() as u64);
-                }
-            }
-            flow.fail(e.to_string());
-            emit_error(&on_event, e.to_string(), &secrets);
+    let (stream, flow) = match handshake(request, &tap, None).await {
+        Ok(opened) => opened,
+        Err(message) => {
+            emit_error(&on_event, message, &secrets);
             CONNECTIONS
                 .lock()
                 .expect("connections mutex poisoned")
@@ -563,6 +613,325 @@ async fn run_connection(
         .lock()
         .expect("connections mutex poisoned")
         .remove(&connection_id);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// One-shot exchange: connect, send, listen (bounded), close, transcript.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The usual [`ExchangeSpec::send_budget`]: how long the messages to send may take to go out, all
+/// together. A server that stops reading fills the socket buffer and stalls the writer; past this
+/// the exchange stops.
+pub const SEND_BUDGET: Duration = Duration::from_secs(10);
+
+/// How long each step of the close may take: our Close frame going out, then the server's.
+const CLOSE_GRACE: Duration = Duration::from_secs(1);
+
+/// The most of one message's text a transcript keeps.
+pub const PREVIEW_BYTES: usize = 4 * 1024;
+
+/// The most text one transcript keeps; once spent, messages are listed by size only.
+pub const TRANSCRIPT_TEXT_BYTES: usize = 256 * 1024;
+
+/// What [`exchange`] does.
+#[derive(Debug, Clone)]
+pub struct ExchangeSpec {
+    pub url: String,
+    /// Handshake headers, sent exactly as given: an exchange never reads the Vault.
+    pub headers: Vec<WsHeader>,
+    /// Text messages, sent in order as soon as the socket opens.
+    pub send: Vec<String>,
+    /// How long to keep listening after the last message went out (after the open, with none).
+    pub wait: Duration,
+    /// Stop listening once this many messages arrived (at least one).
+    pub max_messages: usize,
+    /// The handshake's deadline (TCP, TLS and the HTTP upgrade together).
+    pub connect_timeout: Duration,
+    /// How long the sends may take, all together ([`SEND_BUDGET`] unless a test needs less).
+    pub send_budget: Duration,
+}
+
+/// Which way a message went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Direction {
+    Sent,
+    Received,
+}
+
+/// A data message's kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PayloadKind {
+    Text,
+    Binary,
+}
+
+/// One data message of an exchange.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExchangeEntry {
+    pub direction: Direction,
+    /// Milliseconds since the socket opened.
+    pub at_ms: u64,
+    pub kind: PayloadKind,
+    /// The payload's size in bytes.
+    pub bytes: usize,
+    /// A text message's content, cut at [`PREVIEW_BYTES`]; `None` for a binary message, or once
+    /// the transcript's [`TRANSCRIPT_TEXT_BYTES`] are spent.
+    pub text: Option<String>,
+    /// `text` is not the whole message.
+    pub truncated: bool,
+}
+
+/// Why an exchange stopped listening.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum ExchangeEnd {
+    /// The wait after the last send ran out.
+    Waited,
+    /// `max_messages` arrived.
+    MaxMessages,
+    /// The server closed the socket: the code and reason of its Close frame, when it sent one.
+    ServerClosed { code: Option<u16>, reason: String },
+    /// The messages could not all be sent within the send budget.
+    SendStalled,
+    /// The socket failed after it opened (a send, a read, an oversized message).
+    Error { message: String },
+}
+
+/// The transcript of an exchange.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Exchange {
+    /// How long the handshake took.
+    pub handshake_ms: u64,
+    /// Every data message both ways, in the order they went out or arrived.
+    pub entries: Vec<ExchangeEntry>,
+    pub sent: usize,
+    /// Messages that never went out (the server closed first, the socket failed, the send stalled).
+    pub unsent: usize,
+    pub received: usize,
+    pub end: ExchangeEnd,
+}
+
+/// `text` cut to at most `max` bytes on a character boundary, and whether anything was cut.
+pub fn cut_text(text: &str, max: usize) -> (&str, bool) {
+    if text.len() <= max {
+        return (text, false);
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], true)
+}
+
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The transcript as it is written: entries, counts, and the text budget left.
+#[derive(Debug)]
+struct Log {
+    opened: Instant,
+    entries: Vec<ExchangeEntry>,
+    text_left: usize,
+    sent: usize,
+}
+
+impl Log {
+    fn new(opened: Instant) -> Self {
+        Self {
+            opened,
+            entries: Vec::new(),
+            text_left: TRANSCRIPT_TEXT_BYTES,
+            sent: 0,
+        }
+    }
+
+    /// Note one message, keeping as much of `text` as the per-message cut and the budget allow.
+    fn push(&mut self, direction: Direction, kind: PayloadKind, bytes: usize, text: Option<&str>) {
+        let shown = text.and_then(|t| {
+            let room = PREVIEW_BYTES.min(self.text_left);
+            if room == 0 && !t.is_empty() {
+                return None;
+            }
+            let (cut, _) = cut_text(t, room);
+            self.text_left -= cut.len();
+            Some(cut.to_string())
+        });
+        let truncated = text.is_some() && shown.as_ref().map_or(0, String::len) < bytes;
+        if direction == Direction::Sent {
+            self.sent += 1;
+        }
+        self.entries.push(ExchangeEntry {
+            direction,
+            at_ms: millis(self.opened.elapsed()),
+            kind,
+            bytes,
+            text: shown,
+            truncated,
+        });
+    }
+}
+
+fn note(
+    log: &Mutex<Log>,
+    direction: Direction,
+    kind: PayloadKind,
+    bytes: usize,
+    text: Option<&str>,
+) {
+    log.lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push(direction, kind, bytes, text);
+}
+
+/// Connect to `spec.url`, send `spec.send` in order, collect what the server sends until
+/// `spec.wait` after the last send or `spec.max_messages`, close, and return the transcript.
+///
+/// Recorded in the Network view like a console session (one `ws`/`wss` row, live counts, `done`
+/// on close). Bounded everywhere: the handshake by `connect_timeout`, the sends by
+/// `send_budget`, the listening by `wait` and `max_messages`, each incoming message by
+/// [`MAX_MESSAGE_BYTES`], the close by two short graces, and the kept text by [`PREVIEW_BYTES`]
+/// per message and [`TRANSCRIPT_TEXT_BYTES`] in all.
+///
+/// `Err` only when the socket never opened (a bad URL or header, a refused or timed-out
+/// connect, a rejected handshake). A failure after the open ends the transcript instead
+/// ([`ExchangeEnd::Error`]), so what was exchanged before it is not lost.
+pub async fn exchange(spec: ExchangeSpec, tap: &Tap) -> Result<Exchange, String> {
+    let (request, _) = build_request(&spec.url, &spec.headers, &ApiStore::default())?;
+    let started = Instant::now();
+    let (stream, flow) = handshake(request, tap, Some(spec.connect_timeout)).await?;
+    let opened = Instant::now();
+    let log = Mutex::new(Log::new(opened));
+    let (sink, mut read) = stream.split();
+    let max_messages = spec.max_messages.max(1);
+    let to_send = spec.send;
+    let total = to_send.len();
+
+    // The sends run beside the reads (a server may answer each message before it reads the
+    // next), as one future polled by the loop below until it hands the write half back.
+    let mut sending = Box::pin(async {
+        let mut sink = sink;
+        for text in to_send {
+            let bytes = text.len();
+            let preview = cut_text(&text, PREVIEW_BYTES).0.to_string();
+            sink.send(Message::Text(text.into()))
+                .await
+                .map_err(|e| e.to_string())?;
+            flow.ws_sent(bytes);
+            note(
+                &log,
+                Direction::Sent,
+                PayloadKind::Text,
+                bytes,
+                Some(&preview),
+            );
+        }
+        Ok::<_, String>(sink)
+    });
+
+    let hard_stop = opened + spec.send_budget + spec.wait;
+    let mut listen_until = hard_stop;
+    let mut write = None;
+    let mut sending_done = false;
+    let mut received = 0usize;
+    let end = loop {
+        tokio::select! {
+            done = &mut sending, if !sending_done => {
+                sending_done = true;
+                match done {
+                    Ok(sink) => {
+                        write = Some(sink);
+                        listen_until = hard_stop.min(Instant::now() + spec.wait);
+                    }
+                    Err(message) => break ExchangeEnd::Error { message },
+                }
+            }
+            incoming = read.next() => match incoming {
+                Some(Ok(Message::Text(text))) => {
+                    flow.ws_received(text.len());
+                    note(&log, Direction::Received, PayloadKind::Text, text.len(), Some(text.as_str()));
+                    received += 1;
+                    if received >= max_messages {
+                        break ExchangeEnd::MaxMessages;
+                    }
+                }
+                Some(Ok(Message::Binary(bytes))) => {
+                    flow.ws_received(bytes.len());
+                    note(&log, Direction::Received, PayloadKind::Binary, bytes.len(), None);
+                    received += 1;
+                    if received >= max_messages {
+                        break ExchangeEnd::MaxMessages;
+                    }
+                }
+                Some(Ok(Message::Close(frame))) => {
+                    let (code, reason) = match frame {
+                        Some(f) => (Some(u16::from(f.code)), f.reason.as_str().to_string()),
+                        None => (None, String::new()),
+                    };
+                    break ExchangeEnd::ServerClosed { code, reason };
+                }
+                // tungstenite answers Pings itself; `Frame` is never yielded to a reader.
+                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {}
+                Some(Err(e)) => break ExchangeEnd::Error { message: e.to_string() },
+                None => break ExchangeEnd::ServerClosed { code: None, reason: String::new() },
+            },
+            () = tokio::time::sleep_until(listen_until.into()) => {
+                break if sending_done { ExchangeEnd::Waited } else { ExchangeEnd::SendStalled };
+            }
+        }
+    };
+    // A stalled writer still holds the write half; dropping it lets the socket close.
+    drop(sending);
+
+    match &end {
+        ExchangeEnd::Error { message } => flow.fail(message.clone()),
+        ExchangeEnd::ServerClosed { .. } => {
+            // tungstenite queued its answer to the server's Close; flush it out.
+            if let Some(mut w) = write {
+                let _ = tokio::time::timeout(CLOSE_GRACE, w.close()).await;
+            }
+            flow.done(None);
+        }
+        ExchangeEnd::Waited | ExchangeEnd::MaxMessages | ExchangeEnd::SendStalled => {
+            if let Some(mut w) = write {
+                let frame = CloseFrame {
+                    code: CloseCode::Normal,
+                    reason: "".into(),
+                };
+                let sent = tokio::time::timeout(CLOSE_GRACE, w.send(Message::Close(Some(frame))));
+                if matches!(sent.await, Ok(Ok(()))) {
+                    // Wait for the server's Close so both sides see a clean close. What still
+                    // arrives is counted on the Network row, not added to the transcript.
+                    let _ = tokio::time::timeout(CLOSE_GRACE, async {
+                        while let Some(Ok(m)) = read.next().await {
+                            match m {
+                                Message::Text(t) => flow.ws_received(t.len()),
+                                Message::Binary(b) => flow.ws_received(b.len()),
+                                Message::Close(_) => break,
+                                _ => {}
+                            }
+                        }
+                    })
+                    .await;
+                }
+            }
+            flow.done(None);
+        }
+    }
+
+    let log = log.into_inner().unwrap_or_else(|p| p.into_inner());
+    Ok(Exchange {
+        handshake_ms: millis(opened - started),
+        sent: log.sent,
+        unsent: total - log.sent,
+        received,
+        entries: log.entries,
+        end,
+    })
 }
 
 #[cfg(test)]
@@ -1211,5 +1580,81 @@ mod tests {
     async fn closing_an_unknown_connection_errors() {
         let err = ws_close("no-such-id".to_string()).unwrap_err();
         assert!(err.contains("unknown websocket connection"), "got: {err}");
+    }
+
+    // ── exchange transcript bounds (hermetic; the live exchange is in
+    //    tests/agent_stream_tools.rs) ───────────────────────────────────────────
+
+    #[test]
+    fn text_is_cut_on_a_character_boundary_and_says_so() {
+        assert_eq!(cut_text("hello", 10), ("hello", false));
+        assert_eq!(cut_text("hello", 5), ("hello", false));
+        assert_eq!(cut_text("hello", 3), ("hel", true));
+        // "é" is two bytes: a cut inside it backs off to before it, never splits it.
+        assert_eq!(cut_text("aé", 2), ("a", true));
+        assert_eq!(cut_text("", 0), ("", false));
+    }
+
+    #[test]
+    fn a_transcript_keeps_a_preview_per_message_and_stops_keeping_text_at_its_budget() {
+        let mut log = Log::new(Instant::now());
+        let big = "x".repeat(PREVIEW_BYTES + 10);
+        log.push(
+            Direction::Received,
+            PayloadKind::Text,
+            big.len(),
+            Some(&big),
+        );
+        let first = &log.entries[0];
+        assert_eq!(first.text.as_deref().map(str::len), Some(PREVIEW_BYTES));
+        assert!(first.truncated, "a cut message is marked");
+        assert_eq!(first.bytes, PREVIEW_BYTES + 10, "its real size is kept");
+
+        log.push(Direction::Sent, PayloadKind::Text, 2, Some("hi"));
+        assert_eq!(log.entries[1].text.as_deref(), Some("hi"));
+        assert!(!log.entries[1].truncated);
+        assert_eq!(log.sent, 1);
+
+        log.push(Direction::Received, PayloadKind::Binary, 12, None);
+        assert_eq!(log.entries[2].text, None);
+        assert!(
+            !log.entries[2].truncated,
+            "binary is listed by size, not cut"
+        );
+
+        // Spend the rest of the budget, then one more: listed by size only, marked.
+        while log.text_left >= PREVIEW_BYTES {
+            log.push(
+                Direction::Received,
+                PayloadKind::Text,
+                big.len(),
+                Some(&big),
+            );
+        }
+        let rest = "y".repeat(log.text_left + 1);
+        log.push(
+            Direction::Received,
+            PayloadKind::Text,
+            rest.len(),
+            Some(&rest),
+        );
+        assert_eq!(log.text_left, 0);
+        log.push(Direction::Received, PayloadKind::Text, 3, Some("abc"));
+        let last = log.entries.last().unwrap();
+        assert_eq!(last.text, None);
+        assert!(last.truncated);
+        let kept: usize = log
+            .entries
+            .iter()
+            .filter_map(|e| e.text.as_ref().map(String::len))
+            .sum();
+        assert_eq!(
+            kept, TRANSCRIPT_TEXT_BYTES,
+            "never more text than the budget"
+        );
+        // An empty message costs nothing and is whole even with no budget left.
+        log.push(Direction::Received, PayloadKind::Text, 0, Some(""));
+        assert_eq!(log.entries.last().unwrap().text.as_deref(), Some(""));
+        assert!(!log.entries.last().unwrap().truncated);
     }
 }

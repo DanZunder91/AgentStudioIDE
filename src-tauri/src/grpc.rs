@@ -45,6 +45,12 @@
 //! response JSON, or the gRPC status with its trailers (`done` — a status is a response), or
 //! `error` for a dial/reflection/transport failure. The reflection round-trips that resolve the
 //! method are not separate rows. Sizes are protobuf payload bytes (see the record module).
+//!
+//! **Rust API.** The two commands are thin over [`Reflection`] (a reflection session and its
+//! descriptor pool) and [`call`] (a recorded unary call with a deadline, returning the server's
+//! metadata too). An agent's `grpc_services` / `grpc_describe` / `grpc_call` tools
+//! (`agent_ctl::commands::stream`) use the same two, so a call an agent makes is the call the
+//! console makes, recorded the same way.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -502,15 +508,47 @@ impl Reflect {
     }
 }
 
-/// Assemble a fresh [`DescriptorPool`] describing `symbol` (a fully-qualified service
-/// name) by fetching its file over reflection and chasing `import` dependencies.
-async fn build_pool_for_symbol(
-    reflect: &mut Reflect,
-    symbol: &str,
-) -> Result<DescriptorPool, String> {
-    let mut pool = DescriptorPool::new();
-    build_pool_into(reflect, symbol, &mut pool).await?;
-    Ok(pool)
+/// A server-reflection session on one connection, and the descriptors it has loaded so far in
+/// one pool. What [`grpc_reflect`], [`grpc_send`] and the agent tools
+/// (`agent_ctl::commands::stream`) share, so a schema means the same thing to all of them.
+pub struct Reflection {
+    reflect: Reflect,
+    pool: DescriptorPool,
+}
+
+impl Reflection {
+    /// Dial `endpoint` (TLS unless `plaintext`) and negotiate the reflection version (`v1`,
+    /// else `v1alpha`).
+    pub async fn connect(endpoint: &str, plaintext: bool) -> Result<Self, String> {
+        Self::over(connect_channel(endpoint, plaintext).await?).await
+    }
+
+    /// The same, over a channel that is already connected.
+    async fn over(channel: Channel) -> Result<Self, String> {
+        Ok(Self {
+            reflect: Reflect::negotiate(channel).await?,
+            pool: DescriptorPool::new(),
+        })
+    }
+
+    /// Every service the server lists, fully qualified.
+    pub async fn list_services(&mut self) -> Result<Vec<String>, String> {
+        self.reflect
+            .list_services()
+            .await
+            .map_err(|e| e.into_string())
+    }
+
+    /// Load the file that declares `symbol` (a service, method, message or enum, fully
+    /// qualified), with its imports, into [`Self::pool`].
+    pub async fn load(&mut self, symbol: &str) -> Result<(), String> {
+        build_pool_into(&mut self.reflect, symbol, &mut self.pool).await
+    }
+
+    /// Everything loaded so far.
+    pub fn pool(&self) -> &DescriptorPool {
+        &self.pool
+    }
 }
 
 /// Turn a fully-reflected [`DescriptorPool`] into the pinned [`GrpcSchema`] (services +
@@ -546,23 +584,16 @@ fn schema_from_pool(pool: &DescriptorPool, service_names: &[String]) -> GrpcSche
 /// disabled) — there is no schema to show.
 #[tauri::command]
 pub async fn grpc_reflect(endpoint: String, plaintext: bool) -> Result<GrpcSchema, String> {
-    let channel = connect_channel(&endpoint, plaintext).await?;
-    let mut reflect = Reflect::negotiate(channel).await?;
-
-    let service_names = reflect.list_services().await.map_err(|e| e.into_string())?;
+    let mut reflection = Reflection::connect(&endpoint, plaintext).await?;
+    let service_names = reflection.list_services().await?;
 
     // Reflect each service's file to enumerate its methods. A service whose descriptor
     // can't be fetched degrades to an empty method list rather than failing the reflect.
-    let mut pool = DescriptorPool::new();
-    let mut resolved = Vec::with_capacity(service_names.len());
     for name in &service_names {
-        match build_pool_into(&mut reflect, name, &mut pool).await {
-            Ok(()) => resolved.push(name.clone()),
-            Err(_) => resolved.push(name.clone()), // keep the service; methods may be empty
-        }
+        let _ = reflection.load(name).await;
     }
 
-    Ok(schema_from_pool(&pool, &resolved))
+    Ok(schema_from_pool(reflection.pool(), &service_names))
 }
 
 /// Fetch `symbol`'s file (and imports) into an existing pool. Used by [`grpc_reflect`] to
@@ -667,23 +698,63 @@ pub async fn grpc_send(request: GrpcRequest) -> Result<GrpcResponse, String> {
 /// [`grpc_send`] with the Network tap injected instead of taken from the app — the seam
 /// `tests/netcap_record.rs` drives: the real call, recorded into a test's own `Netcap`.
 pub async fn send_via(request: GrpcRequest, tap: &Tap) -> Result<GrpcResponse, String> {
+    call(request, tap, None)
+        .await
+        .map(|outcome| outcome.response)
+}
+
+/// A unary call's [`GrpcResponse`] and the metadata the server sent with it: on OK the
+/// response headers and trailers (tonic merges them), otherwise the status's metadata — with
+/// `grpc-status`, `grpc-message` and `grpc-status-details-bin` left out, as they are the
+/// response's status fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrpcOutcome {
+    pub response: GrpcResponse,
+    pub metadata: Vec<(String, String)>,
+}
+
+/// `metadata` without the status entries [`GrpcResponse`] already carries.
+fn without_status(metadata: &[(String, String)]) -> Vec<(String, String)> {
+    const STATUS: [&str; 3] = ["grpc-status", "grpc-message", "grpc-status-details-bin"];
+    metadata
+        .iter()
+        .filter(|(k, _)| !STATUS.contains(&k.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// The unary call behind [`grpc_send`], recorded on `tap`, returning the server's metadata as
+/// well. With a `limit`, the whole call (dial, reflection, the call itself) must finish within
+/// it; past it the call is abandoned and its Network row settles as an error, never left
+/// pending.
+pub async fn call(
+    request: GrpcRequest,
+    tap: &Tap,
+    limit: Option<Duration>,
+) -> Result<GrpcOutcome, String> {
     let flow = start_flow(tap, &request);
-    match unary(request, &flow).await {
-        Ok(r) => Ok(r),
-        Err(e) => {
-            flow.fail(e.clone());
-            Err(e)
-        }
-    }
+    let outcome = match limit {
+        None => unary(request, &flow).await,
+        Some(limit) => tokio::time::timeout(limit, unary(request, &flow))
+            .await
+            .unwrap_or_else(|_| {
+                Err(format!(
+                    "no answer within {} ms; the call was abandoned",
+                    limit.as_millis()
+                ))
+            }),
+    };
+    outcome.inspect_err(|e| flow.fail(e.clone()))
 }
 
 /// The call itself; `flow` gets the request body once parsed and the outcome.
-async fn unary(request: GrpcRequest, flow: &Flow) -> Result<GrpcResponse, String> {
+async fn unary(request: GrpcRequest, flow: &Flow) -> Result<GrpcOutcome, String> {
     let channel = connect_channel(&request.endpoint, request.plaintext).await?;
 
     // Resolve the method descriptor via reflection.
-    let mut reflect = Reflect::negotiate(channel.clone()).await?;
-    let pool = build_pool_for_symbol(&mut reflect, &request.service).await?;
+    let mut reflection = Reflection::over(channel.clone()).await?;
+    reflection.load(&request.service).await?;
+    let pool = reflection.pool();
 
     let service = pool
         .get_service_by_name(&request.service)
@@ -736,21 +807,21 @@ async fn unary(request: GrpcRequest, flow: &Flow) -> Result<GrpcResponse, String
     match grpc.unary(tonic_request, path, codec).await {
         Ok(response) => {
             let message = dynamic_to_json(response.get_ref())?;
-            // tonic only resolves `Ok` on an HTTP 200 whose grpc-status was OK; the response
-            // headers are its metadata (the trailers are consumed by tonic and not exposed).
-            flow.response_head(
-                200,
-                "HTTP/2",
-                capture_headers(&response.metadata().clone().into_headers()),
-            );
+            // tonic only resolves `Ok` on an HTTP 200 whose grpc-status was OK; its metadata is
+            // the response headers with the trailers merged in (so `grpc-status: 0` is there).
+            let headers = capture_headers(&response.metadata().clone().into_headers());
+            flow.response_head(200, "HTTP/2", headers.clone());
             flow.grpc_status(0);
             flow.response_body(message.as_bytes(), response.get_ref().encoded_len() as u64);
             flow.done(None);
-            Ok(GrpcResponse {
-                message,
-                status_code: 0,
-                status_name: status_name_for(0).to_string(),
-                error: None,
+            Ok(GrpcOutcome {
+                response: GrpcResponse {
+                    message,
+                    status_code: 0,
+                    status_name: status_name_for(0).to_string(),
+                    error: None,
+                },
+                metadata: without_status(&headers),
             })
         }
         // A gRPC status (incl. a post-connect transport blip surfaced as Unavailable) is
@@ -765,6 +836,7 @@ async fn unary(request: GrpcRequest, flow: &Flow) -> Result<GrpcResponse, String
                 message.to_string()
             };
             flow.grpc_status(number as i32);
+            let metadata = capture_headers(&status.metadata().clone().into_headers());
             if std::error::Error::source(&status).is_some() {
                 // Wrapped by tonic around an h2/transport error: nothing came back from the
                 // server, so the row is an error, not a response.
@@ -778,15 +850,18 @@ async fn unary(request: GrpcRequest, flow: &Flow) -> Result<GrpcResponse, String
                 if !message.is_empty() {
                     trailers.push(("grpc-message".to_string(), message.to_string()));
                 }
-                trailers.extend(capture_headers(&status.metadata().clone().into_headers()));
+                trailers.extend(metadata.iter().cloned());
                 flow.response_trailers(trailers);
                 flow.done(None);
             }
-            Ok(GrpcResponse {
-                message: String::new(),
-                status_code: number,
-                status_name,
-                error: Some(error),
+            Ok(GrpcOutcome {
+                response: GrpcResponse {
+                    message: String::new(),
+                    status_code: number,
+                    status_name,
+                    error: Some(error),
+                },
+                metadata: without_status(&metadata),
             })
         }
     }
@@ -953,6 +1028,30 @@ mod tests {
     fn build_metadata_rejects_binary_metadata_for_now() {
         let err = build_metadata(&[header("trace-bin", "AAAA")]).unwrap_err();
         assert!(err.contains("binary metadata"), "got: {err}");
+    }
+
+    #[test]
+    fn an_outcomes_metadata_leaves_out_the_status_it_already_carries() {
+        let pairs = |p: &[(&str, &str)]| -> Vec<(String, String)> {
+            p.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        assert_eq!(
+            without_status(&pairs(&[
+                ("content-type", "application/grpc"),
+                ("grpc-status", "0"),
+                ("x-served-by", "a"),
+                ("grpc-message", "m"),
+                ("grpc-status-details-bin", "AAAA"),
+                ("x-served-by", "b"),
+            ])),
+            pairs(&[
+                ("content-type", "application/grpc"),
+                ("x-served-by", "a"),
+                ("x-served-by", "b"),
+            ])
+        );
     }
 
     #[test]
