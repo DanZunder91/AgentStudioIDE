@@ -414,6 +414,12 @@ pub fn run() {
             portability::portability_export,
             portability::portability_inspect,
             portability::portability_import,
+            // ── Agent Studio's tools in Claude Code (agent_ctl/mcp.rs), for the Settings menu
+            //    item. Each runs Claude Code's own `claude mcp get|add|remove`, only when the user
+            //    opens the menu or clicks; the app never writes Claude's config itself.
+            agent_ctl::mcp::claude_mcp_status,
+            agent_ctl::mcp::claude_mcp_install,
+            agent_ctl::mcp::claude_mcp_uninstall,
             // ── tab tear-off (docs/design/tab-tearoff.md): move a tab into its own OS window
             //    and back. A tab crosses as a description posted to the receiver's mailbox;
             //    its PTY never moves (the receiver re-attaches it).
