@@ -360,12 +360,13 @@ never an HTTP 502), so tests that expect a refused connection pass unchanged.";
 /// (`crate::agent_ctl`). Advice, but here advice is the whole mechanism: the agent has to know the
 /// command exists to use it when the user says "connect me to this database".
 pub(crate) const TOOLS_CONTEXT: &str = "Agent Studio tools: this terminal has an `agent-studio` \
-command that acts on the Agent Studio app itself. When the user asks you to connect to, add or \
-open a database in Agent Studio, run `agent-studio db connect '<connection-url>'` with the URL \
-quoted (postgres, postgresql, mysql, clickhouse, mongodb, mongodb+srv, redis, rediss and valkey \
-URLs; --name <name> names it). It tests the connection, saves it read-only, moves the password \
-into Agent Studio's Vault and opens it in the DB panel, and it never prints the password back. \
-`agent-studio db list` shows the saved connections; `agent-studio help` explains the rest.";
+command that acts on the Agent Studio app itself (also available as the agent-studio MCP server \
+when it is configured). Use it when the user asks you to do something in Agent Studio: connect to \
+a database (`agent-studio db connect '<connection-url>'`, URL quoted), list, browse or query the \
+databases saved there (`agent-studio db list`, …), or open and send HTTP, WebSocket and gRPC \
+requests with its API client. Run `agent-studio help` for every command and \
+`agent-studio help <command>` for its options. It never prints passwords or Vault secrets, new \
+connections are read-only, and an agent cannot use the user's saved secrets.";
 
 /// Everything the `SessionStart` hook adds to the session's context.
 pub(crate) fn session_context() -> String {
@@ -3260,7 +3261,8 @@ node  \"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n)\r\n";
         assert!(ctx.starts_with(PROXY_CONTEXT));
         assert!(ctx.contains("agent-studio db connect '<connection-url>'"));
         assert!(ctx.contains("agent-studio db list"));
-        assert!(ctx.contains("never prints the password"));
+        assert!(ctx.contains("never prints passwords"));
+        assert!(ctx.contains("agent-studio help"));
         // Every scheme it names is one the registry really parses.
         for scheme in [
             "postgres",

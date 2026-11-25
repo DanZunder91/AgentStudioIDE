@@ -5999,10 +5999,11 @@ mod db_live_agent_ctl {
         let (dir, paths) = temp_paths("ok");
         let url = format!("postgresql://{USER}:{PASSWORD}@{HOST}:{PORT}/{DATABASE}");
         rt().block_on(async {
-            let report =
-                agent_studio_scaffold_lib::agent_ctl::db_connect(&paths, &url, None, false)
-                    .await
-                    .unwrap_or_else(|e| panic!("db connect refused the fixture: {e}"));
+            let report = agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+                &paths, &url, None, false,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("db connect refused the fixture: {e}"));
             assert!(report.created);
             let test = report.test.clone().expect("a fresh connection is tested");
             assert!(test.ok, "{test:?}");
@@ -6030,9 +6031,11 @@ mod db_live_agent_ctl {
             agent_studio_scaffold_lib::db::db_close(opened.session_id.clone()).await;
 
             // Asking again changes nothing and says so.
-            let again = agent_studio_scaffold_lib::agent_ctl::db_connect(&paths, &url, None, false)
-                .await
-                .unwrap();
+            let again = agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+                &paths, &url, None, false,
+            )
+            .await
+            .unwrap();
             assert!(!again.created);
             assert_eq!(again.connection.id, c.id);
         });
@@ -6045,9 +6048,11 @@ mod db_live_agent_ctl {
         let (dir, paths) = temp_paths("bad");
         let url = format!("postgresql://{USER}:wrong-pw@{HOST}:{PORT}/{DATABASE}");
         rt().block_on(async {
-            let err = agent_studio_scaffold_lib::agent_ctl::db_connect(&paths, &url, None, false)
-                .await
-                .unwrap_err();
+            let err = agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+                &paths, &url, None, false,
+            )
+            .await
+            .unwrap_err();
             assert!(err.contains("Nothing was saved"), "{err}");
             assert!(
                 !err.contains("wrong-pw"),

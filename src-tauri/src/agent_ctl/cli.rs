@@ -13,13 +13,13 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
-use super::{CtlRequest, CtlResponse, CTL_PATH};
+use serde_json::{Map, Value};
+
+use super::registry::{self, ParamKind, ToolSpec};
+use super::{CtlCall, CtlResponse, CTL_PATH};
 use crate::agent::hook::{
     ENV_HOOK_TOKEN, ENV_HOOK_URL, ENV_TERMINAL_ID, HEADER_TERMINAL, HEADER_TOKEN,
 };
-
-/// The first arguments that put the binary in command mode. Anything else starts the app.
-const COMMANDS: &[&str] = &["db", "help", "--help", "-h"];
 
 /// Exit codes: 0 done, 1 the app refused or the operation failed, 2 a usage error,
 /// 3 the app could not be reached.
@@ -29,8 +29,8 @@ const EXIT_UNREACHABLE: i32 = 3;
 
 /// The connect timeout. The listener is on loopback, so anything slower is not there.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-/// The whole reply. Above the slowest connection test an engine allows, so a slow server is
-/// reported by the app as a failed test rather than cut off here.
+/// The whole reply. Above the slowest operation a tool allows (a connection test, a request
+/// timeout), so a slow server is reported by the app rather than cut off here.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(150);
 
 /// Run the command in `std::env::args` if there is one, returning the process exit code.
@@ -46,9 +46,12 @@ pub fn run_if_cli() -> Option<i32> {
     Some(run(&args, env.as_ref(), &mut out, &mut err))
 }
 
-/// Whether `args` (without the program name) is a command rather than an app launch.
+/// Whether `args` (without the program name) is a command rather than an app launch: the first
+/// word is a tool group (`db`, `http`, …) or a request for help.
 pub fn is_command(args: &[String]) -> bool {
-    args.first().is_some_and(|a| COMMANDS.contains(&a.as_str()))
+    args.first().is_some_and(|a| {
+        matches!(a.as_str(), "help" | "--help" | "-h") || registry::groups().contains(&a.as_str())
+    })
 }
 
 /// The three values a terminal inside Agent Studio carries.
@@ -60,7 +63,7 @@ pub struct CtlEnv {
 }
 
 impl CtlEnv {
-    fn from_process() -> Option<Self> {
+    pub fn from_process() -> Option<Self> {
         Some(Self {
             url: std::env::var(ENV_HOOK_URL).ok().filter(|v| !v.is_empty())?,
             token: std::env::var(ENV_HOOK_TOKEN)
@@ -74,10 +77,14 @@ impl CtlEnv {
 }
 
 /// What the command line asked for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Parsed {
-    Help,
-    Request { request: CtlRequest, json: bool },
+    /// The whole list, or one tool's (`None` / `Some(name)`).
+    Help(Option<&'static str>),
+    Call {
+        call: CtlCall,
+        json: bool,
+    },
 }
 
 /// The whole command, with its output streams injected (tests read them).
@@ -90,12 +97,20 @@ pub fn run(args: &[String], env: Option<&CtlEnv>, out: &mut dyn Write, err: &mut
             return EXIT_USAGE;
         }
     };
-    let (request, json) = match parsed {
-        Parsed::Help => {
+    let (call, json) = match parsed {
+        Parsed::Help(None) => {
             let _ = write!(out, "{}", usage());
             return 0;
         }
-        Parsed::Request { request, json } => (request, json),
+        Parsed::Help(Some(name)) => {
+            let _ = write!(
+                out,
+                "{}",
+                registry::find(name).map(tool_usage).unwrap_or_default()
+            );
+            return 0;
+        }
+        Parsed::Call { call, json } => (call, json),
     };
     let Some(env) = env else {
         let _ = writeln!(
@@ -105,7 +120,7 @@ pub fn run(args: &[String], env: Option<&CtlEnv>, out: &mut dyn Write, err: &mut
         );
         return EXIT_USAGE;
     };
-    let response = match send(env, &request) {
+    let response = match send(env, &call) {
         Ok(r) => r,
         Err(message) => {
             let _ = writeln!(err, "agent-studio: {message}");
@@ -131,82 +146,207 @@ pub fn run(args: &[String], env: Option<&CtlEnv>, out: &mut dyn Write, err: &mut
     }
 }
 
-/// `db connect <url> [--name <name>] [--force] [--json]`, `db list [--json]`, `help`.
+/// `<group> <verb> [positional…] [--param value]… [--flag] [--json] [--help]`, or `help`.
 pub fn parse_args(args: &[String]) -> Result<Parsed, String> {
-    let mut rest = args.iter().map(String::as_str);
-    match rest.next() {
-        None | Some("help" | "--help" | "-h") => Ok(Parsed::Help),
-        Some("db") => match rest.next() {
-            Some("connect") => {
-                let (mut url, mut name, mut force, mut json) = (None, None, false, false);
-                while let Some(a) = rest.next() {
-                    match a {
-                        "--force" => force = true,
-                        "--json" => json = true,
-                        "--name" => {
-                            name = Some(rest.next().ok_or("--name needs a value")?.to_string())
-                        }
-                        "--help" | "-h" => return Ok(Parsed::Help),
-                        _ if a.starts_with("--name=") => {
-                            name = Some(a["--name=".len()..].to_string())
-                        }
-                        _ if a.starts_with("--") => return Err(format!("unknown option {a}")),
-                        _ if url.is_none() => url = Some(a.to_string()),
-                        _ => {
-                            return Err("give one connection URL (quote it: it may contain & or ?)"
-                                .to_string())
-                        }
-                    }
-                }
-                let url = url.ok_or("db connect needs a connection URL")?;
-                Ok(Parsed::Request {
-                    request: CtlRequest::DbConnect { url, name, force },
-                    json,
-                })
-            }
-            Some("list") => {
-                let mut json = false;
-                for a in rest {
-                    match a {
-                        "--json" => json = true,
-                        "--help" | "-h" => return Ok(Parsed::Help),
-                        _ => return Err(format!("unexpected argument {a}")),
-                    }
-                }
-                Ok(Parsed::Request {
-                    request: CtlRequest::DbList,
-                    json,
-                })
-            }
-            Some(other) => Err(format!("unknown db command `{other}`")),
-            None => Err("db needs a command: connect or list".to_string()),
-        },
-        Some(other) => Err(format!("unknown command `{other}`")),
+    match args.first().map(String::as_str) {
+        None | Some("help" | "--help" | "-h") => {
+            // `agent-studio help db query` → that tool's help.
+            return Ok(Parsed::Help(
+                registry::find_cli(args.get(1..).unwrap_or(&[])).map(|t| t.name),
+            ));
+        }
+        _ => {}
     }
+    let Some(spec) = registry::find_cli(args) else {
+        let group = &args[0];
+        let verbs: Vec<&str> = registry::all()
+            .iter()
+            .filter(|t| t.cli.first() == Some(&group.as_str()))
+            .filter_map(|t| t.cli.get(1).copied())
+            .collect();
+        return Err(match (verbs.is_empty(), args.get(1)) {
+            (true, _) => format!("unknown command `{group}`"),
+            (false, None) => format!("{group} needs a command: {}", verbs.join(", ")),
+            (false, Some(v)) => format!("unknown {group} command `{v}`"),
+        });
+    };
+    let rest = &args[spec.cli.len()..];
+    let mut map = Map::new();
+    let mut json = false;
+    let mut positionals = spec.params.iter().filter(|p| p.positional);
+    let mut i = 0;
+    while i < rest.len() {
+        let a = rest[i].as_str();
+        i += 1;
+        match a {
+            "--json" => json = true,
+            "--help" | "-h" => return Ok(Parsed::Help(Some(spec.name))),
+            _ if a.starts_with("--") => {
+                let (flag, inline) = match a.split_once('=') {
+                    Some((f, v)) => (f, Some(v.to_string())),
+                    None => (a, None),
+                };
+                let p = spec
+                    .params
+                    .iter()
+                    .find(|p| p.flag() == flag)
+                    .ok_or_else(|| format!("unknown option {flag}"))?;
+                if p.kind == ParamKind::Bool {
+                    let v = match inline.as_deref() {
+                        None | Some("true") => true,
+                        Some("false") => false,
+                        Some(other) => return Err(format!("{flag} is a flag, not `{other}`")),
+                    };
+                    map.insert(p.name.to_string(), Value::Bool(v));
+                    continue;
+                }
+                let raw = match inline {
+                    Some(v) => v,
+                    None => {
+                        let v = rest
+                            .get(i)
+                            .ok_or_else(|| format!("{flag} needs a value"))?
+                            .clone();
+                        i += 1;
+                        v
+                    }
+                };
+                let value = convert(p.kind, &raw, flag)?;
+                if p.kind == ParamKind::StringList {
+                    let list = map
+                        .entry(p.name.to_string())
+                        .or_insert_with(|| Value::Array(Vec::new()));
+                    if let (Value::Array(items), Value::String(s)) = (list, value) {
+                        items.push(Value::String(s));
+                    }
+                } else {
+                    map.insert(p.name.to_string(), value);
+                }
+            }
+            _ => {
+                let p = positionals.next().ok_or_else(|| {
+                    format!(
+                        "unexpected argument `{a}` (quote a value that contains spaces, & or ?)"
+                    )
+                })?;
+                map.insert(p.name.to_string(), convert(p.kind, a, p.name)?);
+            }
+        }
+    }
+    if let Some(p) = spec
+        .params
+        .iter()
+        .find(|p| p.required && !map.contains_key(p.name))
+    {
+        return Err(if p.positional {
+            format!("{} needs {}", spec.cli.join(" "), p.name.replace('_', " "))
+        } else {
+            format!("{} needs {}", spec.cli.join(" "), p.flag())
+        });
+    }
+    Ok(Parsed::Call {
+        call: CtlCall {
+            tool: spec.name.to_string(),
+            args: map,
+        },
+        json,
+    })
 }
 
-/// The help text, with the URL schemes the app actually speaks (read from the engine registry).
+/// A command-line string as the JSON value of a parameter kind.
+fn convert(kind: ParamKind, raw: &str, what: &str) -> Result<Value, String> {
+    Ok(match kind {
+        ParamKind::String | ParamKind::StringList => Value::String(raw.to_string()),
+        ParamKind::Integer => Value::from(
+            raw.parse::<i64>()
+                .map_err(|_| format!("{what} must be a whole number, not `{raw}`"))?,
+        ),
+        ParamKind::Bool => Value::Bool(raw == "true"),
+        ParamKind::Json => {
+            serde_json::from_str(raw).map_err(|e| format!("{what} must be JSON ({e}): {raw}"))?
+        }
+    })
+}
+
+/// The help text: every tool, grouped by its first word, from the registry.
 pub fn usage() -> String {
-    format!(
-        "agent-studio — drive Agent Studio from one of its terminals\n\
-         \n\
-         \x20 agent-studio db connect <url> [--name <name>] [--force] [--json]\n\
-         \x20     Add a database connection to Agent Studio, test it and open it in the DB panel.\n\
-         \x20     <url> is a connection URL: {schemes}\n\
-         \x20     The password moves into Agent Studio's Vault and is never printed back.\n\
-         \x20     New connections are read-only; the user can make one writable in the DB panel.\n\
-         \x20     A connection that fails its test is not saved unless --force is given.\n\
-         \n\
-         \x20 agent-studio db list [--json]\n\
-         \x20     The saved database connections (no secrets).\n",
-        schemes = super::scheme_list()
-    )
+    let mut s = String::from(
+        "agent-studio — drive Agent Studio from one of its terminals\n\n\
+         Every command prints a sentence; add --json for structured output.\n\
+         `agent-studio help <command>` shows a command's options.\n",
+    );
+    let mut group = "";
+    for t in registry::all() {
+        let g = t.cli.first().copied().unwrap_or("");
+        if g != group {
+            s.push('\n');
+            group = g;
+        }
+        s.push_str(&format!(
+            "  agent-studio {}\n      {}\n",
+            synopsis(t),
+            t.summary
+        ));
+    }
+    s
 }
 
-/// POST the request to the app and read its reply.
-pub fn send(env: &CtlEnv, request: &CtlRequest) -> Result<CtlResponse, String> {
+/// `db connect <url> [--name <name>] [--force]`.
+fn synopsis(t: &ToolSpec) -> String {
+    let mut parts: Vec<String> = t.cli.iter().map(|w| w.to_string()).collect();
+    for p in t.params.iter().filter(|p| p.positional) {
+        let n = p.name.replace('_', "-");
+        parts.push(if p.required {
+            format!("<{n}>")
+        } else {
+            format!("[<{n}>]")
+        });
+    }
+    for p in t.params.iter().filter(|p| !p.positional) {
+        let value = match p.kind {
+            ParamKind::Bool => String::new(),
+            ParamKind::Json => " <json>".to_string(),
+            _ => format!(" <{}>", p.name.replace('_', "-")),
+        };
+        let repeat = if p.kind == ParamKind::StringList {
+            "…"
+        } else {
+            ""
+        };
+        parts.push(if p.required {
+            format!("{}{value}{repeat}", p.flag())
+        } else {
+            format!("[{}{value}]{repeat}", p.flag())
+        });
+    }
+    parts.join(" ")
+}
+
+/// One tool's help: synopsis, summary, details, and each parameter.
+pub fn tool_usage(t: &ToolSpec) -> String {
+    let mut s = format!("agent-studio {}\n\n{}\n", synopsis(t), t.summary);
+    if !t.details.is_empty() {
+        s.push_str(&format!("\n{}\n", t.details));
+    }
+    if !t.params.is_empty() {
+        s.push('\n');
+        for p in t.params {
+            let name = if p.positional {
+                format!("<{}>", p.name.replace('_', "-"))
+            } else {
+                p.flag()
+            };
+            s.push_str(&format!("  {name:<18} {}\n", p.help));
+        }
+    }
+    s.push_str("  --json             Print the result as JSON.\n");
+    s
+}
+
+/// POST the call to the app and read its reply.
+pub fn send(env: &CtlEnv, call: &CtlCall) -> Result<CtlResponse, String> {
     let addr = loopback_addr(&env.url)?;
-    let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
+    let body = serde_json::to_vec(call).map_err(|e| e.to_string())?;
     let unreachable = |e: std::io::Error| {
         format!("could not reach Agent Studio at {addr} ({e}). Is the app still running?")
     };
@@ -281,8 +421,15 @@ mod tests {
         a.iter().map(|s| s.to_string()).collect()
     }
 
+    fn call(a: &[&str]) -> (CtlCall, bool) {
+        match parse_args(&args(a)).unwrap() {
+            Parsed::Call { call, json } => (call, json),
+            other => panic!("not a call: {other:?}"),
+        }
+    }
+
     #[test]
-    fn only_our_commands_switch_the_binary_into_command_mode() {
+    fn only_tool_groups_and_help_switch_the_binary_into_command_mode() {
         assert!(is_command(&args(&["db", "list"])));
         assert!(is_command(&args(&["help"])));
         assert!(is_command(&args(&["--help"])));
@@ -293,8 +440,8 @@ mod tests {
     }
 
     #[test]
-    fn db_connect_takes_one_url_and_its_options_in_any_order() {
-        let p = parse_args(&args(&[
+    fn positionals_flags_and_inline_values_become_typed_arguments() {
+        let (c, json) = call(&[
             "db",
             "connect",
             "--force",
@@ -302,37 +449,52 @@ mod tests {
             "--name",
             "Shop",
             "--json",
-        ]))
-        .unwrap();
+        ]);
+        assert!(json);
+        assert_eq!(c.tool, "db_connect");
         assert_eq!(
-            p,
-            Parsed::Request {
-                request: CtlRequest::DbConnect {
-                    url: "postgres://u:p@h/db?sslmode=require&x=1".into(),
-                    name: Some("Shop".into()),
-                    force: true,
-                },
-                json: true,
-            }
+            Value::Object(c.args),
+            serde_json::json!({
+                "url": "postgres://u:p@h/db?sslmode=require&x=1",
+                "name": "Shop",
+                "force": true,
+            })
         );
-        let p = parse_args(&args(&["db", "connect", "redis://h", "--name=Cache"])).unwrap();
+        let (c, json) = call(&[
+            "db",
+            "connect",
+            "redis://h",
+            "--name=Cache",
+            "--force=false",
+        ]);
+        assert!(!json);
         assert_eq!(
-            p,
-            Parsed::Request {
-                request: CtlRequest::DbConnect {
-                    url: "redis://h".into(),
-                    name: Some("Cache".into()),
-                    force: false,
-                },
-                json: false,
-            }
+            Value::Object(c.args),
+            serde_json::json!({"url": "redis://h", "name": "Cache", "force": false})
         );
+    }
+
+    #[test]
+    fn every_kind_converts_from_its_command_line_spelling() {
+        assert_eq!(convert(ParamKind::Integer, "42", "n").unwrap(), 42);
+        assert!(convert(ParamKind::Integer, "4x", "--limit")
+            .unwrap_err()
+            .contains("--limit must be a whole number"));
+        assert_eq!(
+            convert(ParamKind::Json, r#"{"a":[1]}"#, "b").unwrap(),
+            serde_json::json!({"a": [1]})
+        );
+        assert!(convert(ParamKind::Json, "{", "--body")
+            .unwrap_err()
+            .contains("must be JSON"));
+        assert_eq!(convert(ParamKind::String, "x", "s").unwrap(), "x");
+        assert_eq!(convert(ParamKind::Bool, "true", "b").unwrap(), true);
     }
 
     #[test]
     fn mistakes_are_usage_errors_that_name_the_problem() {
         let e = |a: &[&str]| parse_args(&args(a)).unwrap_err();
-        assert_eq!(e(&["db", "connect"]), "db connect needs a connection URL");
+        assert_eq!(e(&["db", "connect"]), "db connect needs url");
         assert_eq!(
             e(&["db", "connect", "a://", "--name"]),
             "--name needs a value"
@@ -341,25 +503,42 @@ mod tests {
             e(&["db", "connect", "a://", "--bogus"]),
             "unknown option --bogus"
         );
-        assert!(e(&["db", "connect", "a://", "b://"]).contains("one connection URL"));
+        assert!(e(&["db", "connect", "a://", "b://"]).contains("unexpected argument `b://`"));
         assert_eq!(e(&["db", "drop"]), "unknown db command `drop`");
-        assert_eq!(e(&["db"]), "db needs a command: connect or list");
-        assert_eq!(e(&["db", "list", "x"]), "unexpected argument x");
+        assert!(e(&["db"]).starts_with("db needs a command: connect, list"));
+        assert!(e(&["db", "connect", "a://", "--force=maybe"]).contains("is a flag"));
     }
 
     #[test]
-    fn help_lists_every_scheme_the_registry_speaks() {
-        assert_eq!(parse_args(&args(&["help"])).unwrap(), Parsed::Help);
+    fn help_is_generated_from_the_registry() {
+        assert_eq!(parse_args(&args(&["help"])).unwrap(), Parsed::Help(None));
+        assert_eq!(
+            parse_args(&args(&["help", "db", "connect"])).unwrap(),
+            Parsed::Help(Some("db_connect"))
+        );
         assert_eq!(
             parse_args(&args(&["db", "connect", "--help"])).unwrap(),
-            Parsed::Help
+            Parsed::Help(Some("db_connect"))
         );
-        let text = usage();
-        for spec in crate::db::engines::ENGINES {
-            for scheme in spec.url_schemes {
-                assert!(text.contains(&format!("{scheme}://")), "{scheme} missing");
-            }
+        let all = usage();
+        for t in registry::all() {
+            assert!(
+                all.contains(&format!("agent-studio {}", t.cli.join(" "))),
+                "{}",
+                t.name
+            );
+            assert!(all.contains(t.summary), "{}", t.name);
         }
+        let one = tool_usage(registry::find("db_connect").unwrap());
+        assert!(one.starts_with("agent-studio db connect <url> [--name <name>] [--force]"));
+        assert!(one.contains("--force"));
+        assert!(one.contains("--json"));
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(
+            run(&args(&["help", "db", "list"]), None, &mut out, &mut err),
+            0
+        );
+        assert!(String::from_utf8_lossy(&out).starts_with("agent-studio db list"));
     }
 
     #[test]

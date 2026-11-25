@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use agent_studio_scaffold_lib::agent_ctl::{self, cli};
+use agent_studio_scaffold_lib::agent_ctl::{self, cli, CtlCall, CtlEvent, ToolCtx, UiSink};
 use agent_studio_scaffold_lib::db::Paths;
 use agent_studio_scaffold_lib::hook_listener::{CtlFuture, CtlHandler, HookListener};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -26,27 +26,34 @@ fn dead_port() -> u16 {
     l.local_addr().unwrap().port()
 }
 
-/// A listener whose `/ctl` route is the real handler over `paths`, recording every hook and
-/// every event the handler would emit.
-type Events = Arc<Mutex<Vec<agent_ctl::CtlEvent>>>;
+/// A listener whose `/ctl` route is the real dispatcher over the temp dir, recording every hook
+/// and every UI event the tools emit.
 type Hooks = Arc<Mutex<Vec<String>>>;
 
-fn start(paths: Paths) -> (cli::CtlEnv, Hooks, Events) {
+#[derive(Default)]
+struct Events(Mutex<Vec<CtlEvent>>);
+
+impl UiSink for Events {
+    fn emit(&self, event: CtlEvent) {
+        self.0.lock().unwrap().push(event);
+    }
+}
+
+fn start(paths: Paths) -> (cli::CtlEnv, Hooks, Arc<Events>) {
+    let dir = paths.store.parent().unwrap().to_path_buf();
     let (listener, config) = HookListener::bind().expect("bind");
     let hooks: Hooks = Arc::default();
-    let events: Events = Arc::default();
+    let events: Arc<Events> = Arc::default();
     let (h, e) = (hooks.clone(), events.clone());
     let on_ctl: Arc<CtlHandler> = Arc::new(move |terminal_id: String, body: Vec<u8>| {
-        let (paths, e) = (paths.clone(), e.clone());
+        let ctx = ToolCtx {
+            dir: dir.clone(),
+            terminal_id,
+            ui: e.clone(),
+        };
         Box::pin(async move {
-            let outcome = agent_ctl::handle(&paths, &terminal_id, &body).await;
-            if let Some(ev) = outcome.event {
-                e.lock().unwrap().push(ev);
-            }
-            (
-                outcome.status,
-                serde_json::to_vec(&outcome.response).unwrap(),
-            )
+            let (status, response) = agent_ctl::handle(ctx, &body).await;
+            (status, serde_json::to_vec(&response).unwrap())
         }) as CtlFuture
     });
     listener.serve_with_ctl(
@@ -61,8 +68,15 @@ fn start(paths: Paths) -> (cli::CtlEnv, Hooks, Events) {
     (env, hooks, events)
 }
 
+fn call(tool: &str, args: serde_json::Value) -> CtlCall {
+    CtlCall {
+        tool: tool.into(),
+        args: args.as_object().unwrap().clone(),
+    }
+}
+
 /// `cli::send` blocks; run it off the async runtime the listener serves on.
-async fn send(env: &cli::CtlEnv, request: agent_ctl::CtlRequest) -> agent_ctl::CtlResponse {
+async fn send(env: &cli::CtlEnv, request: CtlCall) -> agent_ctl::CtlResponse {
     let env = env.clone();
     tokio::task::spawn_blocking(move || cli::send(&env, &request))
         .await
@@ -75,18 +89,21 @@ async fn the_ctl_route_answers_the_cli_and_hooks_still_go_to_the_hook_callback()
     let (dir, paths) = temp_paths("route");
     let (env, hooks, events) = start(paths.clone());
 
-    let listed = send(&env, agent_ctl::CtlRequest::DbList).await;
+    let listed = send(&env, call("db_list", serde_json::json!({}))).await;
     assert!(listed.ok);
     assert!(listed.message.starts_with("No database connections"));
 
     let port = dead_port();
     let created = send(
         &env,
-        agent_ctl::CtlRequest::DbConnect {
-            url: format!("postgres://app:s3cret@127.0.0.1:{port}/shop"),
-            name: Some("Shop".into()),
-            force: true,
-        },
+        call(
+            "db_connect",
+            serde_json::json!({
+                "url": format!("postgres://app:s3cret@127.0.0.1:{port}/shop"),
+                "name": "Shop",
+                "force": true,
+            }),
+        ),
     )
     .await;
     assert!(created.ok, "{}", created.message);
@@ -94,27 +111,22 @@ async fn the_ctl_route_answers_the_cli_and_hooks_still_go_to_the_hook_callback()
         .message
         .contains("Saved in Agent Studio as \"Shop\""));
     assert!(!created.message.contains("s3cret"));
-    let ev = events.lock().unwrap().clone();
+    let ev = events.0.lock().unwrap().clone();
     assert_eq!(ev.len(), 1);
-    let agent_ctl::CtlEvent::DbConnection {
-        terminal_id,
-        created,
-        ..
-    } = &ev[0];
+    assert_eq!(ev[0].kind, "dbConnection");
     assert_eq!(
-        terminal_id, "term-9",
+        ev[0].terminal_id, "term-9",
         "the event names the terminal that asked"
     );
-    assert!(*created);
+    assert_eq!(ev[0].payload["created"], true);
 
     // A refusal is a reply with a message, not a transport error.
     let refused = send(
         &env,
-        agent_ctl::CtlRequest::DbConnect {
-            url: format!("postgres://app:s3cret@127.0.0.1:{port}/other"),
-            name: None,
-            force: false,
-        },
+        call(
+            "db_connect",
+            serde_json::json!({"url": format!("postgres://app:s3cret@127.0.0.1:{port}/other")}),
+        ),
     )
     .await;
     assert!(!refused.ok);
@@ -153,12 +165,14 @@ async fn a_ctl_request_without_the_token_never_reaches_the_handler() {
     let (dir, paths) = temp_paths("token");
     let (mut env, _hooks, events) = start(paths.clone());
     env.token = "0".repeat(64);
-    let err = tokio::task::spawn_blocking(move || cli::send(&env, &agent_ctl::CtlRequest::DbList))
-        .await
-        .unwrap()
-        .unwrap_err();
+    let err = tokio::task::spawn_blocking(move || {
+        cli::send(&env, &call("db_list", serde_json::json!({})))
+    })
+    .await
+    .unwrap()
+    .unwrap_err();
     assert!(err.contains("refused the request"), "{err}");
-    assert!(events.lock().unwrap().is_empty());
+    assert!(events.0.lock().unwrap().is_empty());
     assert!(!paths.store.exists());
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -174,10 +188,12 @@ async fn without_a_ctl_handler_the_route_answers_404_and_calls_no_hook() {
         token: config.token,
         terminal_id: "t".into(),
     };
-    let err = tokio::task::spawn_blocking(move || cli::send(&env, &agent_ctl::CtlRequest::DbList))
-        .await
-        .unwrap()
-        .unwrap_err();
+    let err = tokio::task::spawn_blocking(move || {
+        cli::send(&env, &call("db_list", serde_json::json!({})))
+    })
+    .await
+    .unwrap()
+    .unwrap_err();
     assert!(err.contains("404"), "{err}");
     assert!(hooks.lock().unwrap().is_empty());
 }
