@@ -58,6 +58,7 @@ pub mod redis;
 pub mod result;
 pub mod secret;
 pub mod session;
+pub mod sql_words;
 pub mod sqlmongo;
 pub mod store;
 pub mod tree;
@@ -100,7 +101,7 @@ pub struct Paths {
 
 impl Paths {
     /// The real paths, in the OS app config dir. The one function here that an `AppHandle` gates.
-    fn of(app: &tauri::AppHandle) -> Self {
+    pub(crate) fn of(app: &tauri::AppHandle) -> Self {
         Self {
             store: store::store_path(app),
             vault: crate::api_store::store_path_for(app),
@@ -872,6 +873,29 @@ pub async fn query(
     mode: DbRunMode,
     row_limit: Option<u32>,
 ) -> Result<Vec<DbResultSet>, DbError> {
+    run_on_session(session_id, sql, mode, row_limit, false).await
+}
+
+/// [`query`], with read-only as a boundary rather than a default: on a read-only PostgreSQL or
+/// MySQL session the run is held in a `READ ONLY` transaction that is always rolled back, because
+/// the session's read-only setting alone does not stand against a hostile statement. The agent
+/// tools' path. See [`engine::DbSession::run_strict`]; every other session runs as [`query`] does.
+pub async fn query_strict(
+    session_id: &str,
+    sql: String,
+    mode: DbRunMode,
+    row_limit: Option<u32>,
+) -> Result<Vec<DbResultSet>, DbError> {
+    run_on_session(session_id, sql, mode, row_limit, true).await
+}
+
+async fn run_on_session(
+    session_id: &str,
+    sql: String,
+    mode: DbRunMode,
+    row_limit: Option<u32>,
+    strict: bool,
+) -> Result<Vec<DbResultSet>, DbError> {
     let live = session::get(session_id)?;
     // A per-run row limit may only ever be *clamped*, never trusted: it arrives from the webview
     // and the ceiling exists because above it the webview is the bottleneck no matter what.
@@ -893,7 +917,12 @@ pub async fn query(
     // that died mid-flight may already have committed on the server, and re-sending it would apply
     // the user's write twice. See `DbSession::ensure_live`.
     sess.ensure_live(&limits).await?;
-    sess.run(&Script { text: sql, mode }, &limits).await
+    let script = Script { text: sql, mode };
+    if strict {
+        sess.run_strict(&script, &limits).await
+    } else {
+        sess.run(&script, &limits).await
+    }
 }
 
 /* ──────────────────────────── secret resolution ──────────────────────────── */

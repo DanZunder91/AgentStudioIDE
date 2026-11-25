@@ -352,6 +352,12 @@ pub(crate) fn update<R, E>(
     Ok((store, out))
 }
 
+/// The store file inside the app config dir `dir` — where [`store_path`] puts it, for a
+/// caller that already holds the dir (the agent tools, whose tests pass a temp dir).
+pub fn path_in(dir: &Path) -> PathBuf {
+    dir.join(FILE_NAME)
+}
+
 /// The store file's path: the Tauri app config dir if available (created on write),
 /// else a `home_dir()`-based fallback. **Always outside any workspace/repo** — that
 /// is the secret-safety guarantee.
@@ -575,6 +581,12 @@ mod tests {
         save(&f.store, &store).unwrap();
         // A brand-new read of the same file returns exactly what we saved.
         assert_eq!(load(&f.store), store);
+    }
+
+    #[test]
+    fn path_in_is_the_store_file_inside_the_config_dir() {
+        let f = Fixture::new("path-in");
+        assert_eq!(path_in(&f.dir), f.store);
     }
 
     #[test]

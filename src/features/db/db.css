@@ -347,8 +347,20 @@ input.db-dialog__input[type="checkbox"] {
   padding: 5px 6px;
   /* The rail is `overflow-x: hidden`, so over-wide content is CLIPPED, not scrolled
      (a known failure mode). `min-width: 0` on the flex children is what lets the
-     truncating cells actually shrink instead of pushing the buttons out of the rail. */
+     truncating cells actually shrink instead of pushing the buttons out of the rail.
+     It wraps: when the text cells and `.db-panel__actions` do not fit on one line, the
+     actions move to a second one, right-aligned, and the name keeps its room. */
   min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.db-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .db-panel__disclose {
@@ -375,8 +387,9 @@ input.db-dialog__input[type="checkbox"] {
 }
 
 .db-panel__name {
-  flex: 0 1 auto;
-  min-width: 0;
+  /* Never squeezed below a readable width: the actions wrap first. */
+  flex: 1 1 6em;
+  min-width: 6em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -384,7 +397,7 @@ input.db-dialog__input[type="checkbox"] {
 
 .db-panel__engine,
 .db-panel__where {
-  flex: 0 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -630,4 +643,27 @@ input.db-dialog__input[type="checkbox"] {
   border-bottom: 1px solid var(--border, #30363d);
   font-size: 10px;
   color: var(--text-dim, #8b949e);
+}
+
+/* What an agent just did through the `agent-studio db` tools (DbPanel's AgentNotice). The
+   buttons keep their size (`.db-dialog__btn`), so in the side panel's default width they wrap
+   below the text instead of squeezing it to a word per line; a wider panel keeps one row. */
+.db-panel__agent-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--accent, #4c8bf5);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.db-panel__agent-notice > span {
+  flex: 1 1 14em;
+  min-width: 0;
+  /* A query line can hold one long token (an identifier, a URL): break it, never overflow. */
+  overflow-wrap: anywhere;
 }

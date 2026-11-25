@@ -33,7 +33,7 @@
 
 import { useCallback, useEffect } from "react";
 
-import { useAppStore } from "../../app/store";
+import { useAppStore, type DbAgentNotice } from "../../app/store";
 import { ChevronIcon } from "../../components/icons";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { DbTree } from "./DbTree";
@@ -100,12 +100,103 @@ export function sessionTitle(session: {
   return "How long this connection took to open — DNS, TLS, authentication and the version query.";
 }
 
+/** A query's first non-blank line, capped, for a one-line notice. */
+function queryLine(query: string): string {
+  const line = query.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
+  return line.length <= 80 ? line : `${line.slice(0, 79)}…`;
+}
+
+/**
+ * What an agent just did, in words: which agent, which connection, and —
+ * * for a connection it added, that it is read-only, so a connection never appears in the list
+ *   unexplained;
+ * * for a query it ran (`ran`, every run), the query, Agent Studio's refusal or what came back,
+ *   and where the results are (in the console, or not yet: a busy or unconnected console);
+ * * for a query it wrote while the user had text in that console (`offer`), that their text was
+ *   left as it is — the notice's "Put in console" is the only way the query goes in.
+ */
+export function agentNoticeText(
+  notice: Omit<DbAgentNotice, "connectionId">,
+  connection: DbConnection | null,
+): string {
+  const who = notice.agent === null ? "An agent" : `The agent "${notice.agent}"`;
+  const what = connection === null ? "a connection" : `"${connection.name}"`;
+  const kept = notice.offer === undefined ? "" : " Your text in the console was left as it is.";
+  if (notice.ran !== undefined) {
+    const { error, outcome, console: shown } = notice.ran;
+    const line = queryLine(notice.ran.query);
+    if (error !== null) {
+      return (
+        `${who} tried to run a query on ${what}, and Agent Studio refused it: ${error}` +
+        `${line === "" ? "" : ` (${line})`}${kept}`
+      );
+    }
+    const where =
+      shown === "busy"
+        ? " Your own query was running, so the console did not show its results."
+        : shown === "closed"
+          ? " Connect the console to see its results."
+          : " Its results are in the console.";
+    return (
+      `${who} ran a query on ${what}${line === "" ? "." : `: ${line}`} ` +
+      `Result: ${outcome ?? "nothing"}.${where}${kept}`
+    );
+  }
+  if (notice.offer !== undefined) {
+    const line = queryLine(notice.offer);
+    return `${who} wrote a query for ${what}${line === "" ? "." : `: ${line}`}${kept}`;
+  }
+  if (!notice.created) return `${who} opened ${what}, which was already saved. Nothing changed.`;
+  const access =
+    connection === null || connection.readOnly
+      ? " It is read-only: use Edit to allow writes."
+      : "";
+  return `${who} added ${what}.${access}`;
+}
+
+function AgentNotice({
+  notice,
+  connection,
+  onPut,
+  onDismiss,
+}: {
+  notice: Omit<DbAgentNotice, "connectionId">;
+  connection: DbConnection | null;
+  onPut: () => void;
+  onDismiss: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="db-panel__agent-notice" role="status" data-testid="db-agent-notice">
+      <span title={notice.offer ?? notice.ran?.query}>{agentNoticeText(notice, connection)}</span>
+      {notice.offer !== undefined && (
+        <button
+          type="button"
+          className="db-dialog__btn"
+          data-testid="db-agent-notice-put"
+          onClick={onPut}
+        >
+          Put in console
+        </button>
+      )}
+      <button
+        type="button"
+        className="db-dialog__btn"
+        data-testid="db-agent-notice-dismiss"
+        onClick={onDismiss}
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
 export function DbPanel(): React.JSX.Element {
   const engines = useAppStore((s) => s.dbEngines);
   const connections = useAppStore((s) => s.dbConnections);
   const sessions = useAppStore((s) => s.dbSessions);
   const dbError = useAppStore((s) => s.dbError);
   const dialog = useAppStore((s) => s.dbDialog);
+  const agentNotice = useAppStore((s) => s.dbAgentNotice);
   const {
     loadDbStore,
     openDbDialog,
@@ -115,6 +206,8 @@ export function DbPanel(): React.JSX.Element {
     openDbSession,
     closeDbSession,
     refreshDbTree,
+    dismissDbAgentNotice,
+    putAgentDbQueryInConsole,
   } = useAppStore((s) => s.dbActions);
   const openDbConsoleTab = useAppStore((s) => s.layoutActions.openDbConsoleTab);
 
@@ -166,6 +259,15 @@ export function DbPanel(): React.JSX.Element {
           New connection
         </button>
       </div>
+
+      {agentNotice !== null && (
+        <AgentNotice
+          notice={agentNotice}
+          connection={connections.find((c) => c.id === agentNotice.connectionId) ?? null}
+          onPut={putAgentDbQueryInConsole}
+          onDismiss={dismissDbAgentNotice}
+        />
+      )}
 
       {dbError !== null && (
         <p className="db-dialog__error" role="alert" data-testid="db-panel-error">
@@ -273,52 +375,57 @@ function ConnectionRow({
         <span className="db-panel__where" title={connectionSubtitle(c)}>
           {connectionSubtitle(c)}
         </span>
-        {c.readOnly && (
-          <span
-            className="db-panel__badge"
-            title={readOnlyBadgeTitle(spec)}
-            data-testid={`db-row-readonly-${c.id}`}
+        {/* The badge and the buttons wrap onto their own line when the rail is too narrow
+            for one: on one line at the default 300px rail they squeezed the name, engine and
+            host to 0px and pushed Delete out of view. */}
+        <div className="db-panel__actions">
+          {c.readOnly && (
+            <span
+              className="db-panel__badge"
+              title={readOnlyBadgeTitle(spec)}
+              data-testid={`db-row-readonly-${c.id}`}
+            >
+              read-only
+            </span>
+          )}
+          {/* The connection offers a way to refresh its tables and database model,
+              next to Edit and Delete.
+              It used to live in the session block, which only appears once connected — and
+              a control that appears only sometimes teaches nobody where it lives.
+              Always rendered here, DISABLED without an open session, because the
+              levels it re-reads are answered by `db_children`, which needs one. */}
+          <button
+            type="button"
+            className="db-dialog__btn db-dialog__btn--small"
+            data-testid={`db-row-refresh-${c.id}`}
+            aria-label={`Refresh ${c.name}`}
+            title={
+              session?.status === "open"
+                ? "Re-read this connection's databases and tables. Levels you have opened stay open."
+                : "Connect first — refreshing re-reads the server's catalogue."
+            }
+            disabled={session?.status !== "open"}
+            onClick={onRefresh}
           >
-            read-only
-          </span>
-        )}
-        {/* The connection offers a way to refresh its tables and database model,
-            next to Edit and Delete.
-            It used to live in the session block, which only appears once connected — and
-            a control that appears only sometimes teaches nobody where it lives.
-            Always rendered here, DISABLED without an open session, because the
-            levels it re-reads are answered by `db_children`, which needs one. */}
-        <button
-          type="button"
-          className="db-dialog__btn db-dialog__btn--small"
-          data-testid={`db-row-refresh-${c.id}`}
-          aria-label={`Refresh ${c.name}`}
-          title={
-            session?.status === "open"
-              ? "Re-read this connection's databases and tables. Levels you have opened stay open."
-              : "Connect first — refreshing re-reads the server's catalogue."
-          }
-          disabled={session?.status !== "open"}
-          onClick={onRefresh}
-        >
-          Refresh
-        </button>
-        <button
-          type="button"
-          className="db-dialog__btn db-dialog__btn--small"
-          aria-label={`Edit ${c.name}`}
-          onClick={onEdit}
-        >
-          Edit
-        </button>
-        <button
-          type="button"
-          className="db-dialog__btn db-dialog__btn--small"
-          aria-label={`Delete ${c.name}`}
-          onClick={onDelete}
-        >
-          Delete
-        </button>
+            Refresh
+          </button>
+          <button
+            type="button"
+            className="db-dialog__btn db-dialog__btn--small"
+            aria-label={`Edit ${c.name}`}
+            onClick={onEdit}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className="db-dialog__btn db-dialog__btn--small"
+            aria-label={`Delete ${c.name}`}
+            onClick={onDelete}
+          >
+            Delete
+          </button>
+        </div>
       </div>
 
       {session !== undefined && (

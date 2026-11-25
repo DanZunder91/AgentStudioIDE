@@ -5962,3 +5962,1322 @@ mod db_live_ddl_kind {
         );
     }
 }
+
+/// `agent-studio db connect <url>` against the real Postgres fixture: what an agent does when the
+/// user says "connect me to this database". The URL carries the password, the way a user pastes it
+/// into a conversation; it must come out tested, saved read-only, with the password in the Vault,
+/// and open from the saved record alone.
+mod db_live_agent_ctl {
+    const HOST: &str = "127.0.0.1";
+    const PORT: u16 = 55432;
+    const USER: &str = "agentstudio";
+    /// TEST FIXTURE ONLY — published in this repo, bound to localhost.
+    const PASSWORD: &str = "agentstudio-test-pw";
+    const DATABASE: &str = "maestro";
+
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    fn temp_paths(tag: &str) -> (std::path::PathBuf, agent_studio_scaffold_lib::db::Paths) {
+        let dir = std::env::temp_dir().join(format!(
+            "agentstudio-db-live-ctl-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = agent_studio_scaffold_lib::db::Paths::in_dir(&dir);
+        (dir, paths)
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn an_agents_url_is_tested_saved_read_only_and_opens_from_the_vault() {
+        let (dir, paths) = temp_paths("ok");
+        let url = format!("postgresql://{USER}:{PASSWORD}@{HOST}:{PORT}/{DATABASE}");
+        rt().block_on(async {
+            let report = agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+                &paths, &url, None, false,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("db connect refused the fixture: {e}"));
+            assert!(report.created);
+            let test = report.test.clone().expect("a fresh connection is tested");
+            assert!(test.ok, "{test:?}");
+            assert!(
+                test.server_version
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("PostgreSQL"),
+                "{test:?}"
+            );
+            let c = &report.connection;
+            assert_eq!(c.name, format!("{DATABASE}@{HOST}"));
+            assert!(c.read_only);
+            let store = std::fs::read_to_string(&paths.store).unwrap();
+            assert!(
+                !store.contains(PASSWORD),
+                "the password reached the connection store"
+            );
+
+            // The saved record alone opens: the password comes back out of the Vault.
+            let opened = agent_studio_scaffold_lib::db::open(&paths, &c.id, None)
+                .await
+                .unwrap_or_else(|e| panic!("the saved connection did not open: {}", e.message));
+            assert!(opened.server_version.contains("PostgreSQL"));
+            agent_studio_scaffold_lib::db::db_close(opened.session_id.clone()).await;
+
+            // Asking again changes nothing and says so.
+            let again = agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+                &paths, &url, None, false,
+            )
+            .await
+            .unwrap();
+            assert!(!again.created);
+            assert_eq!(again.connection.id, c.id);
+        });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn a_wrong_password_is_reported_by_the_server_and_nothing_is_saved() {
+        let (dir, paths) = temp_paths("bad");
+        let url = format!("postgresql://{USER}:wrong-pw@{HOST}:{PORT}/{DATABASE}");
+        rt().block_on(async {
+            let err = agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+                &paths, &url, None, false,
+            )
+            .await
+            .unwrap_err();
+            assert!(err.contains("Nothing was saved"), "{err}");
+            assert!(
+                !err.contains("wrong-pw"),
+                "the password leaked into the error: {err}"
+            );
+        });
+        assert!(
+            !paths.store.exists()
+                || std::fs::read_to_string(&paths.store)
+                    .unwrap()
+                    .contains("[]")
+        );
+        assert!(
+            !paths.vault.exists(),
+            "a refused connection wrote the Vault"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /* ── the tools after `db connect`: an agent browsing and querying the saved connection ── */
+
+    use agent_studio_scaffold_lib::agent_ctl::commands::db::db_run;
+    use agent_studio_scaffold_lib::agent_ctl::{self, CtlEvent, CtlResponse, ToolCtx, UiSink};
+
+    /// A write probe of this module's own, in the 9000 range the seed never uses.
+    const PROBE_AGENT_WRITE: i32 = 9101;
+
+    #[derive(Default)]
+    struct Events(std::sync::Mutex<Vec<CtlEvent>>);
+
+    impl UiSink for Events {
+        fn emit(&self, event: CtlEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    /// The fixture saved the way an agent saves it (`db connect`, read-only), in a temp dir.
+    async fn saved(tag: &str) -> (std::path::PathBuf, agent_studio_scaffold_lib::db::Paths) {
+        let (dir, paths) = temp_paths(tag);
+        let url = format!("postgresql://{USER}:{PASSWORD}@{HOST}:{PORT}/{DATABASE}");
+        agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+            &paths,
+            &url,
+            Some("Maestro"),
+            false,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("db connect refused the fixture: {e}"));
+        (dir, paths)
+    }
+
+    /// One tool call through the real dispatcher, as the CLI or MCP would make it.
+    async fn tool(
+        dir: &std::path::Path,
+        name: &str,
+        args: serde_json::Value,
+    ) -> (u16, CtlResponse, Vec<CtlEvent>) {
+        let events = std::sync::Arc::new(Events::default());
+        let ctx = ToolCtx {
+            dir: dir.to_path_buf(),
+            terminal_id: "term-live".into(),
+            ui: events.clone(),
+        };
+        let body = serde_json::to_vec(&serde_json::json!({"tool": name, "args": args})).unwrap();
+        let (status, reply) = agent_ctl::handle(ctx, &body).await;
+        assert!(
+            !reply.message.contains(PASSWORD) && !reply.data.to_string().contains(PASSWORD),
+            "the password reached an agent: {}",
+            reply.message
+        );
+        let seen = events.0.lock().unwrap().clone();
+        assert!(
+            !serde_json::to_string(&seen).unwrap().contains(PASSWORD),
+            "the password reached the UI: {seen:?}"
+        );
+        (status, reply, seen)
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn an_agent_tests_and_browses_the_saved_connection_level_by_level() {
+        rt().block_on(async {
+            let (dir, _paths) = saved("schema").await;
+            let (status, r, _) = tool(
+                &dir,
+                "db_test",
+                serde_json::json!({"connection": "maestro"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(r.message.contains(": PostgreSQL "), "{}", r.message);
+
+            let (status, r, _) = tool(
+                &dir,
+                "db_schema",
+                serde_json::json!({"connection": "MAESTRO"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(
+                r.message
+                    .contains("database  maestro  — the connected database"),
+                "{}",
+                r.message
+            );
+
+            let (_, r, _) = tool(
+                &dir,
+                "db_schema",
+                serde_json::json!({"connection": "Maestro", "path": "maestro/public"}),
+            )
+            .await;
+            let names: Vec<&str> = r.data["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| i["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(names, ["Tables", "Views"], "{}", r.message);
+
+            let (_, r, _) = tool(
+                &dir,
+                "db_schema",
+                serde_json::json!({"connection": "Maestro", "path": "maestro/public/Tables"}),
+            )
+            .await;
+            for table in ["tall", "tracks", "wide"] {
+                assert!(
+                    r.message.contains(&format!("table  {table}")),
+                    "{}",
+                    r.message
+                );
+            }
+
+            // The folder level left out, and the columns with the server's own type names.
+            let (status, r, _) = tool(
+                &dir,
+                "db_schema",
+                serde_json::json!({"connection": "Maestro", "path": "maestro/public/tracks"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["path"], "maestro/public/Tables/tracks");
+            assert!(
+                r.message
+                    .contains("column  title  — character varying(16) · not null"),
+                "{}",
+                r.message
+            );
+            assert!(r.message.contains("11 items."), "{}", r.message);
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn an_agent_searches_table_view_and_column_names() {
+        rt().block_on(async {
+            let (dir, _paths) = saved("search").await;
+            let (status, r, _) = tool(
+                &dir,
+                "db_search",
+                serde_json::json!({"connection": "maestro", "pattern": "TRACK"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            let paths: Vec<&str> = r.data["matches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["path"].as_str().unwrap())
+                .collect();
+            assert!(
+                paths.contains(&"maestro/public/Tables/tracks"),
+                "{paths:?}"
+            );
+            assert!(
+                paths.contains(&"maestro/public/Views/v_tracks"),
+                "{paths:?}"
+            );
+            assert_eq!(r.data["complete"], true, "{}", r.message);
+
+            let (_, r, _) = tool(
+                &dir,
+                "db_search",
+                serde_json::json!({"connection": "maestro", "pattern": "label"}),
+            )
+            .await;
+            assert!(
+                r.message.contains("column  maestro/public/Tables/tall/label"),
+                "{}",
+                r.message
+            );
+
+            // 200 columns of `wide` match "c1": the walk stops at its match limit and says so.
+            let (_, r, _) = tool(
+                &dir,
+                "db_search",
+                serde_json::json!({"connection": "maestro", "pattern": "c", "path": "maestro/public/wide"}),
+            )
+            .await;
+            assert_eq!(r.data["matches"].as_array().unwrap().len(), 200);
+            assert_eq!(r.data["cutShort"], "matches", "{}", r.message);
+            assert!(r.message.contains("The search stopped early"), "{}", r.message);
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn an_agent_queries_rows_and_the_user_is_shown_the_run() {
+        rt().block_on(async {
+            let (dir, _paths) = saved("query").await;
+            let (status, r, events) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({
+                    "connection": "maestro",
+                    "query": "SELECT id, title, tag FROM tracks ORDER BY id",
+                }),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(
+                r.message.starts_with(
+                    "Ran on \"Maestro\" (PostgreSQL at 127.0.0.1:55432/maestro, read-only)"
+                ),
+                "{}",
+                r.message
+            );
+            assert!(r.message.contains("(6 rows)"), "{}", r.message);
+            assert!(
+                r.message.contains("2  | Bluewater   | NULL"),
+                "{}",
+                r.message
+            );
+            assert!(
+                r.message
+                    .contains("4  | Driftwood   | ünïcode ✓ 中文\\tand a\\nnewline"),
+                "{}",
+                r.message
+            );
+            // NULL and '' stay apart in the data (rows 2 and 3).
+            assert_eq!(r.data["results"][0]["rows"][1][2], serde_json::Value::Null);
+            assert_eq!(r.data["results"][0]["rows"][2][2], "");
+            assert_eq!(
+                r.data["results"][0]["columns"],
+                serde_json::json!(["id", "title", "tag"])
+            );
+
+            assert_eq!(events.len(), 1);
+            let e = serde_json::to_value(&events[0]).unwrap();
+            assert_eq!(e["kind"], "dbQueryRun");
+            assert_eq!(e["terminalId"], "term-live");
+            assert_eq!(e["results"][0]["rows"].as_array().unwrap().len(), 6);
+
+            // A `{{…}}` in a query is text, never a Vault lookup.
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": "SELECT '{{PROD_PW}}' AS t"}),
+            )
+            .await;
+            assert_eq!(
+                r.data["results"][0]["rows"],
+                serde_json::json!([["{{PROD_PW}}"]])
+            );
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn the_row_limit_and_the_byte_cap_are_measured_and_said() {
+        rt().block_on(async {
+            let (dir, _paths) = saved("limits").await;
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": "SELECT id FROM tall ORDER BY id"}),
+            )
+            .await;
+            assert_eq!(r.data["results"][0]["rows"].as_array().unwrap().len(), 100, "the default");
+            assert_eq!(r.data["truncated"], true);
+            assert!(r.message.contains("(100 rows, more exist)"), "{}", r.message);
+
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": "SELECT id FROM tall ORDER BY id", "limit": 10}),
+            )
+            .await;
+            assert_eq!(r.data["results"][0]["rows"].as_array().unwrap().len(), 10);
+            assert_eq!(r.data["results"][0]["rows"][9][0], "10");
+            assert!(
+                r.message
+                    .contains("Only the first 10 rows were read: that is the limit (10)."),
+                "{}",
+                r.message
+            );
+
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": "SELECT id FROM tall", "limit": 5000}),
+            )
+            .await;
+            assert_eq!(r.data["results"][0]["rows"].as_array().unwrap().len(), 1000);
+            assert!(r.message.contains("--limit 5000 was lowered to 1000"));
+
+            // 500 rows of 1000 characters (1010 bytes each with the cell's and the row's own
+            // cost): what fits in 64 KB, and a sentence for the rest.
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({
+                    "connection": "maestro",
+                    "query": "SELECT repeat('x', 1000) AS v FROM generate_series(1, 500)",
+                    "limit": 500,
+                }),
+            )
+            .await;
+            assert_eq!(r.data["results"][0]["rows"].as_array().unwrap().len(), 64);
+            assert!(
+                r.message.contains(
+                    "Rows after the first 64 (of 500 read) were left out: the reply is capped at 64 KB."
+                ),
+                "{}",
+                &r.message[r.message.len().saturating_sub(400)..]
+            );
+            assert!(r.message.len() <= 64 * 1024 + 4096);
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn a_write_through_a_read_only_connection_is_refused_and_the_row_is_absent() {
+        rt().block_on(async {
+            let (dir, _paths) = saved("ro").await;
+            let insert = format!(
+                "INSERT INTO tracks (id, title, ensemble, duration, tag) \
+                 VALUES ({PROBE_AGENT_WRITE}, 'agent', 'duo', 1, 'agent-write')"
+            );
+            let (status, r, events) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": insert}),
+            )
+            .await;
+            assert_eq!(status, 200, "the server's refusal is a result: {}", r.message);
+            assert!(
+                r.message.contains("The database said: The server refused that statement because the transaction is read-only"),
+                "{}",
+                r.message
+            );
+            assert_eq!(events.len(), 1, "the attempt is shown to the user");
+
+            // The guard's half: an access-mode change is refused before it is sent.
+            let (status, r, events) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({
+                    "connection": "maestro",
+                    "query": "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE",
+                }),
+            )
+            .await;
+            assert_eq!(status, 422, "{}", r.message);
+            assert!(r.message.contains("would change its access mode"), "{}", r.message);
+            assert!(events[0].payload["error"].as_str().unwrap().contains("access mode"));
+
+            // Two statements on a connection that allows one.
+            let (status, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": "SELECT 1; SELECT 2"}),
+            )
+            .await;
+            assert_eq!(status, 422);
+            assert!(r.message.contains("That is 2 statements"), "{}", r.message);
+
+            // Proven by absence, not by the error.
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({
+                    "connection": "maestro",
+                    "query": format!("SELECT count(*) FROM tracks WHERE id = {PROBE_AGENT_WRITE}"),
+                }),
+            )
+            .await;
+            assert_eq!(r.data["results"][0]["rows"], serde_json::json!([["0"]]), "{}", r.message);
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn a_query_past_the_deadline_is_cancelled_on_the_server() {
+        rt().block_on(async {
+            let (dir, paths) = saved("deadline").await;
+            let started = std::time::Instant::now();
+            let (_, result) = db_run::run(
+                &paths,
+                "maestro",
+                "SELECT pg_sleep(25) AS agent_deadline_probe",
+                None,
+                std::time::Duration::from_secs(1),
+            )
+            .await;
+            let err = result.unwrap_err();
+            assert!(err.contains("stopped waiting for the query"), "{err}");
+            assert!(started.elapsed() < std::time::Duration::from_secs(10));
+
+            // The statement is gone from the server, not left running for 25 s.
+            let mut still = String::new();
+            for _ in 0..30 {
+                let (_, r, _) = tool(
+                    &dir,
+                    "db_query",
+                    serde_json::json!({
+                        "connection": "maestro",
+                        "query": "SELECT count(*) FROM pg_stat_activity \
+                                  WHERE query LIKE 'SELECT pg_sleep(25) AS agent_deadline_probe%' \
+                                  AND state = 'active'",
+                    }),
+                )
+                .await;
+                still = r.data["results"][0]["rows"][0][0]
+                    .as_str()
+                    .unwrap_or("?")
+                    .to_string();
+                if still == "0" {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            assert_eq!(still, "0", "the abandoned statement is still running");
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    /// The same tools on an engine without SQL: the Redis fixture (`127.0.0.1:56379`,
+    /// `requirepass` only), saved by `db connect` from a `redis://:password@…` URL.
+    #[test]
+    #[ignore = "needs the Docker fixture (redis) — run with --ignored"]
+    fn an_agent_reads_redis_and_its_read_only_list_refuses_a_write_before_it_is_sent() {
+        const REDIS_PORT: u16 = 56379;
+        rt().block_on(async {
+            let (dir, paths) = temp_paths("redis");
+            let url = format!("redis://:{PASSWORD}@{HOST}:{REDIS_PORT}/0");
+            agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+                &paths,
+                &url,
+                Some("Cache"),
+                false,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("db connect refused the redis fixture: {e}"));
+
+            let (status, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "cache", "query": "GET fixture:string"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["results"][0]["rows"], serde_json::json!([["hello"]]));
+
+            let (status, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "cache", "query": "SET fixture:agent-probe x"}),
+            )
+            .await;
+            assert_eq!(status, 422, "{}", r.message);
+            assert!(
+                r.message.contains("not on this app's read-only list"),
+                "{}",
+                r.message
+            );
+            let (_, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "cache", "query": "EXISTS fixture:agent-probe"}),
+            )
+            .await;
+            assert_eq!(
+                r.data["results"][0]["rows"],
+                serde_json::json!([["0"]]),
+                "{}",
+                r.message
+            );
+
+            // The fixture holds ~5000 keys and the tree reads one page of 500: both tools must
+            // say so rather than let a name past the page read as a name that does not exist.
+            let (status, r, _) = tool(
+                &dir,
+                "db_schema",
+                serde_json::json!({"connection": "cache", "path": "db0/Keys"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["items"].as_array().unwrap().len(), 500);
+            assert_eq!(r.data["items"][0]["kind"], "key");
+            assert!(
+                r.data["partial"].as_str().unwrap().starts_with("500 of "),
+                "{}",
+                r.data
+            );
+            assert!(
+                r.message.contains("This level lists 500 of "),
+                "{}",
+                r.message
+            );
+
+            let (status, r, _) = tool(
+                &dir,
+                "db_search",
+                serde_json::json!({"connection": "cache", "pattern": "fixture:"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["complete"], false, "{}", r.message);
+            assert!(
+                r.message
+                    .contains("1 level list only one page of what the database holds"),
+                "{}",
+                r.message
+            );
+            assert!(r.message.contains("\"db0/Keys\" (500 of "), "{}", r.message);
+
+            // What the tree cannot page through, the console's own command can.
+            let (status, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({
+                    "connection": "cache",
+                    "query": "SCAN 0 MATCH \"fixture:key with*\" COUNT 10000",
+                }),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(
+                r.message.contains("fixture:key with spaces"),
+                "{}",
+                r.message
+            );
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    /* ── an agent is a hostile client: no password out, no write through read-only ── */
+
+    use agent_studio_scaffold_lib::db::engine::{engine_for, Limits, ResolvedConfig, Script};
+    use agent_studio_scaffold_lib::db::model::DbRunMode;
+    use agent_studio_scaffold_lib::db::result::DbResultSet;
+
+    const REDIS_PORT: u16 = 56379;
+    const MYSQL_PORT: u16 = 53306;
+    /// This module's PostgreSQL write probes (the module above uses 9101).
+    const PG_PROBE_DO_COMMIT: i32 = 9111;
+    const PG_PROBE_FUNCTION: i32 = 9112;
+    const PG_PROBE_CALL: i32 = 9113;
+    const PG_PROBE_SMUGGLED: i32 = 9115;
+    const PG_PROBE_WRITABLE: i32 = 9116;
+    /// Rows of the measured exploits: a forged run marker, the same from a function, and a
+    /// program run by `COPY … TO PROGRAM`.
+    const PG_PROBE_FORGED: i32 = 9131;
+    const PG_PROBE_FORGED_IN_CODE: i32 = 9134;
+    const PG_PROBE_PROGRAM: i32 = 9132;
+    /// This module's MySQL write probes (`db_live_mysql` uses 9101–9104).
+    const MY_PROBE_SMUGGLED: i32 = 9121;
+    const MY_PROBE_EXECUTE: i32 = 9122;
+    const MY_PROBE_SCRIPT_COMMIT: i32 = 9123;
+    const MY_PROBE_CALL: i32 = 9124;
+    const MY_PROBE_EXEC_COMMENT: i32 = 9125;
+    /// The row of a `CALL` hidden behind `--` and a control character.
+    const MY_PROBE_HIDDEN_CALL: i32 = 9133;
+
+    /// A script on a read-WRITE session of a fixture, outside the tools: set-up, clean-up, and the
+    /// check that a probe row is absent (from a session of its own, so nothing the agent's run left
+    /// behind can answer it).
+    async fn admin(cfg: ResolvedConfig, sql: &str) -> Vec<DbResultSet> {
+        let mut s = engine_for(cfg.engine)
+            .unwrap()
+            .open(&cfg)
+            .await
+            .unwrap_or_else(|e| panic!("the fixture did not open: {}", e.message));
+        let out = s
+            .run(
+                &Script {
+                    text: sql.to_string(),
+                    mode: DbRunMode::Script,
+                },
+                &Limits {
+                    row_limit: 500,
+                    timeout_ms: 30_000,
+                    allow_multi_statement: true,
+                },
+            )
+            .await;
+        s.close().await;
+        out.unwrap_or_else(|e| panic!("{sql}: {}", e.message))
+    }
+
+    async fn pg_admin(sql: &str) -> Vec<DbResultSet> {
+        admin(super::db_live::config(false, PASSWORD), sql).await
+    }
+
+    async fn my_admin(sql: &str) -> Vec<DbResultSet> {
+        admin(super::db_live_mysql::config(false, PASSWORD), sql).await
+    }
+
+    async fn rows_with(admin_sql: impl std::future::Future<Output = Vec<DbResultSet>>) -> String {
+        let sets = admin_sql.await;
+        sets[0].rows[0][0].clone().unwrap_or_default()
+    }
+
+    fn insert(id: i32) -> String {
+        format!(
+            "INSERT INTO tracks (id, title, ensemble, duration, tag) \
+             VALUES ({id}, 'agent', 'duo', 1, 'agent-write')"
+        )
+    }
+
+    /// Change every saved connection the way the user would in the DB panel's Edit dialog.
+    fn edit_saved(
+        paths: &agent_studio_scaffold_lib::db::Paths,
+        edit: impl Fn(&mut agent_studio_scaffold_lib::db::model::DbConnection),
+    ) {
+        use agent_studio_scaffold_lib::db::store;
+        let mut saved = store::load(&paths.store);
+        saved.connections.iter_mut().for_each(edit);
+        store::save(&paths.store, &saved).unwrap();
+    }
+
+    /// Let the saved connection run several statements per call (the console's Script button).
+    fn allow_scripts(paths: &agent_studio_scaffold_lib::db::Paths) {
+        edit_saved(paths, |c| c.allow_multi_statement = true);
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture (redis) — run with --ignored"]
+    fn redis_never_hands_an_agent_the_password_it_was_opened_with() {
+        rt().block_on(async {
+            // The exploit is real: on the console's path the fixture answers with the password.
+            let direct = admin(
+                super::db_live_redis::config(false, PASSWORD),
+                "CONFIG GET requirepass",
+            )
+            .await;
+            assert!(
+                format!("{direct:?}").contains(PASSWORD),
+                "the fixture is expected to answer CONFIG GET with its password: {direct:?}"
+            );
+
+            let (dir, paths) = temp_paths("redis-secret");
+            let url = format!("redis://:{PASSWORD}@{HOST}:{REDIS_PORT}/0");
+            agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+                &paths,
+                &url,
+                Some("Secrets"),
+                false,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("db connect refused the redis fixture: {e}"));
+
+            // Every way to read it is refused before anything is sent (`tool` asserts the
+            // password is in no reply, data or event).
+            for query in [
+                "CONFIG GET requirepass",
+                "CONFIG GET *",
+                "config get masterauth",
+                "\"CONFIG\" GET *pass*",
+                "ACL LIST",
+                "ACL GETUSER default",
+                "AUTH wrong-guess",
+                "HELLO 3 AUTH default wrong-guess",
+                "MONITOR",
+            ] {
+                let (status, r, events) = tool(
+                    &dir,
+                    "db_query",
+                    serde_json::json!({"connection": "secrets", "query": query}),
+                )
+                .await;
+                assert_eq!(status, 422, "{query}: {}", r.message);
+                assert!(
+                    r.message.contains("is not available to an agent"),
+                    "{query}: {}",
+                    r.message
+                );
+                assert_eq!(events.len(), 1, "the user is shown the attempt");
+            }
+
+            // The backstop: a value that IS the password comes back masked, to the agent and to
+            // the console alike. It expires on its own, so a failed run leaves nothing behind.
+            let key = format!("agent:secret-probe:{}", std::process::id());
+            admin(
+                super::db_live_redis::config(false, PASSWORD),
+                &format!("SET {key} {PASSWORD} EX 60"),
+            )
+            .await;
+            let (status, r, events) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "secrets", "query": format!("GET {key}")}),
+            )
+            .await;
+            admin(
+                super::db_live_redis::config(false, PASSWORD),
+                &format!("DEL {key}"),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            let mask = agent_studio_scaffold_lib::db::error::MASK;
+            assert_eq!(r.data["results"][0]["rows"], serde_json::json!([[mask]]));
+            assert_eq!(
+                events[0].payload["results"][0]["rows"],
+                serde_json::json!([[mask]])
+            );
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    /// A plpgsql function the fixture's admin creates, so its body is out of every text check an
+    /// agent's query passes: what a database the agent did not write may already hold.
+    async fn pg_function(name: &str, body: &str) {
+        pg_admin(&format!(
+            "CREATE OR REPLACE FUNCTION {name}() RETURNS void LANGUAGE plpgsql AS $$ BEGIN \
+             {body} END $$"
+        ))
+        .await;
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn a_hostile_statement_cannot_write_through_a_read_only_postgres_connection() {
+        rt().block_on(async {
+            let probes = [PG_PROBE_DO_COMMIT, PG_PROBE_FUNCTION, PG_PROBE_CALL];
+            let ids = format!("{}, {}, {}", probes[0], probes[1], probes[2]);
+            pg_admin(&format!("DELETE FROM tracks WHERE id IN ({ids})")).await;
+            let (dir, _paths) = saved("ro-hostile").await;
+            let query = |q: String| {
+                let dir = dir.clone();
+                async move {
+                    tool(
+                        &dir,
+                        "db_query",
+                        serde_json::json!({"connection": "maestro", "query": q}),
+                    )
+                    .await
+                }
+            };
+
+            // Reads run as before, each in its own read-only transaction, every column type
+            // included (the server's one-statement check describes them all).
+            let (status, r, _) =
+                query("SELECT * FROM tracks WHERE id < 9000 ORDER BY id".into()).await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(
+                r.data["results"][0]["rows"].as_array().unwrap().len(),
+                6,
+                "{}",
+                r.message
+            );
+
+            // The first exploit: a DO block that turns the default off, commits and writes. DO
+            // runs SQL no check can read, so it is refused before anything is sent.
+            let (status, r, events) = query(format!(
+                "DO $$ BEGIN PERFORM set_config('default_transaction_read_only', 'off', false); \
+                 COMMIT; {}; END $$",
+                insert(PG_PROBE_DO_COMMIT)
+            ))
+            .await;
+            assert_eq!(status, 422, "{}", r.message);
+            assert!(r.message.contains("`DO` is not available"), "{}", r.message);
+            assert_eq!(events.len(), 1, "the user is shown the attempt");
+            let (status, r, _) =
+                query("SELECT set_config('transaction_read_only', 'off', false)".to_string()).await;
+            assert_eq!(status, 422, "{}", r.message);
+
+            // The same moves from code the database already holds, which no text check sees:
+            // the server refuses them inside the statement's read-only transaction.
+            let function = format!("agent_probe_rw_{}", std::process::id());
+            pg_function(
+                &function,
+                &format!(
+                    "PERFORM set_config('transaction_read_only', 'off', false); {};",
+                    insert(PG_PROBE_FUNCTION)
+                ),
+            )
+            .await;
+            let (status, r, _) = query(format!("SELECT {function}()")).await;
+            pg_admin(&format!("DROP FUNCTION IF EXISTS {function}()")).await;
+            assert_eq!(status, 200, "a database error is a result: {}", r.message);
+            assert!(r.message.contains("The database said:"), "{}", r.message);
+
+            let proc_name = format!("agent_probe_commit_write_{}", std::process::id());
+            pg_admin(&format!(
+                "CREATE OR REPLACE PROCEDURE {proc_name}() LANGUAGE plpgsql AS $$ BEGIN \
+                 PERFORM set_config('default_transaction_read_only', 'off', false); COMMIT; \
+                 {}; END $$",
+                insert(PG_PROBE_CALL)
+            ))
+            .await;
+            let (status, r, _) = query(format!("CALL {proc_name}()")).await;
+            pg_admin(&format!("DROP PROCEDURE IF EXISTS {proc_name}()")).await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(
+                r.message.contains("invalid transaction termination"),
+                "{}",
+                r.message
+            );
+
+            // A bare COMMIT ends only its own statement's transaction, which holds nothing.
+            let (status, r, _) = query("COMMIT".to_string()).await;
+            assert_eq!(status, 200, "{}", r.message);
+
+            // Proven by absence.
+            assert_eq!(
+                rows_with(pg_admin(&format!(
+                    "SELECT count(*) FROM tracks WHERE id IN ({ids})"
+                )))
+                .await,
+                "0",
+                "a probe row was written"
+            );
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn a_hostile_script_cannot_write_through_a_read_only_postgres_connection() {
+        rt().block_on(async {
+            let ids = format!("{PG_PROBE_FORGED}, {PG_PROBE_FORGED_IN_CODE}, {PG_PROBE_SMUGGLED}");
+            pg_admin(&format!("DELETE FROM tracks WHERE id IN ({ids})")).await;
+            let (dir, paths) = saved("ro-script").await;
+            allow_scripts(&paths);
+            let script = |q: String| {
+                let dir = dir.clone();
+                async move {
+                    tool(
+                        &dir,
+                        "db_query",
+                        serde_json::json!({"connection": "maestro", "query": q}),
+                    )
+                    .await
+                }
+            };
+
+            // A measured exploit, as written: copy a run-scoped marker into the session, turn
+            // the default off, COMMIT, write. set_config is refused before anything is sent.
+            let (status, r, events) = script(format!(
+                "SELECT set_config('agent_studio.read_only_run', \
+                 current_setting('agent_studio.read_only_run', true), false), \
+                 set_config('default_transaction_read_only', 'off', false); COMMIT; {}",
+                insert(PG_PROBE_FORGED)
+            ))
+            .await;
+            assert_eq!(status, 422, "{}", r.message);
+            assert!(
+                r.message.contains("`set_config` is not available"),
+                "{}",
+                r.message
+            );
+            assert!(events[0].payload["error"].is_string());
+
+            // The same exploit from a function the database already holds, out of every text
+            // check: each statement's transaction is rolled back, so nothing the function did to
+            // the session reaches the INSERT's own read-only transaction, COMMIT or not.
+            let forge = format!("agent_probe_forge_{}", std::process::id());
+            pg_function(
+                &forge,
+                "PERFORM set_config('agent_studio.read_only_run', \
+                 coalesce(current_setting('agent_studio.read_only_run', true), ''), false); \
+                 PERFORM set_config('default_transaction_read_only', 'off', false);",
+            )
+            .await;
+            let (status, r, _) = script(format!(
+                "SELECT {forge}(); COMMIT; {}",
+                insert(PG_PROBE_FORGED_IN_CODE)
+            ))
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(
+                r.message.contains("because the transaction is read-only"),
+                "{}",
+                r.message
+            );
+
+            // Statements smuggled past the splitter: it reads `texte'\'…` as an escape string,
+            // the server (standard_conforming_strings on) as a typed literal, so the splitter
+            // sees one statement where the server sees four. The server is asked first.
+            let smuggled = format!(
+                "SELECT texte'\\'; SELECT {forge}(); COMMIT; INSERT INTO tracks (id, title, \
+                 ensemble, duration, tag) VALUES ({PG_PROBE_SMUGGLED}, $$agent$$, $$duo$$, 1, \
+                 $$agent-write$$); SELECT 'x'"
+            );
+            assert_eq!(
+                agent_studio_scaffold_lib::db::guard::split_statements(&smuggled).len(),
+                1,
+                "the splitter is fooled, which is the point of this probe"
+            );
+            let (status, r, _) = script(smuggled).await;
+            pg_admin(&format!("DROP FUNCTION IF EXISTS {forge}()")).await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(
+                r.message.contains("more than one statement"),
+                "{}",
+                r.message
+            );
+
+            assert_eq!(
+                rows_with(pg_admin(&format!(
+                    "SELECT count(*) FROM tracks WHERE id IN ({ids})"
+                )))
+                .await,
+                "0",
+                "a probe row was written"
+            );
+
+            // Negative control: once the user makes the connection writable, the same path
+            // writes — the transaction holds read-only, it does not invent it.
+            edit_saved(&paths, |c| c.read_only = false);
+            let (status, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": insert(PG_PROBE_WRITABLE)}),
+            )
+            .await;
+            let written = rows_with(pg_admin(&format!(
+                "SELECT count(*) FROM tracks WHERE id = {PG_PROBE_WRITABLE}"
+            )))
+            .await;
+            pg_admin(&format!(
+                "DELETE FROM tracks WHERE id = {PG_PROBE_WRITABLE}"
+            ))
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(r.message.contains("OK: 1 row affected."), "{}", r.message);
+            assert_eq!(written, "1");
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture — run with --ignored"]
+    fn an_agent_cannot_reach_the_postgres_servers_programs_or_files() {
+        rt().block_on(async {
+            pg_admin(&format!("DELETE FROM tracks WHERE id = {PG_PROBE_PROGRAM}")).await;
+            let reversed: String = PASSWORD.chars().rev().collect();
+            let environ = "SELECT reverse(split_part(split_part(encode(pg_read_binary_file(\
+                           '/proc/1/environ'), 'escape'), 'POSTGRES_PASSWORD=', 2), '\\000', 1)) \
+                           AS x";
+            // The exploits are real on this account: the fixture's user is a superuser, as local
+            // accounts often are, and the console's own path reads the server's environment.
+            let direct = pg_admin(environ).await;
+            assert!(
+                format!("{direct:?}").contains(&reversed),
+                "the fixture is expected to read its own environment: {direct:?}"
+            );
+
+            let (dir, paths) = saved("server-side").await;
+            let program = format!(
+                "COPY (SELECT 1) TO PROGRAM 'psql -h 127.0.0.1 -U {USER} -d {DATABASE} -c \
+                 \"INSERT INTO tracks (id, title, ensemble, duration, tag) VALUES \
+                 ({PG_PROBE_PROGRAM}, ''agent'', ''duo'', 1, ''agent-write'')\"'"
+            );
+            // Read-only first, then writable: read-only is not what stops these.
+            for writable in [false, true] {
+                edit_saved(&paths, |c| c.read_only = !writable);
+                for (q, what) in [
+                    (program.as_str(), "`COPY` is not available"),
+                    (environ, "`pg_read_binary_file` is not available"),
+                    (
+                        "/* x */ copy (select 1) to program 'true'",
+                        "`COPY` is not available",
+                    ),
+                    (
+                        "SELECT \"pg_read_file\"('/etc/hostname')",
+                        "`pg_read_file` is not available",
+                    ),
+                ] {
+                    let (status, r, events) = tool(
+                        &dir,
+                        "db_query",
+                        serde_json::json!({"connection": "maestro", "query": q}),
+                    )
+                    .await;
+                    assert_eq!(status, 422, "writable={writable} {q}: {}", r.message);
+                    assert!(r.message.contains(what), "{}", r.message);
+                    assert!(
+                        r.message
+                            .contains("an agent acts with the database account's privileges"),
+                        "{}",
+                        r.message
+                    );
+                    let seen = serde_json::to_string(&events).unwrap();
+                    assert!(
+                        !r.message.contains(&reversed)
+                            && !r.data.to_string().contains(&reversed)
+                            && !seen.contains(&reversed),
+                        "the password reached the agent or the UI in another form"
+                    );
+                }
+            }
+            assert_eq!(
+                rows_with(pg_admin(&format!(
+                    "SELECT count(*) FROM tracks WHERE id = {PG_PROBE_PROGRAM}"
+                )))
+                .await,
+                "0",
+                "a program on the server wrote the probe row"
+            );
+
+            // Positive control: an ordinary read on the same connection runs.
+            let (status, r, _) = tool(
+                &dir,
+                "db_query",
+                serde_json::json!({"connection": "maestro", "query": "SELECT count(*) FROM tracks WHERE id < 9000"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["results"][0]["rows"], serde_json::json!([["6"]]));
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+
+    /// The MySQL fixture's root, for what its ordinary account may not create (a stored function,
+    /// with binary logging on). TEST FIXTURE ONLY — published in this repo, bound to localhost.
+    async fn my_root(sql: &str) -> Vec<DbResultSet> {
+        let mut cfg = super::db_live_mysql::config(false, "agentstudio-root-test-pw");
+        cfg.user = "root".to_string();
+        admin(cfg, sql).await
+    }
+
+    #[test]
+    #[ignore = "needs the Docker fixture (mysql) — run with --ignored"]
+    fn a_hostile_statement_cannot_write_through_a_read_only_mysql_connection() {
+        rt().block_on(async {
+            let ids = format!(
+                "{MY_PROBE_SMUGGLED}, {MY_PROBE_EXECUTE}, {MY_PROBE_SCRIPT_COMMIT}, \
+                 {MY_PROBE_CALL}, {MY_PROBE_EXEC_COMMENT}, {MY_PROBE_HIDDEN_CALL}"
+            );
+            let ddl_probe = format!("agent_probe_ddl_{}", std::process::id());
+            let ddl_absent = || async {
+                rows_with(my_admin(&format!(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_name = '{ddl_probe}'"
+                )))
+                .await
+            };
+            my_admin(&format!(
+                "DELETE FROM tracks WHERE id IN ({ids}); DROP TABLE IF EXISTS {ddl_probe}"
+            ))
+            .await;
+            let (dir, paths) = temp_paths("mysql-hostile");
+            let url = format!("mysql://{USER}:{PASSWORD}@{HOST}:{MYSQL_PORT}/{DATABASE}");
+            agent_studio_scaffold_lib::agent_ctl::commands::db::db_connect(
+                &paths,
+                &url,
+                Some("Shop"),
+                false,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("db connect refused the mysql fixture: {e}"));
+            let replies = std::sync::Mutex::new(Vec::<String>::new());
+            let query = |q: String| {
+                let dir = dir.clone();
+                let replies = &replies;
+                async move {
+                    let out = tool(
+                        &dir,
+                        "db_query",
+                        serde_json::json!({"connection": "shop", "query": q}),
+                    )
+                    .await;
+                    replies.lock().unwrap().push(out.1.message.clone());
+                    out
+                }
+            };
+
+            // Reads run, each in its read-only transaction, every column type included.
+            let (status, r, _) = query("SELECT count(*) FROM tracks WHERE id < 9000".into()).await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["results"][0]["rows"], serde_json::json!([["6"]]));
+            let (status, r, _) =
+                query("SELECT * FROM tracks WHERE id < 9000 ORDER BY id".into()).await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["results"][0]["rows"].as_array().unwrap().len(), 6);
+            // MySQL cannot prepare SHOW WARNINGS (1295): it is still one statement, and it runs.
+            let (status, r, _) = query("SHOW WARNINGS".into()).await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert_eq!(r.data["results"][0]["kind"], "rows", "{}", r.message);
+
+            // One statement to the splitter (MySQL reads \' as an escaped quote, the splitter
+            // does not), five to the server — COMMIT, read-write, write. The server is asked first.
+            let smuggled = format!(
+                "SELECT '\\'' ; COMMIT; SET SESSION TRANSACTION READ WRITE; INSERT INTO tracks \
+                 (id, title, ensemble, duration, tag) VALUES ({MY_PROBE_SMUGGLED}, CHAR(97), \
+                 CHAR(100,117,111), 1, CHAR(120)); SELECT 'x'"
+            );
+            assert_eq!(
+                agent_studio_scaffold_lib::db::guard::split_statements(&smuggled).len(),
+                1,
+                "the splitter is fooled, which is the point of this probe"
+            );
+            let (status, r, _) = query(smuggled).await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(r.message.contains("The database said:"), "{}", r.message);
+
+            // An executable comment hides SQL from every check that reads the text.
+            let (status, r, _) = query(format!(
+                "SELECT 1 /*!50000 ; COMMIT; SET SESSION TRANSACTION READ WRITE; {} */",
+                insert(MY_PROBE_EXEC_COMMENT)
+            ))
+            .await;
+            assert_eq!(status, 422, "{}", r.message);
+            assert!(r.message.contains("/*! … */"), "{}", r.message);
+
+            // A procedure may COMMIT in MySQL: refused before it is called — also behind a `--`
+            // the server reads as a comment because a control character follows it.
+            let proc_name = format!("agent_probe_commit_write_{}", std::process::id());
+            my_admin(&format!(
+                "DROP PROCEDURE IF EXISTS {proc_name}; \
+                 CREATE PROCEDURE {proc_name}() BEGIN COMMIT; SET SESSION TRANSACTION READ \
+                 WRITE; {}; END",
+                insert(MY_PROBE_CALL)
+            ))
+            .await;
+            let mut calls = vec![format!("CALL {proc_name}()")];
+            for hide in ["--\u{1}\n", "--\u{7f}\n", "--\r\n", "# x\n", "/* x */"] {
+                calls.push(format!("{hide}CALL {proc_name}()"));
+            }
+            for call in calls {
+                let (status, r, _) = query(call.clone()).await;
+                assert_eq!(status, 422, "{call:?}: {}", r.message);
+                assert!(r.message.contains("cannot `CALL`"), "{call:?}: {}", r.message);
+            }
+            // The measured bypass, exactly: its own procedure and probe row.
+            let hidden = format!("agent_probe_hidden_call_{}", std::process::id());
+            my_admin(&format!(
+                "DROP PROCEDURE IF EXISTS {hidden}; \
+                 CREATE PROCEDURE {hidden}() BEGIN COMMIT; SET SESSION TRANSACTION READ \
+                 WRITE; {}; END",
+                insert(MY_PROBE_HIDDEN_CALL)
+            ))
+            .await;
+            let (status, r, _) = query(format!("--\u{1}\nCALL {hidden}()")).await;
+            my_admin(&format!(
+                "DROP PROCEDURE IF EXISTS {proc_name}; DROP PROCEDURE IF EXISTS {hidden}"
+            ))
+            .await;
+            assert_eq!(status, 422, "{}", r.message);
+
+            // Scripts: a prepared mode change, and a COMMIT between statements.
+            allow_scripts(&paths);
+            let (status, r, _) = query(format!(
+                "PREPARE s FROM 'SET SESSION TRANSACTION READ WRITE'; EXECUTE s; COMMIT; {}",
+                insert(MY_PROBE_EXECUTE)
+            ))
+            .await;
+            assert_eq!(status, 422, "{}", r.message);
+            assert!(r.message.contains("cannot `EXECUTE`"), "{}", r.message);
+            // COMMIT ends only its own statement's transaction; the INSERT's is read-only.
+            let (status, r, _) = query(format!(
+                "SELECT 1; COMMIT; {}",
+                insert(MY_PROBE_SCRIPT_COMMIT)
+            ))
+            .await;
+            assert_eq!(status, 200, "{}", r.message);
+            assert!(
+                r.message.contains("because the transaction is read-only"),
+                "{}",
+                r.message
+            );
+
+            // A function the database already holds turns the SESSION read-write, which a
+            // ROLLBACK does not undo in MySQL; a DDL statement's implicit commit would then run
+            // read-write (measured: the table is created). The session is asked before each
+            // statement, so the DDL is never sent.
+            let flip = format!("agent_probe_flip_{}", std::process::id());
+            my_root(&format!(
+                "DROP FUNCTION IF EXISTS {flip}; CREATE FUNCTION {flip}() RETURNS INT \
+                 DETERMINISTIC NO SQL BEGIN SET SESSION TRANSACTION READ WRITE; RETURN 1; END"
+            ))
+            .await;
+            let (status, r, _) =
+                query(format!("SELECT {flip}(); CREATE TABLE {ddl_probe} (a INT)")).await;
+            my_root(&format!("DROP FUNCTION IF EXISTS {flip}")).await;
+            assert_eq!(status, 422, "{}", r.message);
+            assert!(
+                r.message.contains("turned this session's read-only off"),
+                "{}",
+                r.message
+            );
+            assert_eq!(ddl_absent().await, "0", "the DDL ran read-write");
+
+            // What reaches the server's files or settings is refused, read-only or not.
+            for q in [
+                "SELECT LOAD_FILE('/etc/hostname')",
+                "SELECT 1 INTO OUTFILE '/tmp/agent-probe'",
+                "SET GLOBAL max_connections = 151",
+            ] {
+                let (status, r, _) = query(q.to_string()).await;
+                assert_eq!(status, 422, "{q}: {}", r.message);
+                assert!(r.message.contains("is not available to an agent"), "{}", r.message);
+            }
+
+            // No reply claims a rollback that this run did not measure.
+            for reply in replies.lock().unwrap().iter() {
+                assert!(!reply.contains("rolled back"), "{reply}");
+            }
+            assert_eq!(
+                rows_with(my_admin(&format!(
+                    "SELECT count(*) FROM tracks WHERE id IN ({ids})"
+                )))
+                .await,
+                "0",
+                "a probe row was written"
+            );
+            let _ = std::fs::remove_dir_all(dir);
+        });
+    }
+}

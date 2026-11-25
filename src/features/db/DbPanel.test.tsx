@@ -44,9 +44,9 @@ const dbIpc = vi.hoisted(() => ({
 }));
 vi.mock("./dbIpc", () => dbIpc);
 
-import { useAppStore } from "../../app/store";
+import { blankDbConsole, useAppStore } from "../../app/store";
 import { resetStore } from "../../test/store-harness";
-import { DbPanel, connectionSubtitle, sessionLine, sessionTitle } from "./DbPanel";
+import { DbPanel, agentNoticeText, connectionSubtitle, sessionLine, sessionTitle } from "./DbPanel";
 import { POSTGRES_ENGINE, REDIS_ENGINE } from "./dbFixtures";
 import { describeDbError } from "./dbErrors";
 import type { DbConnection } from "./types";
@@ -673,5 +673,167 @@ describe("sessionTitle — the latency number explains itself", () => {
     expect(
       screen.getByTestId("db-row-session-c1").querySelector("[title]"),
     ).toHaveAttribute("title", expect.stringContaining("took to open"));
+  });
+});
+
+/* ─────────────────── a connection an agent added (agent-studio db connect) ─────────────────── */
+
+describe("DbPanel — a connection an agent added", () => {
+  const agentNamed = (title: string, customTitle: string | null = null): void =>
+    useAppStore.setState((s) => {
+      (s.agents as Record<string, unknown>)["t1"] = { id: "t1", title, customTitle };
+    });
+
+  it("says who added which connection, and that it is read-only", () => {
+    expect(agentNoticeText({ created: true, agent: "claude · shop" }, conn())).toBe(
+      'The agent "claude · shop" added "Prod Postgres". It is read-only: use Edit to allow writes.',
+    );
+    expect(agentNoticeText({ created: true, agent: null }, conn({ readOnly: false }))).toBe(
+      'An agent added "Prod Postgres".',
+    );
+    expect(agentNoticeText({ created: false, agent: null }, conn())).toBe(
+      'An agent opened "Prod Postgres", which was already saved. Nothing changed.',
+    );
+    // Before the reload lands the record is not in the list yet.
+    expect(agentNoticeText({ created: true, agent: null }, null)).toBe(
+      "An agent added a connection. It is read-only: use Edit to allow writes.",
+    );
+  });
+
+  it("tells every query an agent ran: the query, the refusal or the result, and where it is", async () => {
+    type Ran = NonNullable<Parameters<typeof agentNoticeText>[0]["ran"]>;
+    const ran = (query: string, over: Partial<Ran> = {}) => ({
+      created: false,
+      agent: "claude · shop",
+      ran: { query, error: null, outcome: "2 rows", console: "shown" as const, ...over },
+    });
+    expect(agentNoticeText(ran("\n  SELECT 1\nFROM t"), conn())).toBe(
+      'The agent "claude · shop" ran a query on "Prod Postgres": SELECT 1 Result: 2 rows. ' +
+        "Its results are in the console.",
+    );
+    expect(agentNoticeText(ran("SELECT 1", { console: "busy" }), conn())).toBe(
+      'The agent "claude · shop" ran a query on "Prod Postgres": SELECT 1 Result: 2 rows. ' +
+        "Your own query was running, so the console did not show its results.",
+    );
+    expect(agentNoticeText(ran("SELECT 1", { console: "closed", outcome: null }), null)).toBe(
+      'The agent "claude · shop" ran a query on a connection: SELECT 1 Result: nothing. ' +
+        "Connect the console to see its results.",
+    );
+    expect(
+      agentNoticeText(
+        { ...ran("INSERT INTO t VALUES (1)", { error: "It is read-only." }), agent: null },
+        null,
+      ),
+    ).toBe(
+      "An agent tried to run a query on a connection, and Agent Studio refused it: It is " +
+        "read-only. (INSERT INTO t VALUES (1))",
+    );
+    // No query text at all: the sentence still ends cleanly.
+    expect(agentNoticeText(ran(" \n "), conn())).toBe(
+      'The agent "claude · shop" ran a query on "Prod Postgres". Result: 2 rows. Its results ' +
+        "are in the console.",
+    );
+    expect(agentNoticeText(ran("", { error: "Refused." }), conn())).toBe(
+      'The agent "claude · shop" tried to run a query on "Prod Postgres", and Agent Studio ' +
+        "refused it: Refused.",
+    );
+    const long = `SELECT ${"x".repeat(200)}`;
+    expect(agentNoticeText(ran(long), conn())).toContain(`${long.slice(0, 79)}…`);
+    // A run whose query was kept out of the user's text says so, refused or not.
+    expect(agentNoticeText({ ...ran("SELECT 1"), offer: "SELECT 1" }, conn())).toMatch(
+      / Your text in the console was left as it is\.$/,
+    );
+    expect(
+      agentNoticeText({ ...ran("SELECT 1", { error: "No." }), offer: "SELECT 1" }, conn()),
+    ).toMatch(/\(SELECT 1\) Your text in the console was left as it is\.$/);
+
+    // Rendered in the panel like any agent notice, without a Put button when nothing is offered.
+    await mount();
+    useAppStore.setState((s) => {
+      s.dbAgentNotice = { connectionId: "c1", ...ran("SELECT 2", { console: "busy" }) };
+    });
+    expect(await screen.findByTestId("db-agent-notice")).toBeTruthy();
+    expect(screen.getByTestId("db-agent-notice").textContent).toContain(
+      "Your own query was running, so the console did not show its results.",
+    );
+    expect(screen.queryByTestId("db-agent-notice-put")).toBeNull();
+  });
+
+  it("offers a query written for a console the user was writing in, and puts it in on a click", async () => {
+    expect(
+      agentNoticeText({ created: false, agent: null, offer: "\nSELECT * FROM orders" }, conn()),
+    ).toBe(
+      'An agent wrote a query for "Prod Postgres": SELECT * FROM orders Your text in the ' +
+        "console was left as it is.",
+    );
+    expect(agentNoticeText({ created: false, agent: null, offer: "  " }, null)).toBe(
+      "An agent wrote a query for a connection. Your text in the console was left as it is.",
+    );
+
+    await mount();
+    useAppStore.setState((s) => {
+      s.dbConsoles.c1 = {
+        ...blankDbConsole(),
+        text: "SELECT mine",
+        savedQuery: { id: "Q1", name: "Mine" },
+      };
+      s.dbAgentNotice = {
+        connectionId: "c1",
+        created: false,
+        agent: null,
+        offer: "SELECT * FROM orders",
+      };
+    });
+    const notice = await screen.findByTestId("db-agent-notice");
+    expect(notice.querySelector("[title]")).toHaveAttribute("title", "SELECT * FROM orders");
+    // Showing the offer changes nothing; the click does.
+    expect(useAppStore.getState().dbConsoles.c1.text).toBe("SELECT mine");
+    fireEvent.click(screen.getByTestId("db-agent-notice-put"));
+    const s = useAppStore.getState();
+    expect(s.dbConsoles.c1.text).toBe("SELECT * FROM orders");
+    expect(s.dbConsoles.c1.savedQuery).toBeNull();
+    expect(s.dbAgentNotice).toBeNull();
+    expect(screen.queryByTestId("db-agent-notice")).toBeNull();
+  });
+
+  it("brings the DB tab into view, re-arms both stores Rust wrote, and reloads the list", async () => {
+    await mount();
+    useAppStore.setState((s) => {
+      s.rightRailTab = "files";
+      s.rightRailCollapsed = true;
+      s.apiStoreLoaded = true;
+    });
+    agentNamed("claude · shop");
+    dbIpc.dbConnectionsLoad.mockResolvedValue({ connections: [conn({ id: "c9" })], version: 1 });
+
+    useAppStore
+      .getState()
+      .dbActions.showAgentDbConnection({ connectionId: "c9", terminalId: "t1", created: true });
+
+    const s = useAppStore.getState();
+    expect(s.rightRailTab).toBe("db");
+    expect(s.rightRailCollapsed).toBe(false);
+    // The Vault (api-store.json) was written under the API slice: its gate must not say current.
+    expect(s.apiStoreLoaded).toBe(false);
+    expect(s.dbAgentNotice).toEqual({ connectionId: "c9", created: true, agent: "claude · shop" });
+    await waitFor(() => expect(dbIpc.dbConnectionsLoad).toHaveBeenCalledTimes(2));
+    expect(
+      await screen.findByText(
+        'The agent "claude · shop" added "Prod Postgres". It is read-only: use Edit to allow writes.',
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("db-agent-notice-dismiss"));
+    expect(useAppStore.getState().dbAgentNotice).toBeNull();
+    expect(screen.queryByTestId("db-agent-notice")).toBeNull();
+  });
+
+  it("prefers the agent's custom name, and says 'an agent' for a terminal it does not know", () => {
+    agentNamed("claude · shop", "Data helper");
+    const { showAgentDbConnection } = useAppStore.getState().dbActions;
+    showAgentDbConnection({ connectionId: "c9", terminalId: "t1", created: false });
+    expect(useAppStore.getState().dbAgentNotice?.agent).toBe("Data helper");
+    showAgentDbConnection({ connectionId: "c9", terminalId: "unknown", created: true });
+    expect(useAppStore.getState().dbAgentNotice?.agent).toBeNull();
   });
 });

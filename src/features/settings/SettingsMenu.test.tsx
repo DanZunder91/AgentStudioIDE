@@ -29,8 +29,18 @@ const layoutPrefsIpc = vi.hoisted(() => ({
 }));
 vi.mock("../../app/layoutPrefsIpc", () => layoutPrefsIpc);
 
+// "Add Agent Studio to Claude Code" asks Claude Code for its status when the popover opens. Left
+// pending here so no test in this file reaches Tauri; ClaudeMcpItem.test.tsx covers the answers.
+const claudeMcpIpc = vi.hoisted(() => ({
+  claudeMcpStatus: vi.fn(),
+  claudeMcpInstall: vi.fn(),
+  claudeMcpUninstall: vi.fn(),
+}));
+vi.mock("./claudeMcpIpc", () => claudeMcpIpc);
+
 import { useAppStore } from "../../app/store";
 import { resetStore } from "../../test/store-harness";
+import { forgetClaudeMcpRuns } from "./claudeMcpRuns";
 import { SettingsMenu } from "./SettingsMenu";
 
 const popover = () => screen.queryByTestId("settings-popover");
@@ -44,6 +54,8 @@ beforeEach(() => {
     s.railGroupStyle = "card";
   });
   layoutPrefsIpc.saveLayoutPrefs.mockClear();
+  forgetClaudeMcpRuns();
+  claudeMcpIpc.claudeMcpStatus.mockReset().mockReturnValue(new Promise(() => {}));
 });
 afterEach(cleanup);
 
@@ -168,6 +180,32 @@ describe("SettingsMenu", () => {
     // The import hint promises a REVIEW before anything lands (import is inspect-then-apply)
     // — the menu should not imply a one-click import.
     expect(screen.getByText(/before anything is added/i)).toBeInTheDocument();
+  });
+
+  /* ── Agent Studio's tools in Claude Code ──────────────────────────────────── */
+
+  it("holds 'Add Agent Studio to Claude Code', the UI way to `agent-studio mcp install`", () => {
+    render(<SettingsMenu />);
+    fireEvent.click(trigger());
+    const item = screen.getByTestId("settings-claude-mcp");
+    expect(item).toHaveAttribute("role", "menuitem");
+    expect(item).toHaveTextContent("Add Agent Studio to Claude Code");
+    expect(item).toHaveTextContent("Checking Claude Code…");
+  });
+
+  it("asks Claude Code when the menu opens and never before; a reopen while it answers asks nothing new", () => {
+    render(<SettingsMenu />);
+    // A closed menu runs nothing: the vendor CLI runs on the user's action only.
+    expect(claudeMcpIpc.claudeMcpStatus).not.toHaveBeenCalled();
+    fireEvent.click(trigger());
+    expect(claudeMcpIpc.claudeMcpStatus).toHaveBeenCalledTimes(1);
+    // Closed and opened again while `claude mcp get` is still running: it waits for that one.
+    fireEvent.click(trigger());
+    fireEvent.click(trigger());
+    expect(screen.getByTestId("settings-claude-mcp")).toHaveTextContent("Checking Claude Code…");
+    expect(claudeMcpIpc.claudeMcpStatus).toHaveBeenCalledTimes(1);
+    expect(claudeMcpIpc.claudeMcpInstall).not.toHaveBeenCalled();
+    expect(claudeMcpIpc.claudeMcpUninstall).not.toHaveBeenCalled();
   });
 });
 

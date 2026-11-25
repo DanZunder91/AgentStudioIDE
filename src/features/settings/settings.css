@@ -122,6 +122,26 @@
   outline-offset: -1px;
 }
 
+/* ── Add Agent Studio to Claude Code ─────────────────────────────────────────
+   While Claude Code is being asked, or when there is no Claude Code, the item is
+   disabled; its description line says why, so it is dimmed, not hidden. */
+.settings-menu__item:disabled {
+  cursor: default;
+  background: none;
+}
+.settings-menu__item:disabled .settings-menu__label-text {
+  color: var(--text-dim);
+}
+
+/* Its description can carry a path or Claude Code's own error: wrap anywhere, never
+   widen the popover. */
+.settings-menu__hint--wrap {
+  overflow-wrap: anywhere;
+}
+.settings-menu__hint--problem {
+  color: var(--red, #f85149);
+}
+
 /* ── Interface: a second page of the popover ─────────────────────────────────
    "Interface…" on the first page leads here. The nav item carries a chevron and
    names the current choice, so the setting is readable without opening it. */

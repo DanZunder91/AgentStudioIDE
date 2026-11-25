@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import TearoffApp from "./TearoffApp";
 import { startBridge } from "./app/bridge";
+import { listenAgentCtl } from "./features/agentctl/agentCtlIpc";
+import { dispatchAgentCtl } from "./features/agentctl/dispatch";
 import { suppressNativeContextMenu } from "./app/nativeContextMenu";
 import { isMainWindow, startTearoffHost, startTearoffWindow } from "./app/tearoff";
 
@@ -33,6 +35,9 @@ const main = isMainWindow();
 if (main) {
   const host = (): void => void startTearoffHost();
   void startBridge().then(host, host);
+  // What agents do through the `agent-studio` command and MCP tools (Rust `agent_ctl`): the
+  // main window only, which is the one with the panels they act on.
+  void listenAgentCtl(dispatchAgentCtl);
 } else {
   void startTearoffWindow();
 }

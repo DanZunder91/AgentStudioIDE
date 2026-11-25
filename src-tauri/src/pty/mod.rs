@@ -237,13 +237,20 @@ fn pty_size(rows: u16, cols: u16) -> PtySize {
 
 /// Env vars Claude Code sets on its CHILD processes to mark "you are inside a Claude
 /// session". If Agent Studio is itself launched from within a Claude session (e.g. the
-/// dev `npm run tauri dev`), it inherits these — and so would every PTY we spawn,
-/// making a `claude` inside that PTY treat itself as a NESTED child and **turn off
-/// transcript saving** ("Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION
-/// marker"). That silently breaks two headline features that read the transcript: the
-/// fan-out tailer (sub-agent tree) and pinned-agent resume. We strip them so
-/// our agents are always TOP-LEVEL sessions.
-const INHERITED_CLAUDE_CHILD_MARKERS: &[&str] = &["CLAUDE_CODE_CHILD_SESSION"];
+/// dev `npm run tauri dev`), it inherits these — and so would every PTY we spawn:
+///
+/// - `CLAUDE_CODE_CHILD_SESSION` makes a `claude` inside that PTY treat itself as a NESTED
+///   child and **turn off transcript saving** ("Transcript saving is off — inherited
+///   CLAUDE_CODE_CHILD_SESSION marker"). That silently breaks two headline features that
+///   read the transcript: the fan-out tailer (sub-agent tree) and pinned-agent resume.
+/// - `CLAUDECODE` (set for every command Claude Code runs) makes whatever the user types
+///   look as if Claude Code ran it: `agent-studio mcp install|uninstall` refuse an agent by
+///   it, so the user typing them in an IDE terminal would be refused for a reason that is
+///   not true.
+///
+/// A terminal is the user's, whatever launched the app: we strip them so our agents are
+/// always TOP-LEVEL sessions and the user's commands are the user's.
+const INHERITED_CLAUDE_CHILD_MARKERS: &[&str] = &["CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE"];
 
 /// The env Agent Studio imposes on a spawned PTY (on top of the inherited environment):
 /// rich-TTY vars, our `AGENTSTUDIO` marker, a `LANG` passthrough, and the Claude-session
@@ -268,6 +275,26 @@ fn pty_env_mutations(
         ("CLAUDE_CODE_FORCE_SESSION_PERSISTENCE", "1".to_string()),
     ];
     (sets, INHERITED_CLAUDE_CHILD_MARKERS)
+}
+
+/// Give `cmd` (which starts with this process's environment) a terminal's environment: the
+/// rich-TTY vars, our marker and the Claude-session neutralizer (see [`pty_env_mutations`]).
+/// Removals FIRST, then sets, then the per-spawn `spec_env`.
+fn apply_pty_env(
+    cmd: &mut CommandBuilder,
+    inherited_lang: Option<String>,
+    spec_env: &[(String, String)],
+) {
+    let (sets, removes) = pty_env_mutations(inherited_lang);
+    for k in removes {
+        cmd.env_remove(k);
+    }
+    for (k, v) in &sets {
+        cmd.env(k, v);
+    }
+    for (k, v) in spec_env {
+        cmd.env(k, v);
+    }
 }
 
 /// Windows: make sure the terminals this process starts can be interrupted with Ctrl+C.
@@ -328,18 +355,7 @@ pub fn spawn_pty(spec: &SpawnSpec) -> Result<PtySpawn> {
     }
     cmd.cwd(&spec.cwd);
 
-    // Rich-TTY vars + our marker + the Claude-session neutralizer (see
-    // `pty_env_mutations`). Removals FIRST, then sets, then per-spawn `spec.env`.
-    let (sets, removes) = pty_env_mutations(std::env::var("LANG").ok());
-    for k in removes {
-        cmd.env_remove(k);
-    }
-    for (k, v) in &sets {
-        cmd.env(k, v);
-    }
-    for (k, v) in &spec.env {
-        cmd.env(k, v);
-    }
+    apply_pty_env(&mut cmd, std::env::var("LANG").ok(), &spec.env);
 
     let child = pair.slave.spawn_command(cmd).with_context(|| {
         format!(
@@ -1330,6 +1346,37 @@ mod tests {
         // Our marker + the LANG passthrough.
         assert!(sets.iter().any(|(k, v)| *k == "AGENTSTUDIO" && v == "1"));
         assert!(sets.iter().any(|(k, v)| *k == "LANG" && v == "en_GB.UTF-8"));
+    }
+
+    /// Agent Studio launched from a Claude Code session (its Bash tool sets both markers):
+    /// a terminal it opens carries neither, so a `claude` there is a top-level session and a
+    /// command the user types there is not taken for one Claude Code ran.
+    #[test]
+    fn a_terminal_does_not_inherit_the_claude_code_session_that_launched_the_app() {
+        let mut cmd = CommandBuilder::new("sh");
+        for (k, v) in [
+            ("CLAUDECODE", "1"),
+            ("CLAUDE_CODE_CHILD_SESSION", "1"),
+            ("PATH", "/usr/bin:/bin"),
+        ] {
+            cmd.env(k, v);
+        }
+        apply_pty_env(
+            &mut cmd,
+            None,
+            &[("AGENTSTUDIO_TERMINAL_ID".to_string(), "t1".to_string())],
+        );
+        assert_eq!(cmd.get_env("CLAUDECODE"), None);
+        assert_eq!(cmd.get_env("CLAUDE_CODE_CHILD_SESSION"), None);
+        // Everything else inherited stays; ours and the spawn's own are added.
+        let get = |k: &str| cmd.get_env(k).and_then(|v| v.to_str()).map(str::to_string);
+        assert_eq!(get("PATH").as_deref(), Some("/usr/bin:/bin"));
+        assert_eq!(get("AGENTSTUDIO").as_deref(), Some("1"));
+        assert_eq!(
+            get("CLAUDE_CODE_FORCE_SESSION_PERSISTENCE").as_deref(),
+            Some("1")
+        );
+        assert_eq!(get("AGENTSTUDIO_TERMINAL_ID").as_deref(), Some("t1"));
     }
 
     #[test]

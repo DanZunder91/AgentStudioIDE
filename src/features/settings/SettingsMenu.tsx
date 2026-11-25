@@ -5,7 +5,8 @@
  * is a lightweight menu, not a global overlay, so it does not live in the store):
  * a gear button toggles a popover that closes on outside-click or Esc. Inside is
  * an accessible switch ("Focus follows agent") bound straight to the store's
- * `focusFollowsAgent` / `setFocusFollowsAgent`.
+ * `focusFollowsAgent` / `setFocusFollowsAgent`, the config export/import items,
+ * and "Add Agent Studio to Claude Code" (`<ClaudeMcpItem/>`).
  *
  * "Interface…" opens a second page of the same popover, for how the app looks. It is
  * a page rather than more rows on the first one so the menu stays short as appearance
@@ -24,6 +25,7 @@ import {
   railGroupStyleLabel,
   type RailGroupStyle,
 } from "../fleet/railGroupStyle";
+import { ClaudeMcpItem } from "./ClaudeMcpItem";
 import "./settings.css";
 
 type Page = "main" | "interface";
@@ -108,7 +110,7 @@ export function SettingsMenu(): React.JSX.Element {
   const pageChanged = useRef(false);
 
   const focusFollowsAgent = useAppStore((s) => s.focusFollowsAgent);
-  // Config bundles: the only two actions in this menu. Selected narrowly (not the whole actions object)
+  // Config bundles: the two store actions in this menu. Selected narrowly (not the whole actions object)
   // so a change elsewhere in the portability slice cannot re-render the titlebar.
   const openPortabilityDialog = useAppStore((s) => s.portabilityActions.openPortabilityDialog);
   const setFocusFollowsAgent = useAppStore(
@@ -303,6 +305,12 @@ export function SettingsMenu(): React.JSX.Element {
               Review a colleague&rsquo;s file before anything is added.
             </span>
           </button>
+
+          {/* ── Agent Studio's tools in Claude Code ─────────────────────────────
+              The menu's way to `agent-studio mcp install|uninstall`. It asks Claude Code
+              for the status when it mounts, i.e. when this popover opens. */}
+          <div className="settings-menu__separator" role="separator" />
+          <ClaudeMcpItem />
         </div>
       )}
     </div>
