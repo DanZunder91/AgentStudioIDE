@@ -41,6 +41,7 @@ beforeEach(() => {
   resetStore();
   useAppStore.setState((s) => {
     s.focusFollowsAgent = false;
+    s.railGroupStyle = "card";
   });
   layoutPrefsIpc.saveLayoutPrefs.mockClear();
 });
@@ -167,5 +168,104 @@ describe("SettingsMenu", () => {
     // The import hint promises a REVIEW before anything lands (import is inspect-then-apply)
     // — the menu should not imply a one-click import.
     expect(screen.getByText(/before anything is added/i)).toBeInTheDocument();
+  });
+});
+
+describe("SettingsMenu — Interface page", () => {
+  const openInterface = () => {
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByTestId("settings-interface"));
+  };
+  const choice = (style: string) => screen.getByTestId(`rail-group-style-${style}`);
+  const lastSaved = () => {
+    const calls = layoutPrefsIpc.saveLayoutPrefs.mock.calls;
+    expect(calls.length, "saveLayoutPrefs should have run").toBeGreaterThan(0);
+    return calls[calls.length - 1][0] as { railGroupStyle?: string };
+  };
+
+  it("the first page names the current project style beside the Interface item", () => {
+    useAppStore.setState((s) => {
+      s.railGroupStyle = "well";
+    });
+    render(<SettingsMenu />);
+    fireEvent.click(trigger());
+    expect(screen.getByTestId("settings-interface")).toHaveTextContent("Project groups: Inset well");
+  });
+
+  it("opens the Interface page in place of the first page", () => {
+    render(<SettingsMenu />);
+    openInterface();
+    expect(screen.getByRole("menu", { name: "Interface settings" })).toBeInTheDocument();
+    // The first page's controls are gone: one page at a time.
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByTestId("settings-export-config")).toBeNull();
+  });
+
+  it("lists the four project styles, Framed card marked as the default", () => {
+    render(<SettingsMenu />);
+    openInterface();
+    const radios = screen.getAllByRole("menuitemradio");
+    expect(radios.map((r) => r.getAttribute("data-testid"))).toEqual([
+      "rail-group-style-card",
+      "rail-group-style-well",
+      "rail-group-style-divider",
+      "rail-group-style-pinned",
+    ]);
+    expect(choice("card")).toHaveTextContent("Framed card · default");
+    expect(choice("well")).not.toHaveTextContent("default");
+  });
+
+  it("checks exactly the store's style", () => {
+    useAppStore.setState((s) => {
+      s.railGroupStyle = "divider";
+    });
+    render(<SettingsMenu />);
+    openInterface();
+    expect(choice("divider")).toHaveAttribute("aria-checked", "true");
+    for (const other of ["card", "well", "pinned"]) {
+      expect(choice(other)).toHaveAttribute("aria-checked", "false");
+    }
+  });
+
+  it("🔴 choosing a style sets it in the store and persists it", () => {
+    render(<SettingsMenu />);
+    openInterface();
+
+    fireEvent.click(choice("pinned"));
+
+    expect(useAppStore.getState().railGroupStyle).toBe("pinned");
+    expect(lastSaved().railGroupStyle).toBe("pinned");
+    expect(choice("pinned")).toHaveAttribute("aria-checked", "true");
+    expect(choice("card")).toHaveAttribute("aria-checked", "false");
+    // The page stays open, so the choice can be compared against the rail.
+    expect(screen.getByRole("menu", { name: "Interface settings" })).toBeInTheDocument();
+  });
+
+  it("Back returns to the first page and puts focus back on the Interface item", () => {
+    render(<SettingsMenu />);
+    openInterface();
+    expect(screen.getByTestId("settings-back")).toHaveFocus();
+
+    fireEvent.click(screen.getByTestId("settings-back"));
+
+    expect(screen.getByRole("menu", { name: "Settings menu" })).toBeInTheDocument();
+    expect(screen.getByTestId("settings-interface")).toHaveFocus();
+  });
+
+  it("reopening the menu starts on the first page", () => {
+    render(<SettingsMenu />);
+    openInterface();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(popover()).toBeNull();
+
+    fireEvent.click(trigger());
+    expect(screen.getByRole("menu", { name: "Settings menu" })).toBeInTheDocument();
+  });
+
+  it("a click inside the Interface page does not close the menu", () => {
+    render(<SettingsMenu />);
+    openInterface();
+    fireEvent.mouseDown(choice("well"));
+    expect(popover()).not.toBeNull();
   });
 });

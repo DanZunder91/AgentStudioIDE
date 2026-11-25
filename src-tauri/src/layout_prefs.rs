@@ -143,6 +143,14 @@ pub struct LayoutPrefs {
     /// still loads (defaults to `false` — today's behaviour).
     #[serde(default)]
     pub focus_follows_agent: bool,
+    /// How the agent rail draws a project (Settings → Interface): `"card"`, `"well"`,
+    /// `"divider"` or `"pinned"`. A plain string, not an enum, on purpose: the frontend
+    /// owns the list, so a style from a newer build round-trips through an older one
+    /// instead of being dropped, and an unknown one reads as the default there.
+    /// [`lenient`] so a wrong-shaped value degrades to `None` rather than costing the
+    /// user their folder order.
+    #[serde(default, deserialize_with = "lenient")]
+    pub rail_group_style: Option<String>,
     /// Ids of API-client **saved-request folders** the user collapsed in the
     /// Collections rail.
     ///
@@ -332,6 +340,7 @@ mod tests {
             collapsed_folders: vec!["/b".into()],
             collapsed_roots: vec!["/a".into(), "/c".into()],
             focus_follows_agent: true,
+            rail_group_style: Some("well".into()),
             collapsed_api_folders: vec!["f-1".into(), "f-2".into()],
             views: views(),
             active_view_id: Some("v-2".into()),
@@ -403,6 +412,61 @@ mod tests {
         assert!(
             !prefs.focus_follows_agent,
             "an older store missing the key loads as false (today's behaviour)"
+        );
+    }
+
+    #[test]
+    fn rail_group_style_round_trips_and_serializes_camel_case() {
+        let f = Fixture::new("rgs");
+        save(&f.store, &sample()).unwrap();
+        assert_eq!(load(&f.store).rail_group_style.as_deref(), Some("well"));
+
+        let json = serde_json::to_string(&sample()).unwrap();
+        assert!(json.contains("\"railGroupStyle\":\"well\""), "got: {json}");
+    }
+
+    #[test]
+    fn an_old_blob_without_rail_group_style_loads_it_as_none() {
+        let f = Fixture::new("rgs-old");
+        std::fs::write(
+            &f.store,
+            r#"{ "folderOrder": ["/a"], "focusFollowsAgent": true }"#,
+        )
+        .unwrap();
+        let prefs = load(&f.store);
+        assert_eq!(prefs.rail_group_style, None);
+        assert!(
+            prefs.focus_follows_agent,
+            "the rest of the file still loads"
+        );
+    }
+
+    #[test]
+    fn a_style_this_build_does_not_know_survives_a_round_trip() {
+        // A newer build wrote a style this one has never heard of. Rust keeps it as-is, so
+        // going back to the newer build does not lose the user's choice.
+        let f = Fixture::new("rgs-future");
+        std::fs::write(&f.store, r#"{ "railGroupStyle": "orbit" }"#).unwrap();
+        let prefs = load(&f.store);
+        assert_eq!(prefs.rail_group_style.as_deref(), Some("orbit"));
+        save(&f.store, &prefs).unwrap();
+        assert_eq!(load(&f.store).rail_group_style.as_deref(), Some("orbit"));
+    }
+
+    #[test]
+    fn a_wrong_shaped_rail_group_style_costs_nothing_else() {
+        let f = Fixture::new("rgs-bad");
+        std::fs::write(
+            &f.store,
+            r#"{ "folderOrder": ["/a", "/b"], "railGroupStyle": { "not": "a string" } }"#,
+        )
+        .unwrap();
+        let prefs = load(&f.store);
+        assert_eq!(prefs.rail_group_style, None);
+        assert_eq!(
+            prefs.folder_order,
+            vec!["/a".to_string(), "/b".to_string()],
+            "a malformed style must not take the folder order down with it"
         );
     }
 

@@ -410,12 +410,17 @@
   background: var(--bg-elev, #1c2128);
 }
 
-/* ── folder-group header ──────────────────────────────────────────────────── */
+/* ── folder-group header ────────────────────────────────────────────────────
+   Two lines: the project name on the first (with the +), the counts per status on
+   the second. The counts used to share the name's line, which cut "AgentStudioIDE"
+   down to "AgentSt…" at the default rail width. */
 .folder-group {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px 4px 6px;
+  column-gap: 4px;
+  row-gap: 1px;
+  padding: 4px 4px 4px 6px;
   margin-top: 4px;
   color: var(--text, #c9d1d9);
 }
@@ -423,10 +428,11 @@
   color: var(--red, #f85149);
 }
 .folder-group__header {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 1 1 auto;
   min-width: 0;
   padding: 2px 2px;
   background: none;
@@ -444,6 +450,8 @@
   font-size: 10px;
 }
 .folder-group__name {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -457,16 +465,49 @@
   border-radius: 8px;
   padding: 0 6px;
 }
-.folder-group__rollup {
-  flex: 0 1 auto;
+/* The project badges. Each style turns on the one it uses (see below). */
+.folder-group__mono,
+.folder-group__icon {
+  display: none;
+}
+.folder-group__mono {
+  place-items: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--pc) 22%, transparent);
+  color: var(--pc);
+  font-size: 9px;
+  font-weight: 700;
+}
+.folder-group__icon {
+  flex: 0 0 auto;
+  line-height: 0;
+  color: var(--pc);
+}
+/* "5 running · 1 waiting · 23 done", each part in its status colour. */
+.folder-group__stats {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  min-width: 0;
+  padding-left: 22px; /* under the name: header padding + caret + gap */
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
-  font-weight: 400;
+  font-size: 10px;
   color: var(--text-dim, #8b949e);
 }
+.folder-group__sep {
+  padding: 0 4px;
+}
+.folder-group__stat--running { color: var(--accent, #3b82f6); }
+.folder-group__stat--waiting_input { color: #d29922; }
+.folder-group__stat--done { color: var(--green, #3fb950); }
+.folder-group__stat--error { color: var(--red, #f85149); }
 .folder-group__add {
+  grid-column: 2;
+  grid-row: 1;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -482,7 +523,184 @@
 }
 .folder-group__add:hover {
   color: var(--text, #c9d1d9);
-  background: var(--bg-elev, #1c2128);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+/* ── project styles (Settings → Interface → Project groups) ───────────────────
+   One class on the tree picks the style: `fleet-tree--groups-<style>`. The rail is a
+   flat list, so nothing wraps a project; each style draws the project's shape across
+   its header and rows. A project's first row is the one right after its header
+   (`.folder-group + .fleet-row`); its last is the one right before the next header, or
+   the last row of all (`.fleet-row:has(+ .folder-group)`, `.fleet-row:last-child`).
+   Selectors rather than markers on the rows on purpose: a marker would make adding an
+   agent re-render the row that used to be last, and the rail's render budget allows
+   only the new one. */
+
+/* Framed card (the default): one bordered card per project, the header a lighter
+   band with the project's monogram, a divider under it. */
+.fleet-tree--groups-card .folder-group {
+  margin-top: 10px;
+  padding: 6px 4px 6px 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--group-border);
+  border-bottom-color: var(--border);
+  border-radius: 8px 8px 0 0;
+}
+.fleet-tree--groups-card .folder-group:first-child {
+  margin-top: 4px;
+}
+.fleet-tree--groups-card .folder-group--collapsed {
+  border-bottom-color: var(--group-border);
+  border-radius: 8px;
+}
+.fleet-tree--groups-card .folder-group__mono {
+  display: grid;
+}
+.fleet-tree--groups-card .folder-group__count {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+.fleet-tree--groups-card .folder-group__stats {
+  padding-left: 44px; /* under the name, past the monogram */
+}
+.fleet-tree--groups-card .fleet-row {
+  margin: 0;
+  border: solid var(--group-border);
+  border-width: 0 1px;
+  border-radius: 0;
+  /* The two side borders take 2px; the right padding gives them back, so a row's
+     content is exactly as wide as in an unframed rail and the status line still fits
+     the widest pill plus the restored marker (restoredRow.browser.test.tsx). The left
+     padding is the depth indent, set inline, so it is left alone. */
+  padding-right: 8px;
+}
+.fleet-tree--groups-card .fleet-row:has(+ .folder-group),
+.fleet-tree--groups-card .fleet-row:last-child {
+  border-bottom-width: 1px;
+  border-radius: 0 0 8px 8px;
+}
+
+/* Inset well: the header stays on the rail with a folder icon in the project's colour,
+   and the agents sit in a darker recessed panel beneath it. No border, no width lost. */
+.fleet-tree--groups-well .folder-group {
+  margin-top: 8px;
+}
+.fleet-tree--groups-well .folder-group:first-child {
+  margin-top: 4px;
+}
+.fleet-tree--groups-well .folder-group__icon {
+  display: block;
+}
+.fleet-tree--groups-well .folder-group__stats {
+  padding-left: 42px;
+}
+.fleet-tree--groups-well .fleet-row {
+  margin: 0;
+  border-radius: 0;
+  background: var(--bg-app);
+  border-top: 1px solid rgba(240, 246, 252, 0.04);
+}
+.fleet-tree--groups-well .folder-group + .fleet-row {
+  border-top: 0;
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+  box-shadow: inset 0 3px 4px -2px rgba(0, 0, 0, 0.55);
+}
+.fleet-tree--groups-well .fleet-row:has(+ .folder-group),
+.fleet-tree--groups-well .fleet-row:last-child {
+  margin-bottom: 4px;
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
+/* Labelled divider: the lightest. A small uppercase label with a rule running out to
+   the +, so each project opens with a line; rows sit slightly indented under it. */
+.fleet-tree--groups-divider .folder-group {
+  margin-top: 10px;
+  padding: 4px 2px 2px;
+}
+.fleet-tree--groups-divider .folder-group:first-child {
+  margin-top: 4px;
+}
+.fleet-tree--groups-divider .folder-group__header::after {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 12px;
+  height: 1px;
+  margin-left: 2px;
+  background: var(--group-border);
+}
+.fleet-tree--groups-divider .folder-group__name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.fleet-tree--groups-divider .fleet-row {
+  margin-left: 6px;
+}
+
+/* Pinned header bar: a solid bar with a folder icon and the counts as chips. It sticks
+   to the top of the rail while that project's agents scroll under it; the next
+   project's bar slides over it. */
+.fleet-tree--groups-pinned .folder-group {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin-top: 8px;
+  margin-bottom: 4px;
+  padding: 6px 4px 6px 6px;
+  background: var(--bg-elev);
+  border: 1px solid var(--group-border);
+  border-radius: 6px;
+  box-shadow: 0 6px 10px -6px rgba(0, 0, 0, 0.7);
+}
+.fleet-tree--groups-pinned .folder-group:first-child {
+  margin-top: 4px;
+}
+.fleet-tree--groups-pinned .folder-group__icon {
+  display: block;
+  color: var(--text-dim, #8b949e);
+}
+.fleet-tree--groups-pinned .folder-group__count {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+.fleet-tree--groups-pinned .folder-group__stats {
+  gap: 4px;
+  padding-left: 42px;
+}
+.fleet-tree--groups-pinned .folder-group__sep {
+  display: none;
+}
+.fleet-tree--groups-pinned .folder-group__stat {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+.fleet-tree--groups-pinned .fleet-row {
+  margin-left: 8px;
+}
+
+/* State colours win over a style's row and header backgrounds and shadows. Restated
+   after the styles, one class more specific than the most specific style rule (the
+   well's first row), in the order of precedence they have at the top of this file:
+   hover over selected, as today, and a drop target over both while dragging. */
+.fleet-tree .fleet-row.fleet-row--selected {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.fleet-tree .fleet-row:hover {
+  background: var(--bg-elev);
+}
+.fleet-tree .fleet-row.fleet-row--drop-target {
+  background: var(--accent-soft);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.fleet-tree .fleet-row--selected.fleet-row--drop-target {
+  box-shadow: inset 2px 0 0 var(--accent), inset 0 2px 0 var(--accent);
+}
+.fleet-tree .folder-group--drop-target {
+  background: var(--accent-soft);
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 
 /* Inline rename field for an agent row's title. */

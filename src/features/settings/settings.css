@@ -121,3 +121,121 @@
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
+
+/* ── Interface: a second page of the popover ─────────────────────────────────
+   "Interface…" on the first page leads here. The nav item carries a chevron and
+   names the current choice, so the setting is readable without opening it. */
+.settings-menu__item--nav {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+}
+.settings-menu__item--nav .settings-menu__label-text {
+  grid-column: 1;
+  grid-row: 1;
+}
+.settings-menu__item--nav .settings-menu__hint {
+  grid-column: 1;
+  grid-row: 2;
+}
+.settings-menu__chevron {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  font-size: 16px;
+  color: var(--text-dim);
+}
+
+.settings-menu__page-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.settings-menu__back {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.settings-menu__back:hover {
+  color: var(--text);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+.settings-menu__back:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.settings-menu__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-menu__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.settings-menu__section-label {
+  margin-bottom: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* One choice: a drawing of the style, its name and what it does. The chosen one is
+   outlined in the accent, the same signal the rail uses for a selected row. */
+.settings-menu__choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.settings-menu__choice:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+.settings-menu__choice[aria-checked="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.settings-menu__choice:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.settings-menu__preview {
+  flex: none;
+  margin-top: 1px;
+  color: var(--text-dim);
+}
+.settings-menu__choice[aria-checked="true"] .settings-menu__preview {
+  color: var(--accent);
+}
+.settings-menu__choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.settings-menu__default {
+  font-weight: 400;
+  color: var(--text-dim);
+}

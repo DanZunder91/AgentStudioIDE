@@ -21,6 +21,9 @@ export function AgentTree() {
   // Referentially stable — see `selectFleetRows`. Selecting an un-memoized
   // `flattenFleet(...)` here is the infinite-loop footgun it exists to close.
   const rows = useAppStore(selectFleetRows);
+  // How projects are drawn (Settings → Interface). One class on the list switches the
+  // whole style in CSS, so changing it re-renders this element and no row.
+  const groupStyle = useAppStore((s) => s.railGroupStyle);
 
   if (rows.length === 0) {
     return (
@@ -33,7 +36,7 @@ export function AgentTree() {
   }
 
   return (
-    <ul className="fleet-tree" role="tree" aria-label="Agents">
+    <ul className={`fleet-tree fleet-tree--groups-${groupStyle}`} role="tree" aria-label="Agents">
       {rows.map((row) =>
         row.kind === "folder" ? (
           <FolderGroupRow
@@ -43,6 +46,7 @@ export function AgentTree() {
             agentCount={row.agentCount}
             collapsed={row.collapsed}
             rollupRunning={row.rollup.running}
+            rollupWaiting={row.rollup.waiting_input}
             rollupDone={row.rollup.done}
             rollupError={row.rollup.error}
           />

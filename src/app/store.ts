@@ -132,6 +132,11 @@ export type { HistoryEntry, HistoryStore } from "../features/api/historyIpc";
 // are the recent projects ∪ the workspace root, so a browse root must be recorded
 // there or its listing rejects. Best-effort; never blocks opening the folder.
 import { ensureAgentHooks, pushRecentProject } from "../features/fleet/fleetIpc";
+import {
+  DEFAULT_RAIL_GROUP_STYLE,
+  parseRailGroupStyle,
+  type RailGroupStyle,
+} from "../features/fleet/railGroupStyle";
 // The pin registry effects. Aliased so they do not collide with the
 // `pinAgent`/`unpinAgent` ACTION names below: these are the persistence EFFECTS
 // the action wrappers run (never inside a `set` producer), the same shape as
@@ -332,6 +337,7 @@ export function layoutPrefsBlob(s: AppStore): LayoutPrefs {
     collapsedFolders: [...s.collapsedFolders],
     collapsedRoots: [...s.collapsedRoots],
     focusFollowsAgent: s.focusFollowsAgent,
+    railGroupStyle: s.railGroupStyle,
     collapsedApiFolders: [...s.collapsedApiFolders],
     views: center.views,
     activeViewId: center.activeViewId,
@@ -1210,6 +1216,12 @@ export interface WorkspaceState {
    * `setFocusFollowsAgent`, which persists it via the same wholesale save.
    */
   focusFollowsAgent: boolean;
+  /**
+   * How the agent rail draws a project (Settings → Interface → Project groups). Persisted
+   * with the rest of the rail prefs; `applyLayoutPrefs` seeds it on boot, reading anything
+   * this build does not know as the default ("card").
+   */
+  railGroupStyle: RailGroupStyle;
 }
 
 export interface WorkspaceActions {
@@ -1267,6 +1279,8 @@ export interface WorkspaceActions {
    * existing collapse state is left as the user last had it).
    */
   setFocusFollowsAgent(on: boolean): void;
+  /** Choose how the agent rail draws projects, and persist it. */
+  setRailGroupStyle(style: RailGroupStyle): void;
   /**
    * Boot only (`bridge.ts`): seed `folderOrder` + both collapse sets + the
    * `focusFollowsAgent` setting from the persisted store. Pure reconcile — NO persist
@@ -4235,6 +4249,7 @@ function initialWorkspaceState(): WorkspaceState {
     collapsedRoots: new Set<string>(),
     // Off by default (today's behaviour); seeded from the persisted store on boot.
     focusFollowsAgent: false,
+    railGroupStyle: DEFAULT_RAIL_GROUP_STYLE,
   };
 }
 
@@ -6351,6 +6366,13 @@ export const useAppStore = create<AppStore>()(
           if (on) applyFocusFollow();
         },
 
+        setRailGroupStyle: (style) => {
+          set((s) => {
+            s.railGroupStyle = style;
+          });
+          persistLayoutPrefs(get);
+        },
+
         applyLayoutPrefs: (prefs) =>
           set((s) => {
             // Pure reconcile — seed from the persisted store, no persist (this IS
@@ -6360,6 +6382,9 @@ export const useAppStore = create<AppStore>()(
             s.collapsedFolders = new Set(prefs.collapsedFolders);
             s.collapsedRoots = new Set(prefs.collapsedRoots);
             s.focusFollowsAgent = prefs.focusFollowsAgent ?? false;
+            // An older file has no style (null/absent), a newer build's may be one this
+            // build does not know: both read as the default.
+            s.railGroupStyle = parseRailGroupStyle(prefs.railGroupStyle);
             // `?? []` for the same reason `focusFollowsAgent` has `?? false`: a prefs
             // file written by a build before this field existed simply omits it.
             s.collapsedApiFolders = new Set(prefs.collapsedApiFolders ?? []);

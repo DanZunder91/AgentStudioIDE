@@ -24,6 +24,7 @@ describe("loadLayoutPrefs", () => {
       collapsedFolders: ["/a"],
       collapsedRoots: ["/b"],
       focusFollowsAgent: true,
+      railGroupStyle: null,
       collapsedApiFolders: ["f-1"],
       views: [],
       activeViewId: null,
@@ -38,6 +39,7 @@ describe("loadLayoutPrefs", () => {
       collapsedFolders: [],
       collapsedRoots: [],
       focusFollowsAgent: false,
+      railGroupStyle: null,
       collapsedApiFolders: [],
       views: [],
       activeViewId: null,
@@ -56,6 +58,9 @@ describe("loadLayoutPrefs", () => {
       collapsedFolders: [],
       collapsedRoots: ["/a"],
       focusFollowsAgent: false,
+      // …and one written before the project styles existed has no style (the store
+      // reads null as the default, Framed card).
+      railGroupStyle: null,
       // A prefs file written before saved-request folders existed omits this too.
       collapsedApiFolders: [],
       // …and one written before the center layout was persisted omits these.
@@ -116,6 +121,16 @@ describe("loadLayoutPrefs", () => {
   it("yields empty prefs (never throws) when the command fails", async () => {
     invoke.mockRejectedValue(new Error("not implemented"));
     await expect(loadLayoutPrefs()).resolves.toEqual(EMPTY_LAYOUT_PREFS);
+  });
+});
+
+describe("loadLayoutPrefs — project style", () => {
+  it("passes the persisted style through as written, even one this build does not know", async () => {
+    // The store decides what a value means; the wire must not drop a newer build's style.
+    for (const railGroupStyle of ["pinned", "orbit"]) {
+      invoke.mockResolvedValue({ folderOrder: [], railGroupStyle });
+      await expect(loadLayoutPrefs()).resolves.toMatchObject({ railGroupStyle });
+    }
   });
 });
 
