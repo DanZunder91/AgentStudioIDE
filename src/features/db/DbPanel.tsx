@@ -33,7 +33,7 @@
 
 import { useCallback, useEffect } from "react";
 
-import { useAppStore } from "../../app/store";
+import { useAppStore, type DbAgentNotice } from "../../app/store";
 import { ChevronIcon } from "../../components/icons";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { DbTree } from "./DbTree";
@@ -107,27 +107,44 @@ function queryLine(query: string): string {
 }
 
 /**
- * What an agent just did, in words: which agent, which connection, and that it is read-only — so a
- * connection never appears in the list unexplained — or the query it ran (`ran`) while the
- * user's own run held the console, so a run is never lost, a refused one least of all.
+ * What an agent just did, in words: which agent, which connection, and —
+ * * for a connection it added, that it is read-only, so a connection never appears in the list
+ *   unexplained;
+ * * for a query it ran (`ran`, every run), the query, Agent Studio's refusal or what came back,
+ *   and where the results are (in the console, or not yet: a busy or unconnected console);
+ * * for a query it wrote while the user had text in that console (`offer`), that their text was
+ *   left as it is — the notice's "Put in console" is the only way the query goes in.
  */
 export function agentNoticeText(
-  notice: {
-    created: boolean;
-    agent: string | null;
-    ran?: { query: string; error: string | null };
-  },
+  notice: Omit<DbAgentNotice, "connectionId">,
   connection: DbConnection | null,
 ): string {
   const who = notice.agent === null ? "An agent" : `The agent "${notice.agent}"`;
   const what = connection === null ? "a connection" : `"${connection.name}"`;
+  const kept = notice.offer === undefined ? "" : " Your text in the console was left as it is.";
   if (notice.ran !== undefined) {
+    const { error, outcome, console: shown } = notice.ran;
     const line = queryLine(notice.ran.query);
-    return notice.ran.error === null
-      ? `${who} ran a query on ${what} while your own query was running, so the console did not ` +
-          `show it${line === "" ? "." : `: ${line}`}`
-      : `${who} tried to run a query on ${what} while your own query was running, and it was ` +
-          `refused: ${notice.ran.error}${line === "" ? "" : ` (${line})`}`;
+    if (error !== null) {
+      return (
+        `${who} tried to run a query on ${what}, and Agent Studio refused it: ${error}` +
+        `${line === "" ? "" : ` (${line})`}${kept}`
+      );
+    }
+    const where =
+      shown === "busy"
+        ? " Your own query was running, so the console did not show its results."
+        : shown === "closed"
+          ? " Connect the console to see its results."
+          : " Its results are in the console.";
+    return (
+      `${who} ran a query on ${what}${line === "" ? "." : `: ${line}`} ` +
+      `Result: ${outcome ?? "nothing"}.${where}${kept}`
+    );
+  }
+  if (notice.offer !== undefined) {
+    const line = queryLine(notice.offer);
+    return `${who} wrote a query for ${what}${line === "" ? "." : `: ${line}`}${kept}`;
   }
   if (!notice.created) return `${who} opened ${what}, which was already saved. Nothing changed.`;
   const access =
@@ -140,15 +157,27 @@ export function agentNoticeText(
 function AgentNotice({
   notice,
   connection,
+  onPut,
   onDismiss,
 }: {
-  notice: Parameters<typeof agentNoticeText>[0];
+  notice: Omit<DbAgentNotice, "connectionId">;
   connection: DbConnection | null;
+  onPut: () => void;
   onDismiss: () => void;
 }): React.JSX.Element {
   return (
     <div className="db-panel__agent-notice" role="status" data-testid="db-agent-notice">
-      <span>{agentNoticeText(notice, connection)}</span>
+      <span title={notice.offer ?? notice.ran?.query}>{agentNoticeText(notice, connection)}</span>
+      {notice.offer !== undefined && (
+        <button
+          type="button"
+          className="db-dialog__btn"
+          data-testid="db-agent-notice-put"
+          onClick={onPut}
+        >
+          Put in console
+        </button>
+      )}
       <button
         type="button"
         className="db-dialog__btn"
@@ -178,6 +207,7 @@ export function DbPanel(): React.JSX.Element {
     closeDbSession,
     refreshDbTree,
     dismissDbAgentNotice,
+    putAgentDbQueryInConsole,
   } = useAppStore((s) => s.dbActions);
   const openDbConsoleTab = useAppStore((s) => s.layoutActions.openDbConsoleTab);
 
@@ -234,6 +264,7 @@ export function DbPanel(): React.JSX.Element {
         <AgentNotice
           notice={agentNotice}
           connection={connections.find((c) => c.id === agentNotice.connectionId) ?? null}
+          onPut={putAgentDbQueryInConsole}
           onDismiss={dismissDbAgentNotice}
         />
       )}

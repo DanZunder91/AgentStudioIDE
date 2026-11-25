@@ -40,37 +40,48 @@ export function agentRunNote(event: AgentCtlEvent, results: DbResultSet[]): DbRe
   };
 }
 
+const rowCount = (n: number): string => (n === 1 ? "1 row" : `${n} rows`);
+
 /**
- * The console text once the agent's query is added to what the user has there, or `null` when it
- * is already there.
- *
- * Added below, after a blank line, never in place of the user's text: what they were writing is
- * theirs, and appending is the simplest change they can see and undo — no new control, and the
- * query is right there to select and run.
+ * What a run brought back, in a few words for the DB panel's notice: the rows read (and whether
+ * Rust cut them), the rows a write changed, and whether the database answered with an error.
  */
-export function withAgentQuery(text: string, query: string): string | null {
-  const wanted = query.trim();
-  if (text.trimEnd().endsWith(wanted)) return null;
-  const gap = text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
-  return `${text}${gap}${query}`;
+export function runOutcome(results: DbResultSet[]): string {
+  const parts: string[] = [];
+  const read = results.filter((r) => r.kind === "rows");
+  if (read.length > 0) {
+    const n = read.reduce((sum, r) => sum + r.rows.length, 0);
+    parts.push(`${rowCount(n)}${read.some((r) => r.truncated) ? " (cut)" : ""}`);
+  }
+  const wrote = results.filter((r) => r.kind === "affected");
+  if (wrote.length > 0) {
+    parts.push(`${rowCount(wrote.reduce((sum, r) => sum + (r.rowsAffected ?? 0), 0))} affected`);
+  }
+  if (results.some((r) => r.kind === "message")) parts.push("an error from the database");
+  return parts.length === 0 ? "nothing" : parts.join(", ");
 }
 
 /**
  * Open a console for a connection the store may not have loaded yet (it names the tab), with the
- * agent's query typed in. An empty console takes the query as a new buffer (which also unlinks a
- * saved query, so ⌘S cannot write the agent's text over it); a console holding the user's text
- * keeps it, and its saved-query link, and gets the query added below.
+ * agent's query typed in when the console is empty (which also unlinks a saved query, so ⌘S
+ * cannot write the agent's text over it). A console holding the user's own text is never
+ * modified: it is brought to the front as it is, and the DB panel offers the query instead.
  */
-async function openAgentConsole(connectionId: string, query: string | null): Promise<void> {
+async function openAgentConsole(
+  connectionId: string,
+  terminalId: string,
+  query: string | null,
+): Promise<void> {
   await useAppStore.getState().dbActions.loadDbStore();
   const { dbActions, layoutActions, dbConsoles } = useAppStore.getState();
   const text = dbConsoles[connectionId]?.text ?? "";
-  if (query === null) layoutActions.openDbConsoleTab(connectionId);
-  else if (text.trim() === "") dbActions.openDbQueryInConsole(connectionId, query);
-  else {
-    layoutActions.openDbConsoleTab(connectionId);
-    const next = withAgentQuery(text, query);
-    if (next !== null) dbActions.setDbConsoleText(connectionId, next);
+  if (query !== null && text.trim() === "") {
+    dbActions.openDbQueryInConsole(connectionId, query);
+    return;
+  }
+  layoutActions.openDbConsoleTab(connectionId);
+  if (query !== null && text.trim() !== query.trim()) {
+    dbActions.offerAgentDbQuery({ connectionId, terminalId, query });
   }
 }
 
@@ -85,19 +96,26 @@ export const DB_HANDLERS: Readonly<Record<string, AgentCtlHandler>> = {
 
   /** `db_console`: open the connection's console with the agent's query typed in, not run. */
   dbConsole: (e) =>
-    void openAgentConsole(String(e.connectionId), typeof e.query === "string" ? e.query : null),
+    void openAgentConsole(
+      String(e.connectionId),
+      e.terminalId,
+      typeof e.query === "string" ? e.query : null,
+    ),
 
   /**
-   * `db_query`: every run, refused ones included, lands in the connection's console — opened in
-   * the background, so the terminal the user is watching keeps the focus.
+   * `db_query`: every run, refused ones included, is told in the DB panel's notice and lands in
+   * the connection's console — opened in the background, so the terminal the user is watching
+   * keeps the focus.
    */
   dbQueryRun: (e) => {
     const results = Array.isArray(e.results) ? (e.results as DbResultSet[]) : [];
+    const error = typeof e.error === "string" ? e.error : null;
     void useAppStore.getState().dbActions.showAgentDbQuery({
       connectionId: String(e.connectionId),
       terminalId: e.terminalId,
       query: typeof e.query === "string" ? e.query : "",
-      error: typeof e.error === "string" ? e.error : null,
+      error,
+      outcome: error === null ? runOutcome(results) : null,
       results: [agentRunNote(e, results), ...results],
     });
   },

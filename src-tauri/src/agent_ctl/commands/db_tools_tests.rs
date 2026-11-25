@@ -2108,6 +2108,117 @@ async fn redis_credential_commands_never_reach_the_server_on_any_connection() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A port that accepts and counts connections, then drops them: what a refused query must never
+/// reach.
+async fn counting_listener() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = accepted.clone();
+    tokio::spawn(async move {
+        while let Ok((sock, _)) = listener.accept().await {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            drop(sock);
+        }
+    });
+    (port, accepted)
+}
+
+#[tokio::test]
+async fn statements_that_reach_the_server_itself_are_refused_before_anything_is_dialled() {
+    let (port, accepted) = counting_listener().await;
+    let (dir, paths) = temp_paths();
+    save(
+        &paths,
+        &format!("postgres://app:pw@127.0.0.1:{port}/shop"),
+        "Pg",
+        true,
+        true,
+    );
+    save(
+        &paths,
+        &format!("postgres://app:pw@127.0.0.1:{port}/shop2"),
+        "PgWritable",
+        false,
+        true,
+    );
+    save(
+        &paths,
+        &format!("mysql://app:pw@127.0.0.1:{port}/shop"),
+        "My",
+        true,
+        true,
+    );
+    save(
+        &paths,
+        &format!("mysql://app:pw@127.0.0.1:{port}/shop2"),
+        "MyWritable",
+        false,
+        true,
+    );
+    let pg = [
+        "COPY (SELECT 1) TO PROGRAM 'psql -c \"INSERT …\"'",
+        "SELECT reverse(encode(pg_read_binary_file('/proc/1/environ'), 'escape'))",
+        "SELECT 1; /* x */ copy t to '/tmp/x'",
+        "DO $$ BEGIN EXECUTE 'SELECT 1'; END $$",
+        "SELECT set_config('default_transaction_read_only', 'off', false)",
+        "SELECT dblink_exec('host=x', 'INSERT …')",
+    ];
+    let my = [
+        "SELECT LOAD_FILE('/etc/hostname')",
+        "SELECT 1 INTO OUTFILE '/tmp/x'",
+        "--\u{1}\nKILL 42",
+        "SET GLOBAL read_only = 0",
+    ];
+    for (connections, queries) in [
+        (["pg", "pgwritable"], &pg[..]),
+        (["my", "mywritable"], &my[..]),
+    ] {
+        for connection in connections {
+            for query in queries {
+                let (status, reply, events) = call(
+                    &dir,
+                    "db_query",
+                    serde_json::json!({"connection": connection, "query": query}),
+                )
+                .await;
+                assert_eq!(status, 422, "{connection} {query}: {}", reply.message);
+                assert!(
+                    reply.message.contains("is not available to an agent")
+                        && reply.message.contains("the database account's privileges"),
+                    "{connection} {query}: {}",
+                    reply.message
+                );
+                assert_eq!(events.len(), 1, "the user is shown the attempt");
+                assert!(events[0].payload["error"].is_string());
+            }
+        }
+    }
+    assert_eq!(
+        accepted.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a refused query reached the server's port"
+    );
+
+    // Negative control: an ordinary query does dial (and fails on this port, which is no server).
+    let (status, reply, _) = call(
+        &dir,
+        "db_query",
+        serde_json::json!({"connection": "pg", "query": "SELECT 1"}),
+    )
+    .await;
+    assert_eq!(status, 422, "{}", reply.message);
+    assert!(
+        reply.message.starts_with("Could not connect"),
+        "{}",
+        reply.message
+    );
+    assert!(accepted.load(std::sync::atomic::Ordering::SeqCst) > 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[tokio::test]
 async fn the_connections_password_is_masked_in_every_reply_and_event_whatever_the_server_sends() {
     use crate::db::error::MASK;

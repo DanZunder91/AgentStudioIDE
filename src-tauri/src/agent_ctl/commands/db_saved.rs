@@ -255,9 +255,10 @@ pub fn db_console(
 pub fn console_message(c: &DbConnection, with_query: bool) -> String {
     if with_query {
         format!(
-            "Opened a query console for {} in Agent Studio with the query typed in (below \
-             anything the user already had there, which is kept). It was NOT run: the user reads \
-             it and presses Run (Connect first, if the console asks).",
+            "Opened a query console for {} in Agent Studio with the query typed in, or, when \
+             the user was already writing there, left their text as it is and showed the query \
+             in the DB panel with a button that puts it in the console. It was NOT run: the user \
+             reads it and presses Run (Connect first, if the console asks).",
             target::describe(c)
         )
     } else {

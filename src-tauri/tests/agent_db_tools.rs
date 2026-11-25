@@ -219,11 +219,13 @@ async fn the_help_lists_every_database_tool_with_its_arguments() {
         );
     }
     let out = run(&env, &["help", "db", "query"]).await;
-    assert!(
-        out.stdout.contains("a read-only connection refuses writes"),
-        "{}",
-        out.stdout
-    );
+    // The real boundary, stated where the agent reads it.
+    for said in [
+        "Read-only stops data writes, not everything",
+        "use a least-privileged account for agent work",
+    ] {
+        assert!(out.stdout.contains(said), "{said}:\n{}", out.stdout);
+    }
     assert!(out.stdout.contains("at most 1000"), "{}", out.stdout);
     let _ = std::fs::remove_dir_all(dir);
 }

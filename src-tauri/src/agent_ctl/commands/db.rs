@@ -6,16 +6,23 @@
 //! * A connection that is already saved (same engine, host, port, database and user) is reported
 //!   and opened, never changed.
 //! * A connection that fails its test is not saved unless the agent passes `force`.
-//! * Nothing an agent sees carries a password, a Vault reference or a connection URL. Commands
-//!   that read credentials (Redis `CONFIG`, `ACL`, `AUTH`, …) are refused, and every reply and
-//!   event of a tool that names a saved connection has that connection's secrets masked
-//!   ([`db_target::secrets_of`]) as the backstop.
+//! * No tool hands an agent a password, a Vault reference or a connection URL. Commands that read
+//!   credentials (Redis `CONFIG`, `ACL`, `AUTH`, …) and statements that read the server's files
+//!   (PostgreSQL `pg_read_file`, MySQL `LOAD_FILE`, …) are refused, and every reply and event of a
+//!   tool that names a saved connection has that connection's password masked where it appears
+//!   as written or URL-encoded ([`db_target::secrets_of`]). The mask is a backstop, not a
+//!   boundary: a privileged database account can read secrets the server holds and return them in
+//!   another form. The boundary is a least-privileged account, and `db_query`'s help says so.
 //! * Every other tool names a **saved** connection (id or name, any case — [`db_target`]); its
 //!   password is resolved from the Vault inside Rust, and the agent cannot change where it dials.
-//! * Queries run through the console's own path and guardrails ([`db_run`]), and on a read-only
-//!   PostgreSQL or MySQL connection inside a `READ ONLY` transaction that is always rolled back
-//!   (the session setting alone can be turned off by a hostile statement); each run is shown to
-//!   the user in that connection's console tab (`dbQueryRun`).
+//! * Queries run through the console's own path and guardrails ([`db_run`]); on a read-only
+//!   PostgreSQL or MySQL connection each statement runs in a `READ ONLY` transaction of its own,
+//!   ended with a rollback before the next one starts (the session setting alone can be turned
+//!   off by a hostile statement).
+//!   That stops data writes. What acts on the server itself rather than its data — `COPY …
+//!   PROGRAM`, file and large-object functions, `dblink`, `SET GLOBAL` — is refused on every
+//!   connection by [`db_refuse`], a text check. Each run, refused ones included, is shown to the
+//!   user (`dbQueryRun`).
 //! * Everything returned is bounded — rows, bytes, items, time — and every cut is said.
 
 use std::time::Duration;
@@ -29,6 +36,8 @@ use crate::db::{self, url, Paths};
 
 #[path = "db_browse.rs"]
 pub mod db_browse;
+#[path = "db_refuse.rs"]
+pub mod db_refuse;
 #[path = "db_run.rs"]
 pub mod db_run;
 #[path = "db_saved.rs"]
@@ -157,13 +166,20 @@ pub const TOOLS: &[ToolSpec] = &[
         cli: &["db", "query"],
         summary: "Run a query or command on a saved connection through Agent Studio's console \
                   and its guardrails, and show the rows as a table.",
-        details: "The DB console's own path: a read-only connection refuses writes (on \
-                  PostgreSQL and MySQL each run is also held in a read-only transaction that is \
-                  rolled back, so it cannot commit or end it), one statement per run unless the \
-                  connection allows multiple statements, and the connection's timeout applies. \
-                  Redis/Valkey commands that read credentials or auth settings (CONFIG, ACL, \
-                  AUTH, HELLO … AUTH, MONITOR, SENTINEL) are refused, and the connection's \
-                  password never appears in a reply. SQL engines take SQL; MongoDB a JSON command \
+        details: "The DB console's own path: one statement per run unless the connection \
+                  allows multiple statements, and the connection's timeout applies. On a \
+                  read-only PostgreSQL or MySQL connection each statement runs in a read-only \
+                  transaction of its own, ended (with a rollback) before the next one starts; \
+                  other engines refuse writes by command. Read-only stops data writes, not everything: an agent acts with the \
+                  database account's privileges, so use a least-privileged account for agent \
+                  work. A text check, not a boundary, refuses statements that reach the server \
+                  itself: PostgreSQL COPY, DO, LOAD, file, large-object, dblink and session \
+                  functions, set_config, SET ROLE; MySQL file reads and writes, KILL, SET \
+                  GLOBAL, executable comments, and CALL/EXECUTE on a read-only connection; \
+                  Redis/Valkey CONFIG, ACL, AUTH, HELLO … AUTH, MONITOR, SENTINEL. The \
+                  connection's password is masked in replies where it appears as written or \
+                  URL-encoded; an account that can read the server's files or settings can still \
+                  read secrets the server holds. SQL engines take SQL; MongoDB a JSON command \
                   document (or SQL that maps to one); Redis and Valkey a command line; DynamoDB \
                   PartiQL. Another database on the same server is named in the query where the \
                   engine allows it (db.table, \"$db\"); a PostgreSQL connection is bound to its \
@@ -193,8 +209,9 @@ pub const TOOLS: &[ToolSpec] = &[
         cli: &["db", "console"],
         summary: "Open a query console tab in Agent Studio for a saved connection, with a query \
                   typed in but not run, for the user to read and run.",
-        details: "What the user already typed in that console is kept: the query is added \
-                  below it.",
+        details: "A console the user is already writing in is left as it is: the query is \
+                  shown to them in the DB panel instead, with a button that puts it in the \
+                  console.",
         params: &[
             CONNECTION,
             Param::new(

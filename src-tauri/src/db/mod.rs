@@ -58,6 +58,7 @@ pub mod redis;
 pub mod result;
 pub mod secret;
 pub mod session;
+pub mod sql_words;
 pub mod sqlmongo;
 pub mod store;
 pub mod tree;

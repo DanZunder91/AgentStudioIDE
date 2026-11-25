@@ -178,10 +178,12 @@ pub fn connect_failure(c: &DbConnection, reason: &str) -> String {
 /// The values no reply or event of a database tool may carry: the connection's password as the
 /// Vault resolves it, a Vault reference its URL names, and a password written into its URL.
 ///
-/// The backstop behind every refusal: whatever a server returns (a `CONFIG GET requirepass`, a
-/// table the user keeps a password in, an error that echoes a DSN) has these replaced by
-/// [`crate::db::error::MASK`] before an agent or the UI sees it — the percent-encoded form too
-/// ([`crate::db::secret::redact`]).
+/// The backstop behind every refusal: where what a server returns (a `CONFIG GET requirepass`, a
+/// table the user keeps a password in, an error that echoes a DSN) holds one of these as written
+/// or percent-encoded, it is replaced by [`crate::db::error::MASK`] before an agent or the UI sees
+/// it ([`crate::db::secret::redact`]). Only those forms: a server that can read the password (its
+/// own environment, a file) can return it reversed or encoded, and that is caught only by the
+/// refusals in front of this, or by an account that cannot read it.
 pub fn secrets_of(paths: &Paths, c: &DbConnection) -> Vec<String> {
     let vault = crate::api_store::load(&paths.vault);
     let mut refs = vec![c.password_ref.clone()];

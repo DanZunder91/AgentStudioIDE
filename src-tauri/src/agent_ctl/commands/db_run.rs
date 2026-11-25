@@ -13,15 +13,22 @@
 //! Those guardrails are written against a user's mistakes. An agent can be prompt-injected, so
 //! two of them are not enough on their own, and this path adds:
 //!
-//! * **A read-only PostgreSQL or MySQL connection runs the agent's statements in a `READ ONLY`
-//!   transaction that is always rolled back** ([`crate::db::query_strict`]).
+//! * **A read-only PostgreSQL or MySQL connection runs each of the agent's statements in a
+//!   `READ ONLY` transaction of its own, ended with a rollback before the next one starts**
+//!   ([`crate::db::query_strict`]).
 //!   The session setting alone is a default a `DO` block or a `set_config` + `COMMIT` can turn
-//!   off; inside the transaction they are refused by the server.
+//!   off; inside the transaction a write is refused by the server, and nothing one statement does
+//!   to the session reaches the next statement's transaction.
+//! * **What acts on the server rather than its data is refused on every PostgreSQL and MySQL
+//!   connection** ([`super::db_refuse`]): a read-only transaction does not stop `COPY … TO
+//!   PROGRAM` or `pg_read_file` on a privileged account. A text check, so a speed bump; the
+//!   boundary is a least-privileged account, and the help says so.
 //! * **Redis and Valkey commands that read credentials or the server's auth set-up are refused**
 //!   ([`redis_refusal`]): `CONFIG GET requirepass` returns the very password Agent Studio dialled
 //!   with, read from the Vault.
-//! * **Whatever comes back has the connection's secrets masked** ([`target::secrets_of`]) before
-//!   anything is cut, so no cut can leave half a password behind.
+//! * **Whatever comes back has the connection's password masked** ([`target::secrets_of`]) where
+//!   it appears as written or URL-encoded, before anything is cut, so no cut can leave half of it
+//!   behind. Only those two forms: a server that can read it can return it in another.
 //!
 //! Query text is never resolved against the Vault: the DB client has no `{{VAR}}` substitution in
 //! statements, so a `{{…}}` in a query is sent to the database as the characters it is and can
@@ -209,13 +216,15 @@ async fn run_on(
         ));
     }
     let (limit, limit_note) = effective_limit(limit)?;
-    if c.family == DbFamily::Redis {
-        if let Some(why) = redis_refusal(query) {
-            return Err(format!(
-                "Agent Studio did not run that on {}: {why}",
-                target::describe(c)
-            ));
-        }
+    let refusal = match c.family {
+        DbFamily::Redis => redis_refusal(query),
+        family => super::db_refuse::sql_refusal(family, query),
+    };
+    if let Some(why) = refusal {
+        return Err(format!(
+            "Agent Studio did not run that on {}: {why}",
+            target::describe(c)
+        ));
     }
     let secrets = target::secrets_of(paths, c);
     let started = Instant::now();

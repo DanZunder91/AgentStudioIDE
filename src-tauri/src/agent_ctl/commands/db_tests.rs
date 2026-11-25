@@ -369,3 +369,33 @@ fn the_details_name_every_scheme_the_registry_parses() {
         }
     }
 }
+
+/// The help an agent (and the user reading over its shoulder) gets must not promise more than the
+/// code holds: read-only stops data writes, the text refusals are not a boundary, the mask covers
+/// two forms of the password, and the account's privileges are the real limit.
+#[test]
+fn the_query_help_states_the_real_boundary_and_claims_nothing_more() {
+    let details = |name: &str| TOOLS.iter().find(|t| t.name == name).unwrap().details;
+    let query = details("db_query");
+    for said in [
+        "each statement runs in a read-only transaction of its own, ended (with a rollback) \
+         before the next one starts",
+        "Read-only stops data writes, not everything",
+        "an agent acts with the database account's privileges",
+        "use a least-privileged account for agent work",
+        "A text check, not a boundary",
+        "where it appears as written or URL-encoded",
+        "can still read secrets the server holds",
+    ] {
+        assert!(query.contains(said), "db_query's help does not say: {said}");
+    }
+    for overclaim in ["never appears", "cannot commit", "never reaches"] {
+        assert!(
+            !query.contains(overclaim),
+            "db_query's help claims: {overclaim}"
+        );
+    }
+    let console = details("db_console");
+    assert!(console.contains("left as it is"), "{console}");
+    assert!(!console.contains("added below"), "{console}");
+}

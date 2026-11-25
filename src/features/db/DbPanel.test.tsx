@@ -44,7 +44,7 @@ const dbIpc = vi.hoisted(() => ({
 }));
 vi.mock("./dbIpc", () => dbIpc);
 
-import { useAppStore } from "../../app/store";
+import { blankDbConsole, useAppStore } from "../../app/store";
 import { resetStore } from "../../test/store-harness";
 import { DbPanel, agentNoticeText, connectionSubtitle, sessionLine, sessionTitle } from "./DbPanel";
 import { POSTGRES_ENGINE, REDIS_ENGINE } from "./dbFixtures";
@@ -700,43 +700,100 @@ describe("DbPanel — a connection an agent added", () => {
     );
   });
 
-  it("tells of a query an agent ran while the user's own query held the console", async () => {
-    const ran = (query: string, error: string | null) => ({
+  it("tells every query an agent ran: the query, the refusal or the result, and where it is", async () => {
+    type Ran = NonNullable<Parameters<typeof agentNoticeText>[0]["ran"]>;
+    const ran = (query: string, over: Partial<Ran> = {}) => ({
       created: false,
       agent: "claude · shop",
-      ran: { query, error },
+      ran: { query, error: null, outcome: "2 rows", console: "shown" as const, ...over },
     });
-    expect(agentNoticeText(ran("\n  SELECT 1\nFROM t", null), conn())).toBe(
-      'The agent "claude · shop" ran a query on "Prod Postgres" while your own query was ' +
-        "running, so the console did not show it: SELECT 1",
+    expect(agentNoticeText(ran("\n  SELECT 1\nFROM t"), conn())).toBe(
+      'The agent "claude · shop" ran a query on "Prod Postgres": SELECT 1 Result: 2 rows. ' +
+        "Its results are in the console.",
+    );
+    expect(agentNoticeText(ran("SELECT 1", { console: "busy" }), conn())).toBe(
+      'The agent "claude · shop" ran a query on "Prod Postgres": SELECT 1 Result: 2 rows. ' +
+        "Your own query was running, so the console did not show its results.",
+    );
+    expect(agentNoticeText(ran("SELECT 1", { console: "closed", outcome: null }), null)).toBe(
+      'The agent "claude · shop" ran a query on a connection: SELECT 1 Result: nothing. ' +
+        "Connect the console to see its results.",
     );
     expect(
-      agentNoticeText({ ...ran("INSERT INTO t VALUES (1)", "It is read-only."), agent: null }, null),
+      agentNoticeText(
+        { ...ran("INSERT INTO t VALUES (1)", { error: "It is read-only." }), agent: null },
+        null,
+      ),
     ).toBe(
-      "An agent tried to run a query on a connection while your own query was running, and it " +
-        "was refused: It is read-only. (INSERT INTO t VALUES (1))",
+      "An agent tried to run a query on a connection, and Agent Studio refused it: It is " +
+        "read-only. (INSERT INTO t VALUES (1))",
     );
     // No query text at all: the sentence still ends cleanly.
-    expect(agentNoticeText(ran(" \n ", null), conn())).toBe(
-      'The agent "claude · shop" ran a query on "Prod Postgres" while your own query was ' +
-        "running, so the console did not show it.",
+    expect(agentNoticeText(ran(" \n "), conn())).toBe(
+      'The agent "claude · shop" ran a query on "Prod Postgres". Result: 2 rows. Its results ' +
+        "are in the console.",
     );
-    expect(agentNoticeText(ran("", "Refused."), conn())).toBe(
-      'The agent "claude · shop" tried to run a query on "Prod Postgres" while your own query ' +
-        "was running, and it was refused: Refused.",
+    expect(agentNoticeText(ran("", { error: "Refused." }), conn())).toBe(
+      'The agent "claude · shop" tried to run a query on "Prod Postgres", and Agent Studio ' +
+        "refused it: Refused.",
     );
     const long = `SELECT ${"x".repeat(200)}`;
-    expect(agentNoticeText(ran(long, null), conn())).toContain(`${long.slice(0, 79)}…`);
+    expect(agentNoticeText(ran(long), conn())).toContain(`${long.slice(0, 79)}…`);
+    // A run whose query was kept out of the user's text says so, refused or not.
+    expect(agentNoticeText({ ...ran("SELECT 1"), offer: "SELECT 1" }, conn())).toMatch(
+      / Your text in the console was left as it is\.$/,
+    );
+    expect(
+      agentNoticeText({ ...ran("SELECT 1", { error: "No." }), offer: "SELECT 1" }, conn()),
+    ).toMatch(/\(SELECT 1\) Your text in the console was left as it is\.$/);
 
-    // Rendered in the panel like any agent notice.
+    // Rendered in the panel like any agent notice, without a Put button when nothing is offered.
     await mount();
     useAppStore.setState((s) => {
-      s.dbAgentNotice = { connectionId: "c1", ...ran("SELECT 2", null) };
+      s.dbAgentNotice = { connectionId: "c1", ...ran("SELECT 2", { console: "busy" }) };
     });
     expect(await screen.findByTestId("db-agent-notice")).toBeTruthy();
     expect(screen.getByTestId("db-agent-notice").textContent).toContain(
-      "ran a query on a connection while your own query was running",
+      "Your own query was running, so the console did not show its results.",
     );
+    expect(screen.queryByTestId("db-agent-notice-put")).toBeNull();
+  });
+
+  it("offers a query written for a console the user was writing in, and puts it in on a click", async () => {
+    expect(
+      agentNoticeText({ created: false, agent: null, offer: "\nSELECT * FROM orders" }, conn()),
+    ).toBe(
+      'An agent wrote a query for "Prod Postgres": SELECT * FROM orders Your text in the ' +
+        "console was left as it is.",
+    );
+    expect(agentNoticeText({ created: false, agent: null, offer: "  " }, null)).toBe(
+      "An agent wrote a query for a connection. Your text in the console was left as it is.",
+    );
+
+    await mount();
+    useAppStore.setState((s) => {
+      s.dbConsoles.c1 = {
+        ...blankDbConsole(),
+        text: "SELECT mine",
+        savedQuery: { id: "Q1", name: "Mine" },
+      };
+      s.dbAgentNotice = {
+        connectionId: "c1",
+        created: false,
+        agent: null,
+        offer: "SELECT * FROM orders",
+      };
+    });
+    const notice = await screen.findByTestId("db-agent-notice");
+    expect(notice.querySelector("[title]")).toHaveAttribute("title", "SELECT * FROM orders");
+    // Showing the offer changes nothing; the click does.
+    expect(useAppStore.getState().dbConsoles.c1.text).toBe("SELECT mine");
+    fireEvent.click(screen.getByTestId("db-agent-notice-put"));
+    const s = useAppStore.getState();
+    expect(s.dbConsoles.c1.text).toBe("SELECT * FROM orders");
+    expect(s.dbConsoles.c1.savedQuery).toBeNull();
+    expect(s.dbAgentNotice).toBeNull();
+    expect(screen.queryByTestId("db-agent-notice")).toBeNull();
   });
 
   it("brings the DB tab into view, re-arms both stores Rust wrote, and reloads the list", async () => {
