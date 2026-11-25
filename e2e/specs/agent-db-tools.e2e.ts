@@ -30,11 +30,12 @@ describe("agent-studio db tools: what an agent runs, the user sees", () => {
         `--name 'E2E Tools' && agent-studio db query 'e2e tools' 'SELECT 1'; echo "query-exit-$?"`,
     );
 
-    // The run is reported in the terminal, as the agent reads it…
+    // The run is reported in the terminal, as the agent reads it… (`query-exit-<digit>`: the typed
+    // line itself already contains `query-exit-$?`, so waiting for the bare prefix ends at the echo.)
     const out = await browser.waitUntil(
       async () => {
         const text = await terminalText(term.id);
-        return text.includes("query-exit-") ? text : false;
+        return /query-exit-\d/.test(text) ? text : false;
       },
       { timeout: 30_000, timeoutMsg: "the db query command never finished" },
     );
