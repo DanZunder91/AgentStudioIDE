@@ -95,7 +95,8 @@ needs you raises a badge through every parent, so you see it even when the tree 
 | **Platforms** | ✅ **macOS**: tested and used every day<br>🟡 **Linux** and **Windows**: supported, with installers in every release; still being tested in everyday use<br>🟡 Code signing and auto-update |
 
 The images above are the real UI rendered with a scripted backend and fictional sample projects,
-so they contain no real data. Regenerate them with `node scripts/readme-media.mjs`.
+so they contain no real data. Regenerate them with `node scripts/readme-media.mjs`, or in Docker
+with `scripts/readme-media/docker.sh`.
 
 **Agent Studio never writes to `~/.claude`.** Hooks go only into a project's own
 `.claude/settings.local.json`, and Claude's transcripts are read, never modified.
@@ -110,7 +111,7 @@ request lands in History.
 
 | | |
 |---|---|
-| <img src="docs/media/09-agent-db-tools.png" alt="DB_ALT"><br><b>Databases</b>: connect, browse and search the schema, run read-only queries and open them in a console. | <img src="docs/media/10-agent-api-tools.png" alt="A Claude Code agent runs the user's saved requests with agent-studio api run and opens the 429 case in a request tab; the History rail lists its requests"><br><b>API client</b>: send HTTP, WebSocket and gRPC requests, run your saved requests, read the history and compare two responses. |
+| <img src="docs/media/09-agent-db-tools.png" alt="A Claude Code agent connects to the todo-api database with agent-studio db connect, reads the schema and runs a query; the console beside it shows the same results, and the DB panel names the agent"><br><b>Databases</b>: connect, browse and search the schema, run read-only queries and open them in a console. | <img src="docs/media/10-agent-api-tools.png" alt="A Claude Code agent runs the user's saved requests with agent-studio api run and opens the 429 case in a request tab; the History rail lists its requests"><br><b>API client</b>: send HTTP, WebSocket and gRPC requests, run your saved requests, read the history and compare two responses. |
 
 **Nothing to set up.** Every Agent Studio terminal has an `agent-studio` command, and Claude Code is
 told about it when a session starts. Any other agent in that terminal can call it too.
