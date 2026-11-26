@@ -499,10 +499,9 @@ it("settings — Claude Code has Agent Studio's tools", async () => {
   const item = await screen.findByTestId("settings-claude-mcp");
   await settle(300);
   if (item.getAttribute("data-state") !== "installed") throw new Error("the Claude MCP item is not in its added state");
-  // Crop: the popover under the titlebar, and the window to its left from the agent's tab on.
+  // Crop: the popover under the titlebar, with a little of the titlebar to its left.
   const box = screen.getByTestId("settings-popover").getBoundingClientRect();
-  const tab = screen.getAllByRole("tab").find((t) => t.textContent?.includes("Add rate limiting"));
-  const left = Math.round(tab?.getBoundingClientRect().left ?? box.right - 820);
+  const left = Math.round(box.left - 48);
   const frame = document.createElement("div");
   Object.assign(frame.style, {
     position: "fixed",

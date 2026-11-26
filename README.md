@@ -110,7 +110,7 @@ request lands in History.
 
 | | |
 |---|---|
-| <img src="docs/media/09-agent-db-tools.png" alt="DB_ALT"><br><b>Databases</b>: connect, browse and search the schema, run read-only queries and open them in a console. | <img src="docs/media/10-agent-api-tools.png" alt="API_ALT"><br><b>API client</b>: send HTTP, WebSocket and gRPC requests, run your saved requests, read the history and compare two responses. |
+| <img src="docs/media/09-agent-db-tools.png" alt="DB_ALT"><br><b>Databases</b>: connect, browse and search the schema, run read-only queries and open them in a console. | <img src="docs/media/10-agent-api-tools.png" alt="A Claude Code agent runs the user's saved requests with agent-studio api run and opens the 429 case in a request tab; the History rail lists its requests"><br><b>API client</b>: send HTTP, WebSocket and gRPC requests, run your saved requests, read the history and compare two responses. |
 
 **Nothing to set up.** Every Agent Studio terminal has an `agent-studio` command, and Claude Code is
 told about it when a session starts. Any other agent in that terminal can call it too.
@@ -125,7 +125,7 @@ The item then reads **Remove Agent Studio from Claude Code**, which undoes it.
 - The tools only work for agents started in an Agent Studio terminal.
 
 <p align="center">
-  <img src="docs/media/11-claude-code-setting.png" alt="SETTING_ALT" width="520">
+  <img src="docs/media/11-claude-code-setting.png" alt="Agent Studio Settings menu with the item Remove Agent Studio from Claude Code and its hint: Added: Claude Code sessions in Agent Studio's terminals can use its database and API tools." width="328">
 </p>
 
 | Area | Commands |
