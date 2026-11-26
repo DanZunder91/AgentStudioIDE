@@ -1,29 +1,6 @@
-//! **Contract golden — the Rust half of the tab tear-off seam** (`src/tearoff.rs` ↔
-//! `src/app/tearoff/contract.ts`; two 100%-covered halves do not add up to a working
-//! feature).
-//!
-//! A torn-off tab is described by one realm, crosses Rust, and is rebuilt by another, so the
-//! wire shape has TWO producers and TWO consumers. This file writes
-//! `src/test/contract/goldens/tearoff.json` from values built by the real registry
-//! (`Registry::open` / `send` / `claim` / `holdings`) and the real `TornTab::key`, serialised
-//! exactly as Tauri serialises a command result — the typed structs, never a
-//! `serde_json::Value`, which re-orders keys. The TS half
-//! (`src/test/contract/tearoff.contract.test.ts`) feeds the same file through the page's
-//! `tabKey`, its describer and its adopter. A rename, a new field or a changed spelling on
-//! either side goes red on that side.
-//!
-//! It also proves the other direction here: every value in the golden DEserialises into the
-//! Rust types and re-serialises byte for byte — so what the page sends is what Rust reads.
-//!
-//! Standalone rather than a module of `contract_goldens.rs`: that binary is `cfg(unix)` and
-//! drives real proxies and PTYs; this one is pure data and runs everywhere.
-//!
-//! **Regenerate** after an intended contract change — then read the diff, and update the TS
-//! side in the same change:
-//!
-//! ```text
-//! UPDATE_GOLDENS=1 cargo test --manifest-path src-tauri/Cargo.toml --test tearoff_contract
-//! ```
+//! Tear-off wire golden, Rust half (TS half: `src/test/contract/tearoff.contract.test.ts`). Writes
+//! `goldens/tearoff.json` from the real registry via typed structs (a `Value` reorders keys) and
+//! round-trips it. After an intended change: `UPDATE_GOLDENS=1 cargo test --test tearoff_contract`.
 
 use std::path::PathBuf;
 

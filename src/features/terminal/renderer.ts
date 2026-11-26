@@ -1,37 +1,6 @@
-/**
- * Renderer selection with graceful degradation: WebGL -> DOM.
- *
- * ## Why there is no Canvas rung any more
- *
- * ARCHITECTURE §6 specified WebGL -> Canvas -> DOM, with Linux/WebKitGTK
- * routed straight to Canvas. That is no longer buildable: `@xterm/addon-canvas`
- * was last published 2024-07-14 (0.7.0) and still peer-depends on
- * `@xterm/xterm@^5.0.0`, while core xterm is 6.x — it hard-fails `npm install`
- * with ERESOLVE. The addon is abandoned; Canvas is gone as an option.
- *
- * ## Linux/WebKitGTK policy: attempt WebGL, fall back to DOM
- *
- * With Canvas gone the only choices are attempt-WebGL-then-DOM, or
- * straight-to-DOM on Linux. We attempt WebGL everywhere, because:
- *
- *  1. The Linux special-case existed to reach Canvas — the safe-but-still-fast
- *     middle rung. With that rung gone, defaulting Linux to DOM tracks away the
- *     product's core need (many high-throughput agent terminals) against a risk
- *     that is already detected and handled below, and does so preemptively
- *     rather than on evidence.
- *  2. Failure is cheap and self-healing. A context that cannot be created
- *     throws synchronously out of `loadAddon()` and lands on DOM immediately,
- *     at no cost. A context lost at runtime degrades to DOM permanently.
- *  3. §6's worry that WebKitGTK's WebGL2 "can be silently software-backed" is
- *     an argument about speed, not correctness: measured under SwiftShader
- *     (software WebGL2), xterm's WebGL renderer activates and renders fine. A
- *     software-backed WebGL path is still expected to beat the DOM renderer.
- *
- * The DOM renderer is significantly slower under heavy output, so it is the
- * floor, not a default. ARCHITECTURE §6's M1 Ubuntu/NVIDIA benchmark gate is
- * the right place to overturn this on real data — `setRendererPreference('dom')`
- * is the lever and needs no code change here.
- */
+/** WebGL → DOM. No Canvas rung: `@xterm/addon-canvas` is abandoned and peer-depends on xterm 5.
+ * WebGL is attempted everywhere, Linux included: failure falls to DOM cheaply and a lost context
+ * degrades permanently. Overturn on data via `setRendererPreference('dom')` (ARCHITECTURE §6). */
 
 import type { ITerminalAddon, Terminal } from "@xterm/xterm";
 
@@ -43,12 +12,8 @@ export type RendererPreference = RendererKind | "auto";
 
 let preference: RendererPreference = "auto";
 
-/**
- * Override renderer selection process-wide. Intended for the ARCHITECTURE §6
- * Linux/NVIDIA benchmark gate and for its staged fallback plan (step 1 —
- * now necessarily "force DOM on Linux" rather than Canvas). Takes effect for
- * terminals created afterwards.
- */
+/** Process-wide override for the ARCHITECTURE §6 Linux benchmark gate (its fallback is now
+ * "force DOM on Linux"). Applies to terminals created afterwards. */
 export function setRendererPreference(kind: RendererPreference): void {
   preference = kind;
 }
@@ -90,14 +55,8 @@ export interface RendererHandle {
   dispose(): void;
 }
 
-/**
- * Load the best available renderer addon into `term`.
- *
- * Returns synchronously; the addon is imported lazily, so the handle reports
- * `dom` until one settles. Self-healing: a WebGL context loss disposes the
- * addon and leaves xterm on its built-in DOM renderer, with no caller
- * involvement.
- */
+/** Returns synchronously; the addon loads lazily, so the handle reports `dom` until it settles.
+ * A WebGL context loss disposes the addon, leaving xterm's DOM renderer, with no caller help. */
 export function mountRenderer(term: Terminal): RendererHandle {
   let current: ITerminalAddon | null = null;
   let kind: RendererKind = "dom";
@@ -113,13 +72,8 @@ export function mountRenderer(term: Terminal): RendererHandle {
       if (disposed) return;
       addon = new WebglAddon();
       const gl = addon;
-      // WebKitGTK (and GPU driver resets anywhere) can drop the context at any
-      // time — degrade instead of rendering nothing.
-      //
-      // Note: xterm's WebglRenderer gives the browser a 3s grace period to
-      // restore the context before it fires this, so a real context loss means
-      // ~3s of a stalled terminal before the DOM renderer takes over. That's
-      // xterm's call, not ours — verified against @xterm/addon-webgl 0.19.
+      // The context can drop any time (WebKitGTK, GPU resets): degrade rather than render nothing.
+      // xterm waits 3s for a restore before firing (@xterm/addon-webgl 0.19): a ~3s stall.
       gl.onContextLoss(() => {
         console.warn("[terminal] WebGL context lost, falling back to DOM renderer");
         try {

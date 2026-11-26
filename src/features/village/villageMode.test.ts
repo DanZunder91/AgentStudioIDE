@@ -1,7 +1,4 @@
-/**
- * The Village | City choice: remembered per viewer, the village by default, and storage is
- * only ever a convenience — a missing, corrupt or throwing store still gives a working tab.
- */
+/** Storage is only a convenience: a missing, corrupt or throwing store still gives a working tab */
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";

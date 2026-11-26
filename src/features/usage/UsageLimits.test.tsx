@@ -1,24 +1,5 @@
-/**
- * UsageLimits — the left rail's usage-limits status strip.
- *
- * ── What is mocked, and why exactly that much ───────────────────────────────
- * Only `./usageStore`. That module owns the `invoke("claude_usage")` seam AND a
- * `setTimeout` cadence, so a component test that let the real one mount would
- * reach for Tauri IPC and start a live poll (a component that
- * subscribes on mount adds a hidden mock requirement, and a test must never
- * round-trip through the real outside world). The mock is a plain state object
- * plus a selector, which is all this component asks of it.
- *
- * `./usageFormat` is deliberately **NOT** mocked. It is pure (no clock of its own
- * — `nowMs` is passed in, no IPC, no timers), so using the real thing means every
- * assertion below is on the string a user would actually read, and the tone-band
- * tests exercise the real thresholds end to end rather than a stand-in
- * that would only prove the test agrees with itself.
- *
- * Times in the fixtures are offsets from a single `Date.now()` read, chosen far
- * enough from a bucket boundary that the few ms between fixture and render cannot
- * flip a formatted string.
- */
+/** Only `./usageStore` is mocked (it owns the IPC seam and a live poll); `./usageFormat` is pure
+ * and real, so assertions are on the string a user reads. Fixture times avoid bucket boundaries. */
 
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -66,17 +47,8 @@ function snap(windows: UsageWindow[], fetchedAtMs = Date.now()): UsageSnapshot {
   return { windows, fetchedAtMs };
 }
 
-/**
- * The three windows a real account reports, in the order Rust emits them.
- *
- * Both reset times carry a **+30 s cushion** past the value they are meant to
- * render, and it is load-bearing: the countdown truncates, so a timestamp sitting
- * exactly on a bucket boundary flips as soon as any wall-clock passes between
- * building the fixture and rendering. `now + 3 * HOUR` (no cushion) rendered
- * `"Resets in 2 hr 59 min"` under coverage instrumentation — a real flake. The
- * cushion is smaller than the minute the formatter truncates to,
- * so the expected string is unchanged; it just cannot be raced.
- */
+/** The three windows a real account reports, in Rust's order. Reset times carry a +30 s cushion
+ * (load-bearing): the countdown truncates, so a time exactly on a boundary flakes. */
 function threeWindows(now = Date.now()): UsageWindow[] {
   return [
     win({ key: "five_hour", label: "Current session", usedPct: 24, resetsAtMs: now + 4 * HOUR + 34 * MINUTE + 30_000 }),
@@ -273,10 +245,8 @@ describe("UsageLimits — states", () => {
     expect(screen.queryByTestId("usage-stale")).toBeNull();
   });
 
-  // Routing, not wording: comparing against `describeUsageError(code)`
-  // pins that the panel renders the sentence for THE CODE IT WAS GIVEN — it cannot
-  // fail on a bad sentence, because expected and actual share a source. The six
-  // sentences themselves are pinned as literals in `usageFormat.test.ts`.
+  // Routing, not wording: expected and actual share a source, so this pins only that the panel
+  // renders the code it was given; the sentences are pinned as literals in `usageFormat.test.ts`.
   it("no snapshot + error: the actionable sentence for that code, and no numbers", () => {
     mocks.state.error = "not-signed-in";
     render(<UsageLimits />);

@@ -1,21 +1,6 @@
-/**
- * RestartDialog — the confirm in front of "Restart in the IDE". It SIGTERMs a process the
- * user started somewhere else, so it follows the
- * house destructive-confirm contract of `CloseTerminalDialog` exactly:
- *
- * - `role="alertdialog"`, labelled by its heading, described by its question.
- * - It NAMES what is at stake — pid, name, command (already masked by Rust), cwd — never a bare
- *   "Are you sure?" (CloseTerminalDialog §1).
- * - **Cancel holds initial focus**, so a reflexive Enter cancels; Enter is NOT intercepted, so a
- *   user who Tabs to the destructive button can press it. Escape and a backdrop
- *   click cancel. Tab is trapped inside; focus returns to the opener on close.
- * - While the restart runs, both buttons are disabled and Escape does nothing (the store refuses
- *   to cancel a running restart — it may already have sent the signal).
- *
- * `capture` (the capture guard): the same confirm for an IDE app started
- * without the IDE's proxy — "Restart with capture". Same two steps in Rust; the new terminal
- * gets the IDE's proxy env on top of the app's own, so its calls show in Network.
- */
+/** Confirm before Restart in the IDE (it SIGTERMs a process started elsewhere), following
+ * `CloseTerminalDialog`'s destructive-confirm contract. Busy: buttons disabled, Escape ignored
+ * (the signal may be sent). `capture`: same flow, and the new terminal gets the proxy env. */
 
 import { useEffect, useRef } from "react";
 

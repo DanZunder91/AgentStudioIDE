@@ -1,31 +1,6 @@
-//! Persisted **layout preferences**: the user's manual
-//! ordering of project folders in the rails, which folders they left collapsed,
-//! and the **center layout**: the views (the iTerm2/tmux
-//! "window" strip), their names, their pane arrangement, and which terminal sat
-//! in which pane. All of it survives an app restart.
-//!
-//! Three lists, all keyed by **absolute folder path** (stable across restarts,
-//! unlike the ephemeral agent ids):
-//!   - `folder_order` — the authoritative order the project folders appear in, in
-//!     BOTH the left (Agents) rail and the right (Files) rail. A single source of
-//!     truth is exactly what lets the two sides stay in the same sort:
-//!     a drag in either rail rewrites this one list and both re-read it.
-//!   - `collapsed_folders` — folder paths collapsed in the left (Agents) rail.
-//!   - `collapsed_roots` — folder paths collapsed in the right (Files) rail.
-//!
-//! **WHERE it lives:** the OS **app config dir**
-//! (`~/.config/agent-studio/layout-prefs.json` on the fallback path), never inside a
-//! workspace/repo — exactly like [`crate::recent_projects`] / [`crate::api_store`].
-//! It holds only folder paths and boolean-ish membership, no secrets.
-//!
-//! **Robustness over correctness of the file:** a missing, unreadable, or corrupt
-//! store loads as [`LayoutPrefs::default()`] (three empty lists), never an error —
-//! reading layout prefs must not be able to break UI startup. Same contract as
-//! `recent_projects` / `api_store` / `history_store`.
-//!
-//! [`load`]/[`save`] operate on an explicit path so they are unit-testable against a
-//! temp dir; the `#[tauri::command]`s are the thin glue resolving that path from the
-//! `AppHandle`.
+//! Persisted layout preferences keyed by absolute folder path: folder order (ONE list both rails
+//! read), collapsed folders per rail, and the center layout (views, panes, terminals). Lives in
+//! the OS app config dir, never a workspace; a missing or corrupt file loads as defaults.
 
 use std::path::{Path, PathBuf};
 
@@ -34,12 +9,8 @@ use serde::{Deserialize, Serialize};
 /// File name inside the config dir.
 const FILE_NAME: &str = "layout-prefs.json";
 
-/// How a split divides its children — mirrors `Orientation` in `src/app/types.ts`.
-///
-/// A real enum rather than a `String` on purpose: **this type is the validator**.
-/// The frontend hydrates a persisted tree straight into live `PaneNode`s, so a
-/// hand-edited `"orientation": "sideways"` must be rejected here, at the door,
-/// rather than handed on as a value the TypeScript union swore could not exist.
+/// Mirrors `Orientation` in `src/app/types.ts`. An enum, not a `String`: this type IS the
+/// validator, so a hand-edited bad value is rejected before reaching live `PaneNode`s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Orientation {
@@ -47,14 +18,8 @@ pub enum Orientation {
     Column,
 }
 
-/// One restorable tab inside a persisted pane, keyed by the id that actually
-/// survives a restart.
-///
-/// **Not a `TabId`.** Tab ids are minted fresh on every boot, so a blob full of
-/// them would restore a skeleton nothing could bind to. A `TerminalId` is durable
-/// in the one way that matters: for an agent terminal it IS the agent id, which
-/// [`crate::pinned_agents`] reuses verbatim when it re-spawns a pinned root
-/// — so the tab lands back in the pane the user left it in.
+/// One restorable tab keyed by `TerminalId`, not `TabId` (minted fresh each boot): an agent's
+/// terminal id is its agent id, which [`crate::pinned_agents`] reuses on re-spawn.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedTerminal {
@@ -66,12 +31,8 @@ pub struct PersistedTerminal {
     pub custom_title: Option<String>,
 }
 
-/// A persisted pane tree: the frontend's `PaneNode`, with each leaf's tabs
-/// replaced by the terminals that can be brought back.
-///
-/// Pane ids are deliberately absent — they are ephemeral UI identity, minted
-/// fresh on hydrate, and re-using a persisted one risks colliding with the boot
-/// tree it replaces.
+/// The frontend's `PaneNode` with each leaf's tabs replaced by restorable terminals. No pane
+/// ids: they are minted fresh on hydrate, and a persisted one could collide with the boot tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum PersistedPane {
@@ -99,16 +60,8 @@ pub struct PersistedView {
     pub layout: PersistedPane,
 }
 
-/// Deserialize `T`, falling back to `T::default()` when the value is present but
-/// the wrong shape — so **one malformed field can never take the whole prefs file
-/// down with it**.
-///
-/// The plain `#[serde(default)]` on every other field only covers a *missing* key;
-/// a wrong-shaped one makes the whole struct fail, and [`load`]'s
-/// `unwrap_or_default()` then throws away the user's folder order too. That was an
-/// acceptable risk while every field was a list of strings. `views` is a recursive
-/// tree written by a frontend that will keep changing shape, and it is by far the
-/// most likely field to arrive malformed — so it degrades on its own.
+/// Deserialize `T`, or `T::default()` when present but wrong-shaped, so one malformed field
+/// (like the recursive `views` tree) can't fail the struct and lose the folder order in [`load`].
 fn lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -118,12 +71,8 @@ where
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
-/// The persisted layout preferences. [`Default`] is all-empty — exactly what a
-/// missing/corrupt file loads as. Every field is `#[serde(default)]` so a
-/// partially-written or older file (missing a field) still loads cleanly.
-///
-/// (No `Eq`: `PersistedPane::Split::sizes` is `Vec<f64>`. `PartialEq` is what the
-/// round-trip tests need, and float sizes are compared, never hashed.)
+/// [`Default`] (all empty) is what a missing/corrupt file loads as; every field is
+/// `#[serde(default)]` so older files load. No `Eq`: `Split::sizes` is `Vec<f64>`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutPrefs {
@@ -137,51 +86,22 @@ pub struct LayoutPrefs {
     /// Absolute folder paths the user collapsed in the right (Files) rail.
     #[serde(default)]
     pub collapsed_roots: Vec<String>,
-    /// "Focus follows agent": when true, selecting an agent in the left rail
-    /// collapses every other Files-rail folder and expands the selected agent's
-    /// working directory. `#[serde(default)]` so an older store lacking this key
-    /// still loads (defaults to `false` — today's behaviour).
+    /// Selecting an agent collapses every other Files-rail folder and expands its working dir.
+    /// Defaults to `false`.
     #[serde(default)]
     pub focus_follows_agent: bool,
-    /// How the agent rail draws a project (Settings → Interface): `"card"`, `"well"`,
-    /// `"divider"` or `"pinned"`. A plain string, not an enum, on purpose: the frontend
-    /// owns the list, so a style from a newer build round-trips through an older one
-    /// instead of being dropped, and an unknown one reads as the default there.
-    /// [`lenient`] so a wrong-shaped value degrades to `None` rather than costing the
-    /// user their folder order.
+    /// `"card"`, `"well"`, `"divider"` or `"pinned"`. A string, not an enum: the frontend owns
+    /// the list, so a newer style round-trips through an older build. [`lenient`]: bad → `None`.
     #[serde(default, deserialize_with = "lenient")]
     pub rail_group_style: Option<String>,
-    /// Ids of API-client **saved-request folders** the user collapsed in the
-    /// Collections rail.
-    ///
-    /// It lives here rather than in `api-store.json` on purpose, and it is *why* the
-    /// collapse state was free to persist: this file already IS "which folders did the
-    /// user leave shut", it is the only store that can be written wholesale without
-    /// racing Rust's own writers, and it holds no secrets — while `api-store.json` is
-    /// the Vault, where a per-view UI preference has no business. No second store file
-    /// was invented for it.
-    ///
-    /// Ids, not paths, because a folder here is a user-named group with a minted id and
-    /// no filesystem behind it. A stale id (folder deleted elsewhere) is inert: it names
-    /// nothing, so nothing is collapsed by it.
+    /// Ids of collapsed API-client saved-request folders (minted ids, no filesystem). Here, not in
+    /// `api-store.json` (the Vault): this file is written wholesale with no Rust writer to race.
+    /// A stale id is inert.
     #[serde(default)]
     pub collapsed_api_folders: Vec<String>,
-    /// The **center layout**: every view in bar order, with its name and its pane
-    /// arrangement.
-    ///
-    /// Two bugs shared this one gap. A view's name lived only in the JS
-    /// heap, so a rename died with the process; and nothing recorded *which* view
-    /// a terminal sat in, so on restart every restored agent was dumped into the
-    /// one view on screen. Persisting the arrangement — not just a flat list —
-    /// fixes both, and keeps splits too.
-    ///
-    /// It lives here rather than in a new store file for the reason
-    /// `collapsed_api_folders` does: this file already IS "what did the user's
-    /// window look like", it is written wholesale by the frontend with no Rust
-    /// writer to race, and it holds no secrets.
-    ///
-    /// [`lenient`] so a malformed tree degrades to "no persisted layout" (the
-    /// frontend then keeps its boot view) instead of blanking the folder order.
+    /// The center layout: every view in bar order with its name and panes, so restored terminals
+    /// land back in their view. [`lenient`]: a malformed tree degrades to "no persisted layout"
+    /// instead of blanking the folder order.
     #[serde(default, deserialize_with = "lenient")]
     pub views: Vec<PersistedView>,
     /// Which of [`Self::views`] was on screen. `None`, or an id naming no view,
@@ -238,16 +158,9 @@ pub fn layout_prefs_load(app: tauri::AppHandle) -> LayoutPrefs {
     load(&store_path(&app))
 }
 
-/// Persist the whole `prefs` blob, replacing whatever was there (wholesale, like
-/// `api_store_save`). A write failure surfaces as `Err(String)`; never panics.
-///
-/// **Main window only** (tab tear-off, docs/design/tab-tearoff.md §4.2). This file's
-/// wholesale, non-atomic `save` is justified by it having exactly one writer; a detached
-/// window runs its own store — a second full mirror of a different layout — so letting it
-/// save would be a lost update. The page already skips the call outside the
-/// main window; this refusal makes the single writer a fact rather than a convention.
-///
-/// Frontend contract: `invoke('layout_prefs_save', { prefs })`.
+/// Replace the whole blob (`invoke('layout_prefs_save', { prefs })`). Main window only
+/// (docs/design/tab-tearoff.md §4.2): the wholesale, non-atomic save needs exactly one writer,
+/// and a detached window's save would be a lost update.
 #[tauri::command]
 pub fn layout_prefs_save(
     app: tauri::AppHandle,
@@ -545,11 +458,8 @@ mod tests {
 
     #[test]
     fn a_malformed_views_field_degrades_alone_and_keeps_the_rest_of_the_prefs() {
-        // 🔴 The reason `views` is `lenient`. Every other field only defends
-        // against a MISSING key; a wrong-shaped one fails the whole struct, and
-        // `load`'s `unwrap_or_default()` would then throw away the folder order
-        // the user spent time arranging. `views` is a recursive tree written by a
-        // frontend that will keep changing shape, so it degrades on its own.
+        // Why `views` is `lenient`: a wrong-shaped field fails the whole struct, and
+        // `load` would then throw away the folder order.
         let f = Fixture::new("badviews");
         for junk in [
             r#""not an array""#,

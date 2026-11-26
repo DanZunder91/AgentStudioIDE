@@ -1,11 +1,5 @@
-//! The Agent Logs hub (`logstream/mod.rs`) and its tap in the pump.
-//!
-//! Timing tests run on tokio's **paused** clock (`start_paused = true` + `advance`), as
-//! the coalescer's do: time moves only when the test moves it, so "nothing at 200 ms,
-//! the line at 300 ms" is an assertion about the 250 ms rule rather than a race.
-//!
-//! The contract numbers are restated as literals on purpose (a test that reads the
-//! constant it checks cannot fail when the constant is wrong).
+//! The Agent Logs hub (`logstream/mod.rs`) and its pump tap, on tokio's paused clock, so the
+//! 250 ms rule is asserted, not raced. Contract numbers are restated literals on purpose.
 
 mod common;
 
@@ -449,10 +443,8 @@ async fn two_terminals_with_the_same_label_are_two_sources() {
     );
 }
 
-/// The hub reads a terminal the way its OS's PTY writes it (platform-native). On Windows ConPTY
-/// repaints a screen — PSReadLine redraws the input with a backspace and a cursor jump, so the
-/// line is what the screen shows. Elsewhere the bytes are the program's own stream, where a
-/// backspace erases and a cursor move is not content.
+/// Each OS's PTY is read its own way: ConPTY repaints (PSReadLine backspaces, cursor jumps), so
+/// the line is the screen; elsewhere a backspace erases and cursor moves aren't content.
 #[tokio::test(start_paused = true)]
 async fn each_os_reads_its_own_pty() {
     let (hub, _rec) = hub();
@@ -467,10 +459,8 @@ async fn each_os_reads_its_own_pty() {
     assert_eq!(texts, ["PS> GeGet"]);
 }
 
-/// The PTY size reaches the Windows screen model — sent before the first byte, as the supervisor
-/// does at spawn. Three rows: the fourth line scrolls, so ConPTY's jump to row 3 is the bottom
-/// row, where the prompt is. (At the default 24 rows the jump would land on `3` and log `3 x`.)
-/// The stream splitter ignores the size and reads the same line.
+/// The PTY size reaches the Windows screen model before the first byte, as at spawn: with three
+/// rows ConPTY's jump to row 3 is the prompt row (at 24 rows it would log `3 x`).
 #[tokio::test(start_paused = true)]
 async fn the_pty_size_reaches_the_terminal_model() {
     let (hub, _rec) = hub();

@@ -1,8 +1,4 @@
-/**
- * highlightJson — the lenient JSON tokenizer behind the request-body editor. It must
- * color every JSON token kind AND never choke on partial/invalid input (the user is
- * always mid-typing).
- */
+/** The tokenizer must never choke on partial/invalid input: the user is always mid-typing. */
 
 import { describe, expect, it } from "vitest";
 

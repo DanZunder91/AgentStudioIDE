@@ -1,24 +1,5 @@
-/**
- * Editor buffer lifecycle across the CLOSE paths — the eternal-"Loading…" bug.
- *
- * The registry preserves a buffer while its tab exists (tab switch = unmount +
- * detach, entry kept). But only a MOUNTED <CodeEditor> can dispose on unmount —
- * and a background tab (not its pane's active tab) has no mounted component. So
- * closing one used to delete the `editors` store slice while the registry entry
- * survived; reopening the path then early-returned in `ensureEditor`, never ran
- * initEditor/readFile, and the editor showed "Loading…" until app restart (seen
- * on a package.json).
- *
- * Pinned here, through the real store + real EditorRegistry (CM6 constructs
- * fine under jsdom; only the Tauri IPC boundary is mocked):
- *   1. close a background tab → reopen: loads fresh, never stuck.
- *   2. closePane over a background editor tab → reopen: re-reads from disk
- *      (no stale-buffer resurrection).
- *   3. the `ensureEditor` self-heal backstop for any orphan a future close
- *      path might produce.
- *   4. the preserve contract is untouched: tab switch keeps the buffer and
- *      does NOT re-read the file.
- */
+/** A background tab has no mounted CodeEditor to dispose on unmount; closing one must not leave a
+ * registry entry without its store slice, or a reopen sticks on "Loading…". */
 
 import { render, waitFor } from "@testing-library/react";
 import { act } from "react";
@@ -129,13 +110,7 @@ describe("editor buffer lifecycle on close", () => {
     expect(currentText(PATH)).toBe("new");
   });
 
-  /**
-   * A RASTER image tab has a store slice and NO registry entry — `read_file`
-   * rejects a PNG as "binary file", so `CodeEditor` deliberately never calls
-   * `ensureEditor` for one. `dispose` used to early-return on a missing entry
-   * *before* dropping the slice, which leaked `editors[path]` on every close; a
-   * reopen then inherited the previous tab's zoom instead of starting at 100%.
-   */
+  /** An image tab has a store slice but no registry entry (`read_file` rejects binaries). */
   it("closing an IMAGE tab's PANE drops its store slice, though it never had a buffer", async () => {
     const IMG = "/w/project/logo.png";
     act(() => {
@@ -148,10 +123,8 @@ describe("editor buffer lifecycle on close", () => {
     expect(getView(IMG)).toBeNull();
     expect(ipc.calls("read_file")).toHaveLength(0);
 
-    // Zoom it, then close the whole PANE from the background. `closePane` is the
-    // path that matters: `closeTab` also deletes `editors[path]` inline, so it
-    // would mask the leak, while `closePane` (store.ts:7042) relies entirely on
-    // `disposeEditorBuffer` → `EditorRegistry.dispose` to do it.
+    // `closePane`, not `closeTab`: closeTab deletes `editors[path]` inline and would mask the leak,
+    // while closePane relies on `EditorRegistry.dispose`.
     act(() => {
       useAppStore.getState().editorActions.setPreviewZoom(IMG, 2);
     });

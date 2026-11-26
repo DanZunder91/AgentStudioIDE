@@ -1,27 +1,6 @@
-/**
- * The Git rail panel: working-tree changes per workspace
- * root, and the project's open GitHub pull requests with an author filter.
- *
- * `data-testid="git-panel"` on the root is a CONTRACT: `App.test.tsx` asserts
- * right-rail routing two-sidedly against it (the ToolsPanel precedent). Zero
- * props, likewise.
- *
- * Layout rules: the rail is 180–560px and CLIPS (`overflow-x: hidden`) — see
- * `tools.css`'s warning block. No fixed widths, `min-width: 0` on every flex
- * child, `overflow-wrap: anywhere` on the unbreakable tokens (branch names,
- * PR titles, file paths). All enforced in `git.css`.
- *
- * Honesty rules, inherited from the usage panel:
- *   - never a dialog: every failure is a calm inline note in the tree's
- *     error-note style;
- *   - never-blank: a failed refresh keeps the last good rows on screen with
- *     the error line beside them;
- *   - nothing auto-opens, and no URL is rendered that did not arrive on a
- *     loaded {@link PullRequest}.
- *
- * Deleted files exist ONLY here (they have no row in the file tree), so their
- * rows are deliberately not clickable — there is no file left to open.
- */
+/** Git rail panel: changes per root and open PRs. `data-testid="git-panel"` and zero props are a
+ * contract (`App.test.tsx`). The rail clips, so `git.css` keeps children shrinkable. Failures are
+ * inline notes, last good rows stay, nothing auto-opens; deleted-file rows are not clickable. */
 import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore, workspaceRoots } from "../../app/store";
@@ -43,17 +22,9 @@ import "./git.css";
 /** The shared do-nothing rejection sink: opening a PR is fire-and-forget. */
 const swallow = (): void => {};
 
-/**
- * A change's parent directory relative to its root — `""` for a file directly at the
- * root — in the path's own separators (`src\deep` on Windows, where git status sends
- * `C:\repo\src\deep\x.ts`). This used to cut at `lastIndexOf("/")`, so on Windows every
- * row showed its whole path as the file name and a mangled slice as the folder.
- *
- * `root` is the WORKSPACE root as the UI knows it; git sends paths under the canonical
- * REPO workdir. They usually agree, but not always — a workspace opened on a subfolder
- * of the repo, or `c:\repo` against git's `C:\repo` (case is ignored for Windows paths).
- * A parent outside the root shows in full rather than as a slice of something else.
- */
+/** A change's parent relative to `root`, in the path's own separators ("" at the root). Git paths
+ * use the canonical repo dir, which may differ (subfolder workspace, Windows case); a parent
+ * outside `root` shows in full. */
 function relativeParent(root: string, path: string): string {
   const parent = dirname(path);
   return relativeTo(root, parent) ?? parent;
@@ -87,10 +58,7 @@ function prErrorLine(error: { code: PrErrorCode; detail: string | null }): strin
   }
 }
 
-/**
- * A circular-arrow refresh glyph. Kept feature-local, not in
- * `src/components/icons.tsx` (the usage panel made the same call).
- */
+/** Feature-local, not in `src/components/icons.tsx`, like the usage panel's. */
 function RefreshIcon(): React.JSX.Element {
   return (
     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">

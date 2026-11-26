@@ -1,46 +1,6 @@
-//! Shareable config bundles — export, inspect, import.
-//!
-//! Wire contract: `src/features/portability/types.ts`, which is the
-//! **authority**; every type mirrors it with `#[serde(rename_all = "camelCase")]`.
-//!
-//! ```text
-//! bundle.rs   the format + every pure transform (redaction, refs, hosts)  ── PURE
-//! seal.rs     PBKDF2 → AES-256-GCM, and nothing else                      ── PURE
-//! mod.rs      the three commands, the plan, and the file writes           ── I/O
-//! ```
-//!
-//! ## The four properties this file is responsible for
-//!
-//! 1. **The bundle's bytes never cross IPC, in either direction.** Rust reads and writes the
-//!    file itself, given a path the user picked with `@tauri-apps/plugin-dialog`. The webview
-//!    only ever sees a [`bundle::BundleHeader`], an [`bundle::ImportPlan`] or an
-//!    [`bundle::ImportResult`]. In `sealed` mode the plaintext contains live secrets, and a
-//!    design where the webview assembles or receives that string puts it in the renderer's heap,
-//!    in any devtools session, and in whatever a future crash reporter captures.
-//! 2. **`portability_inspect` writes nothing** — not the stores, not a cache, not on a wrong
-//!    passphrase. `inspect_writes_nothing_even_for_a_wrong_passphrase` snapshots all three files'
-//!    bytes to prove it.
-//! 3. **`structure` mode emits no secret value.** Enforced in [`export`] at three levels: every
-//!    environment value becomes `null`, header/URL/body text is swept for the *actual* values
-//!    this machine's Vault holds, and a literal-looking credential on a sensitive header is
-//!    redacted by heuristic ([`bundle::redact_header_value`], whose limits are written out
-//!    there).
-//! 4. **Guardrails are re-applied on import, never trusted from the file**:
-//!    engine ids validated against `db::engines`, numbers clamped, unknown fields dropped, a
-//!    literal in `passwordRef` discarded, and **imported connections forced read-only**.
-//!
-//! ## The plan and the action are one computation
-//!
-//! [`plan`] produces the `Vec<PlannedItem>` that [`apply`] then executes, and every derived
-//! record comes from one `materialise_*` function that both call. Writing "what would happen"
-//! and "what happens" twice is how a preview and an action drift — and this feature's preview
-//! *is* its security surface, so a drift there is not cosmetic.
-//!
-//! ## Threading
-//!
-//! All three commands are `async` and do their work on [`tokio::task::spawn_blocking`], because
-//! 600 000 PBKDF2 rounds take a visible fraction of a second and a synchronous Tauri command
-//! would spend it on the UI thread.
+//! Shareable config bundles: export, inspect, import (wire authority: `portability/types.ts`).
+//! Bundle bytes never cross IPC (Rust does the file I/O); inspect writes nothing; `structure` mode
+//! emits no secret; import re-applies guardrails. [`plan`] and [`apply`] share one computation.
 
 pub mod bundle;
 pub mod seal;
@@ -62,12 +22,8 @@ use bundle::{
     REDACTED_PLACEHOLDER,
 };
 
-/// The three files this feature reads and writes — **the same struct the DB client uses**.
-///
-/// Reused rather than redeclared so the two features cannot disagree about *which* files exist;
-/// only the resolution of the real locations is repeated below, because `db::Paths::of` is
-/// private to that module. [`crate::db::Paths::in_dir`] is what keeps every test in this file
-/// pointed at a temp directory and away from a real config dir.
+/// The three files this feature reads and writes: the DB client's own struct, so both agree on
+/// which files exist. [`crate::db::Paths::in_dir`] keeps tests in a temp dir.
 pub use crate::db::Paths;
 
 /// `"Agent Studio 0.1.0"`. Informational metadata, **not** a compatibility gate and **not** a
@@ -150,16 +106,8 @@ fn not_a_bundle(message: impl Into<String>) -> PortError {
 
 /* ─────────────────────────────── commands ─────────────────────────────── */
 
-/// The real paths, in the OS app config dir.
-///
-/// `db::Paths::of` is private to that module, so its lines are repeated here rather than
-/// reached into. The *type* is shared, which is what matters: the two features cannot end up
-/// disagreeing about which files hold the config. Needs an `AppHandle`, and is therefore
-/// unreachable from `cargo test` — deliberately, so no test can touch a real config dir.
-///
-/// ⚠️ Adding a field to `Paths` breaks this function, and that is the design: a struct literal
-/// with a missing field does not compile, so the duplicate cannot silently fall behind the
-/// original. Fill the new field in here too rather than reaching for `..Default::default()`.
+/// The real paths in the OS app config dir, repeated from private `db::Paths::of`. Needs an
+/// `AppHandle`, so no test reaches it. Fill new `Paths` fields in explicitly (no `..Default`).
 fn paths_of(app: &tauri::AppHandle) -> Paths {
     let store = crate::db::store::store_path(app);
     let queries = store
@@ -178,10 +126,8 @@ fn paths_of(app: &tauri::AppHandle) -> Paths {
     }
 }
 
-/// Write a bundle to `destPath` and return what it says about itself.
-///
-/// The header comes back so the export dialog can say "3 connections, 2 environments, sealed"
-/// without re-reading the file it just wrote.
+/// Write a bundle to `destPath`; returns its header so the dialog can describe it without
+/// re-reading the file.
 #[tauri::command]
 pub async fn portability_export(
     app: tauri::AppHandle,
@@ -192,13 +138,8 @@ pub async fn portability_export(
     blocking(move || export(&paths, &options, Path::new(&dest_path))).await
 }
 
-/// A **dry run**: what importing `srcPath` would do. Writes nothing, on any path.
-///
-/// Callable twice for a sealed bundle — once with `passphrase: null` to describe the file, then
-/// again with the passphrase to unseal and produce the full plan. `unsealed: false` means exactly
-/// one thing: **sealed, and no passphrase was supplied.** A *wrong* passphrase rejects with
-/// `bad-passphrase`, so one failure has one shape; a retry still costs nothing but the round trip,
-/// because nothing was written either time.
+/// Dry run of importing `srcPath`; writes nothing. `unsealed: false` means only "sealed, no
+/// passphrase given"; a wrong passphrase rejects with `bad-passphrase`.
 #[tauri::command]
 pub async fn portability_inspect(
     app: tauri::AppHandle,
@@ -229,11 +170,8 @@ pub async fn portability_import(
     .await
 }
 
-/// Run `f` off the UI thread and flatten its error onto the wire.
-///
-/// Not a stylistic wrapper: [`seal::KDF_ITERATIONS`] is 600 000 PBKDF2 rounds, which is a visible
-/// fraction of a second by design. A synchronous `#[tauri::command]` would spend it blocking the
-/// webview, so every command here is `async` and hands the work to the blocking pool.
+/// Run `f` on the blocking pool and flatten its error: 600 000 PBKDF2 rounds
+/// ([`seal::KDF_ITERATIONS`]) would otherwise block the webview.
 async fn blocking<T, F>(f: F) -> Result<T, String>
 where
     T: Send + 'static,
@@ -394,20 +332,9 @@ fn export_connection(c: &DbConnection, secrets: &[String]) -> ExportedDbConnecti
     } else {
         String::new()
     };
-    // 🔴 The URL is **always** re-rendered through the splitter, never merely inspected.
-    //
-    // The first draft only replaced it `if split.password.is_some()`, on the reasoning that
-    // `split_url_credentials` also strips a `{{VAR}}` and losing `?password={{PG_PASSWORD}}` would
-    // export a URL that no longer describes its connection. That reasoning was wrong twice, and
-    // `a_literal_password_ref_in_the_store_is_never_exported` caught it: `split.url` *keeps* a
-    // reference (it re-renders with `PasswordSlot::Ref`), and a `password: None` verdict on a
-    // string our parser read differently than intended would have shipped the original — secret
-    // and all. Re-rendering is provably credential-free by construction, and it is a fixed point
-    // for anything `db_connection_upsert` wrote, because that is the same rendering.
-    //
-    // A string the parser cannot read at all is **dropped**. It can only have got into
-    // `db-connections.json` by a hand edit (upsert refuses what it cannot split), so we cannot
-    // prove it is credential-free — and an unprovable string is not one to email to a colleague.
+    // The URL is ALWAYS re-rendered through the splitter: credential-free by construction,
+    // a fixed point for what upsert wrote. An unparsable URL (only a hand edit) can't be
+    // proven credential-free, so it is dropped.
     let url = match c.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
         None => None,
         Some(raw) => match crate::db::url::split_url_credentials(raw) {
@@ -470,12 +397,8 @@ fn export_request(r: &SavedRequest, sealed: bool, secrets: &[String]) -> Exporte
     let (url, body) = if sealed {
         (r.url.clone(), r.body.clone())
     } else {
-        // The body gets the **exact** sweep only, and deliberately no heuristic. A body is an
-        // arbitrary document — a GraphQL query, a protobuf-JSON message, base64 image data — with
-        // no field name to gate on, so a run-length scan would shred legitimate payloads while
-        // still missing a secret in an unexpected shape: neither safe nor usable. The honest
-        // answers are `{{VAR}}` interpolation (which the API client already supports in bodies)
-        // and `sealed` mode. Stated here rather than left as an assumed guarantee.
+        // Bodies get the exact sweep only: with no field name to gate on, a heuristic would
+        // shred payloads and still miss secrets. Use `{{VAR}}` or `sealed` mode.
         (
             bundle::redact_body(&r.url, secrets).0,
             bundle::redact_body(&r.body, secrets).0,
@@ -516,11 +439,8 @@ fn count(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
-/// CRASH-SAFE write: sibling temp → `write_all` → `sync_all` → atomic `rename`, then `0600`.
-///
-/// The same writer every store in this repo uses. `0600` because even a `structure` bundle names
-/// internal hosts, databases and variable names — nobody else's business on a shared machine.
-/// It is **not** encryption and must not be described as such.
+/// Crash-safe write (temp → `sync_all` → atomic `rename`), then `0600`: even a `structure`
+/// bundle names internal hosts. Not encryption.
 fn write_bundle(dest: &Path, file: &Bundle) -> Result<(), PortError> {
     use std::io::Write;
 
@@ -562,10 +482,7 @@ fn restrict_permissions(_path: &Path) {}
 
 /* ─────────────────────────── read and unseal ─────────────────────────── */
 
-/// Read and validate a bundle file, without touching its contents.
-///
-/// The size ceiling is checked against the file's **length**, before a byte is read: reading
-/// 500 MB into memory to then reject it is the bug the ceiling exists to prevent.
+/// Read and validate a bundle; the size ceiling is checked on the file's length before reading.
 fn read_bundle(src: &Path) -> Result<Bundle, PortError> {
     let meta = std::fs::metadata(src).map_err(|e| io_error("read that file", &e))?;
     if meta.len() > MAX_BUNDLE_BYTES {
@@ -586,10 +503,8 @@ fn read_bundle(src: &Path) -> Result<Bundle, PortError> {
              not written by this app's export."
         )));
     }
-    // Any version that is not exactly ours, in **either** direction. A `2` is a file from a
-    // newer build and a `0` is a file declaring a version this format never defined; both leave
-    // the reader in the same position — it cannot know what the fields mean — and both want the
-    // same message. `not-a-bundle` would be wrong for either: the `kind` is right.
+    // Any version not exactly ours, either direction: the reader can't know what the
+    // fields mean. Not `not-a-bundle`: the `kind` is right.
     let version = value
         .get("version")
         .and_then(serde_json::Value::as_i64)
@@ -611,16 +526,8 @@ fn read_bundle(src: &Path) -> Result<Bundle, PortError> {
     })
 }
 
-/// The contents, if they can be read.
-///
-/// `Ok(None)` has **exactly one** meaning: the bundle is sealed and **no passphrase was
-/// supplied**. That is the "describe the file before asking for a passphrase" case, and it is a
-/// legitimate outcome for `inspect` and never one for `import`.
-///
-/// A **wrong** passphrase is an `Err`, not an `Ok(None)` (a contract clarification). One
-/// failure, one shape: resolving a failed unseal as an empty plan would give the frontend two
-/// branches for the same event forever, and an empty plan is indistinguishable from a bundle that
-/// genuinely contains nothing.
+/// The contents, if readable. `Ok(None)` means ONLY "sealed, no passphrase supplied" (valid for
+/// inspect, never import). A wrong passphrase is an `Err`: one failure, one shape.
 fn open_contents(
     file: &Bundle,
     passphrase: Option<&str>,
@@ -648,12 +555,8 @@ fn open_contents(
                     ],
                 ));
             };
-            // The AEAD's additional data is the canonical header, so a relabelled file simply does
-            // not open. That failure arrives as `bad-passphrase` rather than `tampered`, and
-            // [`seal::open`] documents why: AES-GCM's tag check cannot tell a wrong key from
-            // altered additional data, and there is no field in `SealedPayload` that could.
-            // `tampered` is reserved for what *is* distinguishable — a structurally impossible
-            // parameter, or base64 that will not decode.
+            // AAD is the canonical header, so a relabelled file fails as `bad-passphrase`:
+            // GCM can't tell a wrong key from altered AAD (see `seal::open`).
             let aad = bundle::canonical_header(&file.header);
             let plain = seal::open(payload, pass, &aad)?;
             let contents: BundleContents = serde_json::from_slice(&plain).map_err(|e| {
@@ -677,10 +580,7 @@ pub fn inspect(
     let file = read_bundle(src)?;
     let (contents, mut notices) = open_contents(&file, passphrase)?;
     let Some(contents) = contents else {
-        // Sealed, and no passphrase was supplied — the only thing `unsealed: false` means. The
-        // header is still honest about counts, which is the bounded disclosure that lets the
-        // dialog describe the file before asking. Names live inside the ciphertext, so a sealed
-        // bundle received by accident does not advertise the shape of someone's infrastructure.
+        // Sealed, no passphrase: the header discloses counts only; names stay encrypted.
         return Ok(ImportPlan {
             header: file.header,
             unsealed: false,
@@ -723,10 +623,8 @@ pub fn import(
             "This bundle is sealed and cannot be imported without its passphrase.",
         ));
     };
-    // Hold every store's lock from the read to the last write: the import is a read-modify-
-    // write of three files, and the Vault has other writers (a lost update would eat secrets).
-    // The saves inside `apply` take the same locks again — re-entrant on this thread
-    // (`store_file::lock`).
+    // Hold every store's lock from read to last write: a three-file read-modify-write, and
+    // the Vault has other writers. `apply`'s saves re-take them (re-entrant).
     let _locks = [&paths.store, &paths.queries, &paths.vault].map(|p| crate::store_file::lock(p));
     let local = Local::load(paths);
     let planned = plan(&local, &contents);
@@ -777,10 +675,8 @@ enum Target {
 struct PlannedItem {
     item: ImportItem,
     target: Target,
-    /// `false` when the user may **not** override this to create or update: an unknown engine, a
-    /// record with no id, a variable the bundle carries no value for. A per-item override is a
-    /// choice about *whether* to take something offered, not a way to take something that was
-    /// never on offer.
+    /// `false` when the user may NOT override to create/update (unknown engine, no id, no value):
+    /// an override chooses whether to take what is offered, not what never was.
     overridable: bool,
 }
 
@@ -791,11 +687,8 @@ struct Planned {
     notices: Vec<String>,
 }
 
-/// Decide, for every record in `contents`, what would happen — and carry enough for [`apply`] to
-/// do it. **One computation, two callers**, so the preview and the action cannot drift.
-///
-/// Item order is load-bearing: connections before the queries that reference them, and
-/// environments before the variables that land inside them.
+/// What would happen to every record, with enough for [`apply`] to do it: one computation, two
+/// callers. Order matters: connections before their queries, environments before variables.
 fn plan(local: &Local, contents: &BundleContents) -> Planned {
     let mut items: Vec<PlannedItem> = Vec::new();
     let mut notices: Vec<String> = Vec::new();
@@ -983,11 +876,8 @@ fn plan(local: &Local, contents: &BundleContents) -> Planned {
                 continue;
             }
             let (action, reason, overridable) = match &var.value {
-                // 🔴 A `structure` bundle carries names without values, and creating an EMPTY
-                // Vault row would be actively harmful: `db::secret::resolve` returns `Ok("")`
-                // for a key that exists, so a clear `secret-missing` error naming the variable
-                // would silently become an empty-password connection attempt. The name is
-                // reported in the plan; the row is not created.
+                // Names without values: an EMPTY Vault row would turn `secret-missing` into a
+                // silent empty-password attempt (`resolve` gives `Ok("")`). Reported, not created.
                 None => (
                     ImportAction::Skip,
                     format!(
@@ -1037,13 +927,8 @@ fn plan(local: &Local, contents: &BundleContents) -> Planned {
     }
 }
 
-/// Every `{{VAR}}` the bundle references, flagged against this machine.
-///
-/// The union of the file's own `referencedVariables` and a **locally recomputed** scan. Both,
-/// deliberately: the file's list is the exporter's (and is what the contract says to carry), but
-/// trusting it alone would let a hostile bundle *omit* `PROD_API_KEY` from the list and keep
-/// the dialog from ever mentioning the variable its request is about to read. The security
-/// surface must not be self-reported by the thing being inspected.
+/// Every referenced `{{VAR}}`, flagged against this machine: the file's list ∪ a local rescan,
+/// so a hostile bundle can't hide from the dialog a variable its requests read.
 fn plan_variables(local: &Local, contents: &BundleContents) -> Vec<PlanVariable> {
     let mut names: BTreeSet<String> = contents
         .referenced_variables
@@ -1066,12 +951,8 @@ fn plan_variables(local: &Local, contents: &BundleContents) -> Vec<PlanVariable>
         .collect()
 }
 
-/// "This header was redacted at export" — the notice the *export* side has nowhere to return.
-///
-/// ⚠️ Contract gap: `portability_export` returns a `BundleHeader`, which has no `notices` field, so
-/// the sharer is never told which of their headers was redacted. Detecting [`REDACTED_PLACEHOLDER`]
-/// at inspect time gives the *recipient* the actionable half of that — "you must supply this value"
-/// — which is the half that decides whether the imported request works.
+/// Notices for headers redacted at export, found via [`REDACTED_PLACEHOLDER`]: the export
+/// header has no `notices` field, so the recipient gets the actionable half.
 fn redaction_notices(contents: &BundleContents) -> Vec<String> {
     let mut out = Vec::new();
     for r in &contents.api_requests {
@@ -1232,20 +1113,15 @@ fn apply(
                     continue;
                 };
                 if local.has_variable(key) {
-                    // Incoming secrets never replace existing ones unless explicitly allowed.
-                    // The flag wins over a per-item override: taking someone else's value for a
-                    // variable you already use is how a working setup breaks in a way nobody
-                    // traces back to an import, and one checkbox is a deliberate act while a
-                    // per-row dropdown is a click.
+                    // Never replace an existing secret unless the global flag allows it;
+                    // it beats a per-item override (a checkbox is deliberate, a dropdown a click).
                     if !choices.overwrite_existing_secrets {
                         notices.push(kept_own_value(key));
                         bump(&mut result.skipped, p.item.kind);
                         continue;
                     }
-                    // Overwritten **everywhere** it appears, not just in the active environment:
-                    // `db::secret::resolve` falls through to every environment, so leaving one
-                    // stale copy behind would mean the value that gets used is whichever
-                    // environment happens to be active.
+                    // Overwritten in EVERY environment: `resolve` falls through all of
+                    // them, so a stale copy would win whenever its environment is active.
                     for e in &mut local.vault.environments {
                         for v in &mut e.variables {
                             if v.key == key {
@@ -1296,20 +1172,9 @@ fn apply(
     Ok(result)
 }
 
-/// The action to take: the plan's default, overridden by the user only where that is meaningful.
-///
-/// ## Why `overwriteExistingSecrets` has to be read here and not in [`plan`]
-///
-/// The plan is a dry run under **default** choices, so for a variable this machine already holds
-/// its honest default is `Skip` ("keep mine"). The flag is a *choice*, and it arrives with the
-/// import — so if `apply` only ever executed the plan's action, turning the flag on would change
-/// nothing at all. That was a real bug, caught by
-/// `an_incoming_secret_never_replaces_an_existing_one_unless_explicitly_allowed`, which failed with
-/// an empty notice list because the code path holding the overwrite logic was unreachable.
-///
-/// The promotion is deliberately narrow: only a `variable`, only one the plan marked
-/// **overridable** (so a valueless name can never be conjured into an empty Vault row), and only
-/// when the flag is on.
+/// The plan's default action, overridden by the user where meaningful. `overwriteExistingSecrets`
+/// is read here, not in [`plan`] (a dry run under default choices); it only promotes an
+/// overridable `variable`, so a valueless name never becomes an empty Vault row.
 fn resolve_action(
     p: &PlannedItem,
     choices: &ImportChoices,
@@ -1345,11 +1210,7 @@ fn kept_own_value(key: &str) -> String {
     )
 }
 
-/// Which count bucket an outcome belongs in.
-///
-/// Keyed on whether the record **existed**, not on whether the plan said "create" or "update".
-/// Both actions upsert by id — a `create` for an id that is already present cannot produce a
-/// duplicate — so the honest report is what happened, not what was asked for.
+/// Count bucket by whether the record EXISTED, not the planned action: both upsert by id.
 fn outcome(result: &mut ImportResult, existed: bool) -> &mut ImportCounts {
     if existed {
         &mut result.updated
@@ -1371,11 +1232,8 @@ fn bump(counts: &mut ImportCounts, kind: ImportItemKind) {
 
 /* ─────────────────────── materialising the records ─────────────────────── */
 
-/// The `DbConnection` this bundle record becomes, plus every notice that describes.
-///
-/// **The one function that re-applies the import guardrails**, called by both [`plan`] (for the
-/// notices and the skip decision) and [`apply`] (for the record). `Err` is the sentence
-/// explaining why the item cannot be imported at all.
+/// The `DbConnection` a bundle record becomes, with notices: THE function re-applying import
+/// guardrails, shared by [`plan`] and [`apply`]. `Err` explains why it can't be imported.
 fn materialise_connection(
     src: &ExportedDbConnection,
     existing: Option<&DbConnection>,
@@ -1429,14 +1287,8 @@ fn materialise_connection(
         }
     }
 
-    // Numbers clamped rather than refused. `db::mod::upsert` *rejects* an out-of-range number,
-    // because there a human is looking at the field that is wrong; here there is no field to
-    // point at and refusing would discard a record over a value we can safely correct. Both go
-    // through the same bounds (`engines::MAX_ROW_LIMIT`, `MIN_/MAX_TIMEOUT_MS`), so a clamped
-    // record is one `upsert` would accept.
-    // An **absent** port is not an unusable one: it means "use the engine's default", which is a
-    // state the record can now hold, so it is carried across unchanged and silently. Only a number
-    // that is present and cannot be a port gets the clamp-and-say-so treatment.
+    // Clamped, not refused (no field to point at), within the bounds `upsert` enforces. An
+    // ABSENT port means "engine default" and passes silently; only a bad present one is clamped.
     let port = match src.port {
         None => None,
         Some(raw) => match u16::try_from(raw).ok().filter(|p| *p > 0) {
@@ -1450,10 +1302,8 @@ fn materialise_connection(
             }
         },
     };
-    // A bundle that says both is one a human edited (the exporter cannot produce it, and `upsert`
-    // refuses it). Dropped in favour of SRV **with a notice**, rather than refusing the whole
-    // record: unlike the dialog there is no field to point the user at, and the alternative is
-    // discarding a connection over a contradiction we can describe.
+    // SRV plus a port means a hand edit: drop the port in favour of SRV, with a notice,
+    // rather than discard the connection.
     let (port, srv) = match (src.srv, port) {
         (true, Some(dropped)) => {
             notices.push(format!(
@@ -1578,13 +1428,8 @@ fn materialise_connection(
         ));
     }
 
-    // 🔴 **Read-only on import is the DEFAULT, not a forced value.** The
-    // original reasoning survives as justification for the default — a connection that has just
-    // arrived is new *on this machine*, and the recipient did not make the sharer's choice — but the
-    // importer is a person looking at a review screen, and refusing to let them say "yes, I do want
-    // this writable" is the app deciding for them. The notice reports what will actually happen in
-    // both directions, because an import that silently made a connection writable would be worse
-    // than one that silently made it read-only.
+    // Read-only on import is the DEFAULT, not forced: the importer may choose writable.
+    // The notice reports what will happen either way.
     let read_only = if force_read_only { true } else { src.read_only };
     if !src.read_only && force_read_only {
         notices.push(format!(
@@ -1709,11 +1554,8 @@ fn materialise_request(
             grpc_service: src.grpc_service.clone(),
             grpc_method: src.grpc_method.clone(),
             plaintext: src.plaintext,
-            // Folders are LOCAL grouping and are not carried in a bundle, so
-            // an import must not move requests around the user's rail: updating an
-            // existing request keeps whatever folder they filed it in, and a genuinely
-            // new one lands at the root. Overwriting with `None` would silently un-file
-            // every request an import touched.
+            // Folders are local and not bundled: keep an existing request's folder,
+            // put a new one at the root, never un-file it.
             folder_id: existing.and_then(|e| e.folder_id.clone()),
         },
         notices,
@@ -1784,10 +1626,7 @@ fn request_names(local: &Local) -> Vec<(String, String)> {
         .collect()
 }
 
-/// `desired`, suffixed until it collides with no *other* record's name.
-///
-/// Suffixed rather than merged: two things that happen to share a name are still two things, and
-/// silently merging them would overwrite the recipient's own record with a stranger's.
+/// `desired`, suffixed until no OTHER record has it: same-named things stay two, never merged.
 fn unique_name(desired: &str, id: &str, taken: &[(String, String)]) -> String {
     let clashes = |candidate: &str| {
         taken
@@ -1945,10 +1784,8 @@ mod tests {
         }
     }
 
-    /// Assert `secret` is absent from `text` in **every spelling it could take**.
-    ///
-    /// The idiom from `db/mod.rs`'s tests, and it is not decoration: a single `contains` on the
-    /// raw form passes for a secret containing a backslash, because JSON writes that as `\\`.
+    /// Assert `secret` is absent from `text` in every spelling: a raw `contains` misses a
+    /// JSON-escaped backslash (`\\`).
     fn assert_no_spelling_of(secret: &str, text: &str, what: &str) {
         let json_escaped = serde_json::to_string(secret).expect("a string serialises");
         for (spelling, form) in [
@@ -2161,14 +1998,8 @@ mod tests {
 
     /* ══════════════════ 1. structure mode emits no secret value ══════════════════ */
 
-    /// 🔴 **The feature's central promise**, asserted against the file's raw bytes rather than the
-    /// returned header — they are produced by different code.
-    ///
-    /// Falsified three ways, each watched go red before being restored:
-    /// * `value: if sealed { … } else { None }` → `Some(v.value.clone())` gave
-    ///   `the raw form of the secret is in the exported bundle`.
-    /// * dropping the exact sweep from `export_request` left the secret in the body.
-    /// * dropping `redact_header_value` left `UNKNOWN_TOKEN` in the `X-Api-Key` header.
+    /// Asserted on the file's raw bytes, not the returned header (different code). Covers env
+    /// values, the exact body sweep, and header redaction.
     #[test]
     fn a_structure_export_writes_no_secret_value_in_any_spelling() {
         let f = Fixture::new("structure-no-secret");
@@ -2495,13 +2326,8 @@ mod tests {
 
     /* ══════════════════ 4. guardrails re-applied on import ══════════════════ */
 
-    /// 🔴 Imported connections are read-only, the guardrail most likely to be "simplified" away
-    /// later — now a **default** rather than a forced value. This test asserts the
-    /// default path, which is the one nobody chooses explicitly and therefore the one that matters
-    /// most; `the_importer_may_choose_writable_and_the_report_says_so` covers the override.
-    ///
-    /// Falsified by changing `read_only` to `src.read_only` in `materialise_connection`, which
-    /// failed with `an imported connection is read-only by default`.
+    /// The default path (the one nobody chooses explicitly); the override is covered by
+    /// `the_importer_may_choose_writable_and_the_report_says_so`.
     #[test]
     fn an_imported_connection_is_read_only_by_default_whatever_the_bundle_says() {
         let f = Fixture::new("forced-ro");
@@ -2546,13 +2372,7 @@ mod tests {
         assert!(plan.notices.iter().any(|n| n.contains("read-only")));
     }
 
-    /// 🔴 **The amendment: enforced but OPTIONAL.** The importer is a person looking at a
-    /// review screen, and refusing to let them say "yes, I do want this writable" is the app
-    /// deciding for them.
-    ///
-    /// What this pins is both halves: the record really is writable, and the report **says so** —
-    /// because a writable import that looked identical to a read-only one would be the worst of the
-    /// three possible behaviours.
+    /// Both halves: the record really is writable, and the report says so.
     #[test]
     fn the_importer_may_choose_writable_and_the_report_says_so() {
         let f = Fixture::new("optional-ro");
@@ -2588,11 +2408,7 @@ mod tests {
         );
     }
 
-    /// 🔴 **A bundle that says read-write does NOT become writable just because the flag is off.**
-    ///
-    /// The flag means "make imported connections read-only"; with it off, the *bundle's* value is
-    /// honoured — so a sharer who exported a read-only connection still hands over a read-only one.
-    /// Turning the toggle off must not silently promote every connection to writable.
+    /// With the flag off the bundle's value is honoured, so a read-only export stays read-only.
     #[test]
     fn turning_the_flag_off_honours_the_bundle_rather_than_forcing_writable() {
         let f = Fixture::new("ro-bundle");
@@ -2621,12 +2437,8 @@ mod tests {
         );
     }
 
-    /// 🔴 **An absent `forceReadOnly` deserialises to `true`.**
-    ///
-    /// The struct is `#[serde(default)]`, so without the explicit `default = "read_only_by_default"`
-    /// a missing field would be `false` — and an older frontend, or any hand-written IPC call, would
-    /// silently import **writable** connections. The safe value must be the one that appears when
-    /// nobody said anything, and that is a property of the deserialiser, so it is tested there.
+    /// Without the explicit serde default a missing field would be `false`, silently importing
+    /// writable connections.
     #[test]
     fn an_absent_force_read_only_field_deserialises_to_read_only() {
         let from_empty: ImportChoices = serde_json::from_str("{}").expect("empty object");
@@ -3015,10 +2827,8 @@ mod tests {
         assert_eq!(result.updated.variables, 1);
     }
 
-    /// A `structure` bundle carries variable **names** without values. Creating an empty Vault
-    /// row would turn a clear `secret-missing` error naming the variable into a silent
-    /// empty-password connection attempt, because `db::secret::resolve` returns `Ok("")` for a
-    /// key that exists. So the name is reported and the row is not created.
+    /// An empty row would turn `secret-missing` into a silent empty-password attempt, since
+    /// `db::secret::resolve` returns `Ok("")` for an existing key.
     #[test]
     fn a_valueless_variable_is_reported_but_never_created_as_an_empty_row() {
         let f = Fixture::new("no-value");
@@ -3540,16 +3350,8 @@ mod tests {
         assert_eq!(ids, vec!["c1"]);
     }
 
-    /// 🔴 The reason `ImportItem.id` is `"<kind>:<native id>"` rather than the bare record id.
-    ///
-    /// A variable's id is its **name** and a connection's is a ULID, so the two spaces can
-    /// collide — and `ImportChoices.actions` keys on the id alone, so a collision would apply one
-    /// item's decision to another with no error anywhere. Here a variable is literally *called*
-    /// `c1` while a connection *has the id* `c1`, and skipping one must leave the other alone.
-    ///
-    /// Falsified by reverting the ids to bare (`id: src.id.clone()` / `id: key.to_string()`),
-    /// which made this fail with `the connection was collateral damage`: the variable's `skip`
-    /// hit the connection too.
+    /// A variable named `c1` and a connection with id `c1`: skipping one must leave the other
+    /// alone, since `ImportChoices.actions` keys on the id alone.
     #[test]
     fn a_namespaced_item_id_stops_a_variable_name_from_colliding_with_a_record_id() {
         let f = Fixture::new("id-namespace");

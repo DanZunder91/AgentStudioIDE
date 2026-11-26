@@ -1,13 +1,5 @@
-/**
- * The bridge: `agent://event` → reducers, and the startup race around it.
- *
- * ── Why the event module is mocked, not the IPC boundary ─────────────────────
- * `src/test/tauri-mock.ts` fakes `invoke()`, which is the *command* surface.
- * Tauri events are a different plane: `listen()` registers a callback that Rust
- * later drives. Mocking `@tauri-apps/api/event` lets a test BE Rust — hold the
- * handler and decide exactly when each event lands relative to the snapshot,
- * which is the only way to test the ordering this module exists to get right.
- */
+/** The bridge: `agent://event` to reducers, and its startup race. The event module is mocked (not
+ * `invoke`) so a test can play Rust and land each event exactly relative to the snapshot. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -234,10 +226,8 @@ describe("startBridge — wiring", () => {
   });
 
   it("restores the persisted center layout BEFORE the terminals are rebuilt", async () => {
-    // 🔴 The two-views restart bug, at the boot seam. Order is the whole fix: the
-    // views must exist before `rebuildTerminalTabs` has terminals to place into
-    // them. Reversed, every restored agent lands in the boot view and the
-    // arrangement is lost — which is what the app used to do.
+    // Order is the fix: views must exist before `rebuildTerminalTabs` places terminals into them,
+    // or every restored agent lands in the boot view and the arrangement is lost.
     const leaf = (terminalId: string) => ({
       type: "leaf" as const,
       terminals: [{ terminalId, customTitle: null }],
@@ -612,10 +602,8 @@ describe("startBridge — every open agent comes back (agents survive a restart,
 
 describe("startBridge — a resumed session's ended sub-agents", () => {
   it("a sub-agent the snapshot has as done, whose spawn was buffered, still ends done", async () => {
-    // The boot race in the restart scenario: Rust created the child already `done` and
-    // emitted `subagent_spawned` + `status` while the snapshot was in flight. Replaying
-    // the spawn alone would turn the snapshot's `done` back into "running"; the status
-    // that follows it is what keeps it honest.
+    // Rust emitted `subagent_spawned` + `status` (child already `done`) while the snapshot was in
+    // flight; replaying the spawn alone would turn `done` back into running, the status fixes it.
     let resolveSnapshot!: (v: { agents: AgentNode[]; terminals: [] }) => void;
     fleet.fleetSnapshot.mockReturnValue(
       new Promise((resolve) => {

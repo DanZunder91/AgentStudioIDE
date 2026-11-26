@@ -1,23 +1,6 @@
-/**
- * Layer 5 (testing-strategy §1, §7.5) — the pane tree, in real pixels.
- *
- * The bug:
- *
- *   With the screen split vertically or horizontally, dragging a terminal toward
- *   any edge showed only half of the screen. It happened only when exactly two
- *   terminals were open; with more, it was fine.
- *
- * i.e. 2 panes, drag the only tab out of one pane onto the other pane's edge →
- * half the screen goes dead. With 3+ panes the same gesture is fine.
- *
- * This CANNOT be tested under jsdom, and that is not a preference. `allotment`
- * never reads `clientWidth`/`getBoundingClientRect` — verified: zero such reads
- * in its bundle. It learns its container size from **`ResizeObserver` and
- * nothing else**, and jsdom's RO (our own stub, `src/test/setup.ts`) never
- * fires. So under jsdom allotment lays out *nothing*, every pane is 0x0, and
- * every assertion below is vacuously true. Real Chromium is the only place
- * these facts exist.
- */
+/** Pane tree in real pixels (testing-strategy §1, §7.5): with 2 panes, dragging one pane's only
+ * tab onto the other's edge must leave survivors filling the container. jsdom can't test it:
+ * allotment sizes only via ResizeObserver, which never fires there (`src/test/setup.ts`). */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -45,17 +28,8 @@ import { resetStore } from "../test/store-harness";
 /** TerminalRegistry's fit debounce (RESIZE_DEBOUNCE_MS) plus real headroom. */
 const FIT_DEBOUNCE_MS = 50;
 
-/**
- * Let the browser actually lay out, then let every async consequence land.
- *
- * The chain under test is genuinely asynchronous and every link is real:
- *   rAF (style+layout) → ResizeObserver delivery → allotment `layout()` →
- *   the registry's own RO → `scheduleFit()`'s 50ms debounce → `fit()`.
- *
- * So this waits on frames *and* wall-clock, generously. It is not a "sleep
- * until green" fudge: the assertions that follow are about the settled state,
- * and a bug that survives 400ms of settling is a bug the user sees.
- */
+/** Wait frames and wall-clock for rAF → RO → allotment `layout()` → registry RO → the 50ms fit
+ * debounce; the assertions concern the settled state. */
 async function settle(ms = FIT_DEBOUNCE_MS * 6): Promise<void> {
   await act(async () => {
     const deadline = performance.now() + ms;
@@ -109,10 +83,7 @@ describe("pane layout — real browser geometry", () => {
     ipc.reset();
   });
 
-  /**
-   * Build the failing starting state: two panes side by side, one terminal
-   * tab each, laid out and fitted.
-   */
+  /** Two panes side by side, one terminal tab each, laid out and fitted. */
   async function twoPanes(): Promise<{ tabA: TabId; tabB: TabId }> {
     render(<App />);
     await settle();
@@ -157,17 +128,8 @@ describe("pane layout — real browser geometry", () => {
     }
   });
 
-  /**
-   * THE BUG. Two panes; drag the only tab out of pane A onto pane B's edge.
-   *
-   * All four edges, because it happened in every direction — and
-   * because two distinct store paths are involved:
-   *   - left/right split `row`, which is the root's own orientation, so
-   *     canonicalize FLATTENS (the root split is reused, id and all);
-   *   - top/bottom split `column`, so the pruned root collapses into the new
-   *     nested split (a brand-new root node).
-   * Both must end with the survivors filling the container.
-   */
+  /** All four edges: left/right reuse the root `row` split (canonicalize flattens), top/bottom
+   * collapse into a new nested `column` root. Both must fill the container. */
   describe.each<Edge>(["left", "right", "top", "bottom"])(
     "2 panes → drag the only tab of pane A onto pane B's %s edge",
     (edge) => {
@@ -225,20 +187,8 @@ describe("pane layout — real browser geometry", () => {
           expect(screen, "xterm must have rendered a screen").not.toBeNull();
           const screenBox = geometryOf(screen!);
 
-          /**
-           * The grid must fill its host — i.e. `cols`/`rows` are what a correct
-           * fit computes for THIS box, not a stale count from the old one.
-           *
-           * The cell size is read off the rendered grid (`screenBox` is exactly
-           * cols x cellW by construction), which makes it a real font
-           * measurement; the assertion then compares against `hostBox`, which is
-           * independent of it. So this is not circular: it genuinely says "the
-           * grid matches the box it is in".
-           *
-           * The band accounts for the only two legitimate sources of slack:
-           * xterm's viewport scrollbar (SCROLLBAR_MAX) and the sub-cell
-           * remainder `fit()` floors away (< 1 cell).
-           */
+          /** cols/rows must fit THIS box: cell size from `screenBox`, checked against `hostBox`.
+           * Slack: the scrollbar (SCROLLBAR_MAX) and the sub-cell remainder `fit()` floors away. */
           const cellW = screenBox.width / cols;
           const cellH = screenBox.height / rows;
           const SCROLLBAR_MAX = 20;
@@ -257,11 +207,7 @@ describe("pane layout — real browser geometry", () => {
     },
   );
 
-  /**
-   * The control. Same gesture, 3 panes — this case is fine, so
-   * a fix that makes the 2-pane case pass must not have got there by breaking
-   * this one, and a diagnosis that predicts breakage here is wrong.
-   */
+  /** Control: 3 panes, same gesture; a 2-pane fix must not break it. */
   it("3 panes → the same gesture keeps every pane filling the container", async () => {
     render(<App />);
     await settle();

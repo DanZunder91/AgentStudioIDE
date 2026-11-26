@@ -1,21 +1,6 @@
-/**
- * Tests for the connection dialog.
- *
- * ── Nothing is mocked, and that is the point ─────────────────────────────────
- * The component takes every action as a prop and touches no store and no `invoke`, so
- * these tests need no `vi.mock` at all — the doubles are plain `vi.fn()`s handed in as
- * props. That is the same seam that keeps the form independent of the Rust commands.
- * `engineFields.ts` is deliberately NOT mocked either: using the real logic means every
- * assertion below is on the string a user would actually read (a test against a
- * stand-in only proves the test agrees with itself).
- *
- * ── The hostile fixtures, and what they are for ──────────────────────────────
- * `HOSTILE_PASSWORD` is `p@ss:w/rd#1`: every character that a URL builder has to
- * percent-encode. `hostileBuild` is a *misbehaving backend* that echoes it into the
- * connection string in both its literal and encoded forms. Those two together pin the
- * one property this dialog cannot get wrong — a password must never reach the URL
- * preview, no matter what the layer below hands up.
- */
+/** Nothing is mocked: actions arrive as props, and engineFields.ts runs for real. HOSTILE_PASSWORD
+ * needs percent-encoding and hostileBuild echoes it raw and encoded: a password must never reach
+ * the URL preview, whatever the layer below returns. */
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -227,10 +212,8 @@ describe("per-engine fields", () => {
     fireEvent.click(screen.getByLabelText("Direct connection"));
     await waitFor(() => {
       const last = h.onBuildUrl.mock.calls.at(-1)![0] as DbConnectionDraft;
-      // `authSource` is here because its descriptor carries a non-empty `default`
-      // ("admin") and `newDraft` seeds those — the whole point of adding `default`.
-      // Empty defaults are NOT seeded: an empty option is indistinguishable from an
-      // unset one, so writing it would be noise in a persisted record.
+      // newDraft seeds non-empty descriptor defaults (authSource "admin"); an empty
+      // default would be noise in a persisted record.
       expect(last.options).toEqual({
         authSource: "admin",
         readPreference: "nearest",
@@ -410,13 +393,8 @@ describe("the password", () => {
   });
 
   it("🔴 starts VISIBLE on every open, and never renders a stored secret", async () => {
-    // Visible by default (this is a local tool), and the
-    // reason it is safe is the second assertion here rather than the first: the field is EMPTY on
-    // open even for a saved connection, because the secret lives in the Vault and only its
-    // `{{VAR}}` reference is rendered. So "visible" can only ever mean "what you just typed".
-    //
-    // 🔴 This assertion is the condition on the default: if the dialog ever starts prefilling a
-    // stored password, this test goes red and the default must flip back to masked.
+    // Visible by default is safe only because the field opens EMPTY (the secret stays in the
+    // Vault). If a stored password is ever prefilled, this goes red: flip the default to masked.
     const initial = { id: "01J", name: "Prod", host: "db.internal", passwordRef: "{{PG_PASSWORD}}" };
     const { unmount } = await open({ initial });
     expect(screen.getByTestId("db-password")).toHaveAttribute("type", "text");
@@ -839,10 +817,7 @@ describe("Connection type", () => {
   });
 
   it("asks for the URL it needs, and for nothing the string already carries", async () => {
-    // Connecting with a URL, a user and a password used to demand too many other fields —
-    // a URL-only connection needs a name and a string, not a host and a port the
-    // URI already has.
-    // Nothing derived to seed the box from, so URL-only really does open empty.
+    // URL-only needs a name and a string, not host/port; with nothing to seed, it opens empty.
     h.onBuildUrl.mockResolvedValue("");
     await open();
     type("Name", "Atlas");
@@ -1324,16 +1299,8 @@ describe("the modal contract", () => {
   });
 });
 
-/**
- * 🔴 **DynamoDB declares no connection string**, and an older build was therefore offering a
- * "URL only" mode whose every control is inert — a `user@host/database` box for something with
- * no user and no database, which then refused to save with "Host is required".
- *
- * It went unnoticed because **nothing rendered its dialog**: the field logic
- * (`engineFieldRows`) is a pure function over a descriptor and was behaving perfectly, while the
- * component around it added a mode it should not have offered. These tests render the component —
- * the layer the user actually touches.
- */
+/** DynamoDB declares no connection string, so no URL-only mode. Renders the component: the pure
+ * field logic was right while the component offered the mode anyway. */
 describe("no engine without a DSN offers a connection string", () => {
   /** A DynamoDB-shaped row: schemeless, no database, addressed by host and port. */
   const DYNAMODB_ENGINE: EngineSpec = {

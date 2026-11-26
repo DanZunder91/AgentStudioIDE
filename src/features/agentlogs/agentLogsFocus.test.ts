@@ -1,8 +1,5 @@
-/**
- * Source label → focus. Driven through the REAL app store (only the Tauri seam and the
- * xterm-owning terminal module are mocked), asserting the store change itself: which
- * view is active, which tab is active in which leaf.
- */
+/** Source label → focus through the REAL app store (Tauri seam and terminal module mocked),
+ * asserting the store change: which view, and which tab in which leaf, is active. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

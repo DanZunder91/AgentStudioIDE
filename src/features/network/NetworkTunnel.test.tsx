@@ -1,18 +1,5 @@
-/**
- * The case, on `12:00:00 TUNNEL CONNECT geo.api.example.net:443 —`: the call was listed but looked
- * unfinished and showed nothing about what it was doing.
- *
- * A Rust app on reqwest + rustls with bundled webpki roots cannot trust the IDE's CA, so the proxy
- * tunnels it (a MITM that guesses wrong breaks the program) — correct, but the row and the pane
- * must SAY so:
- *   1. the row: Status `open` (pulsing) / `closed`, never `—`; Size ↑/↓; Path `encrypted · n ↑ m ↓`;
- *   2. the pane: a card — why, what is known, repeated connections grouped, three ways to see more
- *      (Decrypt this app, the Rust native-roots line, Logs);
- *   3. a closed terminal is named by its last title (`gazelle (closed)`), not `closed terminal 0000eeee`;
- *   4. a `bypass` row (an agent command that skipped the proxy) and the strict-capture switch.
- *
- * Only `./netcapIpc` / `./netmachineIpc` are mocked; stores, formatters and cards are real.
- */
+/** A rustls app with bundled webpki roots cannot trust the IDE's CA, so the proxy tunnels it.
+ * Only `./netcapIpc` / `./netmachineIpc` are mocked; stores, formatters and cards are real. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

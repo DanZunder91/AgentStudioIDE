@@ -1,23 +1,6 @@
-/**
- * The tear-off wire contract — what a tab looks like while it crosses from one window to
- * another (docs/design/tab-tearoff.md).
- *
- * Mirrored in Rust by `src-tauri/src/tearoff.rs` (`TornTab`, `Mail`, `Claim`, `Holding`),
- * and pinned on both sides by one golden, `src/test/contract/goldens/tearoff.json`: Rust
- * writes it from its own values and round-trips it; the TS contract test feeds it through
- * `tabKey` and the adopter. A rename on either side goes red on that side.
- *
- * ── Why a description and not the tab ───────────────────────────────────────
- * Each window is its own JS realm with its own store and registries (tab-tearoff.md §2.1),
- * so nothing live can be handed over — only enough to rebuild it. A terminal's PTY never
- * moves at all: the receiver re-binds the same process with `terminal_reattach`.
- *
- * ── What is deliberately lost in a move (the §3 rehydration list, decided) ──
- * - terminal: scrollback older than Rust's 256 KB ring, the selection, the find bar;
- * - editor: nothing on the explicit move (text, dirty, selection, undo history and the disk
- *   stamp all travel); on a CRASHED window's re-home, the undo history and the last few
- *   hundred milliseconds of typing (the periodic report carries text only, debounced).
- */
+/** Tear-off wire contract (docs/design/tab-tearoff.md), mirrored by `src-tauri/src/tearoff.rs`
+ * and pinned by `src/test/contract/goldens/tearoff.json`. A description, not the tab: each window
+ * is its own realm; PTYs re-bind via `terminal_reattach`. Losses: tab-tearoff.md §3. */
 
 import type { Tab } from "../types";
 
@@ -33,10 +16,8 @@ export interface EditorBuffer {
   text: string;
   /** The last saved (or loaded) text — the dirty flag is `text !== baseline`. */
   baseline: string;
-  /**
-   * CodeMirror's `EditorState.toJSON({ history })`, stringified: the selection and the undo
-   * stack. A string so Rust never parses (and re-orders) it. `null` in a periodic report.
-   */
+  /** `EditorState.toJSON({ history })` stringified (selection + undo), a string so Rust never
+   * re-orders it. `null` in a periodic report. */
   state: string | null;
   /** The disk stamp the buffer was last read or written at. */
   stamp: Stamp | null;
@@ -59,11 +40,8 @@ export type TornTab =
       path: string;
       title: string;
       customTitle: string | null;
-      /**
-       * `null` when the editor had not finished loading — the receiver reads the file.
-       * There is no `dirty` beside it: dirty IS `text !== baseline`, and a second copy of
-       * one fact is a copy that can disagree.
-       */
+      /** `null` if the editor had not loaded (the receiver reads the file). No `dirty`: dirty IS
+       * `text !== baseline`. */
       buffer: EditorBuffer | null;
     }
   | { kind: "diff"; path: string; title: string }
@@ -82,17 +60,11 @@ export type Mail =
   | { t: "close"; key: string }
   /** To the main window: this agent's tab was closed for good in a detached window. */
   | { t: "dismissed"; agentId: string }
-  /**
-   * To the window a dragged tab came from: it was dropped on window `to`, so move it there.
-   * `tabId` is the SENDER's tab id — meaningless anywhere else. Rust only accepts one whose
-   * `to` is the window asking.
-   */
+  /** To a dragged tab's source window: it was dropped on `to`, move it there. `tabId` is the
+   * SENDER's id; Rust only accepts it when `to` is the asking window. */
   | { t: "give"; tabId: string; to: string }
-  /**
-   * An agent's custom name changed in the sending window (`null` = back to its derived
-   * title): detached → main, which persists it with the layout; main → the holder, whose tab
-   * then shows what the main rail says.
-   */
+  /** An agent's custom name changed (`null` = derived title): detached → main, which persists
+   * it; main → the holder, to match the main rail. */
   | { t: "renamed"; agentId: string; name: string | null };
 
 /** `tearoff_claim`'s answer: the tabs a detached window holds (reload recovery) + its mail. */
@@ -125,13 +97,8 @@ export const TEAROFF_KINDS: ReadonlySet<Tab["kind"]> = new Set<TornTab["kind"]>(
   "village",
 ]);
 
-/**
- * Can this tab move to another window? The kinds left out are the ones a move would break
- * (tab-tearoff.md §3): an API request's in-flight response and a sequence's captured bearer
- * tokens live in this window's store; a DB console is a live Rust session that is
- * one-per-connection per store; the session picker and an activity view are cheap to
- * re-open from the rail of the window that has one. Their menu item is simply absent.
- */
+/** Can this tab move windows? Excluded kinds would break (tab-tearoff.md §3: in-flight API
+ * state, one-per-connection DB sessions, cheap-to-reopen views); they get no menu item. */
 export function canTearOff(tab: Tab | undefined): boolean {
   return !!tab && TEAROFF_KINDS.has(tab.ref.kind);
 }
@@ -139,14 +106,8 @@ export function canTearOff(tab: Tab | undefined): boolean {
 /** The key prefix every terminal tab shares (`tabKey`). */
 export const TERMINAL_KEY = "terminal:";
 
-/**
- * A tab's identity across windows: at most one window holds a key at any moment. Mirrors
- * `TornTab::key` in Rust; the golden pins both.
- *
- * A plain and an agent terminal share the PTY id space (an agent's TerminalId IS its
- * AgentId), so they share `terminal:`; an editor and a diff of one file are two tabs, so two
- * keys; the singletons key on their kind.
- */
+/** Cross-window tab identity (one holder per key); mirrors Rust's `TornTab::key`, golden-pinned.
+ * Plain and agent terminals share `terminal:` (one PTY id space); editor and diff differ. */
 export function tabKey(t: TornTab | Tab["ref"]): string {
   switch (t.kind) {
     case "terminal":
@@ -161,10 +122,8 @@ export function tabKey(t: TornTab | Tab["ref"]): string {
   }
 }
 
-/**
- * The terminal ids detached windows hold — the ones a main-window reload must NOT rebuild
- * (`bridge.ts`): re-attaching them would steal their PTY stream from the window showing them.
- */
+/** Terminal ids held by detached windows; a main-window reload must NOT rebuild them
+ * (`bridge.ts`) or it would steal their PTY stream. */
 export function heldTerminalIds(holdings: readonly Holding[]): Set<string> {
   const ids = new Set<string>();
   for (const h of holdings) {

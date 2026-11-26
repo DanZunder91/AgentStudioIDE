@@ -1,22 +1,6 @@
-/**
- * selectionSeed — the ONE rule every find bar in the app uses to answer
- * "Cmd/Ctrl+F was pressed and something is selected; what goes in the box?"
- * (pressing Cmd+F with text selected must search for that selection).
- *
- * This file owns the RULE. The six surfaces that use it are tested where they
- * live — `bufferSearch.test.ts` (editor), `terminalViewSearch.test.tsx`,
- * `MarkdownPreview.test.tsx`, `ResultsGrid.test.tsx` and `responseTools.test.tsx`
- * (response body + A/B compare) — because a rule that is right and a surface
- * that never asks it is still an empty box.
- *
- * 🔴 jsdom builds the multi-line cases out of text nodes that genuinely contain
- * `\n`, never out of two block elements. jsdom's `Selection.toString()` is
- * `Range.toString()`: it concatenates character data and does NOT insert the
- * line breaks a real browser puts between blocks, so a two-`<p>` selection here
- * would arrive single-line and the test would pass against nothing. A `<pre>`,
- * a code fence or a multi-line cell value is the honest fixture — and it is
- * also the realistic one for the surfaces that carry this bar.
- */
+/** Multi-line fixtures use text nodes containing `\n`, never two blocks: jsdom's
+ * `Selection.toString()` adds no line breaks between blocks, so such a test would pass against
+ * nothing. The surfaces that use this rule are tested where they live. */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -113,10 +97,8 @@ describe("domSelectionSeed — reading the document selection", () => {
   });
 
   it("counts a selection whose common ancestor IS the container", () => {
-    // Select-all across two children: `commonAncestorContainer` is the
-    // container itself, and `Node.contains` is true for the node it is called
-    // on — the reason the check is written with `contains` and not a strict
-    // descendant test.
+    // `commonAncestorContainer` is the container itself and `Node.contains` is true for its own
+    // node, which is why the check uses `contains` rather than a strict descendant test.
     const host = document.createElement("div");
     host.innerHTML = "<span>alpha</span><span>beta</span>";
     document.body.append(host);

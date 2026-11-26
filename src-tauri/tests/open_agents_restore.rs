@@ -1,20 +1,6 @@
-//! Open agents come back after a restart — the supervisor half (phase 1 of "agents
-//! survive a restart"; `src/open_agents.rs`).
-//!
-//! The pure registry and the restore planner are unit-tested next to them. This suite
-//! drives the REAL supervisor actor (a stub adapter instead of `claude`, a temp file
-//! instead of the app-config dir) through every write and every rung:
-//!
-//! 1. **The writes** — a spawn records the agent; the user closing it, or its own
-//!    process ending, forgets it.
-//! 2. **The shutdown order** — once `begin_shutdown` has raised the flag, neither a PTY
-//!    exit nor a close forgets anything (the quit is not the user ending them), and the
-//!    one shutdown write says which agents were mid-turn.
-//! 3. **The ladder** — resume when a transcript exists, else fresh in the same folder
-//!    (with the new session id recorded), else a dormant row: missing folder or a
-//!    runtime that will not start. Same agent ids throughout.
-//! 4. **The markers** — `restored_agents` lists what came back, and an agent leaves it
-//!    at its next turn, its end, or its close.
+//! Open agents survive a restart, supervisor half (`src/open_agents.rs`): drives the real actor
+//! (stub adapter, temp file) through the writes, the shutdown order (after `begin_shutdown` no exit
+//! or close forgets an agent), the resume/fresh/dormant ladder, and the `restored_agents` markers.
 
 mod common;
 
@@ -41,12 +27,9 @@ use common::{temp_cwd, ChannelSink, RecordingSink, EOL};
 
 const RUNTIME: &str = "restore-stub";
 
-/// The adapter a restore is driven through. Like `ClaudeAdapter`, it imposes a resume
-/// id verbatim and mints a fresh one otherwise — and it RECORDS which it got, which is
-/// the `claude --resume <id>` assertion without a real `claude`. Its "saved
-/// transcripts" are a set the test controls, so the ladder's resume/fresh decision is
-/// driven without touching `~/.claude`. It also parses the turn hooks, so a test can
-/// put an agent mid-turn exactly as `UserPromptSubmit` does.
+/// Like `ClaudeAdapter`, imposes a resume id verbatim or mints a fresh one, and records which, so
+/// `claude --resume <id>` is asserted without `claude`. Its saved transcripts are a test-owned set
+/// (never `~/.claude`); it parses the turn hooks so a test can put an agent mid-turn.
 struct RestoreAdapter {
     seen: Mutex<Vec<Option<String>>>,
     transcripts: Mutex<HashSet<String>>,
@@ -518,10 +501,8 @@ async fn restore_walks_the_ladder_under_the_same_agent_ids() {
     want.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
     assert_eq!(sup.restored_agents().await.unwrap(), want);
 
-    // The registry after the restore: same agents, same order. The fresh fallback's NEW
-    // session replaced the dead one (or every launch would re-try a resume that cannot
-    // work); each re-launch is a new run, so its shutdown stamp is cleared. The dormant
-    // ones were not touched — they still come back until the user closes them.
+    // The fresh fallback's new session replaces the dead one (else every launch retries a doomed
+    // resume) and its shutdown stamp is cleared; dormant ones are untouched until closed.
     assert_eq!(
         store.ids(),
         vec![
@@ -694,11 +675,9 @@ async fn without_a_store_the_shutdown_still_answers() {
 
 // ── 5. sub-agents first seen already ended (a resumed session's history) ───────
 
-/// After a restart, `claude --resume` re-reads a session whose sub-agents ended long
-/// ago: the tailer's FIRST sight of each is already `done`/`error`. The row is created
-/// by `SubagentSpawned` (which carries no status, and the UI starts it `running`), so
-/// the end must follow on a `Status` — in that order, or the UI has no row to apply it
-/// to. A sub-agent first seen running gets no extra event.
+/// After a restart the tailer's first sight of an old sub-agent is already `done`/`error`. The row
+/// is created by `SubagentSpawned` (no status; the UI starts it `running`), so a `Status` must
+/// follow it, in that order. A sub-agent first seen running gets no extra event.
 #[tokio::test]
 async fn a_sub_agent_first_seen_ended_is_followed_by_its_status() {
     use agent_studio_scaffold_lib::agent::fanout::{FanoutAgent, FanoutDelta, FanoutStatus};

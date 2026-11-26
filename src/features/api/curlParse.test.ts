@@ -1,7 +1,4 @@
-/**
- * curlParse — the pure cURL-command parser (cURL import). This is the risky logic (shell
- * quoting + flag handling), so it's tested hardest, at the unit level.
- */
+/** The pure cURL import parser; shell quoting and flags are the risky logic, tested hardest. */
 
 import { describe, expect, it } from "vitest";
 
@@ -233,13 +230,8 @@ describe("parseCurl", () => {
 
 /* ─────────────────────────── Windows pastes ─────────────────────────── */
 
-/**
- * DevTools-exact "Copy as cURL (cmd)" output. Generated with Chromium's own
- * `escapeStringWin` + `generateCurlCommand` (front_end/panels/network/
- * NetworkLogView.ts) — V3 is the generation shipped 2025-09 … 2026-08 (`"` as
- * `\"`), V4 is the newer generation on Chromium main (`"` as `""`, `(` `)` careted).
- * String.raw keeps every caret and backslash exactly as DevTools wrote it.
- */
+/** DevTools-exact "Copy as cURL (cmd)" output from Chromium's `escapeStringWin`: V3 writes `"`
+ * as `\"`, V4 (newer) as `""` with `(` `)` careted. String.raw keeps every caret and backslash. */
 const DEVTOOLS_GET_V3 = String.raw`curl --url ^"https://api.example.com/v1/items?a=1^&b=2^&filter^\[status^\]=open^" ^
   -H ^"accept: application/json, text/plain, */*^" ^
   -H ^"accept-language: en-US,en;q=0.9^" ^

@@ -1,11 +1,5 @@
-/**
- * Breadth-first pathfinding on the 4-connected tile grid (no diagonals,
- * neighbour order up, down, left, right — so ties resolve the same way every
- * time). Characters never block each other; props and walls do.
- *
- * Typed arrays instead of string-keyed sets/`Array.shift()`: a 100×100 village
- * is 10k cells, and a wander decision for 50 characters must stay cheap.
- */
+/** BFS on the 4-connected grid; fixed neighbour order (up, down, left, right) so ties resolve the
+ * same way. Characters never block each other; props and walls do. Typed arrays keep it cheap. */
 
 import type { World } from "../villageTypes";
 import { walkGrid } from "./world";
@@ -18,16 +12,9 @@ export interface Tile {
 const DC = [0, 0, -1, 1];
 const DR = [-1, 1, 0, 0];
 
-/**
- * Shortest path from `from` to `to`, excluding the start and including the end;
- * `[]` when already there; `null` when `to` is out of bounds, not walkable, or
- * unreachable.
- *
- * `blocked` adds extra impassable tiles keyed `"col,row"`. `allow` is a tile
- * exempt from prop blocking — a character's OWN chair, which blocks everybody
- * else (pixel-agents' `withOwnSeatUnblocked`). The start tile is never checked:
- * a character standing on its chair can always leave it.
- */
+/** Excludes the start, includes the end; `[]` when already there; `null` if `to` is out of bounds,
+ * not walkable or unreachable. `blocked` keys are `"col,row"`; `allow` exempts one tile from prop
+ * blocking (a character's own chair). The start tile is never checked. */
 export function findPath(
   world: World,
   from: Tile,

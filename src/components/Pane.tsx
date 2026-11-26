@@ -1,10 +1,5 @@
-/**
- * Pane — one LeafNode: <TabBar> + <PaneToolbar> + the active tab's view.
- *
- * The focused pane carries a blue top-border accent and is where new tabs open.
- * Any mousedown inside claims focus (capture phase, so it lands even when a
- * child — xterm, a button — handles/stops the event).
- */
+/** One LeafNode: <TabBar> + <PaneToolbar> + active view. Any mousedown inside claims focus, in
+ * capture phase so it lands even when a child (xterm, a button) stops the event. */
 
 import { useRef, useState, type DragEvent } from "react";
 
@@ -32,10 +27,8 @@ import "./panes.css";
 /** The pane's top-right toolbar cluster. */
 function PaneToolbar({ paneId }: { paneId: PaneId }) {
   const splitPane = useAppStore((s) => s.layoutActions.splitPane);
-  // `request*`, not the raw primitive: this ✕ kills EVERY terminal in the pane
-  // in one click with no undo, so it has to ask first when one of them is busy.
-  // `requestClosePane` falls straight through to
-  // `closePane` when nothing is running, so the idle case is unchanged.
+  // `request*`: this ✕ kills EVERY terminal in the pane with no undo, so it asks when one is
+  // busy (idle falls straight through to `closePane`).
   const requestClosePane = useAppStore((s) => s.layoutActions.requestClosePane);
   const isOnlyPane = useAppStore((s) => s.layout.type === "leaf");
 
@@ -109,22 +102,14 @@ case "session-picker":
       // in-flight fetch at a different folder.
       return <SessionPicker key={tab.ref.cwd} cwd={tab.ref.cwd} />;
     case "metrics":
-      // The Claude metrics dashboard. Deliberately NOT keyed by cwd: the tab
-      // is a singleton that gets re-pointed at a new project in place, and the
-      // panel's own mount effect refetches when `cwd` changes — remounting would
-      // throw away the last good report and blank the panel mid-switch.
+      // NOT keyed by cwd: a singleton re-pointed in place; a remount would blank it mid-switch.
       return <MetricsPanel cwd={tab.ref.cwd} />;
     case "db-console":
-      // A database query console. Keyed by connectionId so switching between two
-      // connections' consoles remounts rather than re-pointing one console's editor at
-      // another connection's session. The BUFFER survives that remount because it lives
-      // in the store (`dbConsoles`), not in the component — see DbConsoleTab's header.
+      // Keyed by connectionId so a switch remounts rather than re-pointing the editor; the
+      // buffer survives in the store (`dbConsoles`).
       return <DbConsoleTab key={tab.ref.connectionId} connectionId={tab.ref.connectionId} />;
     case "diff":
-      // HEAD ↔ working tree for one file. Keyed by path for the same reason the
-      // editor is: switching tabs must remount the MergeView on the new file
-      // rather than re-point a live one, which would leave the old file's two
-      // panes on screen under the new file's heading.
+      // Keyed by path like the editor: re-pointing a live MergeView leaves the old panes.
       return <DiffView key={tab.ref.path} path={tab.ref.path} />;
     case "agent-logs":
       // The fleet-wide log stream. Singleton, no key needed.
@@ -166,15 +151,8 @@ export function Pane({ node }: { node: LeafNode }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const session = useDragSession();
 
-  /**
-   * Report what this pane's zone would mean, and let <PaneTreeRoot> draw it.
-   *
-   * This pane deliberately does NOT draw the preview itself: the box the tab
-   * lands in can be larger than this pane (a drop can prune the source leaf and
-   * collapse a split, letting the survivor fill the container), and `.pane` is
-   * `overflow: hidden`. See PaneTree's header — this is the half-screen
-   * preview bug.
-   */
+  /** Report this pane's zone; <PaneTreeRoot> draws the preview, as the landing box can exceed
+   * this `overflow: hidden` pane (see PaneTree's header). */
   const publish = (zone: DropZone | null) => {
     setDropZone(zone);
     const tabId = session.draggedTab();
@@ -184,22 +162,12 @@ export function Pane({ node }: { node: LeafNode }) {
   const acceptsDrag = (e: DragEvent) =>
     e.dataTransfer.types.includes(TAB_DND_MIME);
 
-  /**
-   * Hit-test priority: the tab strip wins over the pane's zones.
-   *
-   * `<TabBar>` is a descendant, so its drag events bubble here too. Over the
-   * strip the gesture means *reorder / insert at index*, which the strip owns —
-   * so the pane must not also paint an edge preview or run a second drop. The
-   * strip does not stopPropagation on dragover precisely so this handler still
-   * runs and can clear a preview left over from the body.
-   */
+  /** The tab strip beats the pane's zones: its events bubble here, and over it the gesture is a
+   * reorder. The strip doesn't stop dragover, so this can clear a leftover body preview. */
   const overTabStrip = (e: DragEvent) =>
     (e.target as Element | null)?.closest?.(`.${TABBAR_CLASS}`) != null;
 
-  /**
-   * Measured against the body so the tab strip is never an edge — see
-   * `zoneFor`, which also absorbs the "not laid out yet / no rect" case.
-   */
+  /** Measured against the body so the strip is never an edge; `zoneFor` handles a missing rect. */
   const zoneOf = (e: DragEvent): DropZone =>
     zoneFor(bodyRef.current?.getBoundingClientRect(), e.clientX, e.clientY);
 
@@ -216,11 +184,8 @@ export function Pane({ node }: { node: LeafNode }) {
     publish(null);
   };
 
-  // NOTE: no `overTabStrip` guard here, deliberately. The strip stops
-  // propagation on its own drops, so a drop from the strip provably never
-  // reaches this handler — a second guard would be unreachable code pretending
-  // to be defence. What actually protects the invariant is a test:
-  // "a drop on the strip reorders — it does not also move/split via the pane".
+  // No `overTabStrip` guard: the strip stops propagation on its own drops, so it would be
+  // unreachable; the test "a drop on the strip reorders…" guards the invariant.
   const onDrop = (e: DragEvent) => {
     if (!acceptsDrag(e)) return;
     e.preventDefault();

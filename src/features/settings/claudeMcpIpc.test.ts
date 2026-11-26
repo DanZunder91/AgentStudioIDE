@@ -1,10 +1,5 @@
-/**
- * `claudeMcpIpc` — the three IPCs behind "Add Agent Studio to Claude Code".
- *
- * Two things matter: each wrapper asks its own Rust command (a swapped name would install when
- * the user asked for the status), and none of them ever rejects — a failed bridge must become a
- * report the menu item can show, or the item would sit on "Checking…" forever.
- */
+/** Each wrapper must call its own Rust command (a swapped name would install on a status check),
+ * and none may reject: a failed bridge must become a report, or the item sits on "Checking…". */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn());

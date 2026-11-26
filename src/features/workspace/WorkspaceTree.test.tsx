@@ -1,16 +1,5 @@
-/**
- * WorkspaceTree — the right rail's real file tree (multi-root).
- *
- * `workspaceIpc` (real `read_dir` crosses Tauri) and the folder picker
- * (`@tauri-apps/plugin-dialog`) are mocked at the module boundary — neither
- * belongs in a jsdom unit test. `fleetIpc` is mocked too: `addBrowseRoot`'s
- * best-effort `push_recent_project` effect must not reach for Tauri.
- *
- * What is under test: the multi-root shell (empty "Open a folder" state, one
- * collapsible root per unique folder path, dedup of agents sharing a cwd, the ✕
- * on browse-only roots) AND the per-root tree body kept from the single-root
- * version (lazy one-shot loads, per-path expand/collapse, calm failures, file open).
- */
+/** `workspaceIpc`, the folder picker and `fleetIpc` (`addBrowseRoot`'s `push_recent_project`) are
+ * mocked at the module boundary: none belongs in jsdom. */
 
 import { StrictMode } from "react";
 
@@ -45,13 +34,8 @@ const fleetIpc = vi.hoisted(() => ({
 }));
 vi.mock("../fleet/fleetIpc", () => fleetIpc);
 
-// Git: spy the polling starter (its real implementation is the git feature's
-// poller — not a jsdom concern) and `gitFileRestore` (a real one would `invoke`
-// across Tauri to rewrite a file on disk, which is the last thing a unit test
-// should do). The store and the pure selectors stay REAL, driven via
-// `useGitStore.setState` below. The factory spreads `importActual`,
-// so every other barrel export keeps its real shape and a new export can never
-// silently vanish from this test's module graph.
+// Spy the git poller and `gitFileRestore` (a real one rewrites files over Tauri); the store and
+// selectors stay REAL. Spreading `importActual` keeps every other barrel export real.
 const gitMock = vi.hoisted(() => ({
   startGitPolling: vi.fn(() => vi.fn()),
   gitFileRestore: vi.fn(),
@@ -61,29 +45,16 @@ vi.mock("../git", async (importActual) => {
   return { ...actual, ...gitMock };
 });
 
-// A confirmed revert reloads the file into any open CM6 buffer. The real thing
-// reads the file over Tauri and dispatches into a live EditorView; here it is a
-// spy, so this file can assert the tree ASKS for the reload — the registry's own
-// tests own what the reload then does.
-//
-// 🔴 `opensInExternalBrowser` is deliberately NOT in this mock: the whole
-// point of taking it from the editor barrel is that the menu and the preview
-// mount consult the SAME authority, so a stub here would prove nothing about
-// which files get the item. `importActual` keeps the real predicate — and keeps
-// a future barrel export from silently vanishing (a `vi.mock` factory does not grow
-// new exports).
+// `reloadFromDisk` is a spy: this file asserts the tree ASKS for the reload. Deliberately NOT
+// mocked: `opensInExternalBrowser`, so the menu and the preview consult the same predicate.
 const editorMock = vi.hoisted(() => ({ reloadFromDisk: vi.fn() }));
 vi.mock("../editor", async (importActual) => {
   const actual = await importActual<typeof import("../editor")>();
   return { ...actual, ...editorMock };
 });
 
-// "Open in Browser". The Rust commands behind these (`list_browsers` /
-// `open_in_browser`) launch real applications, so the seam is mocked at the
-// module boundary exactly like `workspaceIpc` — and `cachedBrowsers` is a
-// function here, not a value, so each test decides synchronously what the menu
-// builder sees (which is the contract: the list is read while the items are
-// built, never awaited).
+// The Rust behind these launches real apps, so mocked at the boundary; `cachedBrowsers` is a
+// function so each test decides synchronously what the menu builder sees (never awaited).
 const browserIpc = vi.hoisted(() => ({
   primeBrowsers: vi.fn(),
   cachedBrowsers: vi.fn(),
@@ -1484,10 +1455,8 @@ describe("WorkspaceTree — right-click context menu", () => {
     const prevented = !rightClick(nodeByPath("ws-file", "/w/a.ts"));
     expect(prevented).toBe(true); // e.preventDefault() ran → no native menu
     expect(menu()).toHaveAttribute("aria-label", "Actions for a.ts");
-    // `Git▸` is the submenu parent — the trailing chevron is the
-    // ContextMenu primitive's own aria-hidden glyph, which `textContent` sees and
-    // the accessible name does not. It sits between the create group and the
-    // rename/delete group so that Delete stays last.
+    // The chevron is ContextMenu's aria-hidden glyph (in `textContent`, not the name). Git sits
+    // between create and rename/delete so Delete stays last.
     expect(menuNames()).toEqual(["New File", "New Folder", "Git▸", "Rename", "Delete"]);
   });
 
@@ -1700,14 +1669,8 @@ describe("WorkspaceTree — right-click context menu", () => {
 });
 
 /* ═══════════ the Git submenu: Compare with HEAD / Revert changes… ═══════════
- *
- * Git compare and git revert, as a new menu entry with its own sub-options.
- *
- * The two `disabled` decisions are read off the git status the tree ALREADY
- * subscribes to for its row colors, so every one of them is asserted TWO-SIDED
- * — a rule that only ever greys things out is indistinguishable
- * from a rule that greys everything out.
- */
+ * Both `disabled` decisions come from the tree's git status and are asserted TWO-SIDED: a rule
+ * that only greys out is indistinguishable from one that greys out everything. */
 describe("WorkspaceTree — Git submenu (compare / revert)", () => {
   const rightClick = (el: Element) => fireEvent.contextMenu(el, { clientX: 60, clientY: 60 });
   /** The row/root menu — named "Actions for …", unlike the "Git" submenu. */
@@ -2065,11 +2028,8 @@ describe("WorkspaceTree — reveal active file", () => {
     expect(workspaceIpc.readDir.mock.calls.length).toBe(readsBefore);
   });
 
-  // CHANGED. This used to assert a silent, total no-op — which is
-  // precisely the user-facing bug: the rail flipped to Files and NOTHING else
-  // happened, with no way to tell that from a broken button. The walk is still
-  // skipped (no reads, no selection, no crash); what is new is that the shell
-  // says why, using the same calm inline note a rejected mutation uses.
+  // A reveal outside every root skips the walk but says why, with the calm inline note: a silent
+  // no-op is indistinguishable from a broken button.
   it("REPORTS a reveal for a path outside every rendered root (still no reads, no crash)", async () => {
     serve({ "/w": [file("a.ts", "/w/a.ts")] });
     openRoot("/w");
@@ -2381,11 +2341,8 @@ describe("WorkspaceTree — per-file-type icons (file-icons.md §3/§6 wiring)",
 
     const fileRow = nodeByPath("ws-file", "/w/Cargo.toml");
     const icon = fileRow.querySelector(".workspace-node__icon svg")!;
-    // WIRING assertion, deliberately self-referential (routing is tested here,
-    // values elsewhere): the row exposes no map-injection path, so this pins
-    // only that the row consults resolveFileIconId with the row's BASENAME.
-    // The VALUE for "Cargo.toml" is pinned elsewhere — by the hand-written
-    // fixtures and the real-map integration describe in resolveIconId.test.ts.
+    // WIRING only, self-referential on purpose: the row consults resolveFileIconId with its
+    // BASENAME; the value is pinned in resolveIconId.test.ts.
     const expected = resolveFileIconId("Cargo.toml");
     expect(icon.getAttribute("data-icon-id")).toBe(expected);
     expect(icon.querySelector("use")!.getAttribute("href")).toBe(`#mi-${expected}`);
@@ -2416,15 +2373,8 @@ describe("WorkspaceTree — per-file-type icons (file-icons.md §3/§6 wiring)",
   });
 });
 
-/**
- * The crosshair + the highlight: pressing the button should select the file, so
- * it is clear which one is open.
- *
- * 🔴 Every test here renders the REAL component and drives the REAL button.
- * The store-level suite in `store.test.ts` passes identically
- * whether the rail reads `activeFilePath` or the old focused-pane-only rule,
- * because it never has the call site in frame. The bug was at the call site.
- */
+/** Renders the REAL component and drives the REAL button: a store-level test never has the call
+ * site in frame, and that is where this behaviour lives. */
 describe("WorkspaceTree — the crosshair is alive, and the highlight follows the file", () => {
   const layout = () => useAppStore.getState().layoutActions;
   const revealButton = () => screen.getByRole("button", { name: "Reveal active file" });
@@ -2614,13 +2564,8 @@ describe("WorkspaceTree — the crosshair is alive, and the highlight follows th
   });
 });
 
-/**
- * "Open in Browser" on an `.html` row.
- *
- * The gate is `opensInExternalBrowser` — the REAL one, from the editor barrel
- * (see the mock note at the top of this file), so these tests prove the menu and
- * the in-app preview agree about what a "page" is, not that a stub was called.
- */
+/** The gate is the REAL `opensInExternalBrowser`, so the menu and in-app preview must agree about
+ * what a "page" is. */
 describe("WorkspaceTree — Open in Browser", () => {
   const CHROME: BrowserChoice = { id: "com.google.Chrome", name: "Google Chrome", isDefault: true };
   const SAFARI: BrowserChoice = { id: "com.apple.Safari", name: "Safari", isDefault: false };
@@ -2787,24 +2732,15 @@ describe("WorkspaceTree — Open in Browser", () => {
   });
 });
 
-/**
- * React StrictMode double-invokes every effect in dev (setup → cleanup → setup)
- * against the same component instance. The reveal walk claims its one-shot token
- * BEFORE its first `await`, so setup #1 claimed it, was cancelled, and setup #2
- * found it already handled — a reveal needing an uncached `read_dir` did nothing
- * in `tauri dev` and everything in the production build. Rendering the real
- * component under `<StrictMode>` is the only way to see that from a test.
- */
+/** StrictMode double-invokes effects at mount; the reveal walk claims its one-shot token before its
+ * first `await`, so a cancelled first setup must not leave the second with nothing to do. */
 describe("WorkspaceTree — the reveal walk survives StrictMode's double-invoke", () => {
   const layout = () => useAppStore.getState().layoutActions;
 
   it("reveals into a COLLAPSED root under StrictMode, exactly as in production", async () => {
-    // 🔴 The double-invoke only happens at MOUNT, so the reveal has to be one a
-    // FRESHLY-MOUNTED subtree picks up — which is precisely the collapsed-root
-    // case `revealActiveFile` creates by un-collapsing on its way past. A reveal
-    // that merely re-fires an already-mounted effect is invoked once and proves
-    // nothing here (a version of this test that did that survived mutation: the
-    // question is about the test's PATH, not only its assertion).
+    // The double-invoke happens only at MOUNT, so the reveal must be one a FRESHLY-MOUNTED subtree
+    // picks up (the collapsed root `revealActiveFile` un-collapses); re-firing a mounted effect
+    // proves nothing.
     serve({
       "/w": [dir("a", "/w/a")],
       "/w/a": [file("x.ts", "/w/a/x.ts")],

@@ -1,47 +1,6 @@
-/**
- * ImportDialog — the review screen for a config bundle somebody sent you.
- *
- * ── This is the security surface, and it is a REVIEW, not a confirm button ───
- * An imported bundle is untrusted input. Nothing signs it, so the file's own
- * claims about where it came from are exactly that — claims — and the dialog says so in
- * those words. Before anything is written, four things are on screen:
- *
- *   1. **What the file says it is**, phrased as reported speech. Never "verified".
- *   2. **Which hosts** anything in it would contact.
- *   3. **Which `{{VAR}}`s it will read**, marked where this machine already holds a value.
- *      That pairing is the exfiltration risk made visible: an imported request can read a
- *      secret the recipient already has and point at any host in the list above it.
- *      Intent is not decidable here, so the honest mitigation is visibility, stated once
- *      and without alarm — a dialog that shouts gets clicked through.
- *   4. **Per item: create / update / skip, with the reason**, every one overridable.
- *
- * ── Presentational on purpose ────────────────────────────────────────────────
- * No store, no `invoke`, no `@tauri-apps/plugin-dialog`. The file picker is the caller's
- * `onPickFile`, and the bundle's bytes never come near this component — they stay in
- * Rust, so all that arrives is a header, a plan, or a result.
- *
- * ── Props API ────────────────────────────────────────────────────────────────
- * | Prop        | Meaning |
- * |---|---|
- * | `path`      | The file the user picked, for display. `null` before they pick one. |
- * | `plan`      | `portability_inspect`'s dry run, or `null` before the first inspect. `plan.unsealed === false` is what puts this dialog in its passphrase state. |
- * | `busy`      | An inspect or import is in flight. The caller owns it, so nothing here can disagree with it. |
- * | `error`     | Already a sentence (`portabilityErrors.ts` owns code→English). Rendered next to whatever the user was doing — a wrong passphrase must be retryable **in place**. |
- * | `result`    | `portability_import`'s outcome, or `null`. Non-null switches to the receipt. |
- * | `onPickFile`| Open the native picker. The caller inspects the file and hands back `path` + `plan`. |
- * | `onInspect` | `(passphrase: string) => void` — re-inspect the same file with a passphrase. Called only from the locked state. |
- * | `onImport`  | `(choices: ImportChoices) => void`. |
- * | `onClose`   | Esc, Cancel, and the receipt's Done. |
- *
- * `path`, `busy`, `error` and `result` are caller-owned on purpose: without them the dialog would have to own its own pending/failure state, which is how two
- * disagreeing truths about "is an import running" get created.
- *
- * ── Retrying a wrong passphrase ─────────────────────────────────────────────
- * The locked state is derived from `plan.unsealed`, never from the error text. So a failed
- * unlock leaves the field, its contents and the file exactly where they were and shows the
- * sentence beside them; there is no path through this component that makes a user re-pick
- * the file to try a second passphrase.
- */
+/** Review screen for an untrusted, unsigned bundle: its claims as reported speech (never
+ * "verified"), the hosts, the `{{VAR}}`s it reads (marked where held here: the exfiltration risk),
+ * per-item actions. Presentational; locked state comes from `plan.unsealed`, never error text. */
 
 import { useEffect, useState } from "react";
 
@@ -103,10 +62,8 @@ export function ImportDialog(props: ImportDialogProps): React.JSX.Element {
   const phase: Phase =
     result !== null ? "done" : plan === null ? "pick" : needsPassphrase(plan) ? "locked" : "review";
 
-  // Focus restoration is its own effect with an EMPTY dep list: it has to capture the
-  // opener once, at mount, and hand focus back at unmount. Folding it into the effect
-  // below would re-capture on every step and restore focus to a control this dialog
-  // itself had focused, i.e. to nothing.
+  // Own effect with empty deps: capture the opener once at mount, restore it at unmount. In the
+  // effect below it would re-capture each step and restore focus to this dialog's own control.
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     return () => opener?.focus();
@@ -212,11 +169,8 @@ export function ImportDialog(props: ImportDialogProps): React.JSX.Element {
 
 /* ────────────────────────── what the file CLAIMS ─────────────────────────── */
 
-/**
- * The provenance block. Every sentence here is about what the file *says*, and the
- * unverified note sits directly underneath rather than in a tooltip — a claim presented
- * without its caveat is indistinguishable from a fact.
- */
+/** The unverified note sits right under the claims, not in a tooltip: a claim without its
+ * caveat reads as fact. */
 function Claims({ plan }: { plan: ImportPlan }): React.JSX.Element {
   return (
     <section className="pb-dialog__section" data-testid="pb-claims">
@@ -237,11 +191,8 @@ function Claims({ plan }: { plan: ImportPlan }): React.JSX.Element {
 
 /* ────────────────────────── the locked state ─────────────────────────────── */
 
-/**
- * A sealed bundle, before the passphrase. The file is not re-picked to retry: this is the
- * same component instance, with its own `passphrase` state, so a wrong attempt costs one
- * keystroke's worth of correction (`portability_inspect` writes nothing either way).
- */
+/** The same instance across retries, so a wrong passphrase costs a correction, not a file
+ * re-pick (`portability_inspect` writes nothing either way). */
 function Unlock({
   busy,
   onInspect,

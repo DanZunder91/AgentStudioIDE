@@ -1,13 +1,5 @@
-/**
- * Agent Village — one frame. The engine has already z-sorted the DrawItems;
- * this clears the target and paints them in order, crisp (smoothing off,
- * integer zoom, integer-snapped positions).
- *
- * Cost per frame: with a cached ground layer (`view.ground`, see ground.ts) the
- * static ground is ONE `drawImage` instead of thousands of fills; everything else
- * (water, the Seats LAN's cables and packets, the project rooms' Wi-Fi pulses, walls, props,
- * characters, bubbles, labels) is culled to the view first.
- */
+/** Paints the engine's already z-sorted DrawItems crisp (smoothing off, integer zoom, snapped
+ * positions). The static ground is ONE cached `drawImage` (ground.ts); the rest is view-culled. */
 
 import {
   TILE,
@@ -50,28 +42,20 @@ export interface RenderView {
   w: number;
   h: number;
   timeMs?: number;
-  /**
-   * The pre-painted ground of THIS frame's world and bank (ground.ts). When given, it
-   * is blitted once and the `tile` items it holds are skipped; absent/null, every
-   * tile is painted (a host without a canvas to cache into).
-   */
+  /** This frame's pre-painted ground (ground.ts): blitted once, its `tile` items skipped; absent or
+   * null paints every tile (a host with no canvas to cache into). */
   ground?: GroundLayer | null;
   /** Device px per CSS px (labels scale their font by it so they read the same on Retina). Default 1. */
   pixelRatio?: number;
-  /**
-   * Time of day + weather (ambience.ts). Absent = no sky at all (the old look). Present,
-   * the outdoors is graded and the weather painted after the world and before bubbles
-   * and labels; puddles go down right after the ground.
-   */
+  /** Time of day + weather (ambience.ts); absent = no sky. Weather paints after the world, before
+   * bubbles and labels; puddles right after the ground. */
   ambience?: Ambience;
   /** This frame's weather particles (world px). Default none. */
   particles?: readonly WeatherParticle[];
   /** Lightning brightness 0..1 this frame. Default 0. */
   flash?: number;
-  /**
-   * The world being drawn — its houses are cut out of the grade, its lamps and doors glow; a
-   * city world also gets its sky backdrop (render/city.ts). Default: no houses, no props.
-   */
+  /** The world drawn: its houses are cut out of the grade, its lamps and doors glow; a city also
+   * gets its sky backdrop (render/city.ts). Default: no houses, no props. */
   world?: World;
 }
 
@@ -85,13 +69,10 @@ const NO_WORLD: World = {
   plaza: { col: 0, row: 0 },
 };
 
-/**
- * Label tones drawn whatever they collide with: they name the buildings themselves. Typed by
- * the tone union, so a tone that no longer exists cannot linger here.
- */
-/** Whole tiles the torii's art rises above its 1-tile footprint (the cull must reach its top beam). */
+/** Whole tiles the torii's art rises above its footprint (the cull must reach its top beam). */
 const TORII_RISE_TILES = Math.ceil((TORII_HEIGHT - TILE) / TILE);
 
+/** Label tones drawn whatever they collide with: they name the buildings themselves. */
 const FORCED: ReadonlySet<LabelTone> = new Set<LabelTone>(["house", "civic", "gauge"]);
 
 /** World box around a character's feet that holds its sprite, marker, bubble and effects. */
@@ -100,10 +81,8 @@ const CHAR_BOX = { left: 16, up: 64, w: 32, h: 72 } as const;
 const LABEL_HALF_W = 220;
 const LABEL_H = 48;
 
-/**
- * Paint `items` (already z-sorted) through `cam`. A null or `fallback` bank
- * draws every sprite as a coloured rectangle; procedural art is unaffected.
- */
+/** Paint z-sorted `items` through `cam`. A null or `fallback` bank draws sprites as coloured
+ * rects; procedural art is unaffected. */
 export function renderFrame(
   ctx: DrawTarget,
   items: DrawItem[],
@@ -149,12 +128,9 @@ export function renderFrame(
       CHAR_BOX.w,
       CHAR_BOX.h,
     );
-  // Each sky layer goes down once, at its depth: puddles at the first non-ground item
-  // (the engine sends the ground first), the rest at the first bubble/label. The Seats LAN
-  // is INDOORS and never triggers the sky: its cables (right after the ground) get the
-  // puddles laid before them — puddles sit on path/plaza/road tiles, never in a house, so
-  // the two never share a pixel — and its packets (after the scene) go down before the grade.
-  // A project room's Wi-Fi pulses are indoor traffic too: drawn with the packets, before the grade.
+  // Each sky layer goes down once, at its depth: puddles at the first non-ground item, the rest at
+  // the first bubble/label. Indoor items never trigger the sky: LAN cables get puddles laid first
+  // (they never share a pixel); packets and Wi-Fi pulses go down before the grade.
   let wet = !amb;
   let sky = !amb;
   // The road's markings (the City's pedestrian crossing, render/crossing.ts) go down once, right
@@ -311,10 +287,8 @@ export function renderFrame(
     }
   }
   ambience();
-  // Labels last, laid out together so none overlaps another (the engine sent them in rank
-  // order). Boards and plates (house, floor, civic, gauge) are painted first, then agent tags in
-  // REVERSE rank, so the top-ranked tag (the hovered one) ends up on top of anything it was
-  // forced over.
+  // Labels last, laid out together so none overlaps (sent in rank order): boards and plates first,
+  // then agent tags in REVERSE rank so the top-ranked (hovered) tag ends up on top.
   const boxes = placeLabels(
     labels.map((l) => ({ box: l.layout.box, force: l.force })),
   );

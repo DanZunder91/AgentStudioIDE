@@ -1,27 +1,6 @@
-//! Where a statement can start in a SQL text, and which words the text holds: the reading the
-//! agent tools' refusals are made on.
-//!
-//! [`crate::db::guard::split_statements`] is a best guess at where the **server** will cut a
-//! script, and a guess can be talked around: a backslash the server reads as an escape and the
-//! splitter does not, a quote prefix the two read differently. A refusal cannot rest on a guess,
-//! so this module does not decide where strings are. It reads two things that hold whatever the
-//! server's reading is:
-//!
-//! * [`statements`]: a statement starts at the text's start or right after a `;`, so **every**
-//!   `;` — inside a string or not — is taken as a place one may start. From each, the comments the
-//!   server skips are skipped (by that server's own rules, see [`Dialect`]) along with anything
-//!   that is not a word, and the words up to the next `;` are that statement's, its keyword first.
-//!   A `;` inside a string only adds a false start, which can only refuse more.
-//! * [`words`]: every word of the text, inside strings and comments too.
-//!
-//! A word is a run of ASCII letters, digits and `_`, lower-cased, so `pg_catalog.x`, `"x"`,
-//! `` `x` `` and `x/**/(` all hold the word `x`. A name either server reads as one identifier is
-//! one of these words or holds one: neither can join two words across a comment.
-//!
-//! The one direction that must never err is a comment: a comment skipped here that the server
-//! reads as code hides that code's keyword. So a comment is skipped only where the server is sure
-//! to skip it too, and the rules below are the servers' own lexers', not a superset of them. A
-//! comment the server skips and this module does not is read as words, which only refuses more.
+//! Where statements can start in SQL text, and its words, for the agent tools' refusals. Every `;`
+//! (even in a string) is a possible start, so a false start only refuses more. Comments are skipped
+//! only where the server surely skips them too (its own lexer rules), never a superset.
 
 /// Whose comment rules a text is read by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,10 +8,8 @@ pub enum Dialect {
     /// PostgreSQL's scanner: `--` to the end of the line (`\n` or `\r`), and `/* … */`, which
     /// **nests**.
     Postgres,
-    /// MySQL's and MariaDB's lexer: `#` to the end of the line; `--` only when a space or a
-    /// control character (or the end) follows it — `--\u{1}` is a comment, `--1` is not; and
-    /// `/* … */`, which does not nest. `/*! … */` and `/*M! … */` are **executable**: their inside
-    /// is code, and it is read as code here.
+    /// MySQL/MariaDB lexer: `#` to line end; `--` only before a space, control char or end; `/* */`
+    /// does not nest. `/*! */` and `/*M! */` are executable and read as code.
     Mysql,
 }
 
@@ -109,10 +86,8 @@ fn past_pg_comment(text: &str) -> Option<&str> {
     Some(rest)
 }
 
-/// After the MySQL comment `text` starts with, or `None` when it does not start with one. An
-/// executable comment's marker and version are passed over, and its inside is returned as code.
-/// A `/*` that never closes is not skipped: the server refuses the statement, and reading its
-/// words can only refuse more.
+/// After the MySQL comment `text` starts with, or `None`. An executable comment's inside is
+/// returned as code; an unclosed `/*` is not skipped (reading its words only refuses more).
 fn past_mysql_comment(text: &str) -> Option<&str> {
     let to_line_end = |rest: &str| -> usize { rest.find(['\n', '\0']).unwrap_or(rest.len()) };
     if let Some(rest) = text.strip_prefix('#') {

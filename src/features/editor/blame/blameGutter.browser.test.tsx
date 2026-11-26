@@ -1,10 +1,5 @@
-/**
- * Layer 5 (testing-strategy §1) — the blame gutter in a real CodeMirror 6, in
- * Chromium. jsdom proves the pure logic and the popover controller;
- * only a real layout engine can prove the gutter actually MOUNTS: the column
- * sits LEFT of the line numbers, each visible line carries its label (run
- * collapsing included), and a real hover opens the commit popover.
- */
+/** Only a real layout engine proves the gutter mounts left of the line numbers and that hover
+ * opens the commit popover. */
 
 import { fireEvent, render, type RenderResult } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

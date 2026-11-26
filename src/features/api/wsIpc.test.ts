@@ -1,8 +1,4 @@
-/**
- * `wsIpc` — the WebSocket relay at the wire. Thin wrappers, so the
- * command *names*, arg *shapes*, and the JSON-frame → `WsEvent` parse are the
- * whole contract with the Rust `ws_*` commands. Mirrors `lspIpc.test.ts`.
- */
+/** Command names, arg shapes and the JSON-frame to WsEvent parse are the Rust ws_* contract. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

@@ -1,17 +1,6 @@
-/**
- * Tab tear-off's seams into the store — the open router and the "held elsewhere" provider
- * (`routeOpensElsewhere`, `provideHeldElsewhere`).
- *
- * Two review findings, one per seam:
- *  - opening a file (or a singleton panel) another OS window already shows must bring that
- *    window forward, never open a second copy here — two editor tabs on one file in two
- *    realms are two live writers for it;
- *  - an agent whose tab sits in another window when the app quits must keep its custom
- *    name (the lost-rename bug), so the main window — the only writer of `layout-prefs.json` —
- *    keeps such agents in the blob, names included.
- *
- * Both seams are inert until installed, which is what every other suite relies on.
- */
+/** Tear-off store seams (`routeOpensElsewhere`, `provideHeldElsewhere`): an open shown elsewhere
+ * fronts that window (two realms = two writers), and agents held elsewhere keep their names in
+ * the main window's `layout-prefs.json`. Both are inert until installed. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

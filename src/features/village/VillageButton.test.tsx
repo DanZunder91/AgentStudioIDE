@@ -1,8 +1,4 @@
-/**
- * The titlebar button opens the (singleton) Village tab through the ONE store action
- * (start from the thing that does the calling: a store-level test cannot see which action a
- * button calls).
- */
+/** Starts from the button: a store-level test cannot see which action a button calls. */
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";

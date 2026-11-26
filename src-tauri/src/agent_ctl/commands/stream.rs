@@ -1,18 +1,6 @@
-//! WebSocket and gRPC tools: an agent can hold a short conversation with a WebSocket server, open
-//! a WebSocket console tab for the user to connect, and list, describe and call a gRPC server's
-//! methods, through the API client's own engines ([`crate::ws`], [`crate::grpc`]).
-//!
-//! Rules on top of the module-wide ones ([`crate::agent_ctl`]):
-//! * Everything here is agent-authored, so nothing resolves Vault variables: a URL, target,
-//!   header, message, method or body containing `{{` is refused before anything connects.
-//! * Every answer is bounded — time, message count, bytes kept — and says what it cut.
-//! * What reaches a server is visible to the user: an exchange and a call are rows in the Network
-//!   view (the engines record them like the consoles' traffic), and a call is also added to the
-//!   API client's History (`grpcCall` event). `grpc services` and `grpc describe` only read a
-//!   server's schema, like `db list` reads the store, and leave no row.
-//! * `ws open` connects to nothing: it opens a WebSocket console tab (`wsOpen` event) holding the
-//!   URL, headers and a draft message, and the user presses Connect. The console resolves Vault
-//!   variables on Connect, which is why the Vault rule applies to it all the same.
+//! WebSocket and gRPC tools via the API client's engines. Agent input containing `{{` is refused
+//! before connecting (the console resolves Vault on Connect, so `ws open` too). Answers are bounded
+//! and say what they cut; exchanges and calls show as Network rows, calls also in History.
 
 use std::time::{Duration, Instant};
 
@@ -303,11 +291,8 @@ fn run_grpc_call(ctx: ToolCtx, args: Args) -> ToolFuture {
 /// times over, and a bound on the work.
 const DECODE_ROUNDS: usize = 4;
 
-/// Whether `text` names a Vault variable: a `{{`, also when its braces are written encoded —
-/// percent-encoded (`%7B`, any case, encoded again as `%257B`, …) or as a JSON escape
-/// (`\u007b`), alone or mixed with a literal brace. A placeholder that only appears once decoded
-/// is still one: whatever later decodes the text (a URL parser, a JSON parser, the console
-/// replaying History) would hand a Vault resolver a live `{{VAR}}`.
+/// Also when braces are percent-encoded (any case, re-encoded) or JSON-escaped, alone or mixed:
+/// whatever decodes the text later would hand a Vault resolver a live `{{VAR}}`.
 pub fn names_vault_var(text: &str) -> bool {
     let mut current = std::borrow::Cow::Borrowed(text);
     for _ in 0..DECODE_ROUNDS {
@@ -886,11 +871,8 @@ pub async fn grpc_services(args: &Args) -> Result<ToolOk, String> {
     .await
 }
 
-/// The services listing from what reflection returned: at most [`MAX_SERVICES`] services, the
-/// text within [`SERVICES_TEXT_BYTES`] and the data within [`SERVICES_DATA_BYTES`], names cut at
-/// [`shape::NAME_BYTES`], each cut said. Each line and entry is checked against its budget before
-/// it is built. `stopped_at`: the first service reflection did not load because the session
-/// reached its limit ([`grpc::MAX_REFLECTED_FILES`]).
+/// Each line and entry is checked against its budget before it is built, and each cut is said.
+/// `stopped_at`: the first service not loaded once the session hit [`grpc::MAX_REFLECTED_FILES`].
 pub fn services_report(
     endpoint: &str,
     plaintext: bool,
@@ -1061,10 +1043,8 @@ pub async fn grpc_describe(args: &Args) -> Result<ToolOk, String> {
                 if plaintext { " --plaintext" } else { "" }
             )
         })?;
-        // Loading is bounded (`grpc::MAX_REFLECTED_FILES`, `MAX_REFLECTED_BYTES`) and so is
-        // describing (a walk of `shape::MAX_VISITS` nodes, names cut at `shape::NAME_BYTES`, every
-        // line and entry checked against its budget before it is built): a schema the server
-        // chose cannot make this run long or grow large.
+        // Loading and describing are both bounded: a server-chosen schema cannot make this run long
+        // or grow large.
         let (message, mut data) = shape::describe(&found);
         data["target"] = json!(endpoint);
         data["plaintext"] = json!(plaintext);

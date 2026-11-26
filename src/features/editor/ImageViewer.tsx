@@ -1,45 +1,6 @@
-/**
- * ImageViewer — the rendered view for an image tab (a view for .jpg, .png and
- * .svg files).
- *
- * Two sources, one picture:
- *   - **SVG** — the one image format that is also text. `CodeEditor` hands the
- *     LIVE CodeMirror buffer in `svgText`, so the drawing follows the source as
- *     the user types in the Source view. No IPC at all on this path.
- *   - **raster** (`.png`/`.jpg`/`.gif`/…) — there is no buffer (`read_file`
- *     rejects binary), so the bytes come from the scope-guarded
- *     `read_image_data_url` command, which caps at 10 MiB and returns a `data:`
- *     URL. A rejection renders a calm inline note, never a crash.
- *
- * 🔴 **The picture is ALWAYS an `<img>`.** Never `dangerouslySetInnerHTML`,
- * never a real inline `<svg>`, never `<object>`/`<embed>`/`<iframe>`. This is
- * load-bearing security, not style: an SVG rendered in *image context* runs in
- * the secure processing mode — no scripts, no event handlers, no external
- * fetches — while the same bytes inlined into the document execute their
- * `<script>` / `onload=` with **Tauri IPC in scope**, which in this app reaches
- * `terminal_write` and therefore the user's shell. `fs_tree.rs`'s `image_mime`
- * doc comment states that contract ("an SVG served here is inert"); it is true
- * only because of this sink. Any change that stops routing through `<img>`
- * turns an untrusted repo file into code execution.
- *
- * Zoom is fully controlled (the −/%/+ cluster lives in `CodeEditor`'s header)
- * and all of its math is `previewZoom.ts`, shared verbatim with the markdown
- * preview — one implementation, so the two surfaces cannot disagree.
- *
- * 🔴 The magnification is CSS **`zoom`**, never `transform: scale`:
- * `transform` blows up a raster painted at 1×, `zoom` re-lays-out
- * and re-paints, so an SVG stays vector-sharp and a photo uses every device
- * pixel it has. The consequence lives in `imageViewer.css`: under `zoom: Z` the
- * stage measures `W/Z` CSS px, so a plain `max-width: 100%` resolves back to
- * exactly `W` device px at EVERY zoom — the buttons would move the number and
- * not the picture. The ceiling is written `calc(100% * var(--img-zoom))`, which
- * is why this component publishes `--img-zoom` beside the inline `zoom`.
- *
- * Not handled on purpose: an `<img>` `error` (half-typed SVG markup mid-edit).
- * The browser's own broken-image state is self-explanatory and transient — it
- * repairs itself on the next keystroke that parses — and an overlay note would
- * flash on nearly every character.
- */
+/** The picture is ALWAYS an `<img>`, never inline SVG/object/iframe: an SVG in image context is
+ * inert, but inlined it runs with Tauri IPC in scope (`terminal_write`, the shell). Zoom is CSS
+ * `zoom`, not `transform`; `--img-zoom` feeds the size ceiling in `imageViewer.css`. */
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -47,14 +8,8 @@ import { readImageDataUrl } from "../workspace/workspaceIpc";
 import { anchorScrollDelta, fitPreviewZoom, wheelPreviewZoom } from "./previewZoom";
 import "./imageViewer.css";
 
-/**
- * The `data:` URL for SVG source, or null when there is nothing to draw yet (a
- * newly created `.svg` is an empty buffer, and an empty data URL renders as a
- * broken image rather than as "empty").
- *
- * 🔴 `encodeURIComponent`, NEVER `btoa`: `btoa` throws on any codepoint > 255,
- * so one accented or CJK `<text>` element in a diagram would crash the viewer.
- */
+/** null for an empty buffer (an empty data URL renders as broken). `encodeURIComponent`, NEVER
+ * `btoa`, which throws on any codepoint > 255. */
 function svgDataUrl(svg: string): string | null {
   if (svg.trim() === "") return null;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
@@ -66,12 +21,7 @@ function fileName(path: string): string {
   return parts[parts.length - 1];
 }
 
-/**
- * A rejected `read_image_data_url` as one calm line. Rust already returns short
- * human strings ("image too large", "unsupported image type", "path is outside
- * the allowed workspace roots"), so the message IS the note — same shape as
- * `blameErrorNote`, which maps because git's stderr is not user-facing prose.
- */
+/** Rust already returns short human strings, so the message is the note. */
 function imageErrorNote(err: unknown): string {
   return typeof err === "string" ? err : err instanceof Error ? err.message : String(err);
 }
@@ -102,10 +52,7 @@ export function ImageViewer({
     url: string | null;
     error: string | null;
   } | null>(null);
-  /**
-   * The decoded image's intrinsic width in CSS px: `null` until the first
-   * `load`, `0` for an image that reports none. See `onLoad`.
-   */
+  /** Intrinsic width in CSS px: `null` until the first `load`, `0` when the image reports none. */
   const [natural, setNatural] = useState<number | null>(null);
 
   // The raster fetch. Race-guarded with the `stale` idiom used by CodeEditor's
@@ -127,43 +74,16 @@ export function ImageViewer({
     };
   }, [path, isSvg]);
 
-  // Only THIS path's result counts. Tagging the result and filtering here — as
-  // opposed to clearing the state when the effect re-runs — is what keeps the
-  // previous file's picture from being shown under the new tab's name for the
-  // length of a 10 MiB read, without a synchronous setState in an effect body
-  // (which is a cascading render, and which the lint rule rejects outright).
+  // Filter by path tag rather than clearing state on re-run: no stale picture under the new tab's
+  // name during a slow read, and no synchronous setState in an effect body (lint rejects it).
   const settled = raster !== null && raster.path === path ? raster : null;
   const error = settled?.error ?? null;
 
   const src = svgText === null ? (settled?.url ?? null) : svgDataUrl(svgText);
 
-  /**
-   * Intrinsic size, read off the decoded image — no Rust round-trip and no
-   * image-decoding dependency; the browser already parsed the bytes.
-   *
-   * 🔴 This is not bookkeeping, it is the second half of the zoom contract. An
-   * `<img>` whose source has NO intrinsic size — an SVG carrying only a
-   * `viewBox`, which is most icon-set SVGs — is not laid out at some natural
-   * size: the engine **stretches it to the containing block**. That width is a
-   * percentage-shaped answer, so it is inert under `zoom` (only a layout
-   * property magnifies a document): measured in Chromium, such an SVG rendered 568px wide
-   * in a 568px pane at 100% *and 568px at 200%*. The picture would not move
-   * while the % label did.
-   *
-   * So the width is PINNED to the intrinsic width in CSS px (the
-   * `sizeDiagramForZoom` precedent), which the `calc(100% * var(--img-zoom))`
-   * ceiling then caps — both units the zoom can move.
-   *
-   * `naturalWidth` reports 0 when the engine has no answer at all (the two
-   * dimensions are 0 together — an image cannot have one intrinsic dimension and
-   * not the other, so reading the width reads both). Chromium answers with the
-   * CSS default-sizing box instead (200×150 for a 4:3 viewBox, i.e. 300×150
-   * fitted to the ratio); WebKit — which is what the app actually runs on — is
-   * entitled to answer 0, and 0 must never be pinned or the picture would
-   * collapse to nothing. That case takes the documented fallback: FIT TO THE
-   * PANE (`--scalable` below), which is the one answer that is right at every
-   * pane width, written in the same zoom-movable unit so it still magnifies.
-   */
+  /** Pins the width to the intrinsic width: an SVG with only a `viewBox` is otherwise stretched to
+   * its container, which `zoom` cannot magnify. `0` (WebKit may report it) is never pinned; that
+   * case falls back to the `--scalable` fit-to-pane rule. */
   const onLoad = (e: React.SyntheticEvent<HTMLImageElement>): void => {
     setNatural(e.currentTarget.naturalWidth);
   };
@@ -206,24 +126,9 @@ export function ImageViewer({
     el.scrollTop += pending.dy;
   }, [zoom]);
 
-  /**
-   * Fit — 50% at some times and 200% at others, for a picture.
-   *
-   * Measured at click time in device pixels: the image's own rect, and the
-   * pane's CONTENT box (`clientWidth` already excludes a scrollbar; the padding
-   * has to come off by hand or the image is fitted to a box wider than the space
-   * it can occupy). `fitPreviewZoom` turns the two into the next zoom, and
-   * returns the current one unchanged if anything measures zero.
-   *
-   * 🔴 The input is the RENDERED RECT, not `naturalWidth`/`naturalHeight`, and
-   * that is not an accident: the stylesheet caps a big image at the pane
-   * (`max-width: calc(100% * var(--img-zoom))`), so a 2400px photo is already
-   * drawn at 600px at 100%. An absolute `pane / natural` fit would compute 25%
-   * and land the picture at 150px — a quarter of the size it started. What
-   * `fitPreviewZoom` documents, and what is true here, is that the on-screen
-   * size is exactly LINEAR in the zoom, so scaling the CURRENT zoom by the ratio
-   * the picture is currently off by lands on the fit precisely, capped or not.
-   */
+  /** Fits from the RENDERED rect, not natural size: the stylesheet already caps a big image at the
+   * pane, and on-screen size is linear in zoom, so scaling the current zoom lands exactly. Padding
+   * comes off the content box by hand (`clientWidth` excludes only the scrollbar). */
   const onFit = (): void => {
     const el = containerRef.current as HTMLDivElement; // both render together
     const img = imgRef.current as HTMLImageElement; // (the button lives beside it)
@@ -237,11 +142,8 @@ export function ImageViewer({
     onZoomChange(next);
   };
 
-  // Ctrl/cmd+drag pans by scrolling the container — works at any zoom. Same
-  // globalized-drag pattern as MarkdownPreview and RailResizer: window-level
-  // move/up listeners (not pointer capture) so the drag tracks outside the
-  // element, and a body class so the CSS can kill text selection and hold the
-  // grabbing cursor everywhere.
+  // Ctrl/cmd+drag pans by scrolling. Window-level move/up listeners (not pointer capture) track
+  // the drag outside the element; a body class kills text selection and holds the cursor.
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
     if (!(e.ctrlKey || e.metaKey) || e.button !== 0) return;
     e.preventDefault();

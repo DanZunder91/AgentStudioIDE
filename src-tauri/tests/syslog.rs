@@ -1,9 +1,6 @@
-//! System-app logs (`syslog/`).
-//!
-//! Hermetic: no `log stream`, no `journalctl`, never `simctl`.
-//! The parsers run against captured-shape fixtures (synthetic content) — BOTH platforms'
-//! on every OS. The supervision glue is driven with `/bin/sh` (unix) and with a program
-//! path that does not exist (everywhere). Contract numbers are literals.
+//! System-app logs (`syslog/`). Hermetic: no `log stream`, `journalctl` or `simctl`. Both
+//! platforms' parsers run on every OS against synthetic fixtures; supervision is driven with
+//! `/bin/sh` (unix) and a missing program path (everywhere). Contract numbers are literals.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

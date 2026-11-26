@@ -1,18 +1,6 @@
-//! Pure parsers for the Linux backend: `/proc/net/{tcp,tcp6,udp,udp6}` and `ss -tinH`
-//! (compiled and tested on every OS — the Mac runs these tests too).
-//!
-//! `/proc/net/tcp` row (verified in Ubuntu 24.04):
-//!
-//! ```text
-//!   sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
-//!    1: 0100007F:DBA3 0100007F:B590 01 00000000:00000000 00:00000000 00000000  1000        0 27895644 2 ...
-//! ```
-//!
-//! * The address is the kernel's `__be32` printed with `%08X` as a HOST-order integer, so on a
-//!   little-endian machine `0100007F` is 127.0.0.1 (bytes reversed). IPv6 is four such words.
-//! * The port is a plain big-endian hex number (`DBA3` = 56227).
-//! * `uid` is the socket owner's uid — world-readable, which is how another user's socket is
-//!   told apart from ours even though its process can't be named without root.
+//! Pure parsers for `/proc/net/{tcp,tcp6,udp,udp6}` and `ss -tinH`. Addresses are `__be32`
+//! printed as host-order hex (`0100007F` = 127.0.0.1 on little-endian); ports are big-endian
+//! hex; `uid` tells another user's socket from ours.
 
 use super::{MachineProto, MachineUser, RawApp, RawConn};
 use std::collections::HashMap;

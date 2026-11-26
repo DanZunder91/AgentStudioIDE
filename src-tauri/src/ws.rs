@@ -1,81 +1,6 @@
-//! The built-in API client's WebSocket engine.
-//!
-//! Three `#[tauri::command]`s run a live WS/WSS session in the Rust core (not the
-//! webview's `WebSocket`, which CSP would hobble and which can't send arbitrary
-//! headers), mirroring `http.rs`. The wire contract the frontend builds against:
-//!
-//! ```text
-//! invoke("ws_connect", { url, headers?, onEvent }) -> string  // connectionId; onEvent is a Channel<string>
-//! invoke("ws_send",    { connectionId, message })             // send one text frame
-//! invoke("ws_close",   { connectionId })                      // close the connection
-//! ```
-//!
-//! `headers` is an optional `[{ name, value }]` (the same row shape as gRPC's `metadata`)
-//! applied to the **opening handshake**. It exists because a WebSocket handshake *is* an
-//! HTTP request: a server that authenticates it — a real `ws://…/ws?room=…`
-//! did — answers `HTTP error: 401 Unauthorized` to every connection made without one, and
-//! until now this engine connected from a bare URL and could not send any. See
-//! [`build_request`] for what it refuses and why.
-//!
-//! Server→client is the per-connection `Channel<String>` captured at connect; every
-//! event is a **JSON string** pushed on it — the same "Channel out, command in" shape
-//! as `terminal_open` / `lsp_start`. Event shapes (all keys lowercase):
-//!
-//! ```json
-//! {"kind":"open"}
-//! {"kind":"message","data":"<text>"}
-//! {"kind":"closed","code":<number|null>,"reason":"<string>"}
-//! {"kind":"error","message":"<string>"}
-//! ```
-//!
-//! **Structure (mirrors `lsp/server.rs`).** Each connection is one spawned task that
-//! owns the socket; a module-level [`CONNECTIONS`] registry keyed by id holds only the
-//! **send half** of an mpsc queue (the writer task drains it to the socket). A registry
-//! entry existing *is* the connection being live: dropping the sender (via [`ws_close`],
-//! or clearing the registry) makes the task's `recv()` return `None`, which closes the
-//! socket — the `kill_on_drop` equivalent. The task removes its own id on exit, so the
-//! registry never leaks a dead connection.
-//!
-//! **Guardrails** (same spirit as `http.rs` / the LSP `send`): the outgoing queue is
-//! bounded ([`SEND_QUEUE`]) so a wedged endpoint can't make `ws_send` block — a full
-//! queue is a plain `Err` (backpressure surfaced, never a stall); and incoming messages
-//! are capped at [`MAX_MESSAGE_BYTES`] so a malicious peer can't balloon our memory.
-//!
-//! Only a *failure to establish or run* the socket is surfaced as an `error` event; a
-//! normal server-initiated close is a `closed` event, never an error — the same "an
-//! error status is still a response" spirit as `http_send`.
-//!
-//! **TLS** follows the app-wide policy in [`crate::tls`]: the single `ring`
-//! crypto provider, and a `wss://` root store that is the **union of the operating
-//! system's trust anchors and the bundled Mozilla set** (tungstenite's
-//! `rustls-tls-native-roots` + `rustls-tls-webpki-roots`). So an internal `wss://` behind
-//! a corporate CA verifies, and a machine with an empty/broken system store still reaches
-//! public hosts. No native-tls, no OpenSSL.
-//!
-//! **Secrets.** A header value may hold `{{VAR}}` placeholders; they are resolved
-//! against the Vault **here, in Rust**, so the token never crosses IPC and is never what the
-//! frontend saved. The lookup is [`crate::db::secret`]'s — the one Vault resolver this crate
-//! has — not a second one; only the sentence for a missing variable is written for the API
-//! client rather than the DB client. Every resolved value is then carried alongside the
-//! connection and scrubbed out of **every** `error` event via [`emit_error`], because the one
-//! thing a 401 must never do is echo the `Authorization` header back into the UI.
-//!
-//! **Network view.** Each connection is one `ws`/`wss` flow in the
-//! netcap store, recorded through [`crate::netcap::record`]: pending at connect with the
-//! handshake request's headers (exactly the map tungstenite writes — `Host`, `Connection`,
-//! `Upgrade`, `Sec-WebSocket-Version`, `Sec-WebSocket-Key`, then the custom ones), status 101
-//! and the server's headers on success (a rejected handshake records its status, headers and
-//! body, then the error), live `wsMessages` counts and payload bytes as frames go by, `done` on
-//! close. The flow's `error` text is the transport's, unredacted — the store already holds the
-//! header the server disliked, verbatim, by design; only the UI *event* is
-//! scrubbed.
-//!
-//! **One-shot exchanges.** [`exchange`] is the same engine without a live console: connect, send
-//! a list of messages in order, collect what the server sends for a bounded time and count, close,
-//! and return the transcript. It is what an agent's `ws_exchange` tool runs
-//! (`agent_ctl::commands::stream`). It shares [`handshake`] (request → socket + Network row) with
-//! [`ws_connect`], so both are recorded alike, and it never reads the Vault: header values go out
-//! exactly as given.
+//! The API client's WebSocket engine (Rust, not the webview: CSP, custom handshake headers).
+//! One task per connection; [`CONNECTIONS`] holds only its bounded send half, so dropping it
+//! closes the socket. Vault `{{VAR}}`s resolve here only, scrubbed from every `error` event.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -111,22 +36,13 @@ const SEND_QUEUE: usize = 256;
 /// protocol error (surfaced as an `error` event).
 const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
-/// The live connections' send halves, keyed by `connectionId`. A module-level registry
-/// (a `once`/`Lazy` static) keeps the three commands free of Tauri state,
-/// so `lib.rs` only gains the module decl + `use` + handler rows. `std::sync::Mutex` is
-/// enough: every critical section is a lock-free `insert`/`get`/`remove` with no `.await`
-/// held across it.
+/// The live connections' send halves, keyed by `connectionId`; a static keeps the commands
+/// free of Tauri state. `std::sync::Mutex` suffices: no `.await` is held across a lock.
 static CONNECTIONS: LazyLock<Mutex<HashMap<String, mpsc::Sender<String>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// The five headers `tungstenite::handshake::client::generate_request` writes into the
-/// opening handshake itself, lower-cased (an `http::HeaderName` always is).
-///
-/// They are **not ours to set**. `generate_request` `remove`s exactly these five from the map,
-/// writes them first, and then returns `Error::Protocol(InvalidHeader)` if it meets any of them
-/// again — so a caller-supplied copy either replaces a value tungstenite computed (`Host` from
-/// the URL, a fresh `Sec-WebSocket-Key`) or kills the handshake outright, and the second failure
-/// reads like a server bug rather than a typo. Hence [`build_request`] refuses them by name.
+/// Headers tungstenite writes into the handshake itself (lower-cased); a caller copy overrides a
+/// computed value or fails with `InvalidHeader`, so [`build_request`] refuses them.
 const HANDSHAKE_HEADERS: [&str; 5] = [
     "host",
     "connection",
@@ -170,13 +86,8 @@ fn emit(channel: &Channel<String>, event: WsEvent) {
     }
 }
 
-/// Emit an `error` event with every `secret` masked out of `message` first.
-///
-/// 🔴 **Every error that leaves a connection goes through here, never through [`emit`]
-/// directly.** A rejected handshake is the exact moment a server is most likely to quote the
-/// credential it disliked — and `tungstenite`'s own `Error::Utf8` variant formats a header's
-/// *value* into its text. Masking at the single exit is the [`crate::db::error`] discipline:
-/// a per-call-site scrub is one forgotten call site away from shipping the token.
+/// Emit an `error` event with every `secret` masked. EVERY connection error goes through here,
+/// never [`emit`]: a rejected handshake may quote the credential (the [`crate::db::error`] rule).
 fn emit_error(channel: &Channel<String>, message: String, secrets: &[String]) {
     let refs: Vec<&str> = secrets.iter().map(String::as_str).collect();
     emit(
@@ -187,22 +98,9 @@ fn emit_error(channel: &Channel<String>, message: String, secrets: &[String]) {
     );
 }
 
-/// Replace every `{{VAR}}` in `text` with its Vault value, pushing each resolved value onto
-/// `secrets` so [`emit_error`] can scrub it later.
-///
-/// Matching mirrors `src/features/api/substitute.ts` exactly — two braces, a run of non-brace
-/// characters, two braces, the name trimmed — so what the console previews and what goes on the
-/// wire cannot disagree. A `{{` with no closing `}}`, and an empty `{{}}`/`{{ }}`, are left
-/// **literal**: they name no variable, and rewriting them to nothing would silently blank a
-/// header the user meant to send.
-///
-/// The lookup itself is [`crate::db::secret::resolve`] — the crate's one Vault resolver, with
-/// its active-environment-first-then-the-rest search. Only the missing-variable *sentence* is
-/// rewritten here, because that resolver's own wording talks about database connections.
-///
-/// A missing variable is an **error**, not the empty string the TypeScript preview falls back
-/// to. An empty `Authorization` header is a bare 401 with no explanation attached, which
-/// is precisely the outcome this whole change exists to remove.
+/// Replace each `{{VAR}}` with its Vault value ([`crate::db::secret::resolve`]), collecting
+/// values for [`emit_error`]. Matching mirrors `src/features/api/substitute.ts`; unclosed or
+/// empty braces stay literal; a missing variable is an error, not an empty header.
 fn substitute(text: &str, vault: &ApiStore, secrets: &mut Vec<String>) -> Result<String, String> {
     if !text.contains("{{") {
         return Ok(text.to_string());
@@ -241,25 +139,9 @@ fn substitute(text: &str, vault: &ApiStore, secrets: &mut Vec<String>) -> Result
     Ok(out)
 }
 
-/// Build the opening-handshake HTTP request for `url` with `headers` applied, returning it
-/// alongside every Vault value that was spliced in (the redaction set for [`emit_error`]).
-///
-/// `into_client_request` is what produces a *complete* handshake — `Host`, `Connection`,
-/// `Upgrade`, `Sec-WebSocket-Version` and a freshly generated `Sec-WebSocket-Key`. We only ever
-/// `append` to what it built, so those five survive untouched.
-///
-/// Three refusals, each an `Err` naming the offending header rather than a silent drop — a
-/// dropped `Authorization` is indistinguishable from the 401 that started all this:
-///
-/// 1. a name that is not a valid HTTP token,
-/// 2. a value that is not a valid HTTP field value (a newline, a control byte) — the message
-///    names the header and **never quotes the value**, which may be the resolved secret,
-/// 3. any of [`HANDSHAKE_HEADERS`].
-///
-/// A **duplicate custom header** is kept, not collapsed: two `X-Scope` rows send two
-/// `X-Scope` lines, matching `http.rs`'s `append` and gRPC's `build_metadata`. HTTP says
-/// repeated fields are a list, and picking a winner for the user would be a value they never
-/// typed.
+/// The handshake request for `url` with `headers` appended, plus the Vault values spliced in.
+/// Refuses, naming the header but never quoting the value: an invalid name or value, or any of
+/// [`HANDSHAKE_HEADERS`]. Duplicate custom headers are kept, as in `http.rs`.
 fn build_request(
     url: &str,
     headers: &[WsHeader],
@@ -290,10 +172,7 @@ fn build_request(
     Ok((request, secrets))
 }
 
-/// [`build_request`] against the Vault file at `vault_path`.
-///
-/// The file is read **only** when some header actually mentions `{{`, so the ordinary
-/// no-placeholder connect touches no secret store at all.
+/// [`build_request`] against the Vault at `vault_path`, read only when a header mentions `{{`.
 fn build_request_from_vault(
     url: &str,
     headers: &[WsHeader],
@@ -307,19 +186,9 @@ fn build_request_from_vault(
     build_request(url, headers, &vault)
 }
 
-/// Open a WebSocket to `url` (`ws://` or `wss://`), streaming its lifecycle to `on_event`.
-///
-/// `headers` (optional — omitting it is the pre-header behaviour, byte for byte) are applied
-/// to the opening handshake; values may hold `{{VAR}}` references resolved against the Vault
-/// **in Rust**, so the frontend sends the literal template and never the token.
-///
-/// Returns a fresh `connectionId` (ULID) **immediately**; the actual connect happens on a
-/// spawned task, so the first event on the channel (`open` or `error`) is what tells the
-/// UI whether it succeeded — including a rejected header, which is a failure to *establish*
-/// the socket and so takes the same `error` path as a refused TCP connect rather than
-/// inventing a second way for this command to fail. `wss://` uses rustls with the `ring`
-/// provider and the OS ∪ Mozilla root store (no native-tls; see [`crate::tls`] and
-/// `Cargo.toml`).
+/// Open `ws://`/`wss://` `url`, returning a ULID `connectionId` at once; the first channel
+/// event (`open` or `error`, a rejected header included) says whether it connected. Header
+/// `{{VAR}}`s resolve in Rust, so the frontend never holds the token.
 #[tauri::command]
 pub fn ws_connect(
     app: tauri::AppHandle,
@@ -336,13 +205,8 @@ pub fn ws_connect(
     )
 }
 
-/// [`ws_connect`] with the Vault path and the Network tap injected instead of derived from
-/// an `AppHandle` / taken from the app.
-///
-/// The split is `db::Paths`': only the `#[tauri::command]` above knows the
-/// real config-dir location, so no test can reach it, and the whole connect path — header
-/// resolution included — is still drivable end to end against a temp directory. The tap is
-/// the seam `tests/netcap_record.rs` drives: a real session, recorded into a test's own `Netcap`.
+/// [`ws_connect`] with the Vault path and Network tap injected, so tests drive the whole
+/// connect path against a temp dir (`tests/netcap_record.rs`).
 pub fn connect_via(
     url: String,
     headers: Vec<WsHeader>,
@@ -377,24 +241,16 @@ fn client_config() -> WebSocketConfig {
     WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE_BYTES))
 }
 
-/// Open the socket `request` describes and record it as a Network row: pending with the
-/// handshake as it goes out, then status 101 and the server's headers on success. A rejected
-/// handshake IS a response (a 401, say): its status, headers and body go on the row before the
-/// error that ends it. On `Err` the row is already settled (`error`); the text is the
-/// transport's, unredacted, for the caller to scrub if it resolved secrets.
-///
-/// `limit` bounds the TCP connect, TLS and HTTP upgrade together; `None` waits as long as the OS
-/// does (the console's behaviour).
+/// Open `request`'s socket and record a Network row: pending, then 101 + headers; a rejected
+/// handshake records its status, headers and body before the error. Errors are unredacted
+/// (caller scrubs). `limit` bounds connect + TLS + upgrade; `None` waits as long as the OS.
 async fn handshake(
     request: Request,
     tap: &Tap,
     limit: Option<Duration>,
 ) -> Result<(WsStream, Flow), String> {
-    // One provider for the whole process. tungstenite builds its default
-    // `ClientConfig` with `ClientConfig::builder()`, which prefers the installed process
-    // default over its own crate-feature fallback — installing here is what keeps `wss://`
-    // on the same `ring` backend as `http_send` and gRPC. Idempotent; `run()` also does it
-    // at startup, but tests never go through `run()`.
+    // Keep `wss://` on the process's `ring` provider (tungstenite prefers the installed default);
+    // idempotent, and tests never go through `run()`.
     crate::tls::install_crypto_provider();
 
     // The Network row: pending from here, with the handshake exactly as it goes out.
@@ -788,18 +644,9 @@ fn note(
         .push(direction, kind, bytes, text);
 }
 
-/// Connect to `spec.url`, send `spec.send` in order, collect what the server sends until
-/// `spec.wait` after the last send or `spec.max_messages`, close, and return the transcript.
-///
-/// Recorded in the Network view like a console session (one `ws`/`wss` row, live counts, `done`
-/// on close). Bounded everywhere: the handshake by `connect_timeout`, the sends by
-/// `send_budget`, the listening by `wait` and `max_messages`, each incoming message by
-/// [`MAX_MESSAGE_BYTES`], the close by two short graces, and the kept text by [`PREVIEW_BYTES`]
-/// per message and [`TRANSCRIPT_TEXT_BYTES`] in all.
-///
-/// `Err` only when the socket never opened (a bad URL or header, a refused or timed-out
-/// connect, a rejected handshake). A failure after the open ends the transcript instead
-/// ([`ExchangeEnd::Error`]), so what was exchanged before it is not lost.
+/// Connect, send `spec.send` in order, collect replies until `spec.wait` after the last send or
+/// `spec.max_messages`, close, return the transcript; recorded like a console session, bounded
+/// everywhere. `Err` only if the socket never opened; later failures end the transcript.
 pub async fn exchange(spec: ExchangeSpec, tap: &Tap) -> Result<Exchange, String> {
     let (request, _) = build_request(&spec.url, &spec.headers, &ApiStore::default())?;
     let started = Instant::now();
@@ -1063,10 +910,7 @@ mod tests {
         }
     }
 
-    /// A hermetic echo server on `127.0.0.1:0` (NO network): accept one client, then echo
-    /// every Text/Binary frame back verbatim until it sees a Close (or the socket ends).
-    /// Returns the bound address and a handle that completes when the peer has closed — so a
-    /// test can assert "the server saw the close".
+    /// Hermetic loopback echo server for one client; the handle completes when the peer closes.
     async fn spawn_echo_server() -> (SocketAddr, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1089,17 +933,8 @@ mod tests {
         (addr, handle)
     }
 
-    /// A hermetic **authenticating** server on `127.0.0.1:0`: it accepts the handshake only when
-    /// the request carries `Authorization: <expected>`, and answers `401 Unauthorized`
-    /// otherwise — a real server, reduced to the one behaviour that matters.
-    ///
-    /// This is the negative control. A test that only proves "a connection
-    /// with a header opens" passes identically against a server that never looked at the header;
-    /// the same fixture must be able to say **no**. `seen` records the value the server actually
-    /// read off the wire, so the assertion is about the bytes that arrived, not about our own
-    /// request struct.
-    ///
-    /// Loopback only, and started by this test — never a real endpoint or real credentials.
+    /// Loopback server that accepts only `Authorization: <expected>` (else 401): the negative
+    /// control. `seen` records the value read off the wire, not our request struct.
     async fn spawn_auth_server(expected: &'static str) -> (SocketAddr, Arc<Mutex<Option<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1476,10 +1311,8 @@ mod tests {
         );
     }
 
-    /// An exchange is agent-authored, so it never resolves a `{{VAR}}`. With a Vault on disk that
-    /// holds the variable, the console's path (given that Vault) sends its value — the control —
-    /// while an exchange with the same header is refused before it connects, naming the variable
-    /// and no value: it reads no Vault, so it has nothing to resolve the reference with.
+    /// Agent-authored exchanges never read the Vault: the console path (control) sends the value,
+    /// while the exchange is refused before connecting, naming the variable and no value.
     #[tokio::test]
     async fn an_exchange_never_resolves_a_vault_variable_nor_reads_the_vault() {
         let secret = "exchange-vault-token";
@@ -1592,24 +1425,14 @@ mod tests {
         );
     }
 
-    // ── live TLS smoke: the ONE ws test that leaves the machine ────────────────
-    //
-    // Every test above talks plaintext `ws://` to a loopback echo server, so **the `wss://`
-    // path had no test at all** — and the TLS policy changed both the crypto provider (`ring`,
-    // installed in `crate::tls`) and the root store (OS anchors ∪ Mozilla) underneath it.
-    // `#[ignore]`d so `cargo test`/CI stay hermetic (no network needed), matching
-    // `usage.rs`'s `live_smoke_reads_real_usage_from_the_cli`. Run after touching any
-    // `rustls`/`tokio-tungstenite` feature:
-    //
-    //     cargo test --manifest-path src-tauri/Cargo.toml -- --ignored live_smoke
+    // Live TLS smoke, the only `wss://` test (ring provider, OS ∪ Mozilla roots); it leaves the
+    // machine. Run after touching `rustls`/`tokio-tungstenite`: `-- --ignored live_smoke`.
     #[tokio::test]
     #[ignore = "reaches the public internet over TLS — run with --ignored"]
     async fn live_smoke_wss_completes_a_real_tls_handshake() {
         let (channel, store) = recording_channel();
-        // The long-running public echo service. What is under test is the handshake, not
-        // the echo: an `open` event means the TLS session was established AND the peer's
-        // chain validated against our root store. A provider or trust-root regression
-        // shows up as an `error` event instead, with the rustls reason in it.
+        // Under test is the handshake: `open` means TLS established and the chain validated; a
+        // provider or root-store regression is an `error` event carrying the rustls reason.
         let id = connect_plain("wss://echo.websocket.org/".to_string(), channel);
 
         let opened = wait_for_kind_within(&store, "open", Duration::from_secs(30)).await;

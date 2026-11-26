@@ -1,14 +1,5 @@
-/**
- * CodeEditor — the editor's React header + host wiring (M4).
- *
- * The EditorRegistry (which owns CodeMirror 6) is mocked at the module boundary:
- * CM6 needs a real DOM, and its editability/keymap live in the browser tier. What
- * is under test here is the header (the Save affordance and save feedback), the
- * attach/detach lifecycle, and the right-click "Editor tools" menu (which
- * also hosts the blame toggle), all driven off the reactive `editors` store
- * slice. One test mounts a REAL CM6 view (cmTestKit) to prove "Find in file…"
- * opens the actual find bar.
- */
+/** EditorRegistry is mocked (CM6 needs a real DOM; editing is browser-tier). One test mounts a
+ * real CM6 view (cmTestKit) to prove "Find in file…" opens the actual find bar. */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -30,10 +21,7 @@ const registry = vi.hoisted(() => ({
 }));
 vi.mock("./EditorRegistry", () => registry);
 
-// The blame boundary — the IPC fetch and the CM6 gutter glue are mocked
-// (no Rust, no CodeMirror under jsdom); what's under test is the menu toggle,
-// the fetch/refetch wiring, and the calm error note. `blame.ts` stays REAL
-// (pure functions with their own suite).
+// Blame IPC and gutter glue are mocked; `blame.ts` stays real (pure, with its own suite).
 const blameIpc = vi.hoisted(() => ({
   gitBlame: vi.fn(),
 }));
@@ -44,11 +32,8 @@ const blameGutter = vi.hoisted(() => ({
 }));
 vi.mock("./blame/blameGutter", () => blameGutter);
 
-// The two rendered-preview surfaces are mocked to keep this a focused unit test of
-// the header/toggle wiring (the real ones pull markdown-it + mermaid and are tested
-// on their own). Each echoes the text it was handed so we can assert what flowed in.
-// The Markdown mock also RECORDS every props object it receives — the zoom tests
-// assert the CodeEditor↔preview seam (zoom in, onZoomChange back) through it.
+// Previews are mocked (they pull markdown-it and mermaid); each echoes its text, and the
+// Markdown mock records its props for the zoom seam.
 interface MdPreviewProps {
   text: string;
   basePath: string;
@@ -65,10 +50,7 @@ vi.mock("./MarkdownPreview", () => ({
 vi.mock("./CsvTable", () => ({
   CsvTable: ({ text }: { text: string }) => <div data-testid="csv-preview">{text}</div>,
 }));
-// The image and HTML surfaces. Mocked for the same reason as the two above —
-// one pulls an IPC fetch and real layout, the other an iframe neither jsdom nor a
-// Chromium test can meaningfully load. Both RECORD their props so the tests below
-// can assert what CodeEditor actually handed them, which is the whole seam.
+// Image and HTML surfaces are mocked too; both record their props, which are the whole seam.
 interface ImageViewerProps {
   path: string;
   svgText: string | null;
@@ -106,11 +88,7 @@ import { PREVIEW_ZOOM_DEFAULT, stepPreviewZoom } from "./previewZoom";
 const layout = () => useAppStore.getState().layoutActions;
 const editors = () => useAppStore.getState().editorActions;
 
-/**
- * A minimal CM6-view stand-in: exactly the surface the menu items read
- * (selection + sliceDoc + dispatch + focus), plus an identity marker the blame
- * assertions pin (showBlame/hideBlame must receive THIS view).
- */
+/** The CM6 surface the menu items read, plus a marker: showBlame/hideBlame must get THIS view. */
 interface FakeView {
   marker: string;
   state: {
@@ -257,12 +235,7 @@ describe("CodeEditor", () => {
 
   // ── images, SVG and HTML join the preview family ───────────────────────────
   describe("image / SVG / HTML previews", () => {
-    /**
-     * 🔴 The actual bug. `read_file` rejects a PNG as "binary file", so
-     * routing one through `ensureEditor` is what produced *"Can't preview this
-     * file."* on every image tab. A raster path must never reach the registry at
-     * all — and this is the assertion that keeps it that way.
-     */
+    /** `read_file` rejects a PNG as binary, so a raster path must never reach the registry. */
     it("never asks the registry for a buffer on a raster image", () => {
       act(() => layout().openEditorTab("/w/logo.png"));
       render(<CodeEditor path="/w/logo.png" />);
@@ -276,10 +249,7 @@ describe("CodeEditor", () => {
       expect(screen.queryByText("Can’t preview this file.")).toBeNull();
     });
 
-    /**
-     * The slice has to exist even without a buffer: `setPreviewZoom` no-ops on a
-     * path it does not know, so without this the −/%/+ buttons would be inert.
-     */
+    /** `setPreviewZoom` no-ops on an unknown path, so the slice must exist without a buffer. */
     it("seeds the editor UI slice for a raster so its zoom controls work", () => {
       act(() => layout().openEditorTab("/w/logo.png"));
       render(<CodeEditor path="/w/logo.png" />);
@@ -300,11 +270,7 @@ describe("CodeEditor", () => {
       expect(imageViewerCalls.at(-1)?.svgText).toBeNull();
     });
 
-    /**
-     * An SVG is the one image that is also text: it keeps its buffer, so the
-     * picture is built from `currentText` and follows the user's typing. Fetching
-     * it from disk instead would have shown the last-SAVED file.
-     */
+    /** The picture comes from the live buffer; reading disk would show the last-saved file. */
     it("builds an SVG's picture from the LIVE buffer, behind an Image/Source toggle", () => {
       registry.currentText.mockReturnValue("<svg><rect /></svg>");
       openReady("/w/icon.svg");
@@ -336,12 +302,7 @@ describe("CodeEditor", () => {
       expect(screen.getByTestId("image-preview")).toBeInTheDocument();
     });
 
-    /**
-     * The zoom round-trip, the other half of the seam: the header's −/%/+ buttons
-     * write through `zoom`, and ctrl/cmd+wheel and Fit inside the picture report
-     * back through `onZoomChange`. Both land on the same store slice, so the
-     * header's % label can never disagree with the picture.
-     */
+    /** Header buttons and in-picture gestures write one store slice, so the % label matches. */
     it("round-trips zoom to and from the image viewer", () => {
       openReady("/w/icon.svg");
       render(<CodeEditor path="/w/icon.svg" />);
@@ -353,11 +314,7 @@ describe("CodeEditor", () => {
       expect(screen.getByTestId("preview-zoom-reset")).toHaveTextContent("125%");
     });
 
-    /**
-     * HTML renders from DISK through the `preview://` handler, not from the buffer
-     * — the page's own <link>/<script> are real requests for real files. `savedAt`
-     * is therefore the reload signal, and it is passed through as `reloadKey`.
-     */
+    /** HTML renders from disk via `preview://`, so `savedAt` is the reload signal. */
     it("mounts the HTML preview with savedAt as its reload key", () => {
       openReady("/w/page.html");
       render(<CodeEditor path="/w/page.html" />);
@@ -375,12 +332,7 @@ describe("CodeEditor", () => {
       expect(htmlPreviewCalls.at(-1)?.reloadKey).toBe(1);
     });
 
-    /**
-     * Deliberate absence, pinned so it cannot be added by reflex: preview zoom
-     * is CSS `zoom`, which on an iframe element scales the frame box
-     * rather than the inner document's layout — a control that moves the % label
-     * without moving the page.
-     */
+    /** Deliberately absent: CSS `zoom` on an iframe scales the frame box, not the page. */
     it("gives the HTML preview NO zoom cluster", () => {
       openReady("/w/page.html");
       render(<CodeEditor path="/w/page.html" />);
@@ -388,11 +340,7 @@ describe("CodeEditor", () => {
       expect(screen.queryByTestId("preview-zoom-reset")).toBeNull();
     });
 
-    /**
-     * 🔴 `Pane` renders only the active tab and a cross-pane drag
-     * re-parents the subtree, so React remounts on both. A `useState` toggle
-     * snapped back to Preview every time; the store-backed one survives.
-     */
+    /** `Pane` renders only the active tab and a cross-pane drag re-parents, so React remounts. */
     it("keeps the Source choice across a full remount", async () => {
       openReady("/w/README.md");
       const first = render(<CodeEditor path="/w/README.md" />);

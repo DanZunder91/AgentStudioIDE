@@ -1,8 +1,4 @@
-/**
- * platform — `os()` is the one OS answer every UI branch reads. It must follow the
- * webview's user agent and never the machine the tests run on: jsdom's own agent says
- * `win32` / `linux` / `darwin` after Node's `process.platform`.
- */
+/** `os()` must follow the webview's user agent: jsdom's own agent mirrors the test machine's OS. */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 

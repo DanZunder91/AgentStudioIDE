@@ -1,12 +1,5 @@
-/**
- * FindKeysShortcut — bare Cmd/Ctrl+O → quick open, and a Cmd/Ctrl+F no focused
- * surface claimed → Find in Files.
- *
- * The store is REAL (the assertion is `findInFilesOpen` flipping), platform detection
- * is mocked so both modifier rules are drivable in jsdom, and the quick-open request
- * is observed as the window event `<FindFiles/>` listens for (its side of the contract
- * is pinned in `find/FindFiles.test.tsx`).
- */
+/** Real store; platform detection is mocked so both modifier rules run in jsdom. Quick open is
+ * observed as the window event `<FindFiles/>` listens for (pinned in `find/FindFiles.test.tsx`). */
 
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

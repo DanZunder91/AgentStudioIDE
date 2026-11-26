@@ -1,18 +1,5 @@
-/**
- * A small, dependency-free CSV parser.
- *
- * Exported separately from the view so the risky logic is unit-testable in
- * isolation. RFC-4180-ish:
- *   - comma-separated fields;
- *   - a field may be wrapped in double quotes, in which case it can contain
- *     commas, newlines, and escaped quotes (`""` collapses to a single `"`);
- *   - both `\n` and `\r\n` line endings are accepted;
- *   - a single trailing newline does NOT yield a spurious empty final row;
- *   - empty input yields `[]`.
- *
- * It is a straight character-by-character state machine — no regex, no lookahead
- * beyond the single next character needed to disambiguate `""` and `\r\n`.
- */
+/** Dependency-free RFC-4180-ish CSV parser: quoted fields may hold commas, newlines and `""`;
+ * `\n` and `\r\n` both end rows; one trailing newline adds no empty row; "" yields `[]`. */
 export function parseCsv(text: string): string[][] {
   if (text === "") return [];
 

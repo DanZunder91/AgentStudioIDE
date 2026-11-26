@@ -1,8 +1,5 @@
-/**
- * The Sources sidebar's derivation — real-shaped line sequences, expectations by hand.
- * The wire texts are Rust's (`logstream/tasks.rs` STARTED_PREFIX/STOPPED_PREFIX, the supervisor's
- * lifecycle lines); the contract test runs the same derivation over the real golden.
- */
+/** Sources derivation over real-shaped lines, expectations by hand. Wire texts are Rust's
+ * (`logstream/tasks.rs` prefixes); the contract test runs the derivation over the real golden. */
 
 import { describe, expect, it, vi } from "vitest";
 

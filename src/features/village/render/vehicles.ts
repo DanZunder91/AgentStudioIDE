@@ -1,26 +1,6 @@
-/**
- * Agent Village — the City's vehicles (taxis, cars and buses on the road), our
- * own procedural pixel art, seen from the side on the road (engine/traffic.ts drives them):
- *
- *   car    a sedan, 30 px — six paints;
- *   kei    a boxy kei car, 24 px — four pastel paints;
- *   taxi   30 px with a roof lamp: the dark indigo tall wagon with a lit roof lantern (livery 0), or a
- *          classic two-tone sedan with a roof sign (yellow, green, orange — our own colours);
- *   bus    64 px, a city bus in a cream livery with a coloured band (ours), a destination board, a row of
- *          windows with passengers' silhouettes (from its seed), and its doors on the kerb side only —
- *          the near lane's buses drive left, so we see their left flank (Japan keeps left).
- *
- * All parts are laid out FACING RIGHT, `lx` from the body's left end and `y` px from the road (`v.y`) up
- * to the part's top; a vehicle facing left is the mirror image (`part`). Wheels turn with the distance
- * driven (a light spot steps round the hub every `WHEEL_STEP` px). A wet road sprays behind a moving one.
- *
- *   drawVehicle         the vehicle itself, in the scene (z-sorted by the draw list);
- *   paintVehicleLights  its lights for the night-lights pass (render/ambience.ts, after the grade, so they
- *                       read as light): headlamps with a soft beam on the road ahead, tail lights (bright
- *                       when braking), a taxi's lit roof lamp, a bus's lit windows and board.
- *
- * A handful of fills per vehicle; nothing is allocated per frame.
- */
+/** City vehicles (car, kei, taxi, bus), driven by engine/traffic.ts. Parts are laid out FACING
+ * RIGHT (`lx` from the left end, `y` px up from the road), mirrored by `part`; lights are drawn in
+ * the night-lights pass after the grade. Nothing is allocated per frame. */
 
 import type { VehicleKind, VehicleView } from "../villageTypes";
 import type { Camera } from "./camera";
@@ -227,10 +207,8 @@ export const ART_H = 32;
 /** World px the headlamps' beam reaches ahead (`BEAM_SLICES` × `BEAM_STEP` and the pool's 2 px), and more than the tail lights' glow behind. */
 export const BEAM = 32;
 
-/**
- * Fill one rect of `v` given FACING RIGHT (`lx` from its left end, `y` px above the road to its top):
- * mirrored about its middle when it faces left.
- */
+/** One rect of `v` given FACING RIGHT (`lx` from its left end, `y` px above the road to its top),
+ * mirrored about its middle when it faces left. */
 function part(ctx: DrawTarget, cam: Camera, v: VehicleView, lx: number, y: number, w: number, h: number, color: string): void {
   const x0 = Math.round(v.x);
   rect(ctx, cam, v.dir > 0 ? x0 + lx : x0 + v.w - lx - w, Math.round(v.y) - y, w, h, color);
@@ -331,10 +309,8 @@ export const LIGHTS = {
   board: "#ffbe55",
 } as const;
 
-/**
- * The headlamps' beam: `BEAM_SLICES` strips `BEAM_STEP` px long ahead of the lamp, each a px taller above
- * and below than the last and fainter (a stepped cone), and as many on the road under it (the pool).
- */
+/** Headlamp beam: `BEAM_SLICES` strips `BEAM_STEP` px long, each a px taller each side and
+ * fainter (a stepped cone), plus as many on the road under it. */
 export const BEAM_STEP = 5;
 export const BEAM_SLICES = 6;
 export const BEAM_FADE: readonly string[] = [0.26, 0.2, 0.15, 0.11, 0.08, 0.05].map((a) => `rgba(255, 214, 120, ${a})`);
@@ -344,11 +320,8 @@ export function lightsBox(v: VehicleView): [number, number, number, number] {
   return [v.x - BEAM, v.y - ART_H - 2, v.w + 2 * BEAM, ART_H + 3];
 }
 
-/**
- * The lights of every vehicle in `list` on screen, for the night-lights pass (render/ambience.ts): the
- * headlamps and a soft beam on the road ahead, the tail lights and their glow (wider and brighter when
- * braking), a taxi's lit roof lamp, a bus's lit windows (its passengers dark against them) and board.
- */
+/** Every on-screen vehicle's lights for the night-lights pass (render/ambience.ts); tail lights
+ * glow wider and brighter when braking. */
 export function paintVehicleLights(ctx: DrawTarget, cam: Camera, view: { w: number; h: number }, list: readonly VehicleView[]): void {
   for (const v of list) {
     if (!onScreen(cam, view, ...lightsBox(v))) continue;

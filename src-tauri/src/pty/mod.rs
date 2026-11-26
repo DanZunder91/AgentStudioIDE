@@ -1,12 +1,6 @@
-//! PTY layer — `portable-pty` (openpty/forkpty on Unix, ConPTY on Windows).
-//!
-//! Key facts that shape this code (ARCHITECTURE §3 — do not
-//! relearn the hard way):
-//! - the reader/writer are **blocking `std::io`** → bridged in [`reader`].
-//! - `master.try_clone_reader()` must be called **before** the pair is moved.
-//! - grab `child.clone_killer()` up front so we can kill while `wait()` blocks.
-//! - drop the **slave** after spawning so only the child holds it — otherwise the
-//!   master never sees EOF when the child exits.
+//! PTY layer over `portable-pty` (ARCHITECTURE §3): blocking reader bridged in [`reader`];
+//! `try_clone_reader()` before the pair moves; `clone_killer()` up front so kill works during
+//! `wait()`; drop the slave after spawn or the master never sees EOF.
 
 pub mod cwd;
 pub mod reader;
@@ -17,32 +11,9 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// Serializes PTY allocation across the whole process.
-///
-/// **Do not remove this as a pointless lock.** `openpty(3)` is not safe to call
-/// concurrently on macOS. Its first step, `posix_openpt()` (a clone-open of
-/// `/dev/ptmx`), transiently fails when several threads allocate PTYs at once,
-/// reporting `ENXIO` ("Device not configured") — and sometimes a *negated*
-/// `ENXIO`, which surfaces as the nonsense `errno = -6` / "Unknown error: -6".
-///
-/// Measured, not guessed:
-/// - 16 threads opening PTYs in a **burst**: ~5% of `openpty` calls fail, hitting
-///   10 of 12 runs. With this lock: **0 failures in 576 calls.**
-/// - It is a **platform defect, not ours**: it reproduces in a standalone C
-///   program calling libutil's `openpty()` from threads — no Rust, no tokio, no
-///   `portable-pty` involved.
-/// - It is *not* fd exhaustion (`RLIMIT_NOFILE` is 1048576) and *not* PTY
-///   exhaustion (it triggers at ~32 PTYs against `kern.tty.ptmx_max` = 511).
-///
-/// **This guards the product, not just the tests.** Bursty allocation is exactly
-/// what M3 fan-out does — spawning several agents at once goes through here — so
-/// without this lock, a user creating a handful of agents together would see
-/// spurious "openpty failed" errors. The tests merely surfaced it first.
-///
-/// Held only across the allocation itself, never across `fork`/`exec`: `openpty`
-/// takes microseconds and runs once per terminal, so this never contends in
-/// practice. Kept unconditional rather than `cfg`-gated to macOS — the cost is
-/// unmeasurable and the ordering guarantee is worth having everywhere.
+/// Serializes PTY allocation: concurrent `openpty(3)` on macOS fails transiently with `ENXIO`
+/// (or "-6"), measured at ~5% in bursts and reproduced in plain C. Fan-out spawns in bursts, so
+/// keep it; held only around allocation, never `fork`/`exec`.
 static PTY_ALLOC_LOCK: Mutex<()> = Mutex::new(());
 
 /// What to launch in a PTY. For plain terminals `program` is the resolved
@@ -64,25 +35,13 @@ pub struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
-    /// The pid `portable-pty` reported for the child at spawn (`None` when it could
-    /// not report one).
-    ///
-    /// **Why the pid lives here and not on the supervisor's `TerminalRuntime`.**
-    /// Everything it is ever compared against belongs to *this* PTY — the master's
-    /// foreground process group ([`PtyHandle::foreground_command_running`]) and, via
-    /// [`PtyHandle::child_pid`], the process whose cwd the poller reads. Keeping the
-    /// pid beside the master fd means the two halves of that comparison cannot come
-    /// from different terminals. It also expires at exactly the right moment: the
-    /// supervisor sets `TerminalRuntime.pty = None` the instant the child exits, so
-    /// the handle — and the pid with it — is dropped before the OS can recycle the
-    /// number onto somebody else's process.
+    /// The child's pid from spawn. Kept beside the master fd so pgid/cwd checks can't mix
+    /// terminals, and dropped with the handle when the child exits, before the pid can be reused.
     child_pid: Option<u32>,
 }
 
-/// The pieces of a freshly spawned PTY, split by who owns what:
-/// - `handle` → the supervisor (resize/write/kill),
-/// - `reader` → the dedicated reader thread (hot path),
-/// - `child`  → the waiter thread (blocking `wait()`).
+/// A freshly spawned PTY split by owner: `handle` → supervisor, `reader` → reader thread,
+/// `child` → waiter thread (blocking `wait()`).
 pub struct PtySpawn {
     pub handle: PtyHandle,
     pub reader: Box<dyn Read + Send>,
@@ -111,50 +70,15 @@ pub fn default_shell() -> String {
     }
 }
 
-/// What Windows PowerShell runs before its first prompt in an IDE terminal: drop its `curl`
-/// alias, so `curl` is the real `curl.exe`.
-///
-/// Why: Windows PowerShell 5.1 aliases `curl` to `Invoke-WebRequest`,
-/// which ignores `HTTP(S)_PROXY` — so a `curl https://…` typed in an IDE terminal never
-/// reached the capture proxy and never showed in Network, and it does not take curl's
-/// arguments either (`curl -s -X POST …` is an error there). `curl.exe` ships with Windows
-/// (10 1803+) and honours the proxy variables. `-Force` because the built-in alias is
-/// `AllScope`; silent where there is no such alias. `wget` is left alone: Windows has no
-/// `wget.exe` to fall back to. `Invoke-WebRequest` and `iwr` still work by name.
+/// Windows PowerShell startup: drop its `curl` alias (`Invoke-WebRequest`, which ignores
+/// `HTTP(S)_PROXY` and curl's arguments) so `curl` is the proxy-aware `curl.exe`. `-Force`
+/// because the alias is `AllScope`; `wget` is left alone (no `wget.exe` to fall back to).
 pub const POWERSHELL_UNALIAS_CURL: &str =
     "Remove-Item Alias:curl -Force -ErrorAction SilentlyContinue";
 
-/// What Windows PowerShell runs before its first prompt in an IDE terminal, after
-/// [`POWERSHELL_UNALIAS_CURL`]: point .NET's `[System.Net.WebRequest]::DefaultWebProxy` at this
-/// terminal's capture proxy, so `Invoke-WebRequest`, `Invoke-RestMethod`, `iwr`, `irm`, `wget`
-/// and .NET's `WebClient` typed in the terminal show in Network.
-///
-/// Why: Windows PowerShell 5.1 (.NET Framework) ignores `HTTP(S)_PROXY`; its web cmdlets use
-/// `DefaultWebProxy`, which is the system (WinINET) setting. The IDE never touches the system
-/// setting (no OS permission may be required; it would capture every app on the machine),
-/// so the terminal sets its own process's default instead — the Windows-native counterpart of
-/// the proxy variables (platform-native). PowerShell 7 (`pwsh`, .NET) reads the variables
-/// itself and is untouched, as is cmd.
-///
-/// How, and what it must not break:
-/// - Only when the terminal has OUR proxy: `AGENTSTUDIO_PROXY_URL` set and `HTTP_PROXY` equal to
-///   it. Capture off, or the user's own proxy in their environment → nothing changes.
-/// - The proxy is `http://<host:port>` of that URL (userinfo is not part of a .NET proxy
-///   address). Its credentials (`t-<terminal>`/`x`) are set too, but .NET sends them only to
-///   a `407` challenge, which the capture proxy never sends; the proxy attributes the request
-///   from the client process's own `AGENTSTUDIO_PROXY_URL` instead (`netcap::proxy`, Windows).
-/// - `NO_PROXY` becomes the bypass list as far as `System.Net.WebProxy` allows: `*` = no proxy
-///   at all; `host`, `.host`, `*.host` = that host and its subdomains, any port; `host:port`
-///   = that port only; CIDR ranges (`10.0.0.0/8`) cannot be expressed and are skipped.
-///   `BypassProxyOnLocal` is off, matching the variables' semantics (loopback captured).
-/// - **The one thing it cannot do: loopback.** .NET Framework never sends a request for
-///   `localhost` / `127.0.0.1` / `[::1]` through ANY proxy — not `WebProxy`, not a custom
-///   `IWebProxy` (measured on 5.1: both go direct for loopback and through the proxy for any
-///   other host). In an IDE terminal `curl` is `curl.exe`, which is captured for loopback too.
-/// - A script block (`& { … }`), so its variables do not leak into the session; `try`, so a
-///   malformed URL can never stop the terminal from starting. No double quotes anywhere (the
-///   string crosses `CreateProcessW`'s command line and `-Command` parsing — see
-///   [`POWERSHELL_CWD_SYNC`]).
+/// Windows PowerShell 5.1 startup: point `DefaultWebProxy` at OUR capture proxy (only when
+/// `HTTP_PROXY` equals `AGENTSTUDIO_PROXY_URL`), mapping `NO_PROXY` as far as `WebProxy` can;
+/// .NET Framework never proxies loopback. No double quotes (see [`POWERSHELL_CWD_SYNC`]).
 pub const POWERSHELL_WEB_PROXY: &str = "if ($env:AGENTSTUDIO_PROXY_URL -and \
 ($env:HTTP_PROXY -eq $env:AGENTSTUDIO_PROXY_URL)) { & { try { $u = [Uri]$env:AGENTSTUDIO_PROXY_URL; \
 $np = @(@($env:NO_PROXY -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }); \
@@ -166,49 +90,17 @@ $c = $u.UserInfo -split ':', 2; \
 $w.Credentials = [System.Net.NetworkCredential]::new([Uri]::UnescapeDataString($c[0]), 'x'); \
 [System.Net.WebRequest]::DefaultWebProxy = $w } } catch {} } }";
 
-/// What every PowerShell terminal (`powershell` and `pwsh`) runs before its first prompt:
-/// wrap the `prompt` function so that, each time a prompt is drawn, the PROCESS working
-/// directory follows the shell's location.
-///
-/// Why: `Set-Location` / `cd` in PowerShell moves
-/// only PowerShell's own location (`$PWD`); the Win32 current directory of `powershell.exe`
-/// stays where it started (PowerShell has runspaces, so it never ties the two). The
-/// supervisor's cwd poller reads the process cwd ([`crate::pty::cwd::process_cwd`] — the
-/// PEB on Windows), so without this a PowerShell terminal's folder would never change in
-/// the UI. `[Environment]::CurrentDirectory = …` is `SetCurrentDirectoryW`, which is what
-/// that read sees.
-///
-/// How, and what it must not break:
-/// - It runs after the profile has loaded (`-Command` runs after profiles), so the `prompt`
-///   it wraps is the user's own — oh-my-posh, posh-git, a hand-written one.
-/// - The user's prompt runs FIRST, as the very first statement, so its `$?` and
-///   `$LASTEXITCODE` are still those of the user's last command (oh-my-posh reads both); the
-///   sync comes after and prints nothing. Measured on Windows PowerShell 5.1.
-/// - Only the FileSystem provider has a process-cwd meaning: in `HKCU:` or `Env:` the last
-///   folder stays. `try` because the folder may have been deleted under the shell.
-/// - Wrapping twice must not recurse: the original is captured only once.
-/// - No double quotes anywhere: the string travels through `CreateProcessW`'s command line
-///   (portable-pty's quoting) and PowerShell's own `-Command` parsing; single quotes and
-///   `$` mean nothing to either.
-///
-/// A prompt the user replaces later in the session (re-running `oh-my-posh init`) drops the
-/// wrapper; the folder then stops following until the next terminal.
+/// Every PowerShell's startup: wrap `prompt` so the process cwd (what the poller reads) follows
+/// `Set-Location`. The user's prompt runs first (keeps `$?`/`$LASTEXITCODE`); FileSystem only;
+/// wrapped once. No double quotes: it crosses `CreateProcessW` and `-Command` parsing.
 pub const POWERSHELL_CWD_SYNC: &str = "if (-not $global:__AgentStudioPrompt) { \
 $global:__AgentStudioPrompt = $function:prompt }; function global:prompt { \
 & $global:__AgentStudioPrompt; if ($PWD.Provider.Name -eq 'FileSystem') { \
 try { [Environment]::CurrentDirectory = $PWD.ProviderPath } catch {} } }";
 
-/// The arguments a plain terminal's shell starts with. Only PowerShell started with no
-/// arguments of its own gets any — `-NoExit -Command <startup>`, so the profile still loads
-/// first and the session stays interactive:
-/// - Windows PowerShell (`powershell` / `powershell.exe`): drop the `curl` alias, point the
-///   web cmdlets at the capture proxy, then the cwd sync ([`POWERSHELL_UNALIAS_CURL`];
-///   [`POWERSHELL_WEB_PROXY`]; [`POWERSHELL_CWD_SYNC`]).
-/// - PowerShell 7 (`pwsh` / `pwsh.exe`): the cwd sync only — it has no such alias.
-///
-/// Any case, with or without a path. A caller that passed arguments knows what it wants
-/// and is returned untouched, as is every other shell. `windows` is a parameter so every OS
-/// tests the Windows answer.
+/// A plain terminal's shell args: PowerShell with no args of its own gets `-NoExit -Command`
+/// (profile loads first): Windows PowerShell all three startup scripts, `pwsh` only the cwd
+/// sync. Anything else is returned untouched; `windows` is a parameter for tests.
 pub fn shell_startup_args(program: &str, args: Vec<String>, windows: bool) -> Vec<String> {
     if !windows || !args.is_empty() {
         return args;
@@ -235,29 +127,14 @@ fn pty_size(rows: u16, cols: u16) -> PtySize {
     }
 }
 
-/// Env vars Claude Code sets on its CHILD processes to mark "you are inside a Claude
-/// session". If Agent Studio is itself launched from within a Claude session (e.g. the
-/// dev `npm run tauri dev`), it inherits these — and so would every PTY we spawn:
-///
-/// - `CLAUDE_CODE_CHILD_SESSION` makes a `claude` inside that PTY treat itself as a NESTED
-///   child and **turn off transcript saving** ("Transcript saving is off — inherited
-///   CLAUDE_CODE_CHILD_SESSION marker"). That silently breaks two headline features that
-///   read the transcript: the fan-out tailer (sub-agent tree) and pinned-agent resume.
-/// - `CLAUDECODE` (set for every command Claude Code runs) makes whatever the user types
-///   look as if Claude Code ran it: `agent-studio mcp install|uninstall` refuse an agent by
-///   it, so the user typing them in an IDE terminal would be refused for a reason that is
-///   not true.
-///
-/// A terminal is the user's, whatever launched the app: we strip them so our agents are
-/// always TOP-LEVEL sessions and the user's commands are the user's.
+/// Claude Code's "inside a Claude session" child markers, stripped so PTYs are TOP-LEVEL even
+/// when the app runs under Claude: `CLAUDE_CODE_CHILD_SESSION` turns off transcript saving
+/// (breaking fan-out and resume), and `CLAUDECODE` makes `agent-studio mcp` refuse the user.
 const INHERITED_CLAUDE_CHILD_MARKERS: &[&str] = &["CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE"];
 
-/// The env Agent Studio imposes on a spawned PTY (on top of the inherited environment):
-/// rich-TTY vars, our `AGENTSTUDIO` marker, a `LANG` passthrough, and the Claude-session
-/// neutralizer — remove the inherited child markers AND force transcript persistence
-/// (`CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`, `claude`'s own suggested remedy; belt to
-/// the removal so an app-launched agent always writes its transcript). Pure so it is
-/// unit-testable without a real PTY. Returns `(sets, removes)`.
+/// The env imposed on a spawned PTY: rich-TTY vars, the `AGENTSTUDIO` marker, `LANG`, child
+/// markers removed and `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1` so transcripts are written.
+/// Returns `(sets, removes)`; pure for tests.
 fn pty_env_mutations(
     inherited_lang: Option<String>,
 ) -> (Vec<(&'static str, String)>, &'static [&'static str]) {
@@ -297,18 +174,9 @@ fn apply_pty_env(
     }
 }
 
-/// Windows: make sure the terminals this process starts can be interrupted with Ctrl+C.
-///
-/// Without this, a `^C` typed into an IDE terminal reaches ConPTY, yet `ping` keeps
-/// running. Windows keeps an "ignore Ctrl+C" bit in each
-/// process's parameters and copies it into every child, console or not — and a process
-/// started by a parent that had it set (an agent's shell, a `CREATE_NEW_PROCESS_GROUP`
-/// root, `npm run tauri dev` from such a shell) has it set too. The shell in the PTY then
-/// inherits it from us, and so does everything typed there, so Ctrl+C does nothing in any
-/// terminal. `SetConsoleCtrlHandler(NULL, FALSE)` clears the bit for this process, hence
-/// for every child spawned after it; measured: with it, `^C` stops `ping` at once.
-/// Once per process, before the first spawn. It does not attach us to any terminal's
-/// console, so a Ctrl+C typed in one still reaches only the programs in that terminal.
+/// Windows: clear the inherited "ignore Ctrl+C" bit (`SetConsoleCtrlHandler(NULL, FALSE)`),
+/// which every child copies; without it `^C` in a terminal stops nothing (measured: `ping`).
+/// Once per process, before the first spawn; it attaches us to no console.
 #[cfg(windows)]
 fn allow_ctrl_c() {
     static ONCE: std::sync::Once = std::sync::Once::new();
@@ -318,20 +186,15 @@ fn allow_ctrl_c() {
     });
 }
 
-/// Open a PTY at `spec`'s size and spawn `spec.program` into its slave.
-///
-/// The PTY is allocated at the correct initial size so the child's first paint
-/// (Claude Code's boxes / status lines) is laid out correctly.
+/// Open a PTY at `spec`'s size (so the child's first paint is laid out right) and spawn
+/// `spec.program` into its slave.
 pub fn spawn_pty(spec: &SpawnSpec) -> Result<PtySpawn> {
     #[cfg(windows)]
     allow_ctrl_c();
     let pty_system = native_pty_system();
     let pair = {
-        // See PTY_ALLOC_LOCK: concurrent openpty() is unsafe on macOS. The guard
-        // is scoped to the allocation alone so the expensive part below
-        // (fork/exec) still runs concurrently. Poisoning is recovered from — a
-        // panic elsewhere must not make terminals permanently unopenable, and
-        // there is no state behind this lock to corrupt.
+        // Lock only the allocation (see PTY_ALLOC_LOCK) so fork/exec stays concurrent. Poison is
+        // recovered: there is no state behind it, and a panic elsewhere must not block terminals.
         let _guard = PTY_ALLOC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         pty_system
             .openpty(pty_size(spec.rows, spec.cols))
@@ -396,61 +259,23 @@ impl PtyHandle {
         self.child_pid
     }
 
-    /// Is a **foreground command** running in this PTY right now? (Unix.)
-    ///
-    /// - `Some(true)`  — the terminal's foreground process group is *not* the child
-    ///   we spawned, i.e. the shell has handed the tty to something it launched: a
-    ///   `sleep`, a build, a dev server, a hand-typed `claude`.
-    /// - `Some(false)` — the child itself owns the tty: a shell sitting at its
-    ///   prompt with nothing running.
-    /// - `None` — unknown (`tcgetpgrp` failed). Callers must treat this as *not*
-    ///   busy. Windows answers from the process tree instead (the arm below).
-    ///
-    /// **Why the comparison is exact rather than a heuristic.** `portable-pty`
-    /// calls `setsid()` in its `pre_exec`, so our child is a session leader and its
-    /// process-group id equals its pid. `MasterPty::process_group_leader()` is
-    /// `tcgetpgrp(master_fd)`, the pgid the kernel currently treats as the
-    /// terminal's foreground group. So "leader == child pid" *is* "nothing is in
-    /// front of the shell" — no process-table walking, no matching on command
-    /// names, nothing that can drift.
-    ///
-    /// **It is deliberately blind to an agent terminal the app spawned.** There the
-    /// runtime (`claude`) *is* the PTY child and there is no shell, so the
-    /// foreground group is always the child itself and this always answers
-    /// `Some(false)`. That case belongs to the supervisor's binding table; the two
-    /// checks are disjoint on purpose and neither can cover the other's blind spot.
+    /// Unix: is a foreground command running? `Some(true)` when the tty's foreground pgid isn't
+    /// the child's (a `setsid` leader, so pgid == pid); `None` = unknown, treat as idle. Blind to
+    /// agent terminals by design: the supervisor's binding table covers those.
     #[cfg(unix)]
     pub fn foreground_command_running(&self) -> Option<bool> {
         let pid = self.child_pid?;
         // `None` here means `tcgetpgrp` failed (no controlling process group) —
         // unknown, not "idle".
         let leader = self.master.process_group_leader()?;
-        // Widened rather than cast between `pid_t` (i32) and `u32`, so no value can
-        // wrap into a false match. Deliberately no `libc::` name: `libc` is a
-        // **macOS-only** direct dependency in `Cargo.toml`, so mentioning the type
-        // here would not compile on Linux.
+        // Widened, not cast, so no value wraps into a false match. No `libc::` name: `libc` is a
+        // macOS-only dependency, so naming it would not compile on Linux.
         Some(i64::from(leader) != i64::from(pid))
     }
 
-    /// Windows: is the shell running something that would die with the terminal?
-    ///
-    /// ConPTY has no process groups and no `tcgetpgrp` — there is no "foreground" to ask
-    /// for. What closing the terminal actually destroys is every console program attached
-    /// to its pseudo-console, and a program the shell started inherits that console. So the
-    /// honest Windows answer is the process tree ([`busy_descendant`]):
-    ///
-    /// - `Some(true)`  — the PTY child (the shell) has a live descendant that is a console
-    ///   program: a `ping`, a `cargo build`, `npm run dev`, a hand-typed `claude`.
-    /// - `Some(false)` — it has none: a shell at its prompt.
-    /// - `None` — no pid, or the process snapshot failed (callers treat it as not busy).
-    ///
-    /// Not counted, because closing the terminal does not kill them: `conhost.exe` /
-    /// `OpenConsole.exe` (console hosts), and GUI-subsystem programs (`notepad`, an editor
-    /// the shell opened) and everything they start. One Toolhelp snapshot per call, plus
-    /// one process handle per child of the shell — it runs at close time only.
-    ///
-    /// Unlike the Unix check this also sees a background job (`Start-Job` is a child
-    /// `powershell.exe`) — which closing the terminal would kill too.
+    /// Windows: does the shell have a live console-program descendant ([`busy_descendant`])?
+    /// ConPTY has no foreground group; closing kills every attached console program. `None`
+    /// (no pid, snapshot failed) = idle. Runs at close time only.
     #[cfg(windows)]
     pub fn foreground_command_running(&self) -> Option<bool> {
         let pid = self.child_pid?;
@@ -485,10 +310,8 @@ impl PtyHandle {
         let _ = self.killer.kill();
     }
 
-    /// The slave side's device path (`/dev/ttys003`, `/dev/pts/2`) — what a process
-    /// running in this terminal has as its fd 1. Dev-app discovery compares the two to
-    /// say "this app's console is that IDE terminal".
-    /// `portable-pty` recorded it at `openpty`, so this is a clone, not a syscall.
+    /// The slave's device path (`/dev/ttys003`), i.e. fd 1 of processes in this terminal; dev-app
+    /// discovery matches on it. Recorded at `openpty`, so this is a clone, not a syscall.
     #[cfg(unix)]
     pub fn tty_name(&self) -> Option<String> {
         self.master
@@ -530,15 +353,9 @@ fn is_console_host(exe: &str) -> bool {
     CONSOLE_HOSTS.iter().any(|h| base.eq_ignore_ascii_case(h))
 }
 
-/// A process in `rows` that would die with the terminal whose shell is `root`, if any: a
-/// CHILD of `root` (its `ppid`, and — when both times are known — created no earlier than
-/// `root`, since Windows does not re-parent orphans and an older process naming a reused
-/// pid as its parent is not that pid's child) that is neither a console host nor a GUI
-/// program. Only children are looked at, and that is the whole tree: a console program
-/// inherits its parent's console, so a busy grandchild means a busy child — unless the
-/// child is a GUI program or a console host, whose own children get consoles of their
-/// own and so do not die with this one. (A grandchild orphaned by its parent's exit is
-/// out of reach of any parent link; that miss is the price of not guessing.)
+/// A process that would die with the terminal whose shell is `root`: a CHILD (by `ppid`, created
+/// no earlier than `root`, as Windows doesn't re-parent orphans) that is neither a console host
+/// nor a GUI program. Children suffice: a busy grandchild implies a busy child.
 pub fn busy_descendant(root: u32, root_created: Option<u64>, rows: &[ProcRow]) -> Option<u32> {
     rows.iter()
         .filter(|r| r.ppid == root && r.pid != root)
@@ -574,10 +391,8 @@ pub fn pe_subsystem(head: &[u8]) -> Option<u16> {
 /// `IMAGE_SUBSYSTEM_WINDOWS_GUI`.
 pub const SUBSYSTEM_GUI: u16 = 2;
 
-/// The Windows calls behind [`PtyHandle::foreground_command_running`]: a Toolhelp process
-/// snapshot, then a `PROCESS_QUERY_LIMITED_INFORMATION` handle per candidate (its creation
-/// time and image path, whose PE header says GUI or console). Same-user processes only;
-/// no privilege, no prompt.
+/// Windows calls behind [`PtyHandle::foreground_command_running`]: a Toolhelp snapshot, then a
+/// limited-information handle per candidate (creation time, GUI-or-console PE). Same user only.
 #[cfg(windows)]
 pub(crate) mod winproc {
     use super::{pe_subsystem, ProcRow, SUBSYSTEM_GUI};
@@ -695,14 +510,9 @@ impl Drop for PtyHandle {
     }
 }
 
-/// A real ConPTY terminal for the Windows tests (this module's and the agent adapter's):
-/// the module's own spawn path, output collected by a thread. Every wait is bounded and a
-/// failure prints what the screen showed. It also answers a cursor-position query
-/// `ESC[6n`, as xterm.js does in the app. ConPTY's host used to send one at the
-/// start of every terminal and held the program until it was answered (`node` never ran its
-/// script) — that was `PSEUDOCONSOLE_INHERIT_CURSOR`, now dropped in the vendored
-/// portable-pty (local patch #2), so the host no longer asks. The answer stays because a
-/// program may still ask for itself, and answering is what a real terminal does.
+/// A real ConPTY terminal for Windows tests: bounded waits, failures print the screen. It
+/// answers `ESC[6n` like xterm.js, since a program may ask (vendored portable-pty patch #2
+/// dropped `PSEUDOCONSOLE_INHERIT_CURSOR`, so the host itself no longer does).
 #[cfg(all(test, windows))]
 pub(crate) mod testterm {
     use super::{spawn_pty, Child, PtyHandle, SpawnSpec};
@@ -1215,13 +1025,9 @@ mod tests {
         (port, heads)
     }
 
-    /// The real Windows PowerShell 5.1 with the IDE terminal's startup command and a terminal's
-    /// capture env: `Invoke-WebRequest`, `Invoke-RestMethod`, `wget` and `WebClient` to a
-    /// non-loopback host reach the terminal's proxy (a recorder here); a `NO_PROXY` host (and a
-    /// `host:port` entry on its port only) goes direct; loopback goes direct whatever we do
-    /// (.NET Framework's own rule — pinned here, so a change in it shows up). Falsified in the
-    /// same run: the same commands without the startup command, or with a proxy that is not
-    /// ours, never reach the recorder.
+    /// Real PowerShell 5.1 with the startup command: web cmdlets to a non-loopback host reach our
+    /// proxy; `NO_PROXY` hosts and loopback go direct. Falsified: without the startup command, or
+    /// with a foreign proxy, nothing reaches the recorder.
     #[cfg(windows)]
     #[test]
     fn in_real_windows_powershell_web_cmdlets_go_to_the_terminals_proxy() {

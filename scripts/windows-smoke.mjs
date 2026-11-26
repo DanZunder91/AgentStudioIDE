@@ -1,49 +1,7 @@
 #!/usr/bin/env node
-/**
- * Windows smoke — drives the REAL app (the real WebView2 + the real Rust core + real PTYs) on a
- * Windows machine and prints PASS / FAIL / SKIP per check. It is the local, re-runnable form of
- * "verify the real thing in the running app" for Windows, where the WebDriver
- * tier (e2e/, Linux-only via tauri-driver + WebKitWebDriver) cannot run.
- *
- *   node scripts/windows-smoke.mjs --build [--port 9333] [--shots <dir>]
- *   node scripts/windows-smoke.mjs <path\to\AgentStudio-cdp.exe> [--app-id <identifier>] [--port 9333] [--shots <dir>] [--keep-state]
- *
- * ── The exe it needs ────────────────────────────────────────────────────────────────────────────
- * `--build` (what `npm run verify` runs on a Windows host) builds it: a `tauri build --debug
- * --no-bundle` with a `--config` override written to the OS temp dir (`windows-smoke-config.mjs`:
- * the real main window + a WebView2 remote-debugging port, a fresh `npm run build` of the frontend,
- * and the smoke's own identifier), then copies the exe out of `target` (a running exe locks the
- * next link) and runs against the copy. The WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS env var does
- * NOT work: wry passes its own arguments. A hand-built exe can be passed instead; `--port` must
- * match the port baked into it, and `--app-id` the identifier it was built with.
- *
- * ── What it does to the machine, and how it leaves it ───────────────────────────────────────────
- * - Starts ONE app instance (fails up front if something already answers on the CDP port — the app
- *   binds fixed ports, so two instances would fight) and ALWAYS kills its whole process tree.
- * - Starts its own HTTP server on 127.0.0.1 (ephemeral port) in this process — the only server any
- *   check talks to. Nothing leaves the machine.
- * - Makes a throwaway git repo under %TEMP% (the folder the app opens, edits and saves into) and
- *   deletes it at the end. The real repo is never opened or written.
- * - **App data — hermetic** with `--build` (or `--app-id com.agentstudio.app.<anything>`): the exe
- *   keeps its state in `%APPDATA%\com.agentstudio.app.smoke` and its WebView2 profile in
- *   `%LOCALAPPDATA%\com.agentstudio.app.smoke`, both wiped before and after the run. The user's real
- *   `%APPDATA%\com.agentstudio.app` (layout, recent projects, the Vault) is never read or written.
- * - **App data — fallback**, for an exe built with the real identifier: the layout and agent lists
- *   are moved aside, capture is forced on / decrypt off / system logs off, and every file listed in
- *   STATE_FILES is put back byte-for-byte when the run ends (`--keep-state` leaves what the run
- *   did). The API-client check is SKIPPED there — it would write the real Vault (`api-store.json`),
- *   so it never runs against real state. Never touched in either mode: nothing under ~/.claude.
- * - Writes one Application Event Log record (source `AgentStudioSmoke`, via `eventcreate`, which needs
- *   an elevated shell to register that source the first time; without it that check is SKIPPED).
- *
- * Selectors are the app's own aria-labels / roles / data-testids (the same hooks e2e/ uses). The
- * native folder picker cannot be driven over CDP, so the ONE stub is Playwright answering the
- * `plugin:dialog|open` IPC request with the fixture's path; everything after the dialog is the
- * real UI path (the button, the store, `read_dir`, git status).
- *
- * Checks marked `knownBug` point at a bug this run is expected to expose on builds that predate the
- * fix; they are never skipped or softened — a FAIL there is a real failure.
- */
+/** Windows smoke: the real app over CDP, PASS/FAIL/SKIP per check (WebDriver can't run there).
+ * `--build` makes a hermetic exe (own identifier, app data wiped); a real-identifier exe has its
+ * state restored instead. Never touches ~/.claude; a `knownBug` FAIL is a real failure. */
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync, unlinkSync } from "node:fs";
@@ -96,11 +54,7 @@ if (!BUILD && (!exe || !existsSync(exe))) {
 }
 mkdirSync(SHOTS, { recursive: true });
 
-/**
- * `--build`: the smoke exe from the current tree (header). Bounded: a build that hangs fails the
- * run after an hour instead of blocking it forever. Returns the copy's path and
- * the folder to delete afterwards.
- */
+/** Bounded: a hung build fails the run after an hour. Returns the exe copy's path and its dir. */
 function buildSmokeExe() {
   const conf = JSON.parse(readFileSync(path.join(REPO, "src-tauri", "tauri.conf.json"), "utf8"));
   const dir = mkdtempSync(path.join(os.tmpdir(), "agentstudio-smoke-build-"));
@@ -678,10 +632,8 @@ async function main() {
       if (!/curl/i.test(hit.headers["user-agent"] ?? "")) throw new Error(`unexpected user-agent ${hit.headers["user-agent"]}`);
     });
 
-    // Agent CLIs' own calls to AI providers are hidden by default. The smoke sends nothing off the
-    // machine, so there is no real CLI→provider flow here: this proves the control is in the real
-    // header, on by default, and never hides a curl — the hiding itself is unit-tested
-    // (networkFilter.test.ts, NetworkHideAiProviders.test.tsx).
+    // Nothing leaves the machine, so no real CLI→provider flow: this proves only that the control
+    // is on by default and never hides a curl; the hiding itself is unit-tested (networkFilter).
     await check("network: 'Hide AI providers' is on by default and leaves a curl row visible", async () => {
       const panel = page.locator('[data-testid="network-panel"]');
       const box = panel.locator('.net-head [data-testid="net-hide-ai"]');

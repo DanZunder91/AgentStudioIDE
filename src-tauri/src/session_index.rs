@@ -1,30 +1,6 @@
-//! Session index: list a folder's past Claude Code sessions so the UI
-//! can offer "Recover session" (double-click → resume via `agent_spawn`'s
-//! `resume_session_id`). This module only *lists*; the resume path
-//! already exists.
-//!
-//! **Strategy: scan-and-match, never compute.** `agent::claude::locate_transcript`
-//! established that the cwd→project-dir mangling is dead — `claude` resolves
-//! symlinks before mangling, so `/tmp/x` lands under `-private-tmp-x` and the dir
-//! name cannot be derived reliably. We therefore scan `~/.claude/projects/*/` and
-//! match each transcript's **own `cwd` field** (every message line carries one)
-//! against the requested cwd (raw and symlink-canonicalized). The mangled dir name
-//! is used only as a *secondary attribution hint*, because empty and summary-only
-//! transcripts carry no `cwd` field at all and would otherwise be unattributable.
-//! Since we never build a path from the caller's `cwd` — it is only *compared*
-//! against names `read_dir` returned — a crafted cwd cannot escape
-//! `~/.claude/projects` (and the mangle maps every non-alphanumeric char,
-//! including `.`, to `-`, so `..` could not survive it anyway).
-//!
-//! **`~/.claude` is read-only for us** — this module never writes
-//! there; tests build a fake projects tree under a tempdir `HOME`.
-//!
-//! **Bounded reads.** Transcripts can be 100 MB+; we never read a whole file.
-//! `label` / `resumable` / `cwd` come from the first [`HEAD_SCAN_BOUND`] bytes,
-//! read line-by-line with early exit (typically a few KiB). The honest tradeoff:
-//! a transcript whose first user message sits beyond the bound gets the fallback
-//! label — but a file that large is certainly a real conversation, so a truncated
-//! head is *assumed* resumable rather than mislabeled unresumable.
+//! Lists a folder's past Claude Code sessions for "Recover session"; never writes `~/.claude`.
+//! Matches each transcript's own `cwd` under `~/.claude/projects/*/`, never a path built from
+//! the caller's cwd (the dir mangle is only a hint). Reads at most [`HEAD_SCAN_BOUND`] per file.
 
 use std::collections::HashSet;
 use std::io::{BufRead, Read};
@@ -35,7 +11,8 @@ use serde::Serialize;
 
 use crate::agent::claude::home_dir;
 
-/// How much of a transcript's head we are willing to read to derive its metadata.
+/// How much of a transcript's head we are willing to read to derive its metadata. A head
+/// truncated at this bound is assumed resumable: a file that large is a real conversation.
 const HEAD_SCAN_BOUND: u64 = 256 * 1024;
 
 /// Label cap, in characters (labels are human handles in a list row).
@@ -44,9 +21,7 @@ const LABEL_MAX_CHARS: usize = 120;
 /// The fallback label for a transcript with no summary and no user message.
 const NO_MESSAGES_LABEL: &str = "(no messages)";
 
-/// One past session, as the "Recover session" list renders it.
-///
-/// Frontend contract (built in parallel against this — camelCase on the wire):
+/// One past session for the "Recover session" list. Frontend contract (camelCase):
 /// `invoke<ClaudeSessionMeta[]>('list_claude_sessions', { cwd })`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,10 +40,7 @@ pub struct ClaudeSessionMeta {
     pub resumable: bool,
 }
 
-/// List the past Claude Code sessions that ran in `cwd`, newest-first.
-///
-/// A cwd with no sessions (or no `~/.claude/projects` at all) is a **normal case**
-/// and returns `Ok(vec![])`, never an error — same philosophy as `git.rs`.
+/// Past sessions run in `cwd`, newest-first; none (or no projects dir) is `Ok(vec![])`.
 #[tauri::command]
 pub fn list_claude_sessions(cwd: String) -> Result<Vec<ClaudeSessionMeta>, String> {
     Ok(sessions_for_cwd(&cwd))
@@ -81,14 +53,9 @@ pub fn sessions_for_cwd(cwd: &str) -> Vec<ClaudeSessionMeta> {
     };
     let projects = home.join(".claude").join("projects");
 
-    // The cwd shapes a transcript's `cwd` field may carry: the path as given, and
-    // its symlink-resolved form (`claude` canonicalizes — /tmp/x runs as
-    // /private/tmp/x on macOS). Normalized so a trailing slash never misses.
-    //
-    // Windows: `paths::canonicalize` (`std`'s answers `\\?\C:\…`, which no
-    // transcript holds) and `paths::cwd_key`, which folds case and reads `/` as `\` for a
-    // Windows spelling — a typed `c:\repo` and Claude Code's `C:\Repo` are one folder. The
-    // keys of a Windows cwd are lower-case, so its dir names are compared lower-cased too.
+    // Match the cwd as given and symlink-resolved (macOS /tmp → /private/tmp), normalized.
+    // Windows: `paths::canonicalize` (no `\\?\`) and `paths::cwd_key` (case- and slash-folded),
+    // so dir names are compared lower-cased too.
     let mut targets: HashSet<String> = HashSet::new();
     targets.insert(normalize_cwd(cwd));
     if let Ok(canon) = crate::paths::canonicalize(cwd) {
@@ -108,10 +75,8 @@ pub fn sessions_for_cwd(cwd: &str) -> Vec<ClaudeSessionMeta> {
         }
         let candidates = scan_project_dir(&dir);
 
-        // Does this project dir host the requested cwd? Primary evidence: any
-        // transcript inside carries a matching `cwd`. Secondary: the dir name is
-        // the mangle of the cwd (covers a dir whose only transcripts are
-        // empty/summary-only and thus carry no `cwd` field).
+        // Primary: a transcript inside carries a matching `cwd`. Secondary: the dir name is the
+        // cwd's mangle (empty/summary-only transcripts carry no `cwd`).
         let name_matches = dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
             if fold_names {
                 mangled.contains(&n.to_ascii_lowercase())
@@ -179,10 +144,8 @@ pub(crate) struct HeadScan {
     truncated: bool,
 }
 
-/// Collect every `<session-id>.jsonl` directly inside a project dir.
-///
-/// Skips calmly: non-`.jsonl` names, directories (a `<session-id>/` subdir holds
-/// sub-agent files, not a session), and files that cannot be opened/statted.
+/// Every `<session-id>.jsonl` directly in a project dir; skips other names, unreadable files,
+/// and subdirs (a `<session-id>/` dir holds sub-agent files, not a session).
 fn scan_project_dir(dir: &Path) -> Vec<Candidate> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -415,16 +378,9 @@ mod tests {
     }
 }
 
-/// The Claude session id to resume a FINISHED root agent with — the "Resume
-/// conversation" action on an agent whose `claude` died (a killed session left the tab
-/// frozen with no way back into the conversation).
-///
-/// Frontend contract: `invoke('agent_resume_session', { agentId })` → the id, which
-/// the UI hands to the existing `agent_spawn` `resumeSessionId` path. This exposes a
-/// session id exactly as `list_claude_sessions` ("Recover session…") already does,
-/// and only for a root that has **finished** — a live session is never resumable
-/// twice. Errors: `"not-finished"`, `"not-a-root"`, `"no-session"` (no saved
-/// transcript, so `claude --resume` would fail).
+/// The session id to resume a FINISHED root agent with, for `agent_spawn`'s `resumeSessionId`.
+/// Errors: `"not-finished"`, `"not-a-root"`, `"no-session"` (no transcript to resume).
+/// Frontend contract: `invoke('agent_resume_session', { agentId })`.
 #[tauri::command]
 pub async fn agent_resume_session(
     supervisor: tauri::State<'_, crate::supervisor::SupervisorHandle>,

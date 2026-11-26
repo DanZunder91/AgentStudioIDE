@@ -1,28 +1,6 @@
-/**
- * Layer 5 — a restored agent's terminal, in a pane that is NOT focused, paints its replay.
- *
- * ## The problem
- *
- * After an app restart two agents came back side by side. B (right, focused) showed the stub's
- * banner; A (left, unfocused) stayed blank — its outline cursor frozen on row 0 — indefinitely.
- * Read frame by frame, a recording fits one rule (settleRepaint.ts has
- * the whole chain): the Linux webview puts a WebGL canvas on screen ONE DRAW LATE, and A's
- * replay was its last draw — an unfocused terminal has no blinking cursor to draw again — so
- * the screen kept the frame before it: empty.
- *
- * ## What this file can and cannot prove — said plainly
- *
- * This tier is Chromium. Chromium does not lag, so the blank pane does NOT reproduce here: the
- * first test passes with or without the fix, and is here as the literal requirement
- * in real layout (a second, unfocused pane, real xterm, real WebGL, real pixels from the
- * screen) — it fails if the replay never reaches A's screen for any reason that is ours.
- *
- * The second test models the engine as the recording shows it: every frame A's real WebGL
- * canvas draws is copied off the canvas as it is drawn, and "on screen" is the frame BEFORE
- * the last one. That is falsifiable here: without the settle repaint the last frame A draws is
- * its replay, so the modelled screen shows the empty frame before it, and the test goes red.
- * Only the Docker E2E (WebKitGTK) can confirm the model on the real engine.
- */
+/** The Linux webview shows a WebGL canvas one draw late (settleRepaint.ts). Chromium does not lag,
+ * so the first test passes with or without the fix; the second models the lag (on screen = the
+ * frame before the last) and fails without the settle repaint. Docker E2E checks WebKitGTK. */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -80,14 +58,8 @@ const liveTerminal = (id: AgentId): TerminalMeta => ({
   agentId: id,
 });
 
-/**
- * Pixels of row `row` that are TEXT: light (well above the background's luminance, ~16) and grey
- * (the foreground is #c9d1d9). Grey matters: the accent-blue cursor — an outline on row 0 before
- * the replay, when A is unfocused — must not count as text. The threshold is low on purpose:
- * how bright an anti-aliased stroke comes out depends on the rasteriser and on the load the run
- * is under (measured: the same banner gave 279 pixels above 160 alone and 61 in a full tier run),
- * so what is asserted is "there is text", not "this much".
- */
+/** Light grey text pixels of `row`, so the accent-blue cursor outline does not count. The
+ * threshold is low on purpose: stroke brightness varies with the rasteriser and load. */
 function textPixels(data: ImageData, rows: number, row: number): number {
   const rowPx = data.height / rows;
   let n = 0;

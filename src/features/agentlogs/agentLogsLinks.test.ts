@@ -1,9 +1,5 @@
-/**
- * "→ open <service> stream": which files the IDE streams, which tokens name
- * one, which blocks link. Every expectation is written by hand, independently of the
- * function under test — in particular the path-match table lists each pair
- * with its own verdict rather than deriving it.
- */
+/** "→ open <service> stream": every expectation, including each path-match verdict, is written by
+ * hand, independent of the function under test. */
 
 import { describe, expect, it } from "vitest";
 

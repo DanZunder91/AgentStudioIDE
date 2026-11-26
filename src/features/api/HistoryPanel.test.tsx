@@ -1,26 +1,5 @@
-/**
- * HistoryPanel — the right rail's API request history (M6 follow-on).
- *
- * `historyIpc` is mocked at the module boundary (the load crosses Tauri). What's
- * under test is the panel — hydrate-on-mount (+ skip/cancelled guards), the empty
- * state, newest-first rendering, the two-step Clear confirmation, and that clicking
- * an entry OPENS it (mint a request, populate it from the entry, open a tab) WITHOUT
- * sending it.
- *
- * Extended (entries after the first 10 are grouped into expandable days, and
- * there is a search) with the navigation layer: the flat/grouped
- * split, the collapsed-by-default day disclosures, and the search view that drops
- * grouping entirely. The shaping itself is pure and pinned exhaustively in
- * `historyGroup.test.ts`; what these tests own is the SEAM — that the
- * panel actually renders what the pure functions return, that a hidden entry is
- * genuinely absent from the DOM and genuinely appears on expand (two-sided),
- * and that search does not quietly re-scope the destructive Clear action.
- *
- * Timestamps are built from the CURRENT local calendar day (`dayAt`) rather than
- * from literal epoch integers: the panel buckets by local day against the real
- * clock, so a fixture pinned to a UTC instant would land on a different day
- * depending on the machine's timezone.
- */
+/** Grouping is pinned in historyGroup.test.ts; these own the seam (hidden entries truly absent,
+ * Clear not re-scoped by search). Fixtures use local days (`dayAt`), so any timezone works. */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,11 +35,7 @@ const entry = (over: Partial<HistoryEntry> = {}): HistoryEntry => ({
 
 const emptyLog: HistoryStore = { entries: [] };
 
-/**
- * An instant `daysAgo` local calendar days before today, at a local wall-clock
- * time. Built from local Y/M/D parts so it means the same calendar day in every
- * timezone, and so `Date` normalises the day arithmetic across DST.
- */
+/** Built from local Y/M/D parts: the same calendar day in every timezone, DST-safe via Date. */
 const dayAt = (daysAgo: number, hour: number, minute = 0): number => {
   const n = new Date();
   return new Date(
@@ -72,10 +47,7 @@ const dayAt = (daysAgo: number, hour: number, minute = 0): number => {
   ).getTime();
 };
 
-/**
- * A log of `n` entries on one day, newest first (`<prefix>0` is newest), handed
- * back in the STORE's order — oldest first, the way `recordApiHistory` appends.
- */
+/** `<prefix>0` is newest; returned oldest first, the store's order (recordApiHistory appends). */
 const dayLog = (n: number, daysAgo: number, prefix: string): HistoryEntry[] =>
   Array.from({ length: n }, (_, i) =>
     entry({

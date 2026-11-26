@@ -1,12 +1,6 @@
-//! Project-wide "Find in Files" (Cmd+Shift+F).
-//!
-//! The **ripgrep libraries, in-process** — never shelling out to `rg`.
-//! [`crate::find_walk`] walks the tree (ignore rules prune DIRECTORIES, they do
-//! not hide files — so a gitignored `.env` is searched); `grep-regex` builds
-//! the matcher (literal or regex, case, whole-word); `grep-searcher` does the
-//! line-oriented, binary-aware search. Confined to the workspace/recent roots by the
-//! shared [`crate::fs_tree::resolve_in_scope`] guard, and capped so a broad query
-//! can't flood the UI/IPC.
+//! Project-wide Find in Files via the ripgrep libraries in-process, never shelling out to `rg`.
+//! Files come from [`crate::find_walk`] (a gitignored `.env` is searched); scope is enforced by
+//! [`crate::fs_tree::resolve_in_scope`]; results are capped so a broad query can't flood IPC.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -19,25 +13,13 @@ use ignore::overrides::{Override, OverrideBuilder};
 use crate::find_cancel::{is_cancelled, CANCELLED};
 use crate::model::{FindOptions, FindResult, Match};
 
-/// Hard caps so a broad query cannot flood the IPC channel / UI. On hit, the result
-/// is `truncated: true`.
-///
-/// 🔴 **These bound the OUTPUT, not the WORK.** They stop a broad query flooding the
-/// wire; they are not a time bound and never were. A query with *zero* matches walks
-/// and greps the entire tree at full cost and returns instantly-empty — which is
-/// exactly the case a typing user hits on every keystroke. That is what the
-/// cancellation below is for.
+/// Caps on OUTPUT (`truncated: true` on hit), not on work: a zero-match query still walks the
+/// whole tree, which is what cancellation is for.
 const MAX_MATCHES: usize = 1000;
 const MAX_FILES: usize = 500;
 
-/// Search `root` for `query` under `options`, confined to `allowed_roots`.
-///
-/// Testable core (explicit roots, no `AppHandle`). Errors: out-of-scope / nonexistent
-/// root, a non-directory root, or an invalid regex.
-///
-/// The uncancellable entry point, signature unchanged, so the suite below proves the walk
-/// directly. `#[cfg(test)]` because the product always goes through
-/// [`search_cancellable`]; the app never ships an uncancellable search.
+/// Uncancellable core over explicit roots, test-only: the product always goes through
+/// [`search_cancellable`]. Errors: out-of-scope/missing/non-directory root or invalid regex.
 #[cfg(test)]
 fn search(
     root: &Path,
@@ -48,15 +30,8 @@ fn search(
     search_cancellable(root, query, options, allowed_roots, None)
 }
 
-/// [`search`], plus a flag that stops the walk early.
-///
-/// `cancel` is `None` for a search nobody can cancel (the back-compat path, and every
-/// existing test). When it is `Some`, the flag is polled **once per directory entry**
-/// at the top of the walk loop, and once per matched line inside
-/// [`CancellableSink`] — see those two sites for what that means for latency.
-///
-/// The scope guard runs FIRST, before the matcher, the walker or a single `readdir`:
-/// an out-of-scope root is refused without the process ever touching it.
+/// [`search`] plus an optional cancel flag, polled per directory entry and per matched line in
+/// [`CancellableSink`]. The scope guard runs FIRST: an out-of-scope root is never touched.
 fn search_cancellable(
     root: &Path,
     query: &str,
@@ -92,11 +67,8 @@ fn search_cancellable(
     // Ignore rules prune directories; they do not hide files (see `find_walk`), so
     // a gitignored `.env` is searchable while `node_modules/` stays pruned.
     for path in crate::find_walk::walk_files(&real, Some(overrides)) {
-        // 🔴 The cancellation point. One poll per file: a relaxed atomic load
-        // is a plain register read, so it costs nothing measurable even on a 100k-entry
-        // tree, and a cancel lands within ONE file's search rather than at the end of the
-        // walk. (A single enormous file is handled inside `CancellableSink` below, which
-        // aborts mid-file and lets the next iteration turn that into the error.)
+        // Cancellation point: one relaxed load per file, so a cancel lands within one file.
+        // A single huge file is aborted mid-file by `CancellableSink`.
         if is_cancelled(cancel) {
             return Err(CANCELLED.to_string());
         }
@@ -157,12 +129,8 @@ fn build_matcher(query: &str, options: &FindOptions) -> Result<RegexMatcher, Str
         .map_err(|e| format!("invalid regex: {e}"))
 }
 
-/// Build the caller's glob mask (`--glob`), which [`crate::find_walk::walk_files`]
-/// applies to the files it yields.
-///
-/// The walk itself lives in `find_walk` and is shared with the filename search, so
-/// "which files does a search see" has ONE answer for both — it used to have two,
-/// and both of them hid `.env`.
+/// Build the caller's `--glob` mask, applied by [`crate::find_walk::walk_files`]; the walk is
+/// shared with the filename search so both see the same files.
 fn build_overrides(root: &Path, options: &FindOptions) -> Result<Override, String> {
     let mut overrides = OverrideBuilder::new(root);
     if let Some(glob) = &options.glob {
@@ -206,18 +174,9 @@ impl Sink for MatchSink<'_> {
     }
 }
 
-/// [`MatchSink`] with a cancellation poll in front of it.
-///
-/// **Why this is a wrapper and not a field on `MatchSink`.** The per-entry poll in the
-/// walk loop is not enough on its own: one minified bundle or one giant log file can hold
-/// `search_path` for seconds inside a *single* entry, which is exactly the file a user
-/// most wants to escape. Polling per matched line makes a cancel land inside that file.
-/// It is a separate type so `MatchSink`'s own contract (and the test that pins its
-/// off-by-one on `cap`) is untouched.
-///
-/// **Known limit, stated plainly:** `grep_searcher::Sink` has no "still scanning" callback,
-/// so a huge file with **no** matches offers nowhere to poll — a cancel on that file still
-/// waits for it to finish. Matching files abort at the first line after the flag is set.
+/// [`MatchSink`] plus a per-matched-line cancel poll, so a cancel lands inside one giant file.
+/// Limit: `Sink` has no "still scanning" callback, so a huge file with no matches can't be
+/// cancelled until it finishes.
 struct CancellableSink<'a, 'c> {
     inner: MatchSink<'a>,
     cancel: Option<&'c AtomicBool>,
@@ -236,22 +195,9 @@ impl Sink for CancellableSink<'_, '_> {
     }
 }
 
-/// Search the workspace file tree for `query`.
-///
-/// Frontend contract:
-/// `invoke<FindResult>('find_in_files', { root, query, options, searchId })`.
-/// `root` must be inside an allowed workspace root (same scope as `read_dir`).
-/// Out-of-scope / non-directory root → `Err`; an invalid regex → `Err(<message>)`
-/// the FE shows inline; a search cancelled via `find_cancel` → `Err("cancelled")`, which
-/// the FE drops silently.
-///
-/// `searchId` is **optional**: a caller that omits it gets an ordinary, uncancellable
-/// search rather than an error.
-///
-/// 🔴 **`async` is load-bearing.** As a sync command this ran inline on the thread
-/// processing the IPC message and froze the entire window — see `find_cancel`'s module
-/// doc. `async` alone would only move the stall onto a tokio worker, so the walk goes to
-/// the blocking pool.
+/// Frontend: `invoke<FindResult>('find_in_files', { root, query, options, searchId })`. Errors:
+/// out-of-scope/non-dir root, invalid regex (shown inline), `cancelled` (dropped); `searchId` is
+/// optional. `async` + the blocking pool are load-bearing: a sync command froze the window.
 #[tauri::command]
 pub async fn find_in_files(
     app: tauri::AppHandle,
@@ -267,12 +213,8 @@ pub async fn find_in_files(
     run_find(root, query, options, allowed_roots, search_id).await
 }
 
-/// The `AppHandle`-free core of [`find_in_files`] — registry glue plus the hop onto the
-/// blocking pool, so a test can drive the real command path without standing up an app.
-///
-/// Mirrors `portability::blocking` (private there, and typed to that module's error, so it
-/// cannot be reused directly) and `metrics::claude_metrics`: `async` command → the work on
-/// `tokio::task::spawn_blocking`. Not a third pattern — the same one, finally applied here.
+/// `AppHandle`-free core of [`find_in_files`]: registry glue plus the hop to `spawn_blocking`
+/// (the same pattern as `portability::blocking` and `metrics::claude_metrics`).
 pub(crate) async fn run_find(
     root: String,
     query: String,
@@ -431,11 +373,6 @@ mod tests {
         assert_eq!(r.matches[0].file, "keep.rs");
     }
 
-    /// The SECOND symptom: with `.env` open in a tab, Find in
-    /// Files for a phrase plainly visible in it answered *"No matches"*. Same root
-    /// cause as the quick-open one — the file was never enumerated — which is why
-    /// both searches now share `find_walk`. A phrase, not a word, because that is
-    /// what was typed.
     #[test]
     fn a_phrase_inside_a_gitignored_dotenv_is_found() {
         let t = Tree::new("dotenv-phrase");
@@ -450,10 +387,7 @@ mod tests {
         assert_eq!(files, vec![".env"], "got {files:?}");
     }
 
-    /// ⚠️ The contract CHANGED (search was ignoring `.env` files). `.gitignore` prunes
-    /// **directories**; it no longer hides **files**. This test used to assert
-    /// `["kept.txt"]` — that expectation was the bug, not the guard, because a
-    /// gitignored `.env` is exactly the file people search for. See `find_walk`'s module docs.
+    /// A gitignored `.env` is exactly what people search for; see `find_walk`'s module docs.
     #[test]
     fn gitignore_prunes_directories_but_no_longer_hides_files() {
         let t = Tree::new("ignore");
@@ -548,10 +482,7 @@ mod tests {
     }
 
     // ---- file-flood cap (MAX_FILES) ---------------------------------------
-    // These pin the distinct-file counter path (find.rs lines 85-87), which had
-    // ZERO coverage: `matches.len() > before`, `distinct_files += 1`, and
-    // `distinct_files > MAX_FILES`. Each fixture writes one match per file so the
-    // MAX_MATCHES cap (1000) never fires first (MAX_FILES = 500 < 1000).
+    // One match per file, so the MAX_MATCHES cap (1000) never fires before MAX_FILES (500).
 
     #[test]
     fn file_cap_not_triggered_at_exactly_max_files() {
@@ -576,12 +507,7 @@ mod tests {
 
     #[test]
     fn file_cap_triggers_past_max_files() {
-        // Boundary: MAX_FILES + 1 matching files must trip the cap. The extra
-        // file's hits are dropped and `truncated` fires. Kills:
-        //   - `distinct_files += 1` -> `*= 1` (pins counter at 0, cap never fires),
-        //   - `matches.len() > before` -> `==` / `<` (counter never increments),
-        //   - `distinct_files > MAX_FILES` -> `==` / `>=` (would drop the 500th file
-        //     too, leaving 499 matches).
+        // Boundary: MAX_FILES + 1 matching files trip the cap and drop the extra file's hits.
         let t = Tree::new("filecap-over");
         for i in 0..(MAX_FILES + 1) {
             t.write(&format!("f{i:04}.txt"), "needle\n");
@@ -600,12 +526,8 @@ mod tests {
 
     #[test]
     fn file_counter_only_counts_matching_files() {
-        // Distinguishes `matches.len() > before` from the `>=` mutant: `>=` counts
-        // EVERY walked file (even ones that add no match) toward the file cap. Here
-        // MAX_FILES matching files + 1 non-matching file = MAX_FILES + 1 files
-        // walked, but only MAX_FILES match, so the correct `>` guard must NOT
-        // truncate. Under `>=` the non-matching file pushes the counter to
-        // MAX_FILES + 1 and `truncated` wrongly fires.
+        // Only matching files count toward the cap, so MAX_FILES matches + 1 non-matching
+        // file must not truncate (a `>=` guard would count the non-matching file).
         let t = Tree::new("filecap-nonmatch");
         for i in 0..MAX_FILES {
             t.write(&format!("f{i:04}.txt"), "needle\n");
@@ -627,10 +549,8 @@ mod tests {
 
     #[test]
     fn match_sink_stops_at_exactly_cap() {
-        // Pins the off-by-one in `Ok(self.out.len() < self.cap)` (find.rs:171): the
-        // `<=` mutant lets one extra match through (cap + 1) before stopping.
-        // Exercised on MatchSink directly with a tiny cap, so the caller's
-        // MAX_MATCHES safety-truncate cannot mask the extra push.
+        // Pins the off-by-one in `Ok(self.out.len() < self.cap)` (`<=` lets cap + 1 through).
+        // On MatchSink directly so the caller's MAX_MATCHES truncate can't mask it.
         let matcher = build_matcher("needle", &opts()).unwrap();
         let mut searcher = SearcherBuilder::new().line_number(true).build();
         let body = "needle\n".repeat(5);
@@ -654,19 +574,14 @@ mod tests {
     }
 
     // ---- cancellation -----------------------------------------------------
-    // A long-running search used to freeze the whole program; it now runs in
-    // parallel so that it can be cancelled. These
-    // pin the kill half; the freeze half is the `async` + `spawn_blocking` signature of
-    // `find_in_files`, which the type system enforces.
+    // These pin the kill half; the no-freeze half is `find_in_files`'s async signature.
 
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    /// Files of noise in the slow fixture. Sized so a full walk takes clearly more time
-    /// than the few milliseconds a cancel needs to land — if a future machine makes this
-    /// fixture too fast, the floor assertion below says so out loud rather than going
-    /// quietly green.
+    /// A full walk must take clearly longer than a cancel needs to land; the floor
+    /// assertion below fails loudly if a machine makes this fixture too fast.
     const SLOW_TREE_FILES: usize = 2500;
     /// How many files in the slow fixture actually contain the needle. Far under
     /// `MAX_FILES`, so the cap never truncates and "real results" is an exact number.
@@ -691,10 +606,8 @@ mod tests {
         tokio::runtime::Runtime::new().expect("tokio runtime")
     }
 
-    /// Two-sided: the same search, same tree, cancelled and not.
-    ///
-    /// The un-cancelled half is what makes the cancelled half mean anything — without it
-    /// this test also passes against a search that is simply broken and returns nothing.
+    /// The un-cancelled half proves the cancelled half: alone, a broken search returning
+    /// nothing would also pass.
     #[test]
     fn a_set_cancel_flag_stops_the_walk_and_a_clear_one_does_not() {
         let t = slow_tree("cancel-preset");
@@ -727,12 +640,8 @@ mod tests {
         let t = slow_tree("cancel-live");
         let roots = t.roots();
 
-        // Warm the file cache first, so the measured walk and the cancelled one cost the
-        // same per file. On Windows the FIRST read of a just-written file pays for the
-        // antivirus on-access scan: the cold measured walk was many times slower than the
-        // warm cancelled one, so a cancel timed at a tenth of the COLD walk landed after the
-        // warm walk had already finished (seen natively on Windows 11).
-        // `find_files` walks names only and never reads content, so it has no such gap.
+        // Warm the file cache so both walks cost the same per file: on Windows the first read
+        // of a fresh file pays an antivirus scan, so a cancel timed off a cold walk lands late.
         search(&t.root, "needle", &opts(), &roots).unwrap();
 
         // The FLOOR: prove this fixture actually takes time, on this machine, in
@@ -756,10 +665,7 @@ mod tests {
         let walker = std::thread::spawn(move || {
             search_cancellable(&root, "needle", &opts(), &walk_roots, Some(&walk_flag))
         });
-        // Cancel a tenth of the way into the walk we just MEASURED, rather than after a
-        // pinned number of milliseconds: a hard-coded delay is a flake waiting for a
-        // faster machine (the sibling test in `find_files` caught itself at 28ms against
-        // a 30ms floor).
+        // Cancel a tenth into the measured walk; a fixed delay flakes on faster machines.
         std::thread::sleep((uncancelled / 10).max(Duration::from_millis(1)));
         flag.store(true, Ordering::Relaxed);
         let err = walker.join().expect("walk thread").unwrap_err();
@@ -816,12 +722,8 @@ mod tests {
         );
     }
 
-    /// The scope guard runs BEFORE any walking — pinned by ordering, not by inspection.
-    ///
-    /// The cancel flag is already set, so if `resolve_in_scope` had drifted to *after* the
-    /// walk loop the first thing this search would meet is the cancellation point and the
-    /// error would be `cancelled`. Getting the scope error instead is the proof that
-    /// nothing was walked (the scope is server-authoritative and unskippable).
+    /// The cancel flag is pre-set, so getting the scope error rather than `cancelled` proves
+    /// the scope guard ran before any walking.
     #[test]
     fn an_out_of_scope_root_is_rejected_before_any_walking() {
         let inside = Tree::new("scope-order-in");
@@ -844,12 +746,8 @@ mod tests {
         );
     }
 
-    /// The registry must never leak a slot — one leaked flag per keystroke is a slow
-    /// memory leak in the most-typed-in surface of the app. Success, error and cancel, all
-    /// through the real command core.
-    ///
-    /// Holds `registry_gate()` because `cargo test` runs the suite as parallel threads in
-    /// one process and this asserts on the WHOLE registry (see `find_cancel`).
+    /// One leaked flag per keystroke would be a slow leak. Holds `registry_gate()`: tests run
+    /// as parallel threads and this asserts on the whole registry (see `find_cancel`).
     #[test]
     fn run_find_releases_its_registry_slot_on_success_error_and_cancel() {
         let _gate = crate::find_cancel::registry_gate();
@@ -903,10 +801,8 @@ mod tests {
         let slow = slow_tree("lifecycle-cancel");
         let id = format!("cancel-{}", ulid::Ulid::new());
         let key = id.clone();
-        // Spins until the search has registered its slot, then flags it. Deterministic:
-        // `run_find` registers BEFORE it starts walking, so this cannot miss the window —
-        // and if it wins the race outright the flag is simply already set when the walk
-        // begins, which is the same outcome.
+        // Spin until the slot is registered, then flag it. `run_find` registers before walking,
+        // so this can't miss; winning the race just means the flag is set when the walk begins.
         let canceller = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(10);
             while Instant::now() < deadline {

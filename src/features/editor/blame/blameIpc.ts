@@ -1,14 +1,5 @@
-/**
- * Blame IPC — typed wrapper for the git-blame command.
- *
- * Feature-local for the same reason as `workspaceIpc.ts` / `lspIpc.ts`: the
- * command *name* and arg/result *shapes* below are the whole wire contract with
- * the Rust side (built in parallel against this exact interface).
- *
- * Rust rejects with a plain string message — "…not in a git repository…" for a
- * file outside any repo, a scope error for an out-of-scope path. The editor
- * surfaces every rejection as a calm inline note, never a crash.
- */
+/** Typed wrapper for the git-blame command. Rust rejects with a plain string (not a repo, out of
+ * scope); the editor shows every rejection as an inline note. */
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -31,10 +22,7 @@ export interface FileBlame {
   /** Repo-relative path of the blamed file. */
   relPath: string;
   commits: BlameCommit[];
-  /**
-   * `lines[i]` = index into `commits` for document line `i + 1`;
-   * `null` = uncommitted line.
-   */
+  /** `lines[i]` indexes `commits` for document line `i + 1`; `null` = uncommitted. */
   lines: (number | null)[];
 }
 

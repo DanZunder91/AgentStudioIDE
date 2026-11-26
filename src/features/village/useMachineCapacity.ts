@@ -1,12 +1,5 @@
-/**
- * The machine sample behind the capacity buildings: `machine_capacity` read now and
- * every {@link CAPACITY_POLL_MS} — only while `enabled` (the panel passes "mounted and the document
- * visible"). Reading the process table is cheap and spawns nothing, unlike the usage
- * and context reads, which this hook never triggers.
- *
- * A failed read keeps the last good sample beside its error code (stale-but-true beats a blank
- * building, as in `usageStore`); reads never overlap.
- */
+/** Polls `machine_capacity` every {@link CAPACITY_POLL_MS} while `enabled`: cheap, spawns nothing.
+ * Reads never overlap; a failed read keeps the last good sample beside its error code. */
 
 import { useEffect, useState } from "react";
 

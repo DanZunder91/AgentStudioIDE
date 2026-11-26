@@ -1,12 +1,5 @@
-/**
- * `apiStoreIpc` — the API client's durable store, at the wire.
- *
- * A thin wrapper, so the command *name* and arg *shape* ARE the contract. What
- * matters most here is the two failure contracts the secret-safety design leans on: `loadApiStore`
- * NEVER throws (a dead backend yields an empty store so the UI still opens), and
- * `saveApiStore` swallows its failure (a dropped save must not break composing a
- * request). Both are pinned against the real `invoke`.
- */
+/** `apiStoreIpc` at the wire: command name and arg shape ARE the contract. Pins, against the
+ * real `invoke`, that `loadApiStore` never throws and `saveApiStore` swallows its failure. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -77,10 +70,8 @@ describe("apiStoreIpc", () => {
   /* ─────────────── folders: the commands ─────────────── */
 
   it("readApiStore answers null on failure — NOT an empty store", async () => {
-    // The distinction is the whole reason this function exists next to
-    // `loadApiStore`: a caller re-hydrating an existing mirror must be able to tell
-    // "the file is empty" from "I could not read the file", or a transient failure
-    // blanks the mirror and the next blob save writes that blank to disk.
+    // A re-hydrating caller must tell "empty file" from "unreadable", or a transient failure
+    // blanks the mirror and the next save writes that blank to disk.
     ipc.handle("api_store_load", () => {
       throw new Error("no backend");
     });
@@ -93,13 +84,8 @@ describe("apiStoreIpc", () => {
     });
   });
 
-  /**
-   * The command NAME and the argument KEYS are the contract Rust's
-   * `#[tauri::command]` signatures declare — `requestId` → `request_id`,
-   * `folderId` → `folder_id`. Asserted one wrapper at a time, with literals, rather
-   * than looped over a table: a loop reading its expectation from the same source
-   * proves the plumbing and nothing about the values.
-   */
+  /** Name and arg keys are Rust's `#[tauri::command]` contract (`requestId` → `request_id`),
+   * asserted per wrapper with literals: a table-driven loop would only prove the plumbing. */
   it("each folder command invokes the name and arg keys Rust declares", async () => {
     for (const cmd of [
       "api_folder_create",

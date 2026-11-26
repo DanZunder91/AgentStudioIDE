@@ -1,15 +1,6 @@
-//! The WebSocket and gRPC agent tools (`ws_exchange`, `grpc_services`, `grpc_describe`,
-//! `grpc_call`) against real servers: the tool path through the dispatcher, the engines'
-//! recording into a real `Netcap` (what the Network view shows), the UI event a call sends to
-//! History, the bounds (wait, count, bytes, deadlines) on servers built to push each one, and the
-//! real `agent-studio` binary end to end.
-//!
-//! Hermetic: every server is started here on 127.0.0.1 — WebSocket servers with one behaviour
-//! each, and a hand-rolled h2c gRPC server that speaks server reflection v1 (tonic's server
-//! feature is not in the build; adding it would lock new crates for a test, so the fixture answers
-//! the reflection queries and five unary methods itself, and serves two import chains built to
-//! push reflection's limits). Nothing reads or writes the user's config: the tools that need a
-//! directory get a temp one, and none of these tools writes.
+//! WebSocket and gRPC agent tools against real loopback servers: dispatcher path, `Netcap`
+//! recording, History events, bounds, the real binary. The gRPC fixture is a hand-rolled h2c
+//! server speaking reflection v1 (tonic's server feature isn't built). No tool writes config.
 
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -1235,10 +1226,8 @@ async fn a_slow_call_is_abandoned_at_its_deadline_and_its_row_settles() {
     assert!(e[0]["transportError"].as_str().unwrap().contains("400 ms"));
 }
 
-/// A deadline that passes on our side — here the request's own `grpc-timeout`, which tonic
-/// enforces in the client and reports as a `Cancelled` status — is the call's timeout, not a
-/// status a server sent: the tool fails, the Network row is an error with no gRPC status, and
-/// History hears a transport error.
+/// A deadline passing on our side (tonic's client-enforced `grpc-timeout`, reported
+/// `Cancelled`) is a timeout, not a server status: the tool fails, the row has no gRPC status.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_deadline_that_passes_on_our_side_is_a_timeout_not_a_server_status() {
     let port = spawn_grpc().await;
@@ -1275,10 +1264,8 @@ async fn a_deadline_that_passes_on_our_side_is_a_timeout_not_a_server_status() {
         .contains("deadline"));
 }
 
-/// A call's own limit is what its channel waits, not the channel's default request timeout. With
-/// the default made short (300 ms), a call limited to 5 s still gets the answer of a server that
-/// takes 800 ms; a call with no limit of its own is cut at the default — so the default is in
-/// force, and the call's limit is what lifts it.
+/// A call's own limit is what its channel waits: with a 300 ms default, a 5 s call still gets
+/// an 800 ms answer, while a call without a limit is cut at the default.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_calls_own_limit_is_what_its_channel_waits_not_the_default() {
     let port = spawn_grpc().await;

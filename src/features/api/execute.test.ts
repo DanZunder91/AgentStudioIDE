@@ -1,10 +1,4 @@
-/**
- * execute — the shared HTTP send path (M6). `httpIpc` and the persistence modules are
- * mocked at the module boundary (the real ones cross Tauri). What's under test: the
- * `{{VAR}}` resolution onto the WIRE request, that response/error land on the
- * request, and — the follow-on's point — that every execution is RECORDED in history
- * with the LITERAL (pre-substitution) request, so a secret is never logged.
- */
+/** History must record the LITERAL (pre-substitution) request, so a secret is never logged. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

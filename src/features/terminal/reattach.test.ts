@@ -1,18 +1,6 @@
-/**
- * The reattach seam — re-subscribing to a PTY that outlived a webview reload.
- *
- * After a full reload the Rust supervisor + PTYs (with the running `claude`s)
- * are alive but the JS store is gone. `bridge.ts` re-fetches `fleet_snapshot`
- * and `store.rebuildTerminalTabs` rebuilds a tab per terminal, marked
- * `reattach`. The registry must then call **`terminal_reattach`** — NOT
- * `terminal_open` (which errors on an id that is already open) and NOT
- * `agent_spawn` (which would start a second claude). This pins that routing plus
- * the exited-PTY handling.
- *
- * jsdom, like `agentSpawn.test.ts`: `ensureTerminal` opens the PTY without ever
- * calling `term.open()`, so no layout is needed; xterm's buffer still reflects
- * bytes written to it, which is all the streaming assertions read.
- */
+/** After a webview reload the PTYs live on; rebuilt `reattach` tabs must call `terminal_reattach`,
+ * never `terminal_open` (errors on an open id) or `agent_spawn` (a second claude). jsdom works:
+ * `ensureTerminal` never calls `term.open()`, and xterm's buffer still records writes. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

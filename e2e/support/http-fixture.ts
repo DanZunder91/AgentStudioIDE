@@ -1,20 +1,5 @@
-/**
- * A tiny deterministic HTTP server for the API-client E2E spec (seam S7).
- *
- * The API flow needs no app seam — arbitrary outbound requests are the feature
- * by design. Instead the spec binds this throwaway server on `127.0.0.1:0`
- * (an ephemeral port, so parallel runs never collide) and points the app's URL
- * at it. The Rust `http_send` (reqwest) reaches it over real loopback TCP;
- * nothing touches the public network.
- *
- * Endpoints:
- *   GET  /health  → 200 application/json, a canned body.
- *   POST /echo    → 200 application/json, echoes the received body + method, so
- *                   the POST spec can assert its request round-tripped.
- *   (any other)   → 404 application/json.
- *
- * Uses only node's built-in `http` — no new npm dependency.
- */
+/** Deterministic HTTP server for the API spec (seam S7) on 127.0.0.1:0, so parallel runs never
+ * collide: GET /health canned JSON, POST /echo echoes method and body, anything else 404. */
 
 import http from "node:http";
 import type { AddressInfo } from "node:net";

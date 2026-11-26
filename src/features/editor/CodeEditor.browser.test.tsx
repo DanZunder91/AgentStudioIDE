@@ -1,11 +1,4 @@
-/**
- * Layer 5 (testing-strategy §1) — the real CodeMirror 6 editor, in Chromium.
- *
- * CM6 needs a real DOM: under jsdom it constructs but never lays out, and its
- * editability/keymap can't be exercised. This tier proves the whole path — read
- * only by default, Shiki colors, opt-in edit, typing → dirty, Cmd/Ctrl+S →
- * write_file, a save error keeping the buffer, and edits surviving a tab switch.
- */
+/** CM6 needs a real DOM: under jsdom it constructs but never lays out; editing is tested here. */
 
 import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -179,17 +172,8 @@ describe("CodeEditor (real CodeMirror 6)", () => {
     expect(tabDirty("/w/a.txt")).toBe(true); // still dirty — edits preserved
   });
 
-  /**
-   * The calm-state path, on a file that genuinely has no text behind it.
-   *
-   * 🔴 This used to open `/w/logo.png`, which was accurate until images got their own
-   * viewer: a PNG reached `read_file`, got rejected as `"binary file"`, and landed here.
-   * That WAS the bug — an image tab is now routed to the image viewer
-   * and never asks for text at all. The state itself is still reachable and still
-   * matters, so the fixture moves to a non-image binary rather than the test being
-   * deleted: `read_file` still rejects a `.bin`, an oversized file and invalid
-   * UTF-8, and any of those must stay a calm note rather than a crash.
-   */
+  /** A non-image binary: `read_file` still rejects `.bin`, oversized and invalid-UTF-8 files, and
+   * that must stay a calm note. Images never reach `read_file`. */
   it("shows a calm state — never a crash — when read_file rejects", async () => {
     ipc.handle("read_file", () => {
       throw new Error("not valid UTF-8");
@@ -198,10 +182,6 @@ describe("CodeEditor (real CodeMirror 6)", () => {
     expect(await findByText(/Can.t preview this file/)).toBeInTheDocument();
   });
 
-  /**
-   * The other side of that move, in the tier that can actually mount the thing:
-   * a raster image must never reach `read_file` at all.
-   */
   it("routes a raster image to the viewer without ever reading it as text", async () => {
     let reads = 0;
     ipc.handle("read_file", () => {

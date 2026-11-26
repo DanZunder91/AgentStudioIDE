@@ -1,7 +1,4 @@
-/**
- * The sequence slice — editing and run bookkeeping. No sending happens here;
- * that is `sequenceExecute.test.ts`.
- */
+/** Editing and run bookkeeping only; sending is covered by sequenceExecute.test.ts. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

@@ -1,12 +1,5 @@
-/**
- * contextScope — the find overlays' context-aware default workspace (from a
- * gazelle file or a gazelle terminal, the search should cover gazelle).
- *
- * Pure functions, driven against the REAL store shape (`useAppStore.getState()`
- * after a seeded layout) so a change to how the store names the focused pane or a
- * tab's ref breaks here rather than silently defaulting to the primary root. The
- * terminal-cwd lookup is injected, so no PTY is involved.
- */
+/** Driven against the real store shape, so a store rename breaks here instead of silently
+ * defaulting to the primary root. The terminal-cwd lookup is injected (no PTY). */
 
 import { beforeEach, describe, expect, it } from "vitest";
 

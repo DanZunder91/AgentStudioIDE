@@ -1,57 +1,6 @@
-//! The built-in API client's gRPC engine — **native and in-process** (no `grpcurl`
-//! shell-out).
-//!
-//! The requirement: the gRPC client must NOT require the user to install any
-//! external binary. So instead of shelling out to `grpcurl`, we speak gRPC directly
-//! from the Rust core with `tonic` (HTTP/2 transport) + `prost-reflect` (a runtime
-//! `DescriptorPool` + `DynamicMessage` ⇄ canonical-protobuf-JSON), which makes
-//! **arbitrary services chosen at runtime** callable with no codegen. Descriptors are
-//! pulled over the standard **gRPC server-reflection** protocol (`tonic-reflection`'s
-//! generated client, `grpc.reflection.v1` with a `v1alpha` fallback).
-//!
-//! The pleasant surprise: `tonic 0.14` shares the exact hyper 1.x + h2 + tower stack that
-//! `reqwest`/`ws.rs` already resolve, so this adds **no second HTTP/2 stack** and TLS
-//! stays on rustls — no native-tls/OpenSSL — matching the `http.rs` hygiene.
-//!
-//! **TLS** follows the app-wide policy in [`crate::tls`]: the single `ring`
-//! crypto provider (`tls-ring`, now genuinely the only backend in the binary), and a
-//! `grpcs://` root store that is the **union of the operating system's trust anchors and
-//! the bundled Mozilla set** (`with_enabled_roots()` over `tls-native-roots` +
-//! `tls-webpki-roots`). So an internal `grpcs://` behind a corporate CA verifies, exactly
-//! as `http_send` and `ws_connect` do.
-//!
-//! **Contract, mirroring `http.rs`:** a **non-OK gRPC `Status` is a normal response**
-//! ([`GrpcResponse`] with `statusCode != 0`), not a rejected promise — only a failure
-//! to *connect* (dial/TLS/reflection) is `Err`. The command surface + serde wire types
-//! are **pinned** (the frontend builds against exactly these). Native gRPC is always
-//! available (no external tool), so there is no probe/degrade command — unlike a
-//! `grpcurl` shell-out, which would need one.
-//!
-//! The risky logic is kept pure and unit-testable **without a server**: endpoint→URI
-//! building, the `Code`→(number, name) mapping over all 17 codes, metadata→header
-//! construction, and the JSON ⇄ `DynamicMessage` round-trip against a hand-built
-//! descriptor. The reflection + live-call paths need a real server and are exercised in
-//! the running app; a couple of `#[ignore]`d integration tests
-//! document how.
-//!
-//! **Scope (v1):** unary + reflection only. `.proto`/protoset upload (protox) and all
-//! streaming are DEFERRED — clear TODO seams are marked below, not implemented.
-//!
-//! **Network view.** One `grpc` flow per `grpc_send`, recorded through
-//! [`crate::netcap::record`]: pending from the start with path `/pkg.Service/Method` and the
-//! request headers as tonic sends them (the user's metadata, lowercased, then `te: trailers`
-//! and `content-type: application/grpc`; tonic's own `user-agent` is not reconstructed), the
-//! request as its canonical JSON once parsed, then either status 200 + `grpcStatus 0` + the
-//! response JSON, or the gRPC status with its trailers (`done` — a status is a response), or
-//! `error` for a dial/reflection/transport failure or a deadline that passed. The reflection
-//! round-trips that resolve the method are not separate rows. Sizes are protobuf payload bytes
-//! (see the record module).
-//!
-//! **Rust API.** The two commands are thin over [`Reflection`] (a reflection session and its
-//! descriptor pool) and [`call`] (a recorded unary call with a deadline, returning the server's
-//! metadata too). An agent's `grpc_services` / `grpc_describe` / `grpc_call` tools
-//! (`agent_ctl::commands::stream`) use the same two, so a call an agent makes is the call the
-//! console makes, recorded the same way.
+//! The API client's gRPC engine, native and in-process (`tonic` + `prost-reflect` via server
+//! reflection), so no `grpcurl` install. A non-OK status is a response; only connect is `Err`.
+//! Unary only. [`Reflection`]/[`call`] also serve agent tools; calls record via `netcap::record`.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -82,10 +31,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// How far past a caller's whole-call limit the channel's own per-request timeout is set.
 const LIMIT_GRACE: Duration = Duration::from_secs(1);
 
-/// The channel's per-request timeout: `default` (the app passes [`REQUEST_TIMEOUT`]), or, for a
-/// call with a whole-call `limit` of its own, just past that limit. A channel timeout under the
-/// limit would cut the call short of the deadline its caller was promised; past it, the caller's
-/// deadline — which started first, before the dial — is always the one that fires.
+/// Channel per-request timeout: `default`, or just past a call's own `limit`, so the caller's
+/// deadline (which started first, before the dial) is always the one that fires.
 fn channel_timeout(limit: Option<Duration>, default: Duration) -> Duration {
     limit.map_or(default, |limit| limit + LIMIT_GRACE)
 }
@@ -95,10 +42,8 @@ fn channel_timeout(limit: Option<Duration>, default: Duration) -> Duration {
 /// fat responses still come through, but a runaway response can't exhaust memory.
 const MAX_DECODING_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
-/// Descriptor files one reflection session fetches at most — a request counts as one even when
-/// its answer holds none — and their bytes. A server answers each `import` with whatever file it
-/// likes, which may import one more, so following imports is bounded here rather than by how long
-/// the server keeps answering.
+/// Per-session cap on descriptor files fetched (a request counts even if empty) and their bytes:
+/// a server may answer each import with another import, so following them must be bounded.
 pub const MAX_REFLECTED_FILES: usize = 500;
 pub const MAX_REFLECTED_BYTES: usize = 16 * 1024 * 1024;
 
@@ -223,12 +168,8 @@ pub(crate) fn status_name_for(code: u32) -> &'static str {
 // Pure logic (c): metadata (gRPC headers) → tonic MetadataMap.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Build a [`MetadataMap`] from the request headers. Keys are lowercased (gRPC requires
-/// it); duplicates are appended (not overwritten). A bad key/value is a hard error so
-/// the user learns why a header didn't take.
-///
-/// v1 handles **ASCII** metadata only. Binary metadata (`-bin` keys, which carry
-/// base64-encoded bytes) is rejected with a clear message — a DEFER seam.
+/// Build a [`MetadataMap`]: keys lowercased (gRPC requires it), duplicates appended, a bad
+/// key/value is a hard error. ASCII only; `-bin` (binary) keys are rejected for now.
 fn build_metadata(headers: &[GrpcHeader]) -> Result<MetadataMap, String> {
     let mut map = MetadataMap::new();
     for h in headers {
@@ -349,20 +290,15 @@ async fn connect_channel(
     plaintext: bool,
     request_timeout: Duration,
 ) -> Result<Channel, String> {
-    // One provider for the whole process. tonic checks
-    // `CryptoProvider::get_default()` before falling back to its own `tls-ring` feature,
-    // so installing here is what keeps `grpcs://` provably on the same backend as
-    // `http_send`/`ws_connect`. Idempotent; also done at startup in `run()`.
+    // tonic prefers `CryptoProvider::get_default()` over its own `tls-ring`, so installing here
+    // keeps `grpcs://` on the same backend as `http_send`/`ws_connect`. Idempotent.
     crate::tls::install_crypto_provider();
 
     let uri = endpoint_uri(endpoint, plaintext);
     let mut ep = Channel::from_shared(uri).map_err(|e| format!("invalid endpoint: {e}"))?;
     if !plaintext {
-        // TODO(defer): custom CA / mTLS / skip-verify. Until then `with_enabled_roots()`
-        // is what stops an internal `grpcs://` behind a corporate CA from being
-        // unreachable: with `tls-native-roots` + `tls-webpki-roots` both on, it unions the
-        // OS trust anchors with the bundled Mozilla set (see `crate::tls`) — the
-        // same trust story as `http.rs`/`ws.rs`, still no native-tls/OpenSSL.
+        // TODO(defer): custom CA / mTLS / skip-verify. `with_enabled_roots()` unions OS anchors
+        // with the bundled Mozilla set (see `crate::tls`), so a corporate-CA `grpcs://` verifies.
         let tls = ClientTlsConfig::new().with_enabled_roots();
         ep = ep
             .tls_config(tls)
@@ -410,13 +346,8 @@ fn status_to_reflect_err(status: Status) -> ReflectError {
     }
 }
 
-/// Generate the two per-wire-version reflection drivers (`grpc.reflection.v1` and
-/// `v1alpha`). The generated `list_services`/`fetch_files` return only primitive types
-/// (`Vec<String>` / raw descriptor bytes), so the version-specific generated protobuf
-/// types never leak past this macro — the caller ([`Reflect`]) just dispatches.
-///
-/// Each call opens a fresh bidi `ServerReflectionInfo` stream, sends one request, and
-/// reads the single matching response.
+/// Generates the `grpc.reflection.v1` and `v1alpha` drivers. They return only primitive types,
+/// so version-specific generated types never leak past this macro. One fresh stream per call.
 macro_rules! reflection_driver {
     ($ver:ident, $list_fn:ident, $files_fn:ident) => {
         async fn $list_fn(
@@ -607,10 +538,8 @@ impl Reflection {
             .map_err(|e| e.into_string())
     }
 
-    /// Load the file that declares `symbol` (a service, method, message or enum, fully
-    /// qualified), with its imports, into [`Self::pool`] — nothing to fetch when an earlier load
-    /// brought it. At most [`MAX_REFLECTED_FILES`] files ([`MAX_REFLECTED_BYTES`]) are fetched in
-    /// one session; past that every load fails, saying so.
+    /// Load the file declaring the fully qualified `symbol`, plus imports, into [`Self::pool`]
+    /// (no-op if loaded). Fails once the session's [`MAX_REFLECTED_FILES`]/bytes are spent.
     pub async fn load(&mut self, symbol: &str) -> Result<(), String> {
         let known = self.pool.get_service_by_name(symbol).is_some()
             || self.pool.get_message_by_name(symbol).is_some()
@@ -658,11 +587,8 @@ fn schema_from_pool(pool: &DescriptorPool, service_names: &[String]) -> GrpcSche
 // Tauri commands (registered in `lib.rs`).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// List a server's services + methods via gRPC server reflection.
-/// Frontend: `invoke<GrpcSchema>('grpc_reflect', { endpoint, plaintext })`.
-///
-/// Rejects (`Err<String>`) on connect/reflection failure (unreachable host, reflection
-/// disabled) — there is no schema to show.
+/// Frontend: `invoke<GrpcSchema>('grpc_reflect', { endpoint, plaintext })`. `Err` on
+/// connect/reflection failure: there is no schema to show.
 #[tauri::command]
 pub async fn grpc_reflect(endpoint: String, plaintext: bool) -> Result<GrpcSchema, String> {
     let mut reflection = Reflection::connect(&endpoint, plaintext).await?;
@@ -720,10 +646,8 @@ async fn build_pool_into(
         .map_err(|e| format!("failed to add descriptors: {e}"))
 }
 
-/// The request headers as tonic sends them: the metadata (keys lowercased, the reserved
-/// names tonic strips — `te`, `content-type`, `grpc-message`, `grpc-message-type`,
-/// `grpc-status` — left out), then the two `Grpc::unary` inserts. `user-agent` (tonic's own,
-/// added inside the channel) is not reconstructed.
+/// Request headers as tonic sends them: metadata (lowercased, minus the reserved names tonic
+/// strips), then `Grpc::unary`'s two inserts. tonic's own `user-agent` is not reconstructed.
 fn headers_as_sent(metadata: &[GrpcHeader]) -> Vec<(String, String)> {
     const RESERVED: [&str; 5] = [
         "te",
@@ -771,15 +695,9 @@ fn start_flow(tap: &Tap, request: &GrpcRequest) -> Flow {
     )
 }
 
-/// Send a unary gRPC request. Frontend: `invoke<GrpcResponse>('grpc_send', { request })`.
-///
-/// A non-OK gRPC status **resolves** as a [`GrpcResponse`] (`statusCode != 0`,
-/// `statusName` set, `error` carrying the message) — mirroring `http_send`. A failure to
-/// *connect* (dial/TLS/reflection) is `Err`, and so is a deadline that passed on our side
-/// (the request's timeout): no server sent that status, so none is reported. The method's
-/// descriptor is fetched via reflection, the JSON request built into a `DynamicMessage`, the
-/// call made with a dynamic codec, and the response decoded back to JSON. The call is recorded
-/// in the Network view as source `API client`.
+/// Frontend: `invoke<GrpcResponse>('grpc_send', { request })`. A non-OK status resolves (like
+/// `http_send`); connect/TLS/reflection failure or our own deadline is `Err` (no server status).
+/// Recorded in the Network view as source `API client`.
 #[tauri::command]
 pub async fn grpc_send(request: GrpcRequest) -> Result<GrpcResponse, String> {
     send_via(request, &Tap::global()).await
@@ -793,10 +711,8 @@ pub async fn send_via(request: GrpcRequest, tap: &Tap) -> Result<GrpcResponse, S
         .map(|outcome| outcome.response)
 }
 
-/// A unary call's [`GrpcResponse`] and the metadata the server sent with it: on OK the
-/// response headers and trailers (tonic merges them), otherwise the status's metadata — with
-/// `grpc-status`, `grpc-message` and `grpc-status-details-bin` left out, as they are the
-/// response's status fields.
+/// A call's response plus the server's metadata: headers + trailers on OK, else the status
+/// metadata, minus `grpc-status`/`grpc-message`/`grpc-status-details-bin` (status fields).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrpcOutcome {
     pub response: GrpcResponse,
@@ -813,11 +729,8 @@ fn without_status(metadata: &[(String, String)]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The unary call behind [`grpc_send`], recorded on `tap`, returning the server's metadata as
-/// well. With a `limit`, the whole call (dial, reflection, the call itself) must finish within
-/// it; past it the call is abandoned and its Network row settles as an error, never left
-/// pending. The channel's own request timeout is then set past the limit
-/// ([`channel_timeout`]), so a call may take all of it, and the limit is the deadline reported.
+/// The recorded unary call behind [`grpc_send`]. With a `limit`, dial + reflection + call must
+/// finish within it, else the row settles as an error; [`channel_timeout`] sits past the limit.
 pub async fn call(
     request: GrpcRequest,
     tap: &Tap,
@@ -970,10 +883,8 @@ async fn unary(
                 // server, so the row is an error, not a response.
                 flow.fail(format!("{status_name}: {error}"));
             } else {
-                // A status the server sent. tonic parsed `grpc-status`/`grpc-message` out of
-                // the trailers (or the headers of a trailers-only response) and kept the rest
-                // as the status metadata; the row shows them together, as they arrived. The
-                // HTTP status itself is not exposed by tonic and none is invented.
+                // A server-sent status: tonic split out `grpc-status`/`grpc-message` and kept
+                // the rest as metadata; the row shows them together. No HTTP status is invented.
                 let mut trailers = vec![("grpc-status".to_string(), number.to_string())];
                 if !message.is_empty() {
                     trailers.push(("grpc-message".to_string(), message.to_string()));
@@ -1319,13 +1230,8 @@ mod tests {
     }
 
     // ── live-server paths (need a real reflection endpoint) ────────────────────
-    //
-    // Reflection + the unary call require a running gRPC server, so they can't be pure
-    // unit tests. They are verified in the running app against a
-    // throwaway reflection-enabled endpoint. These `#[ignore]`d tests document how to
-    // exercise them manually, e.g.:
-    //   cargo test --manifest-path src-tauri/Cargo.toml grpc -- --ignored --nocapture
-    // pointed at a local server (adjust the endpoint).
+    // `#[ignore]`d; run against a local reflection-enabled server (adjust the endpoint):
+    // `cargo test --manifest-path src-tauri/Cargo.toml grpc -- --ignored --nocapture`.
 
     #[tokio::test]
     #[ignore = "needs a live gRPC reflection server on localhost:50051"]
@@ -1357,22 +1263,13 @@ mod tests {
     }
 
     // ── live TLS smoke: the ONE grpc test that leaves the machine ──────────────
-    //
-    // Both live tests above are `plaintext: true` (h2c on localhost), so **the `grpcs://`
-    // TLS path would have no test at all** — and both the crypto provider (`ring`,
-    // installed in `crate::tls`) and the root store (`with_enabled_roots()`: OS anchors ∪
-    // Mozilla) are deliberate choices underneath it. `#[ignore]`d so `cargo test`/CI stay
-    // hermetic, matching `usage.rs`'s `live_smoke_reads_real_usage_from_the_cli`.
-    // Run after touching any `rustls`/`tonic` feature:
-    //
-    //     cargo test --manifest-path src-tauri/Cargo.toml -- --ignored live_smoke
+    // The only `grpcs://` test (provider + root store); `#[ignore]`d. Run after any rustls/tonic
+    // feature change: `cargo test --manifest-path src-tauri/Cargo.toml -- --ignored live_smoke`.
     #[tokio::test]
     #[ignore = "reaches the public internet over TLS — run with --ignored"]
     async fn live_smoke_grpcs_completes_a_real_tls_handshake() {
-        // grpcb.in's TLS port speaks gRPC + server reflection (`CN=grpcb.in`, a public
-        // chain). Reaching a service list proves the whole TLS path: `ClientTlsConfig`
-        // built with the installed provider, ALPN h2 negotiated, and the peer's chain
-        // validated against our root store.
+        // grpcb.in:9001 speaks gRPC + reflection on a public chain; a service list proves
+        // the provider, ALPN h2 and chain validation against our root store.
         let schema = grpc_reflect("grpcb.in:9001".to_string(), false)
             .await
             .expect(

@@ -1,20 +1,6 @@
-/**
- * The layout store — pane-tree canonicalization, tabs, focus, terminal lifetime.
- *
- * Pane-tree canonicalization is a "highest-value target (test these hardest)",
- * which calls for property-based coverage of exactly these invariants:
- * "sizes sum to 1, no single-child splits, no same-orientation nesting, last
- * leaf survives". This file is where those checks live, re-runnable with the
- * rest of the suite.
- *
- * ── Why `features/terminal` is mocked ────────────────────────────────────────
- * `store.ts` imports `configureTerminal`/`dispose` for effects in its action
- * wrappers. The real module constructs xterm instances, opens PTYs over Tauri
- * IPC and mounts a WebGL renderer — none of which exist (or should) in jsdom.
- * Mocking at that module boundary is both correct unit-testing practice and how
- * we assert the two effects the store owes it: `configureTerminal` on open,
- * `dispose` on close (leak prevention).
- */
+/** The layout store: pane-tree canonicalization (property-tested: sizes sum to 1, no single-child
+ * splits, no same-orientation nesting, last leaf survives), tabs, focus, terminal lifetime.
+ * `features/terminal` is mocked: it needs xterm, PTYs and WebGL; spies prove configure/dispose. */
 
 import fc from "fast-check";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,10 +30,8 @@ const historyIpc = vi.hoisted(() => ({
 }));
 vi.mock("../features/api/historyIpc", () => historyIpc);
 
-// `addBrowseRoot` authorizes a browse root for `read_dir` by pushing
-// it to the persisted recents AND installs the ad-hoc-detection hook for the
-// opened folder — both EFFECTS in the wrapper. Mock the IPC so the
-// spies prove the calls without touching Tauri (both default to resolving).
+// `addBrowseRoot` pushes the root to persisted recents (authorizing `read_dir`) and installs the
+// ad-hoc hook: both effects in the wrapper, proven by these spies.
 const fleetIpc = vi.hoisted(() => ({
   pushRecentProject: vi.fn().mockResolvedValue(undefined),
   ensureAgentHooks: vi.fn().mockResolvedValue(undefined),
@@ -59,10 +43,7 @@ const fleetIpc = vi.hoisted(() => ({
 }));
 vi.mock("../features/fleet/fleetIpc", () => fleetIpc);
 
-// The layout-prefs persistence EFFECT the collapse/order/focus-follows wrappers run
-// (folder order, collapse state + focus-follows-agent). Mock it so a spy proves a
-// mutation persists (and a no-op does NOT) without touching Tauri — the same shape
-// railOrder.test.ts uses.
+// Spies prove a collapse/order/focus-follows mutation persists, and a no-op does not.
 const layoutPrefsIpc = vi.hoisted(() => ({
   loadLayoutPrefs: vi.fn().mockResolvedValue({
     folderOrder: [],
@@ -153,15 +134,8 @@ import {
 const state = (): AppStore => useAppStore.getState();
 const act = () => layoutActions();
 
-/**
- * Let the terminal busy-check settle.
- *
- * Closing a terminal is asynchronous now: the gate asks Rust "is anything
- * running in this?" before it either closes or raises the confirm. Under test
- * `invoke` is unmocked, so `terminalsBusy` catches and resolves `[]` — but it
- * still resolves on a MICROTASK, so a synchronous assertion right after the
- * gesture reads the state from before the answer arrived.
- */
+/** Closing asks Rust whether a terminal is busy first; unmocked `terminalsBusy` resolves `[]` on a
+ * microtask, so assert after this or you read the state from before the answer. */
 const flushBusyGate = () => Promise.resolve().then(() => {});
 
 /** The (only, at boot) leaf. */
@@ -440,28 +414,9 @@ describe("canonicalize", () => {
   });
 
   it("(d) a PARTIAL sizes array gives the missing child exactly 1/children", () => {
-    // Pins the VALUE of `const fallback = 1 / (node.children.length || 1)`.
-    //
-    // The `sizes: []` case above cannot: every weight is then the same number,
-    // and `normalizeSizes` scales any uniform weighting to the same shares —
-    // `1/2` and `1*2` both come out `[0.5, 0.5]`. That test is a blind
-    // sample point for this line (it pins the *equal-shares* rule, which is
-    // what it is for; it just says nothing about the constant).
-    //
-    // A partial array is the only witness, because the fallback then has to
-    // compete with a REAL weight. children = 2, sizes = [0.8]:
-    //   fallback = 1/2 = 0.5  → ratio 0.8 : 0.5 = 1.6   ← correct
-    //   fallback = 1*2 = 2    → ratio 0.8 : 2   = 0.4   (`/` → `*`)
-    //   fallback = 1/1 = 1    → ratio 0.8 : 1   = 0.8   (the `|| 1` divisor
-    //                                                    collapsed to `1`, or
-    //                                                    `||` flipped to `&&`)
-    //   fallback = 1/false = ∞ → clamped to weight 0     → [1, 0]
-    //
-    // (`1 / node.children.length` — dropping only the `|| 1` guard — is an
-    // EQUIVALENT mutant: the guard is dead weight exactly as the sibling
-    // `normalizeSizes` comment argues, because `forEach` never runs its
-    // callback on an empty `children`, so a 0-children split returns `null` at
-    // `children.length === 0` before any `fallback` is ever consulted.)
+    // A partial `sizes` array is the only witness for the fallback 1/children: it must compete with
+    // a real weight (0.8 : 0.5 = 1.6). Dropping only the `|| 1` guard is an equivalent mutant: a
+    // 0-children split returns null before `fallback` is consulted.
     const out = asSplit(
       canonicalize(split("row", [makeLeaf(), makeLeaf()], [0.8])),
     );
@@ -522,14 +477,8 @@ describe("canonicalize", () => {
 
 /* ═════════════════ canonicalize: property-based ═════════════════ */
 
-/**
- * A random tree *shape*. Ids are assigned in `materialize` from a counter, not
- * from the arbitrary, so a shrunk counterexample prints stable, readable ids.
- *
- * Deliberately generates DE-canonical input: single-child splits, same-
- * orientation nesting, size arrays of the wrong length, zero weights. That is
- * the whole point — canonicalize's job is to repair exactly these.
- */
+/** A random tree shape, deliberately de-canonical (single-child splits, same-orientation nesting,
+ * wrong-length sizes, zero weights). Ids come from a counter in `materialize`: stable shrinks. */
 type Shape =
   | { kind: "leaf"; tabs: number }
   | {
@@ -541,13 +490,8 @@ type Shape =
 
 const orientationArb = fc.constantFrom<Orientation>("row", "column");
 
-/**
- * Weights stay in a realistic range. `resizePane`'s documented input is
- * "pixels straight from allotment's onChange, or fractions" — i.e. 0..~1e4.
- * (Weights near `Number.MAX_VALUE` would overflow the sum to Infinity inside
- * normalizeSizes and yield all-zero shares; unreachable from a real viewport,
- * so out of scope here rather than silently asserted as correct.)
- */
+/** Realistic weights (`resizePane` takes pixels or fractions). Near `Number.MAX_VALUE` the sum
+ * overflows to Infinity in normalizeSizes; unreachable from a viewport, so out of scope. */
 const weightArb = fc.double({ min: 0, max: 4000, noNaN: true });
 
 const shapeArb: fc.Arbitrary<Shape> = fc.letrec<{ shape: Shape }>((tie) => ({
@@ -754,15 +698,8 @@ describe("openTerminalTab", () => {
   });
 
   it("strips a RUN of trailing separators, not just the last one", () => {
-    // A blind sample point, not a missing input: the single-separator cases
-    // above ("…/api/", "C:\\…\\proj") are handled IDENTICALLY by a `/[/\\]$/`
-    // regex with no `+`, so they cannot pin the quantifier. Two separators can:
-    // the un-quantified strip leaves "/w/api/", whose `.split(/[/\\]/).pop()`
-    // is "" — falsy — so the title silently degrades to "Terminal N".
-    //
-    // A doubled separator is not exotic: it is what naive path joining
-    // (`${root}/${name}` with a root that already ends in a slash) produces,
-    // and a "Terminal 7" tab where the user expected "api" reads as a bug.
+    // Doubled trailing separators (naive path joins make them) pin the `+` in the strip regex:
+    // without it the basename is "" and the title degrades to "Terminal N".
     const a = act().openTerminalTab({ cwd: "/w/api//" });
     const b = act().openTerminalTab({ cwd: "C:\\proj\\\\" });
     const c = act().openTerminalTab({ cwd: "/w/deep///" });
@@ -1639,10 +1576,8 @@ describe("apiActions — gRPC console", () => {
   });
 
   it("grpcListed validates a selection against ANY service (`.some`, not `.every`)", () => {
-    // The single-service case above cannot tell `.some` from `.every` — both
-    // reduce to the one element. With TWO services, the selection matches only
-    // ONE of them: `.some` keeps it (any service matches), `.every` would wrongly
-    // reset it (not every service matches). This pins the outer quantifier.
+    // Two services, the selection matching one: `.some` keeps it, `.every` would reset it; a single
+    // service cannot tell them apart.
     const multiSchema = {
       services: [
         { name: "a.Alpha", methods: [{ name: "One" }] },
@@ -1883,13 +1818,8 @@ describe("editorActions", () => {
     expect(state().editors["/w/a.ts"].status).toBe("ready");
   });
 
-  /**
-   * The Preview↔Source toggle lives in the STORE, not in `CodeEditor`, because
-   * it is per-TAB state: `Pane` renders only the ACTIVE tab and a cross-pane drag
-   * re-parents the subtree, so a `useState` toggle was reset by every tab switch
-   * and every drag — the user would click "Source", move the tab, and land back
-   * on Preview.
-   */
+  /** The Preview/Source toggle is per-tab store state: `Pane` renders only the active tab and a
+   * drag re-parents the subtree, so component state would reset on every switch or drag. */
   it("setShowSource flips the view toggle, and an unknown path is a no-op", () => {
     ed().initEditor("/w/page.html");
     expect(state().editors["/w/page.html"].showSource).toBe(false);
@@ -2007,16 +1937,8 @@ describe("editorActions", () => {
   });
 
   it("requestCloseTab on an unknown tabId is a total no-op, not a TypeError", () => {
-    // Pins the FIRST factor of the compound guard
-    // `!!tab && tab.ref.kind === "editor" && !!tab.dirty` independently. The
-    // three cases above vary only the tab's *kind/dirtiness*, so they all reach
-    // the guard with `tab` defined — `!!tab` is unobservable there. Forced to
-    // `true`, the very next term dereferences `tab.ref` on `undefined` and the
-    // action throws.
-    //
-    // The stale id is real: Cmd/Ctrl+W and the tab ✕ both route here, so a
-    // double-fire or a shortcut racing a close arrives with a tabId
-    // whose record is already gone. That must do nothing — not crash the shell.
+    // A stale tabId (a double-fire, or a shortcut racing a close) must do nothing; this pins the
+    // `!!tab` factor of the guard, which the cases above never reach with `tab` undefined.
     act().openEditorTab("/w/real.ts"); // some state to prove is untouched
     const before = snapshot(state());
 
@@ -2180,15 +2102,8 @@ describe("revealActiveFile (IntelliJ's crosshair)", () => {
     expect(state().fileReveal).toBeNull();
   });
 
-  // Pressing the reveal button selects the file in the tree, so it is clear
-  // which file is open. This used to assert
-  // `fileReveal` stayed NULL with a terminal active — i.e. the crosshair was dead
-  // the moment you clicked into a terminal, which is the normal state of this
-  // app, and `focusedPaneId` is written by ANY mousedown in ANY pane. The rule
-  // is now `activeFilePath`: the
-  // focused pane wins when it shows a file, otherwise the last file tab activated
-  // anywhere. The assertion that a file-less tab has no path of its OWN is kept
-  // below, where no file tab has ever been opened.
+  // `activeFilePath`: the focused pane wins when it shows a file, else the last file tab activated
+  // anywhere (any mousedown moves focus, and a terminal is usually focused).
   it("falls back to the last file tab when the ACTIVE tab is file-less", () => {
     act().openEditorTab("/w/a.ts");
     act().openTerminalTab(); // …the active tab is now a terminal
@@ -2235,11 +2150,8 @@ describe("revealActiveFile (IntelliJ's crosshair)", () => {
     expect(state().fileReveal?.path).toBe("/w/gazelle/src/lib.rs");
   });
 
-  // The reveal is still posted (the token still bumps, so a
-  // later reveal of the same path still re-fires), but it now carries `root: null`
-  // — the fact that made this case a SILENT no-op before. Every subtree
-  // early-returns on a path outside its root, so the whole user-visible effect
-  // used to be the rail flipping to Files; the tree reads this null and says so.
+  // The reveal still posts (the token bumps so a repeat re-fires) but with `root: null`, so the
+  // tree can say the file is under no open root instead of silently doing nothing.
   it("posts the reveal with root: null when the file is under NO open root", () => {
     ws().addBrowseRoot("/w");
     act().openEditorTab("/elsewhere/x.ts");
@@ -2290,15 +2202,8 @@ describe("activeFilePath (the crosshair's target AND the tree's highlight)", () 
     expect(activeFilePath(state())).toBe("/w/b.ts");
   });
 
-  /**
-   * Added after a SURVIVING MUTANT: deleting `setActiveTab`'s
-   * `noteFileTab` broke nothing, because `setActiveTab` also focuses the pane, so
-   * the clause above is answered by the focused pane and never reaches the
-   * memory. The strip click only matters LATER — once focus leaves for a
-   * file-less pane. Without the write, the rail then snaps back to whichever file
-   * `openEditorTab` happened to record last, i.e. a file the user deliberately
-   * clicked away from.
-   */
+  /** `setActiveTab` must note the file tab even though it also focuses the pane: once focus leaves
+   * for a file-less pane, the rail must show the clicked file, not the last one opened. */
   it("remembers the strip click, not the last file OPENED, once focus leaves", () => {
     act().openEditorTab("/w/a.ts");
     act().openEditorTab("/w/b.ts"); // b.ts is the last file opened
@@ -2369,10 +2274,7 @@ describe("uiActions", () => {
   });
 
   it("switches the right rail's persistent panel through every tab in the union", () => {
-    // The full circuit, not a sample: this test used to exercise only
-    // vault/history/files (never `db` or `tools`). Every member is asserted so a new
-    // tab that the action somehow refused would fail here rather than only in
-    // App-level routing.
+    // Every member is asserted, so a tab the action refused fails here, not only in App routing.
     expect(state().rightRailTab).toBe("files");
 
     for (const tab of ["vault", "history", "collections", "db", "tools", "git"] as const) {
@@ -2630,12 +2532,8 @@ describe("rebuildTerminalTabs (reattach after webview reload)", () => {
     expect(state().selection.selectedAgentId).toBe(agentId);
   });
 
-  /*
-   * An agent's TAB TITLE across a restart. The restart E2E read "workspace" on
-   * the agent's tab before the restart and "claude" after it — its row said "claude"
-   * throughout. Both sides are asserted against the literal folder name the user reads,
-   * never against the store's own helper.
-   */
+  /* An agent's tab title across a restart must stay its folder name, as its row shows. Asserted
+   * against the literal folder name, never the store's own helper. */
   const tabOfAgent = (agentId: string) =>
     Object.values(state().tabs).find((t) => t.ref.kind === "agent-terminal" && t.ref.agentId === agentId);
 
@@ -3155,13 +3053,8 @@ describe("splitPane", () => {
 /* ═════════ the subtle one: split-created empty leaves survive ═════════ */
 
 describe("split-created empty leaves survive unrelated mutations", () => {
-  /**
-   * Pruning is opt-in per call precisely so that `splitPane`'s empty leaf is not
-   * instantly undone by the next canonicalize pass. Every action that
-   * recanonicalizes nominates ONLY the leaf it just emptied, so an unrelated
-   * empty leaf must be untouched. `store.ts` flags this as the trap; these are
-   * the regression guards.
-   */
+  /** Pruning is opt-in per call so `splitPane`'s fresh empty leaf survives: each recanonicalizing
+   * action nominates only the leaf it emptied, so an unrelated empty leaf must be untouched. */
   let empty: PaneId;
   let busy: PaneId;
 
@@ -3202,10 +3095,8 @@ describe("split-created empty leaves survive unrelated mutations", () => {
   });
 
   it("collapses once it has HELD a tab and then loses it", () => {
-    // The distinction that makes pruning opt-in: a split-fresh empty leaf is
-    // kept, but a leaf that *emptied* is nominated by moveTab and collapses.
-    // Same leaf, different history — so this is not a contradiction of the
-    // tests above, it is the other half of the rule.
+    // The other half of opt-in pruning: the same leaf, once emptied by moveTab, is nominated and
+    // collapses.
     const tabId = leafById(busy).tabIds[0];
     act().moveTab(tabId, empty);
     act().moveTab(tabId, busy);
@@ -3424,16 +3315,8 @@ describe("moveTab", () => {
 
 /* ══════════════════════ moveTab — reorder (indexed) ══════════════════════ */
 
-/**
- * `moveTab(tab, pane, index)` doubles as reorder-within-a-pane: same action,
- * because "put this tab in this pane at this position" is one idea, and a tab
- * dragged onto a strip should behave the same whether it came from this pane or
- * the one next door.
- *
- * The index is measured against the strip AS DRAWN (the dragged tab still in
- * it), because that is what the user is looking at when they let go. Every
- * off-by-one lives in that translation, so it is pinned exhaustively below.
- */
+/** `moveTab` also reorders within a pane. The index is measured against the strip as drawn (the
+ * dragged tab still in it), where every off-by-one lives, so it is pinned exhaustively. */
 describe("moveTab — reorder within a pane", () => {
   /** A pane with three tabs, in order. */
   function threeTabs() {
@@ -3592,12 +3475,8 @@ describe("moveTab — indexed insert across panes", () => {
 
 /* ══════════════════════════ moveTabToEdge ══════════════════════════ */
 
-/**
- * Drag a tab onto a pane's edge → that pane splits and the tab lands on that
- * side. The direct-manipulation path to 3+ panes, and the
- * only action that both moves a tab AND restructures the tree in one step —
- * which is exactly why it needs the hardest tests here.
- */
+/** Drop a tab on a pane's edge: that pane splits and the tab lands on that side. The only action
+ * that both moves a tab and restructures the tree, hence the hardest tests. */
 describe("moveTabToEdge", () => {
   it.each([
     ["left", "row", 0],
@@ -3921,12 +3800,8 @@ describe("immutability", () => {
 
 /* ════════════ the headline: random action sequences ════════════ */
 
-/**
- * A command addressed by *index*, resolved against the live tree at execution
- * time. Concrete PaneIds/TabIds cannot be generated up front — they are minted
- * by the very actions under test — so `fc.nat()` indices modulo the current
- * collection are the standard way to keep sequences valid and shrinkable.
- */
+/** A command addressed by index, resolved against the live tree when run: ids are minted by the
+ * actions under test, so `fc.nat()` modulo the collection keeps sequences valid and shrinkable. */
 type Cmd =
   | { t: "openTab"; pane: number; cwd: string | undefined }
   | { t: "closeTab"; tab: number }
@@ -4189,10 +4064,8 @@ describe("property: arbitrary action sequences", () => {
   });
 
   it("reorder is a permutation — same tabs, same pane, same tree, new order", () => {
-    // The reorder-specific risk: `index` is measured against the strip WITH the
-    // dragged tab still in it, so the removal shifts it. An off-by-one there
-    // silently drops or duplicates a tab while every structural invariant still
-    // passes — so assert the multiset directly, per drop.
+    // `index` counts the dragged tab still in the strip, so an off-by-one drops or duplicates a tab
+    // while every structural invariant passes: assert the multiset per drop.
     fc.assert(
       fc.property(
         fc.array(fc.integer({ min: -2, max: 6 }), {
@@ -4284,10 +4157,8 @@ describe("property: arbitrary action sequences", () => {
   });
 
   it("moveTabToEdge conserves tabs — a drag never creates, drops or clones one", () => {
-    // The distinguishing risk of this action: it detaches a tab and re-inserts
-    // it into a leaf that is being built in the same pass. An off-by-one there
-    // loses the tab entirely (or duplicates it into two panes) while every
-    // structural invariant still passes.
+    // The tab is re-inserted into a leaf built in the same pass; an off-by-one loses or duplicates
+    // it while every structural invariant passes.
     fc.assert(
       fc.property(cmdsArb, (cmds) => {
         resetStore();
@@ -4379,12 +4250,8 @@ describe("layoutActions() — the Provider-less handle for bridge.ts", () => {
 });
 
 /* ══════════════════ drop planning + preview geometry ══════════════════
- * The planners are the ONE implementation of "what does this drop do", run by
- * both the actions and the drag preview. That sharing is the fix for the
- * preview bug — the preview used to be drawn as a rectangle inside the
- * hovered pane, which cannot express the source-prune → collapse the drop
- * actually performs. These pin the contract the preview leans on.
- */
+ * The planners are the one "what does this drop do", shared by the actions and the drag preview,
+ * so the preview shows the source-prune collapse the drop really performs. */
 
 describe("fractionalRectOfLeaf — a leaf's share of the work area", () => {
   it("gives the whole container to a lone root leaf", () => {
@@ -4494,10 +4361,8 @@ describe("planDropRect — what the drag preview draws", () => {
   }
 
   it.each([
-    // Dropping the second pane's ONLY tab onto the first pane prunes the second,
-    // collapses the root, and lets the survivor fill the container — so every
-    // landing box spans a full axis. Drawn inside pane `a` these would all be
-    // half as wide: the half-screen preview bug.
+    // Moving the second pane's only tab prunes it and collapses the root, so every landing box
+    // spans a full axis, not half of pane `a`.
     ["left", { left: 0, top: 0, width: 0.5, height: 1 }],
     ["right", { left: 0.5, top: 0, width: 0.5, height: 1 }],
     ["top", { left: 0, top: 0, width: 1, height: 0.5 }],
@@ -4537,13 +4402,8 @@ describe("planDropRect — what the drag preview draws", () => {
     }
   });
 
-  /**
-   * A no-op drop still has an answer, and it is not "nothing". Previewing null
-   * here blanked the overlay for the whole time the cursor sat over the dragged
-   * tab's own pane — the first half of every real gesture, because a hand does
-   * not teleport onto the target (the blue drop highlight went missing
-   * mid-drag). The honest answer: the terminal ends up exactly where it is.
-   */
+  /** A no-op drop previews the box the tab already occupies, not null: the cursor crosses its own
+   * pane first in every real gesture, and null blanked the overlay. */
   it.each(["left", "right", "top", "bottom", "center"] as const)(
     "previews a no-op %s drop as the box the tab already occupies",
     (zone) => {
@@ -4979,10 +4839,8 @@ describe("agentActions — reparenting & orphan adoption (fan-out forest)", () =
   });
 
   it("re-linking an EXISTING agent under its SAME parent preserves child order (guard distinguishes reparent from re-link)", () => {
-    // The reparent guard is `prev !== undefined && prev.parentId !== wire.parentId`.
-    // Forced to `true`, every re-snapshot is treated as a reparent → unlink+relink,
-    // which appends the child to the END of its parent's list. A same-parent
-    // re-snapshot must therefore NOT reorder siblings.
+    // The reparent guard forced true would unlink+relink every re-snapshot, appending the child
+    // to the end; a same-parent re-snapshot must not reorder siblings.
     startRoot("boss");
     spawnKid("boss", "a");
     spawnKid("boss", "b");
@@ -5084,10 +4942,8 @@ describe("closeTabs — active-tab reselection (detachTabFromDraftLeaf)", () => 
     });
 
   it("closing the ACTIVE tab hands activation to the RIGHT neighbour (Math.min), not the far end (Math.max)", () => {
-    // Reach `detachTabFromDraftLeaf` via the batch close path: dismissing a
-    // sub-agent closes its read-only activity tab through `closeTabs`. Four
-    // activity tabs share one leaf; the active one is at index 1 with survivors on
-    // BOTH sides — the only layout where Math.min(i, len-1) and Math.max diverge.
+    // Dismissing a sub-agent closes its activity tab via `closeTabs`. Active tab at index 1 with
+    // survivors on both sides: the only layout where Math.min(i, len-1) and Math.max diverge.
     startRoot("boss");
     spawnKid("boss", "a");
     spawnKid("boss", "m");
@@ -5341,18 +5197,8 @@ describe("focus follows agent", () => {
 });
 
 /* ══════════ resizePane: sizesEqual's no-op guard (mutation testing) ══════════
- *
- * `sizesEqual(a, b)` is `a.length === b.length && a.every(|n,i| |n-b[i]| < EPS)`
- * and its only caller is `resizePane`, which drops the whole resize when it says
- * "equal". So the guard is observable exactly one way: did the resize land?
- *
- * The existing `resizePane` suite above only ever drives a TWO-child split, and
- * that arity is structurally blind to `.every` → `.some`: after
- * `normalizeSizes` both arrays sum to 1, so `a0 === b0` forces `a1 === b1` —
- * "one element matches" is unreachable with two children. Three children is the
- * smallest shape where the two quantifiers can disagree at all (the input
- * *shape* was the blind spot, not the assertion).
- */
+ * `sizesEqual` decides whether a resize is dropped. With two children (sizes sum to 1) `.every`
+ * and `.some` cannot disagree; three children is the smallest shape that pins the quantifier. */
 
 describe("resizePane — sizesEqual (drop-the-no-op guard)", () => {
   /** mirrors SIZE_EPSILON in store.ts, which is module-private. */
@@ -5373,11 +5219,8 @@ describe("resizePane — sizesEqual (drop-the-no-op guard)", () => {
   });
 
   it("applies a resize in which exactly ONE component is unchanged", () => {
-    // From [0.25, 0.25, 0.5] to [0.25, 0.3, 0.45]: element 0 is identical,
-    // elements 1 and 2 move by 0.05 (500× the epsilon).
-    //   `.every` (correct) → "not all equal" → the drag is applied.
-    //   `.some`  (mutant)  → element 0 matches → "equal" → the drag is DROPPED
-    //                        and the sash snaps back mid-gesture.
+    // [0.25, 0.25, 0.5] → [0.25, 0.3, 0.45]: element 0 matches, so `.some` would call it equal and
+    // drop the drag; `.every` applies it.
     act().resizePane(splitId, [250, 300, 450]); // pixels, as allotment emits
 
     const sizes = asSplit(state().layout).sizes;
@@ -5388,15 +5231,8 @@ describe("resizePane — sizesEqual (drop-the-no-op guard)", () => {
   });
 
   it("applies a resize whose largest delta is EXACTLY the epsilon (`<`, not `<=`)", () => {
-    // The `<` → `<=` boundary needs a delta that is bit-for-bit the double
-    // `1e-4`. Arithmetic like `0.5001 - 0.5` will NOT do — it yields
-    // 9.999999999999999e-5, strictly below the epsilon, so both operators agree
-    // and the test would be a silent no-op.
-    //
-    // Constructed so `normalizeSizes` is exact: the weights sum to 2 (a power of
-    // two, so every division is a bare exponent decrement, no rounding), and
-    // `2 * 1e-4` is itself exact. Both totals are
-    // exactly 2 and the resulting deltas are `=== 1e-4`.
+    // The `<` vs `<=` boundary needs a delta of exactly 1e-4 (`0.5001 - 0.5` is just below it):
+    // the weights sum to 2, a power of two, so normalizeSizes divides exactly.
     const w1 = 2 * SIZE_EPSILON; // 2e-4, exact
     const w0 = 2 - w1; // rounds, but w0 + w1 + 0 === 2 exactly
 
@@ -5432,15 +5268,8 @@ describe("resizePane — sizesEqual (drop-the-no-op guard)", () => {
 });
 
 /* ══════════ closeTabs: the batch prune set (mutation testing) ══════════
- *
- * `closeTabs` is the BATCH close path — dismissing an agent sweeps every removed
- * sub-agent's read-only activity tab in one commit — and it builds its own
- * `emptied` prune set rather than reusing the single-tab `pruneIfEmpty`. The
- * neighbouring test at "closing the ACTIVE tab hands activation to the RIGHT
- * neighbour" reaches this function but keeps every tab in ONE leaf, so the prune
- * set is never observable there: with a single leaf there is no split to
- * collapse and `canonicalize` keeps a lone root leaf regardless (rule e).
- */
+ * The batch close (dismissing an agent sweeps its sub-agents' activity tabs) builds its own
+ * `emptied` set, observable only with tabs spread over several leaves. */
 
 describe("closeTabs — the batch prune set", () => {
   const fleet = () => useAppStore.getState().agentActions;
@@ -5468,20 +5297,14 @@ describe("closeTabs — the batch prune set", () => {
       });
     }
 
-    // Leaf A holds EXACTLY ONE batch tab. That arity is load-bearing and was
-    // measured, not assumed: a leaf holding TWO batch tabs cannot distinguish
-    // `=== 0` from `!== 0`, because the mutant adds it to `emptied` on the first
-    // detach (when one tab is still left) and a `Set` makes the miss on the
-    // second detach invisible. Only a single-tab leaf is ever "non-empty after a
-    // detach"-free, so only it exposes the flipped comparison.
+    // Leaf A holds exactly one batch tab: with two, the `=== 0` → `!== 0` mutant still adds the
+    // leaf on the first detach and the Set hides the miss.
     const leafA = rootLeaf().id;
     fleet().selectAgent(aid("k1"));
     expect(leafById(leafA).tabIds).toHaveLength(1);
 
-    // Leaf B holds TWO batch tabs — kept in the witness so the test also covers
-    // the ordinary multi-tab drain, and so the reason `→ true` is an EQUIVALENT
-    // mutant is visible here: a non-empty leaf may be nominated freely because
-    // `canonicalize` re-checks `tabIds.length === 0` before pruning anything.
+    // Leaf B holds two batch tabs: the ordinary drain. `→ true` is an equivalent mutant because
+    // `canonicalize` re-checks `tabIds.length === 0` before pruning.
     const leafB = act().splitPane(leafA, "row");
     fleet().selectAgent(aid("k2"));
     fleet().selectAgent(aid("k3"));
@@ -5498,11 +5321,8 @@ describe("closeTabs — the batch prune set", () => {
     // One commit closes all four activity tabs (the root cascade).
     fleet().dismissAgent(aid("boss"));
 
-    // Leaves A and B must both be in `emptied`, so canonicalize drops them
-    // (rule c) and the now-single-child split collapses into leaf C (rule a).
-    //   `!== 0`  → leaf A is never nominated and survives as a blank pane.
-    //   `false`  → nothing is nominated; all three panes survive.
-    // Either way the layout stays a split the user must tidy up by hand.
+    // A and B are both in `emptied`, so canonicalize drops them (rule c) and the single-child
+    // split collapses into C (rule a); either mutant leaves a split for the user to tidy.
     expect(state().layout.type).toBe("leaf");
     expect(state().layout.id).toBe(leafC);
     expect(leafById(leafC).tabIds).toEqual([term]);
@@ -5513,11 +5333,7 @@ describe("closeTabs — the batch prune set", () => {
 });
 
 /* ══════════ adoptOrphans: null-safety on the root list (mutation testing) ══════════
- *
- * The adoption *outcome* is pinned by the two tests in "reparenting & orphan
- * adoption" above. What was not pinned is that the predicate cannot THROW while
- * scanning the root list.
- */
+ * The adoption outcome is pinned above; this pins that scanning the root list cannot throw. */
 
 describe("adoptOrphans — a phantom root must not break adoption", () => {
   const fleet = () => useAppStore.getState().agentActions;
@@ -5536,13 +5352,8 @@ describe("adoptOrphans — a phantom root must not break adoption", () => {
       runtime: "claude-code",
     });
 
-    // Inject a dangling root id — the same shape the focus-follows-agent test
-    // "skips a phantom root id (in rootAgentIds but no agent record)" already
-    // guards for `collapseAllBut`. Placed FIRST so the predicate meets it before
-    // the real orphan: without the `?.`, `s.agents["phantom"].parentId` throws a
-    // TypeError inside the producer and the arriving parent's whole event is
-    // lost — a dropped `agent_started` means an invisible agent (the failure
-    // mode hydrateAgent's self-parent normalization exists to avoid).
+    // A dangling root id first: without the `?.` the predicate throws inside the producer and the
+    // parent's whole `agent_started` is lost, leaving an invisible agent.
     useAppStore.setState((s) => {
       s.rootAgentIds = [aid("phantom"), ...s.rootAgentIds];
     });
@@ -5573,30 +5384,11 @@ describe("adoptOrphans — a phantom root must not break adoption", () => {
 
 /* ══════════════════════════════ views ══════════════════════════════ */
 
-/**
- * Views: a bar entry holds a WHOLE layout of panes (the iTerm2/tmux window
- * model), and switching between them must not cost the user a running agent.
- *
- * The three seams these tests exist for — the ones that can actually be wrong:
- *   1. the **write-back on switch** (`layout`/`focusedPaneId` are the live
- *      fields of the active view; `views[active]` is a stale snapshot until a
- *      switch refreshes it). Get the order wrong and a layout is silently lost.
- *   2. `moveTabToView` **not touching `tabs`** — the tab object identity and its
- *      `TerminalId` are what keep the PTY and its scrollback alive across a move.
- *   3. **orphan-freedom in both directions**: no record in `tabs` without a pane
- *      in some view, and no tab id in a view's tree without a record.
- *
- * `assertLiveStoreInvariants` is deliberately NOT used here: its orphan check
- * reads only the ACTIVE tree, so a tab legitimately parked in another view reads
- * as an orphan to it. `assertNoOrphans` below is the view-aware version.
- */
+/** Views: each holds a whole pane layout; switching must not cost a running agent. Seams: the
+ * write-back on switch (`views[active]` is stale), `moveTabToView` keeping tab identity, and no
+ * orphans across views (`assertNoOrphans`; the live-store check sees only the active tree). */
 describe("views — one bar entry, one whole layout", () => {
-  /**
-   * `resetStore()` (src/test/store-harness.ts) predates views and does not reset
-   * them, so re-seed the bar around the freshly reset layout. Without this, a
-   * view created by one test leaks into the next — exactly the class of stale
-   * state that harness file's own comments keep warning about.
-   */
+  /** `resetStore()` does not reset views, so re-seed the bar or a view leaks into the next test. */
   const resetViews = (): void => {
     useAppStore.setState((s) => {
       const view = {
@@ -5818,11 +5610,8 @@ describe("views — one bar entry, one whole layout", () => {
   });
 
   it("closing a tab leaves the inactive views that do not hold it as the SAME snapshot", () => {
-    // The sweep runs over every inactive view, so most closes visit views that
-    // have nothing to do with the tab. Rewriting one of those would be a silent
-    // cost, not a silent no-op: Immer mints a new snapshot AND a new `views`
-    // array, waking every `views`-subscribed selector (the bar, its counts) for a
-    // view the user never touched.
+    // The sweep visits unrelated inactive views; rewriting one would mint a new snapshot and
+    // `views` array, waking every `views` selector for a view the user never touched.
     const parked = act().createView();
     const kept = act().openTerminalTab(); // lives in the parked view
     act().activateView(state().views[0].id);
@@ -5857,11 +5646,8 @@ describe("views — one bar entry, one whole layout", () => {
   /* ──────────────────────────── moveTabToView ──────────────────────────── */
 
   it("re-opening a tab that lives in ANOTHER view switches to that view", () => {
-    // The rail and the file tree are the reason this exists: activating a tab whose
-    // terminal/editor you had moved to another view used to do NOTHING, because the scan walked
-    // only the live tree and returned silently. A click that no-ops is indistinguishable from a
-    // broken rail. Driven here through openEditorTab's dedupe, the same `activateTab` seam the
-    // agent rail uses.
+    // Activating a tab parked in another view must switch to it; a no-op click looks like a broken
+    // rail. Driven through openEditorTab's dedupe, the `activateTab` seam the agent rail uses.
     const stay = act().openTerminalTab();
     const moved = act().openEditorTab("/w/moved.ts");
     const other = act().createView();
@@ -5887,11 +5673,7 @@ describe("views — one bar entry, one whole layout", () => {
   });
 
   it("walks PAST the views that do not hold the tab, to the one that does", () => {
-    // Three deep, with the tab parked in the LAST view. With only two views (the
-    // active one plus the holder) the cross-view scan can be wrong and still look
-    // right: "switch to the first view that is not this one" passes. Here that
-    // rule would land the user in an empty "middle" view and leave the tab
-    // they clicked as far away as it started.
+    // Three views, the tab in the last: with two, "switch to the first other view" passes by luck.
     const stay = act().openTerminalTab();
     const moved = act().openEditorTab("/w/moved.ts");
     const middle = act().createView(); // holds nothing — must be stepped over

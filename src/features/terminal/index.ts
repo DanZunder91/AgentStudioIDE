@@ -1,10 +1,5 @@
-/**
- * Public surface of the terminal feature (ARCHITECTURE §4).
- *
- * React side:      <TerminalView terminalId={id} /> — that's the whole UI.
- * Imperative side: the registry owns instance lifetime; call dispose() when a
- *                  tab is closed for good (unmount only detaches).
- */
+/** Public surface (ARCHITECTURE §4): <TerminalView/> is the UI; the registry owns instance
+ * lifetime, so call dispose() when a tab closes for good (unmount only detaches). */
 
 export { TerminalView } from "./TerminalView";
 export type { TerminalViewProps } from "./TerminalView";

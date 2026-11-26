@@ -1,18 +1,5 @@
-/**
- * The TREE seam: store ⇄ `<DbTree/>` ⇄ `db_children` / the saved-query commands, driven for
- * real, with only the IPC edge mocked.
- *
- * 🔴 This file exists because the thing it tests had already happened. `db_children`,
- * `db_saved_queries`, `db_saved_query_upsert` and `db_saved_query_delete` were registered in
- * `src-tauri/src/lib.rs`, covered by Rust tests, and live-tested against a real PostgreSQL —
- * and the rail rendered a paragraph apologising for not having a tree, while `dbIpc.ts`'s
- * header still asserted the commands did not exist. Two 100%-covered halves, no feature. So the
- * assertions below are deliberately about the JOIN: which command was called, with which arguments, how many times, and what the user can
- * then read on screen.
- *
- * Not a unit test, and it does not pretend to be. The real store, the real reducers, the real
- * component, the real pure logic — one mock, at the wire.
- */
+/** Store ⇄ `<DbTree/>` ⇄ `db_children` and the saved-query commands, with only the IPC edge
+ * mocked: the assertions are about the join (which command, which args, how often, what shows). */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -95,11 +82,7 @@ const TRACKS: DbTreeNode = {
   expandable: true,
 };
 
-/**
- * A schema a `CREATE SCHEMA` has just added. It exists only in the SECOND round of answers,
- * so a row that says `legacy` on screen is proof the level was read again — not proof that a
- * call was counted.
- */
+/** Only in the second round of answers, so `legacy` on screen proves the level was re-read. */
 const LEGACY_SCHEMA: DbTreeNode = {
   nodeRef: { kind: "schema", database: "maestro", name: "legacy" },
   label: "legacy",
@@ -108,16 +91,8 @@ const LEGACY_SCHEMA: DbTreeNode = {
   expandable: true,
 };
 
-/**
- * What a `CREATE TABLE` actually comes back as — **`affected`, with ZERO rows affected**.
- *
- * Not invented, and not read off the frontend's own types: `src-tauri/src/db/engine.rs`
- * classifies any statement that returned no rows and is not row-returning as `Affected`, and
- * `db_live.rs`'s `ddl_on_postgres_is_an_affected_result_with_zero_rows` pins it against a real
- * PostgreSQL. This shape is the reason the trigger keys on the KIND and never on
- * `rowsAffected > 0` — DDL is exactly the statement that affects no rows, and DDL is what
- * exposed the bug.
- */
+/** DDL comes back `affected` with zero rows (pinned on PostgreSQL in `db_live.rs`), which is why
+ * the refresh trigger keys on the kind, never on `rowsAffected > 0`. */
 const CREATE_TABLE_RESULT: DbResultSet = {
   kind: "affected",
   statement: "CREATE SCHEMA legacy",
@@ -165,12 +140,8 @@ function mount(sessionId: string | null = SID, family = "postgres" as const) {
   );
 }
 
-/**
- * The store state `runDbQuery` needs before it will send anything: the connection record (for
- * its row limit) and an OPEN session. Spelled out here rather than driven through
- * `<DbPanel/>` — the subject of these tests is what a completed run does to the TREE, and
- * mounting a panel to get there would put a second component between the write and the claim.
- */
+/** Seeds the connection and an open session directly; mounting `<DbPanel/>` would put a second
+ * component between the write and the tree claim. */
 function connected(): void {
   useAppStore.setState((s) => {
     s.dbConnections = [
@@ -245,11 +216,8 @@ describe("the lazy expand", () => {
   });
 
   it("🔴 re-expanding is FREE — a collapse and re-open issues no second call", async () => {
-    // `mockResolvedValue` (not `…Once`) for the second level ON PURPOSE: if the cache check
-    // were removed, a `…Once` chain would run dry and this test would fail with a crash inside
-    // the render instead of with the call COUNT — which is the thing being claimed. Verified by
-    // deleting the check: it now reports `expected "dbChildren" to be called 2 times, but got
-    // 3 times`.
+    // `mockResolvedValue`, not `…Once`, for the second level: without the cache check a `…Once`
+    // chain would run dry and crash instead of failing on the call count being claimed.
     ipc.dbChildren.mockResolvedValueOnce([DATABASE]).mockResolvedValue([SCHEMA]);
     mount();
     await waitFor(() => expect(row("maestro")).toBeInTheDocument());
@@ -426,12 +394,8 @@ describe("a failed expand", () => {
   });
 
   it("🔴 Retry sends the SAME ref, not the root's — the failed level, not the tree", async () => {
-    // The version of this that shipped first looked the ref up from the cache key, and its
-    // "not found" branch was unreachable through any click (a failure note only renders inside
-    // its parent's expanded subtree, so the parent is cached by construction). The ref is now
-    // threaded down as the render recurses, and this is the assertion that it is the RIGHT one:
-    // a lookup that fell back to `{kind:"root"}` would reload the top of the tree and leave the
-    // broken level exactly as broken, with the button looking like it worked.
+    // The ref is threaded down as the render recurses; a lookup falling back to `{kind:"root"}`
+    // would reload the top and leave the broken level broken.
     ipc.dbChildren
       .mockResolvedValueOnce([DATABASE])
       .mockResolvedValueOnce([SCHEMA])
@@ -680,18 +644,8 @@ describe("the Saved queries node", () => {
 
 /* ───────────── 🔴 the tree after a WRITE — the stale-cache bug ───────────── */
 
-/**
- * **The bug:** an edit to the database was not reflected in the tree until the
- * view was changed. `dbTrees` cached every level it had ever read, three places deleted the whole
- * record (delete-connection, disconnect, `clearDbTree`) and **running a statement was not one
- * of them** — so a `CREATE`/`DROP`/`ALTER` left the rail showing the shape it first loaded.
- *
- * Every test here drives the real store, the real component and the real reducers, with only
- * `dbIpc` mocked. The claims are deliberately about the SCREEN (`legacy` appears; `public` is
- * still there) and not only about call counts: a count can be satisfied by a tree that threw
- * the user's expansion away and rebuilt it, which is the fix that would have been worse than
- * the bug.
- */
+/** `dbTrees` caches every level it reads, so a run that wrote must invalidate it. Claims are on
+ * the screen, not just call counts, which a tree that discarded the expansion would also meet. */
 describe("a run that WROTE refreshes the tree", () => {
   /** Root and `maestro` both read and both open — two levels on screen. */
   async function twoLevelsOpen(): Promise<void> {
@@ -792,12 +746,7 @@ describe("a run that WROTE refreshes the tree", () => {
     expect(ipc.dbChildren).toHaveBeenCalledTimes(2);
   });
 
-  /**
-   * Which result mixes count as "the database changed".
-   *
-   * The expectation column is written by hand, never derived from the results —
-   * a table that computed `invalidates` from `kind` would be the implementation twice.
-   */
+  /** The expectation column is hand-written, never derived from `kind`. */
   const TRIGGER_CASES: Array<{ what: string; results: DbResultSet[]; invalidates: boolean }> = [
     { what: "a CREATE, which affects zero rows", results: [CREATE_TABLE_RESULT], invalidates: true },
     {
@@ -856,13 +805,8 @@ describe("the tree store slice, on the paths a gesture cannot reach", () => {
       };
     });
 
-    // The tree goes off screen with the row: `<DbPanel/>` renders `<DbTree/>` only for a
-    // connection that HAS a session record, and `closeDbSession` deletes that record in its
-    // first `set`. Unmounting here is not test convenience — a MOUNTED tree
-    // re-reads any level that is `idle` (`<IdleLevel/>`, the half of the stale-cache fix that
-    // makes a refresh possible), so leaving it up with a now-dead session id in its props
-    // would have it correctly re-fetch a level the disconnect had just dropped. That is a
-    // state the panel cannot produce.
+    // Unmount first, as the panel does: a mounted tree re-reads any `idle` level, so with a dead
+    // session id in its props it would re-fetch the level the disconnect just dropped.
     cleanup();
     await state().dbActions.closeDbSession(CID);
 
@@ -906,10 +850,8 @@ describe("the tree store slice, on the paths a gesture cannot reach", () => {
 
     state().dbActions.refreshDbTree(CID);
 
-    // `loading` is deliberately untouched. Clearing it would let a second call start beside
-    // the first — two catalogue queries for one refresh, and a last-writer-wins race between
-    // them. ⚠️ The known cost of that choice, recorded rather than hidden: the call already on
-    // the wire lands with its PRE-write answer, which the manual Refresh is the escape from.
+    // `loading` stays set so a second call can't race the first. Known cost: the in-flight call
+    // lands with its pre-write answer; manual Refresh is the escape.
     expect(state().dbTrees[CID]?.loading[ROOT_KEY]).toBe(true);
     release([DATABASE]);
     await inFlight;
@@ -953,20 +895,8 @@ describe("the tree store slice, on the paths a gesture cannot reach", () => {
 
 /* ─────────────── drag a table to sort it ─────────────── */
 
-/**
- * Tables can be moved into any order the user chooses, for example turning A,B,C into C,B,A.
- *
- * The suite is jsdom, like the five DnD suites that came before it, and it therefore leans on
- * `src/test/dnd.ts` for every event: jsdom implements no `DragEvent`, so RTL falls back to a
- * plain `Event` and silently drops `relatedTarget` — which would make the `dragleave` guard's
- * test pass without the guard existing. The real-pixel half (does the cursor actually pick the
- * row up) belongs to the browser tier and to a look in the running app.
- *
- * Everything below drives the REAL store: the component's job is to call `moveDbTreeNode` with
- * the right level and the right two labels, and the assertions are on what that produced — the
- * arrangement in the store, the write on the wire, and the order of the rows on screen. A spy
- * on the action would prove the first of those three and none of the others.
- */
+/** jsdom has no `DragEvent`, so events come from `src/test/dnd.ts` (RTL drops `relatedTarget`).
+ * Assertions are on the real store, the wire and the rows on screen, not on an action spy. */
 
 /** The centre-pane tab drag — a table row must ignore it (distinct MIMEs). */
 const TAB_DND_MIME = "application/x-agentstudio-tab";
@@ -1002,14 +932,8 @@ const table = (name: string): DbTreeNode => ({
 const labels = (): (string | null)[] =>
   screen.getAllByTestId("db-tree-row").map((el) => el.getAttribute("data-label"));
 
-/**
- * Mount with the Tables group at the ROOT level and open it.
- *
- * The group is answered as a root child rather than reached through database → schema, and
- * that is not a shortcut around the hierarchy: this component hardcodes no shape (its own
- * header, and `tree.rs`'s), so the four levels of clicking would exercise the same one
- * `renderLevel` these tests are about while costing four more `mockResolvedValueOnce`s.
- */
+/** The Tables group at the root level: the component hardcodes no shape, so this exercises the
+ * same `renderLevel` without four levels of clicking. */
 async function openTables(tables: DbTreeNode[] = ["alpha", "beta", "gamma"].map(table)) {
   ipc.dbChildren.mockResolvedValueOnce([TABLES_GROUP]).mockResolvedValueOnce(tables);
   mount();

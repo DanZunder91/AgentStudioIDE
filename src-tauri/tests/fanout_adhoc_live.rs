@@ -1,16 +1,6 @@
-//! **Ad-hoc fan-out, end to end** (the path that failed): a `claude` typed
-//! into a plain terminal, detected via the `SessionStart` hook, whose sub-agents
-//! must appear in the rail.
-//!
-//! The `+`-spawn path worked; ad-hoc did not. The two call
-//! `start_fanout_tailer` from different places (spawn vs `on_session_start`). This
-//! drives the **ad-hoc path** (`deliver_hook` → `create_adhoc_root` → tailer) over
-//! an incomplete real-shaped session (root `.jsonl` ABSENT, sub-agents as
-//! `.meta.json` only — what a running claude actually leaves on disk) and asserts
-//! the sub-agents reach the sink. Same root cause as the `+` incomplete case: the
-//! old `locate` required the root file. Fails against it, passes with locate-by-dir.
-//!
-//! Own binary (sets `HOME`).
+//! Ad-hoc fan-out end to end: `deliver_hook` → `create_adhoc_root` → tailer, over a running
+//! session's shape (no root `.jsonl`, sub-agent `.meta.json` only), whose sub-agents must
+//! reach the sink. Own binary (sets `HOME`).
 
 mod common;
 
@@ -68,12 +58,8 @@ async fn an_adhoc_claude_delivers_its_subagents_to_the_rail() {
     // claude's OWN session id (a real UUID it generates — not minted by us).
     let session = "c0ffee00-0000-4000-8000-000000000007";
 
-    // Lay the session on disk exactly as a real, still-running claude does
-    // (measured against a real session): the sub-agents' `.meta.json` are present but
-    // the root `<session>.jsonl` is NOT (yet) written. The old locate required the
-    // root file and returned None here, so the ad-hoc tailer delivered nothing —
-    // this is the ad-hoc bug. `locate_transcript` now anchors on the
-    // `<session>/` directory instead.
+    // As a running claude leaves it (measured): sub-agent `.meta.json` present, root
+    // `<session>.jsonl` not yet written; `locate_transcript` anchors on the `<session>/` dir.
     let project = home.join(".claude/projects/-proj");
     let subagents = project.join(session).join("subagents");
     std::fs::create_dir_all(&subagents).unwrap();

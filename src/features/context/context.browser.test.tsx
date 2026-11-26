@@ -1,27 +1,6 @@
-/**
- * Layer 5 — the context-window card's geometry, in real pixels.
- *
- * jsdom can check that a segment CARRIES `width: 25.79%`; only a layout engine can say
- * the segment IS 25.79% of the bar, that the flex row did not shrink or grow it, that
- * the compaction marker lands where the hatched buffer starts, that the grid really is
- * 20 columns × 10 rows, and that a narrow pane wraps the legend instead of scrolling
- * sideways. Those are the claims measured here.
- *
- * The reading is the harness's canned `context_usage` answer (a sample 290.7k of
- * 1m), so this file also proves the browser-tier mock is registered: an un-stubbed
- * command throws by design, and the card would render its error sentence instead.
- *
- * Falsified (each mutation applied, seen red, reverted by its inverse edit):
- * `.context-bar { position: static }` → the marker test (the marker escapes to the
- * host's coordinate space); grid columns `12px` instead of `minmax(0, 12px)` → the
- * 160 px grid case overflows; `.context-legend { flex-wrap: nowrap }` → the narrow
- * card scrolls sideways. NOT a falsifier, recorded so nobody claims it: `.context-bar__seg
- * { flex: 1 1 auto }` stays green, because a real reading's widths sum to ~100% and
- * leave no slack to distribute — the `flex: 0 0 auto` is insurance for a reading whose
- * rows do not add up to the window.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/context/context.browser.test.tsx`
- */
+/** Real-pixel geometry jsdom can't check: segment widths, marker position, the 20x10 grid, legend
+ * wrapping. Uses the harness's canned context_usage, which also proves that mock is registered.
+ * Browser tier: run with --config vitest.browser.config.ts. */
 
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

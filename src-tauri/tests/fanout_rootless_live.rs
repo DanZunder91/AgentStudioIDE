@@ -1,11 +1,6 @@
-//! **The rootless bug, end to end**: a spawned agent whose runtime writes only
-//! `<session>/subagents/*.meta.json` (no root `<session>.jsonl`, no sub-agent
-//! `.jsonl`) — exactly what a real `--session-id` `claude` leaves on disk while
-//! running — must still deliver its sub-agents to the rail.
-//!
-//! Before the locate-by-directory fix, `locate_transcript` returned `None` for this
-//! shape, so the tailer spun forever and emitted nothing. In its own binary (sets
-//! `HOME`).
+//! A spawned agent whose runtime writes only `<session>/subagents/*.meta.json` (as a running
+//! `--session-id` `claude` does) must still deliver its sub-agents to the rail. Own binary
+//! (sets `HOME`).
 
 mod common;
 

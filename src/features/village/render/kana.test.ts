@@ -1,20 +1,11 @@
-/**
- * The shop signs' pixel kana (render/kana.ts) — the art pinned glyph by glyph, the drawing rules it
- * follows proven as properties, and `kanaText`'s layout of every word a sign may spell (neon
- * signs for ramen and soba in katakana, sushi in hiragana).
- *
- * Real pixels (a canvas, through the engine's snapping `rect`) are kana.browser.test.tsx's job.
- */
+/** Real pixels (a canvas, through the snapping `rect`) are kana.browser.test.tsx's job. */
 
 import { describe, expect, it } from "vitest";
 
 import { SIGN_WORDS } from "./backdrop";
 import { KANA_CHARS, KANA_H, KANA_W, kanaText, type Run } from "./kana";
 
-/**
- * The art, hand-checked against the system font on the contact sheet — a pixel
- * changed here or in kana.ts is a glyph redrawn, so it has to be redrawn in both.
- */
+/** Hand-checked against the system font: a pixel changed here or in kana.ts must change in both. */
 const ART: Readonly<Record<string, readonly string[]>> = {
   ラ: [".XXXXXX.", "........", "XXXXXXXX", ".......X", "......X.", ".....X..", "...XX...", "XXX....."],
   メ: ["......X.", "......X.", ".....X..", "..X.X...", "...X....", "..X.X...", ".X...X..", "X......."],

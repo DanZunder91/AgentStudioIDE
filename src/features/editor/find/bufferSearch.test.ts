@@ -1,10 +1,4 @@
-/**
- * bufferSearch — jsdom tests for the extension's keymap wiring.
- *
- * The bindings live in a CM6 keymap (the editor is a
- * contenteditable, so Cmd/Ctrl+F must be intercepted inside CM with
- * preventDefault). jsdom's navigator is non-Mac, so Mod == Ctrl here.
- */
+/** jsdom's navigator is non-Mac, so Mod == Ctrl here. */
 
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { getSearchQuery, search, searchPanelOpen } from "@codemirror/search";
@@ -91,21 +85,14 @@ describe("Mod-f", () => {
   });
 
   it("openFindPanel degrades gracefully on a view running a foreign search panel", () => {
-    // openFindPanel is a public Command. On a view configured with the stock
-    // CM search() panel instead of bufferSearch(), it must still open that
-    // panel and return true — there is no `.find-bar` input to focus, so the
-    // focus/select-all step is skipped and left to the foreign panel's mount.
+    // With the stock CM search() panel there is no `.find-bar` input, so the focus step is skipped.
     h = makeView("abc", search());
     expect(openFindPanel(h.view)).toBe(true);
     expect(searchPanelOpen(h.view.state)).toBe(true);
     expect(barOf(h.view)).toBeNull(); // stock panel, not ours
   });
 
-  /* ── the shared rule ───────────────────────────────────────────────────────
-     `selectionSeed.ts` now owns what may seed a bar, for all six surfaces. The
-     editor's behaviour did not change — these pin the two REJECTIONS the old
-     inline version did with doc-position arithmetic, so the refactor that made
-     the rule shared cannot quietly widen it here. */
+  /* The shared rule (`selectionSeed.ts`): pin the two rejections so sharing it cannot widen it. */
 
   it("a MULTI-LINE selection leaves the query UNTOUCHED — not cleared", () => {
     const view = make("alpha\nbeta");

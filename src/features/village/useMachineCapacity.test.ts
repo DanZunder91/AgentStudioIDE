@@ -1,9 +1,3 @@
-/**
- * `useMachineCapacity` — reads `machine_capacity` now and every CAPACITY_POLL_MS, only while
- * enabled; keeps the last good sample through a failure; never overlaps two reads; stops on
- * disable / unmount and drops a reply that lands after.
- */
-
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

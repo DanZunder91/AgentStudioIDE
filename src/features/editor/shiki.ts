@@ -1,13 +1,6 @@
-/**
- * Shiki highlighter — the engine behind the editor's colors (M4).
- *
- * ONE shared highlighter, created lazily, with Shiki's **pure-JS RegExp engine**
- * (no WebAssembly, no web workers — a hard WebKitGTK constraint),
- * in `forgiving` mode so an exotic grammar rule degrades that one rule rather than
- * throwing. Grammars are **lazy-imported per language** (`@shikijs/langs/<id>`),
- * which Vite emits as a separate async chunk each — the base bundle preloads none.
- * Two themes ship eagerly: a dark "terminal" default + a light companion.
- */
+/** One lazy shared highlighter on Shiki's pure-JS RegExp engine (no WASM or workers: WebKitGTK),
+ * `forgiving` so a bad rule degrades alone. Grammars load per language as async chunks; two
+ * themes ship eagerly. */
 
 import { bundledLanguages, type BundledLanguage } from "shiki";
 import { createHighlighterCore, type HighlighterCore } from "shiki/core";
@@ -32,17 +25,11 @@ export function highlighter(): Promise<HighlighterCore> {
 
 const loaded = new Set<string>();
 
-/**
- * Ensure a grammar is loaded, lazily importing its async chunk on first use.
- * Returns false when the grammar can't be loaded (unknown id / import failure) —
- * the caller then renders plaintext instead of throwing.
- */
+/** Load a grammar on first use; false (render plaintext) for an unknown id or failed import. */
 export async function ensureLang(shikiId: string): Promise<boolean> {
   if (loaded.has(shikiId)) return true;
-  // Shiki's `bundledLanguages` map holds a per-grammar lazy loader with a STATIC
-  // `import()` specifier, which Vite code-splits into one async chunk each — the
-  // base bundle preloads none. (A raw `import(`@shikijs/langs/${id}`)` can't be
-  // statically analyzed by Vite; this is the Vite-friendly equivalent.)
+  // `bundledLanguages` loaders use static `import()` specifiers Vite splits into one chunk each;
+  // a template-string import could not be analyzed.
   const loadGrammar = bundledLanguages[shikiId as BundledLanguage];
   if (!loadGrammar) return false;
   const hl = await highlighter();

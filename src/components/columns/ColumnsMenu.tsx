@@ -1,7 +1,5 @@
-/**
- * "Columns ▾": a checklist to show/hide a table's columns, plus "Reset columns". A required
- * column is shown checked and disabled; the last visible column cannot be unticked.
- */
+/** "Columns ▾" show/hide checklist plus "Reset columns"; required columns are checked and
+ * disabled, and the last visible column cannot be unticked. */
 
 import { useEffect, useRef, useState } from "react";
 
@@ -19,10 +17,8 @@ export function ColumnsMenu({
 }: {
   viewKey: string;
   defs: readonly ColumnDef[];
-  /**
-   * Columns the table hid by itself to fit a narrow pane (Network's `fitColumns`): listed
-   * unticked, with why; ticking one shows it for good (`setColumnHidden` records it as shown).
-   */
+  /** Columns the table auto-hid to fit (Network's `fitColumns`): listed unticked with why;
+   * ticking one shows it for good (`setColumnHidden` records it as shown). */
   autoHidden?: readonly string[];
 }): React.JSX.Element {
   const layout = useColumnLayout(viewKey);

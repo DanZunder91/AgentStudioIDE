@@ -1,14 +1,6 @@
-/**
- * MachineView — the Network panel's Whole-computer mode: every app's sockets, grouped by
- * app, one sample per second.
- *
- * Not windowed on purpose: a busy Mac measured ~80 apps / ~250 sockets, and sockets only
- * render under an expanded app, so the DOM stays around a hundred rows. Keyboard reveal is
- * plain offset arithmetic against the scroll box for the same reason.
- *
- * All state lives in `machineStore` (the panel is a tab and remounts); this file only holds the
- * scroll box.
- */
+/** Whole-computer mode. Not windowed on purpose: ~80 apps / ~250 sockets measured, and sockets
+ * render only under an expanded app, so the DOM stays near a hundred rows.
+ * All state lives in `machineStore` (the panel remounts); this file only holds the scroll box. */
 
 import { Fragment, useEffect, useMemo, useRef } from "react";
 

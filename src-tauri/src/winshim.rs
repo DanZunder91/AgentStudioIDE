@@ -1,16 +1,6 @@
-//! Windows batch shims (`.cmd` / `.bat`) and how to run what they point at **without cmd.exe**
-//! (kept outside `agent::claude` so the language servers share it).
-//!
-//! An `npm i -g <pkg>` on Windows installs `%APPDATA%\npm\<bin>.cmd` (plus a `.ps1`), not an
-//! `.exe`. `CreateProcess` cannot run a batch file; the only way is `cmd.exe /c`, and cmd
-//! re-parses the whole command line — `%VAR%` expands even inside quotes, `^ & | < >` act
-//! outside them, a newline ends the command. It also puts a `cmd.exe` between us
-//! and the real program, so killing "the child" kills cmd and leaves the program running. So an
-//! npm shim is **read** instead ([`parse_cmd_shim`]) and its target run directly: with `node`
-//! (the shim's own `node.exe` first, exactly like the shim) for a script, on its own for an
-//! `.exe` ([`unwrap_npm_shim`]).
-//!
-//! Text only + paths as parameters, so every OS tests it against shims written to a temp dir.
+//! Runs npm `.cmd`/`.bat` shim targets without cmd.exe: cmd re-parses the command line
+//! (`%VAR%` expands even in quotes) and sits between us and the real program. The shim is read
+//! ([`parse_cmd_shim`]) and its target run directly; text-only, so every OS tests it.
 
 use std::path::{Path, PathBuf};
 
@@ -29,11 +19,9 @@ pub fn is_batch(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
 }
 
-/// Read an npm/pnpm `cmd-shim`. The line that forwards the arguments (`%*`) names the
-/// target as the last quoted `%dp0%\…` / `%~dp0\…` path that is not the interpreter
-/// itself. The interpreter: none for an `.exe`/`.com` target; else the shim's
-/// `SET "_prog=<name>"` (npm 7+), else the bare word before the target (older shims:
-/// `node  "%~dp0\…\cli.js" %*`), else `node`.
+/// Read an npm/pnpm `cmd-shim`: the target is the last quoted `%dp0%\…`/`%~dp0\…` path on the
+/// `%*` line that is not the interpreter. Interpreter: none for `.exe`/`.com`, else
+/// `SET "_prog=…"`, else the bare word before the target, else `node`.
 pub fn parse_cmd_shim(text: &str) -> Option<ShimTarget> {
     let line = text.lines().rev().find(|l| l.contains("%*"))?;
     let quoted: Vec<&str> = line.split('"').skip(1).step_by(2).collect();
@@ -92,10 +80,9 @@ pub enum UnwrapError {
     NoNode,
 }
 
-/// Unwrap the npm shim `shim` into its interpreter + script (or its `.exe`). When the text is
-/// not an npm shim, `fallback_script` (relative to the shim's folder — e.g. the package's
-/// `cli.js` in npm's layout) is run with `node` if it exists. `node` finds `node.exe` when the
-/// shim's folder has none; it is a parameter so tests need no Node install.
+/// Unwrap npm shim `shim` into interpreter + script (or its `.exe`); a non-npm shim runs
+/// `fallback_script` (relative to the shim's folder) with `node` if it exists. `node` is a
+/// parameter so tests need no Node install.
 pub fn unwrap_npm_shim(
     shim: &Path,
     fallback_script: Option<&str>,

@@ -1,12 +1,5 @@
-/**
- * `useLaunchAgent` — the single launch funnel, now carrying the
- * optional resume key ("Recover session").
- *
- * The real store drives it (harness reset per test); the two effect seams are
- * mocked: `./fleetIpc` (the persisted-recents push) and `../terminal` (the
- * registry — the store's own `openTerminalTab` also calls into it, so the mock
- * serves both callers, exactly as in `AgentRow.test.tsx`).
- */
+/** Real store; `./fleetIpc` and `../terminal` are mocked (the terminal mock also serves the
+ * store's own `openTerminalTab`, as in `AgentRow.test.tsx`). */
 
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";

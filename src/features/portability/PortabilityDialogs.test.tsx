@@ -1,21 +1,5 @@
-/**
- * The SEAM: store slice ⇄ the two dialogs, driven for real.
- *
- * Neither half could write this file. The store slice's suite mocks the components away; the
- * dialogs' suites take everything through props and never see a store. Both are at 100% coverage
- * and **both were right about their own side** — and the join still had two defects, which this
- * file exists to have caught:
- *
- * 1. A sealed bundle could not be imported at all. `portability_import` needs the passphrase that
- *    unsealed the plan, `ImportDialogProps` deliberately carries none, and the store must not hold
- *    one. The passphrase had nowhere to live.
- * 2. The user's per-item choices were silently ignored. The dialog holds them in component state;
- *    `applyImport` reads them from the store. Nothing connected the two, so every item would have
- *    taken the plan's default and no error would have said so.
- *
- * Only the IPC edge is mocked. The store, its reducers, both dialogs and the container are real.
- * Literal expectations throughout.
- */
+/** The seam between the store slice and both dialogs, which neither half's suite can see. Only
+ * the IPC edge is mocked; store, reducers, dialogs and container are real. */
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -286,10 +270,8 @@ describe("PortabilityDialogs — the join neither half could test", () => {
     await user.click(screen.getByTestId("pb-import-close"));
     expect(state().portabilityDialog).toBeNull();
 
-    // Reopen on the same still-unsealed plan and import: the passphrase must be gone.
-    // `waitFor` before the click, not `getByTestId` straight after the `setState`: a store write
-    // from outside React is not flushed synchronously, so the first version of this test looked
-    // for a button that had not been re-rendered yet.
+    // Reopen on the same still-unsealed plan and import: the passphrase must be gone. `waitFor`
+    // first: a store write from outside React is not flushed synchronously.
     useAppStore.setState((s) => {
       s.portabilityDialog = "import";
     });

@@ -1,38 +1,6 @@
-/**
- * NetworkAppsSidebar — IDE traffic's left sidebar: the same by-language
- * Apps list as the Logs sidebar (`procs/DevAppsSection`, reused through its host slots — the
- * grouping, rows, tags and ports are that section's), where the user **chooses apps one by
- * one**:
- *
- * - "All apps" — no app filter (`allAppPicks`), pressed while nothing is picked.
- * - a row's **checkbox** adds / removes that app (`toggleAppPick`; unchecking the last = All).
- * - a row's **click** (not the checkbox) = Only that app (`onlyAppPick`).
- * - a picked app that is no longer listed (it exited, or was restarted under a new pid) stays as
- *   a row of its own, so it can be unchecked — its flows are still matched (`networkApps`).
- *
- * Each row's capture state (`networkApps.captureState`): ✓ captured (its flows arrive, or Rust
- * verified its env), ⚠ not captured with **Restart with capture** inline (the confirm is the
- * banner's — `UncapturedBanner` lists the same apps), `external` → "capture →", Whole Mac's
- * "Capture this app" guide on its pid (point it at the proxy by hand).
- *
- * Every pick lives in `networkStore` (the panel is a tab and remounts).
- *
- * ── Terminals / Agents / Other (a terminal must be pickable again) ──
- * Under the Apps list, the Logs sidebar's layout (`agentlogs/SourcesSidebar`): one row per flow
- * SOURCE (`networkSource.groupedSourceItems` — a terminal's tab title, an agent's label; the API
- * client, `external · <app>` and `unattributed` in a small Other group), each with a checkbox, its
- * flow count, row click = Only. They read and write `sourceSelection` — the SAME state as the
- * toolbar's Source picker, so the two can never disagree. **All**, the very first row, clears
- * the app AND the source picks (the Process / Host pickers stay the toolbar's).
- *
- * ── Width ──
- * 280 px by default, like Logs, and resizable by its right edge (pointer drag, ←/→ by 10 — Shift
- * by 40 — double-click resets; clamped 180–560 in `networkStore`, which keeps it across remounts).
- * The Apps rows' origin tag (`by claude · gazelle`, `external`) is drawn by `procs/DevAppsSection`,
- * which gives it no title; so a truncated tag is still readable, this sidebar copies each tag's text
- * onto its `title` after every render (DECIDED: done here rather than in `procs/`, so the change
- * stays inside this feature — the section can adopt it and this effect then becomes a no-op).
- */
+/** IDE traffic's left sidebar: `procs/DevAppsSection`'s Apps list (picks live in `networkStore`)
+ * plus Terminals / Agents / Other source rows sharing `sourceSelection` with the toolbar's Source
+ * picker. Copies each origin tag's text onto its `title`, as DevAppsSection gives it none. */
 
 import { useLayoutEffect, useMemo, useRef } from "react";
 
@@ -249,10 +217,7 @@ export function NetworkAppsSidebar(): React.JSX.Element {
   );
 }
 
-/**
- * The sidebar's right-edge drag handle — the Logs sidebar's (`SourcesSidebar`'s `SidebarResizer`):
- * pointer drag, ←/→ by 10 (Shift by 40), double-click resets to 280.
- */
+/** Right-edge resizer, mirroring the Logs sidebar's `SidebarResizer`. */
 function SidebarResizer({ width }: { width: number }): React.JSX.Element {
   const drag = useRef<{ x: number; w: number } | null>(null);
   return (

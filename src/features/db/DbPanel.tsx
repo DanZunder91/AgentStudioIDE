@@ -1,35 +1,6 @@
-/**
- * DbPanel — the right rail's **DB** tab.
- *
- * The saved-connection list, and the one place the connection dialog is opened from. This
- * is the component that turns the props-only `<ConnectionDialog/>` into a working feature:
- * it hands it the four real callbacks (`db_test_connection`, `db_connection_upsert`,
- * `db_url_build`, `db_url_parse`) and the engine registry from `db_engines`.
- *
- * ── What expanding a connection does ─────────────────────────────────────────
- * It **connects**, and shows what connecting proves: the server's own version string and the
- * round-trip latency — and then it renders `<DbTree/>`, the real object tree over
- * `db_children`, plus that connection's saved queries.
- *
- * An older build rendered a paragraph here saying the tree needed a command this build
- * did not have. That had stopped being true: `db_children` and the saved-query trio were
- * registered in `src-tauri/src/lib.rs`, tested in Rust, and unreachable from the UI. A note
- * explaining why a feature is missing has an expiry date, and nothing was watching this one.
- *
- * ── Where the guardrail is visible ───────────────────────────────────────────
- * Read-only must be visible **where you choose the connection**, not
- * buried in a dialog, so every read-only row carries a `[read-only]` badge whose tooltip
- * says what the flag is *worth* on that engine (`readOnlyBadgeTitle`). On Mongo/Redis it is
- * an in-process filter and the badge says so — a control that implies a boundary the engine
- * cannot keep is worse than no control.
- *
- * ── Secrets ──────────────────────────────────────────────────────────────────
- * Nothing here has a password. The dialog keeps the typed one in its own local state and
- * hands it to `onTest`/`onSave` as a separate argument; this component passes that argument
- * straight to the IPC wrapper and never stores, logs, or renders it. `db_open` takes a
- * connection **id** — the Vault lookup happens in Rust, so a resolved secret never reaches
- * this file even in transit (secrets are resolved in Rust and never cross IPC).
- */
+/** DB rail tab: saved connections, wiring the props-only `<ConnectionDialog/>` to real IPC. Each
+ * read-only row's badge says what the flag is worth on that engine. A typed password goes straight
+ * to IPC, never stored, logged or rendered; `db_open` takes an id and Rust resolves secrets. */
 
 import { useCallback, useEffect } from "react";
 
@@ -42,36 +13,16 @@ import { readOnlyBadgeTitle } from "./engineFields";
 import type { DbConnection, DbConnectionDraft, EngineSpec } from "./types";
 import "./db.css";
 
-/**
- * The secondary line on a row: where it points, in the form a DBA reads.
- *
- * The database is omitted rather than rendered as a trailing `/` — `databaseLabel: null`
- * engines (the ClickHouse-shaped ones) genuinely have no database, and `host:port/` would
- * read as an empty one. The port always shows: `validateDraft` guarantees 1..65535, so
- * there is no "no port" state to special-case.
- */
+/** No trailing `/` for engines with no database (`databaseLabel: null`); the port always shows
+ * (`validateDraft` guarantees 1..65535). */
 export function connectionSubtitle(c: DbConnection): string {
   const where = `${c.host}:${c.port}`;
   return c.database === "" ? where : `${where}/${c.database}`;
 }
 
-/**
- * One row's status line. Pure, so the four states are pinned as data rather than by
- * driving a component through four async paths.
- *
- * The success case shows the version **and** the latency, for the reason
- * `describeTestResult` gives: anything less does not distinguish "connected" from "a socket
- * opened". `latencyMs: null` is a real shape (the contract allows it), so it degrades to
- * the version alone rather than printing "null ms".
- *
- * ⚠️ **What that number MEANS changed, so the UI has to say so.** It used to be a
- * probe's round trip; `DbOpened.latencyMs` measures the **whole open** — DNS, TLS handshake,
- * authentication and the version query — because that is what the user waited for. A bare `· 34 ms`
- * would be read as round-trip latency, which on a remote cluster is off by an order of magnitude
- * (a remote connect can take several seconds, almost none of it a round trip). Hence
- * {@link sessionTitle}: a number whose meaning is not on screen is a number that will be
- * misinterpreted.
- */
+/** Pure, so the states are pinned as data. Success shows version and latency (`null` degrades to
+ * the version alone). The number is the whole open, not a round trip; {@link sessionTitle} says
+ * so. */
 export function sessionLine(session: {
   status: "opening" | "open" | "error";
   serverVersion: string | null;
@@ -86,12 +37,7 @@ export function sessionLine(session: {
   return session.latencyMs === null ? who : `${who} · ${session.latencyMs} ms`;
 }
 
-/**
- * The tooltip for the status line — what the number beside the version actually measures.
- *
- * Only for the connected state: there is no time to explain while connecting, and a failure's line
- * is already a sentence.
- */
+/** Says what the latency number measures; connected state only. */
 export function sessionTitle(session: {
   status: "opening" | "open" | "error";
   latencyMs: number | null;
@@ -106,15 +52,9 @@ function queryLine(query: string): string {
   return line.length <= 80 ? line : `${line.slice(0, 79)}…`;
 }
 
-/**
- * What an agent just did, in words: which agent, which connection, and —
- * * for a connection it added, that it is read-only, so a connection never appears in the list
- *   unexplained;
- * * for a query it ran (`ran`, every run), the query, Agent Studio's refusal or what came back,
- *   and where the results are (in the console, or not yet: a busy or unconnected console);
- * * for a query it wrote while the user had text in that console (`offer`), that their text was
- *   left as it is — the notice's "Put in console" is the only way the query goes in.
- */
+/** Which agent, which connection, and what it did: an added connection is read-only; a run shows
+ * the query, refusal or result and where results are; an `offer` left the user's console text as
+ * is (only "Put in console" inserts it). */
 export function agentNoticeText(
   notice: Omit<DbAgentNotice, "connectionId">,
   connection: DbConnection | null,
@@ -314,14 +254,8 @@ export function DbPanel(): React.JSX.Element {
   );
 }
 
-/**
- * One saved connection.
- *
- * The disclosure control IS the connect gesture: expanding
- * opens a session, collapsing closes it. That is why the button is a disclosure rather than
- * a "Connect" button — there is one affordance for one act, and the row cannot end up
- * showing an expanded-but-disconnected state that means nothing.
- */
+/** Expanding the row opens a session and collapsing closes it, so it never shows expanded but
+ * disconnected. */
 function ConnectionRow({
   connection: c,
   spec,
@@ -335,10 +269,8 @@ function ConnectionRow({
 }: {
   connection: DbConnection;
   spec: EngineSpec | null;
-  // `DbSessionState`, spelled out rather than imported: this component takes only what it
-  // renders, and the store's type is the store's. `sessionId` joined the list when the tree
-  // landed — the tree needs the handle `db_children` is addressed by, and `status === "open"`
-  // is not the same claim as "we hold its id".
+  // Only what this row renders. `sessionId` is separate: `status === "open"` is not the same
+  // claim as holding the handle `db_children` is addressed by.
   session:
     | {
         status: "opening" | "open" | "error";
@@ -388,12 +320,8 @@ function ConnectionRow({
               read-only
             </span>
           )}
-          {/* The connection offers a way to refresh its tables and database model,
-              next to Edit and Delete.
-              It used to live in the session block, which only appears once connected — and
-              a control that appears only sometimes teaches nobody where it lives.
-              Always rendered here, DISABLED without an open session, because the
-              levels it re-reads are answered by `db_children`, which needs one. */}
+          {/* Manual refresh: writes from psql or other sessions are invisible to this app. Always
+              shown, disabled without an open session (`db_children` needs one). */}
           <button
             type="button"
             className="db-dialog__btn db-dialog__btn--small"
@@ -438,10 +366,7 @@ function ConnectionRow({
           >
             {sessionLine(session)}
           </p>
-          {/* The tree renders for ANY expanded row, not only an open one. Server-answered
-              levels need the session and say so when there is none; the saved queries do not
-              need one at all, and a failed connect is precisely when someone wants to look at
-              the SQL they saved. */}
+          {/* For any expanded row: saved queries need no session, e.g. after a failed connect. */}
           <DbTree
             connectionId={c.id}
             family={c.family}
@@ -449,19 +374,6 @@ function ConnectionRow({
             sessionId={session.sessionId}
           />
           <div className="db-panel__actions">
-            {/* The honest escape hatch. The automatic refresh after a write can only ever
-                know about writes made *here*: an edit from psql, from another session, or by
-                a colleague is invisible to this app by construction, and every serious
-                database client therefore ships a manual refresh. A button rather than a
-                context menu because that is this panel's house style (Edit, Delete, Open
-                query console) and because a control that needs a right-click is a control
-                half this rail's users will never find.
-
-                Disabled without an OPEN session rather than hidden: the row is still
-                expanded while it is connecting or after a failed connect, and a button that
-                appears only sometimes teaches nobody where it lives. There is also nothing
-                for it to do — every level it would re-read is answered by `db_children`,
-                which needs a session id. */}
             {session.status === "open" && (
               <button
                 type="button"

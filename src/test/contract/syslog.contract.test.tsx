@@ -1,15 +1,6 @@
-/**
- * SEAM TEST — Agent Logs · system apps. Not a unit test.
- *
- * Everything fed in was produced by REAL Rust (`src-tauri/tests/contract_goldens/machine.rs`):
- * the `log stream --style ndjson` / `journalctl --output=json` fixtures through the production
- * parsers and a real `LogHub` (with its 500/s cap and drop line), `SyslogStatus` values built by
- * `syslog::status_of` over real backends and real supervised children, and `RunningApp[]` from
- * the real grouping. Only `invoke` / `listen` are mocked; `logstreamIpc` → `agentLogsStore` →
- * `AgentLogsPanel` / `AgentLogsSources` / `AppPicker` are the real ones.
- *
- * Expected strings are written by hand, never derived from the golden.
- */
+/** SEAM TEST: inputs were produced by real Rust (`src-tauri/tests/contract_goldens/machine.rs`).
+ * Only `invoke` / `listen` are mocked; IPC, store and panels are real. Expected strings are by
+ * hand, never derived from the golden. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

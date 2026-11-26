@@ -1,11 +1,6 @@
-//! Agent tool calls → log events, over a **real-shaped** transcript fixture
-//! (`tests/fixtures/logstream/tool-calls/`: a root session + one sub-agent, in the
-//! exact line shape `claude` writes — `type`/`uuid`/`timestamp`/`message.content[]`
-//! with `tool_use` / `tool_result` blocks, a duplicated assistant line, a torn line).
-//! Hermetic: the fixture is copied to a temp dir; nothing reads `~/.claude`.
-//!
-//! Drives the real `ClaudeAdapter` seam (`tool_transcripts` + `parse_tool_line`) and
-//! the real `TranscriptToolTail`.
+//! Tool calls → log events via the real `ClaudeAdapter` seam and `TranscriptToolTail`, over a
+//! real-shaped fixture (`tests/fixtures/logstream/tool-calls/`, duplicated and torn lines too).
+//! Hermetic: copied to a temp dir; nothing reads `~/.claude`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

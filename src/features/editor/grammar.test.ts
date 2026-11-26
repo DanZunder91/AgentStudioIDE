@@ -1,9 +1,3 @@
-/**
- * LanguageId → Shiki grammar id map (M4). The DoD's discriminating cases must
- * resolve to a real Shiki grammar; the few aliases and no-grammar ids are the
- * only exceptions, and everything else passes straight through.
- */
-
 import { bundledLanguages } from "shiki";
 import { describe, expect, it } from "vitest";
 
@@ -52,42 +46,15 @@ describe("languageToShiki", () => {
     expect(languageToShiki("go-module")).toBeNull();
   });
 
-  /**
-   * `.svg` used to render with NO highlighting at all, and nothing went red.
-   *
-   * `detectLanguage` maps `.svg` to the LanguageId `'svg'`, this map passed it
-   * through unchanged, and Shiki ships no `svg` grammar — so `ensureLang`'s
-   * `bundledLanguages['svg']` lookup missed, its `if (!loadGrammar) return false`
-   * fired, and `applyShikiHighlight` silently fell back to plaintext. A *silent*
-   * degrade is the whole problem: every existing test here asserts against
-   * hand-written expectations, so none of them could notice that the id on the
-   * right-hand side does not exist in Shiki.
-   *
-   * `.svg` is load-bearing (the image preview gives it a Source ↔ Image toggle, so
-   * SVG source is something you actually look at), and SVG *is* XML — Shiki's
-   * `xml` grammar has scope `text.xml`.
-   */
+  /** Shiki ships no `svg` grammar, so a pass-through id silently rendered plaintext; SVG is XML. */
   it("maps svg onto Shiki's xml grammar rather than a nonexistent svg one", () => {
     expect(languageToShiki("svg")).toBe("xml");
     expect(bundledLanguages).not.toHaveProperty("svg");
     expect(bundledLanguages).toHaveProperty("xml");
   });
 
-  /**
-   * The class-level guard: EVERY LanguageId must resolve to a grammar Shiki
-   * actually ships, or to `null` (an honest "render plaintext").
-   *
-   * This is the test that would have caught `svg` on day one, and it catches the
-   * next one for free — a new id added to `LanguageId` whose name happens not to
-   * be a Shiki id fails here instead of quietly rendering grey. It reads the REAL
-   * `bundledLanguages` (a map of lazy loaders — importing it costs no grammar
-   * chunk and no engine), so it cannot go vacuously green against a fake.
-   *
-   * `KNOWN_GAPS` is the honest remainder: ids for which no unambiguous Shiki
-   * grammar exists. They behave correctly today (`ensureLang` misses → plaintext);
-   * they are listed rather than aliased because every candidate is a judgement
-   * call, not a rename. Deleting a row here after adding its alias is the fix.
-   */
+  /** Reads the real `bundledLanguages` (lazy loaders, no grammar cost) so it can't pass vacuously.
+   * KNOWN_GAPS: ids with no unambiguous Shiki grammar; delete a row once its alias is added. */
   it("resolves every LanguageId to a real Shiki grammar or to null", () => {
     const KNOWN_GAPS: Partial<Record<LanguageId, string>> = {
       // Shiki splits Fortran into `fortran-free-form` and `fortran-fixed-form`;
@@ -118,12 +85,7 @@ describe("languageToShiki", () => {
     expect(missing, "these ids silently degrade to plaintext").toEqual([]);
   });
 
-  /**
-   * The other half of the guard above: every KNOWN_GAPS entry must
-   * still BE a gap. Without this, the allowlist is a place bugs go to hide — an
-   * id could be fixed upstream (or aliased here) and the exemption would linger,
-   * quietly excusing a future regression on the same id.
-   */
+  /** Without this, a gap fixed upstream leaves a stale exemption hiding a future regression. */
   it("keeps no stale exemptions: each known gap really has no Shiki grammar", () => {
     for (const id of ["fortran", "mathematica", "mercury", "org", "rebol"] as const) {
       expect(bundledLanguages, `${id} is no longer a gap`).not.toHaveProperty(id);

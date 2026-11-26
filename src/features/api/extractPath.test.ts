@@ -1,12 +1,5 @@
-/**
- * `extractPath` — the capture half of a request sequence.
- *
- * The reasons are tested as hard as the values, and that is the point of the
- * module: `substituteVars` turns an unresolved `{{VAR}}` into the empty string
- * silently (`substitute.test.ts:21`), so a capture that fails without saying why
- * would send `Authorization: Bearer ` and leave the user debugging a 401 in their
- * own API. Every `found: false` here has to name where the walk stopped.
- */
+/** Reasons are tested as hard as values: substituteVars silently turns an unresolved {{VAR}} into
+ * "", so every `found: false` must name where the walk stopped. */
 
 import { describe, expect, it } from "vitest";
 

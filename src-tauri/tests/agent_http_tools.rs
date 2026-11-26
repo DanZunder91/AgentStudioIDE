@@ -1,10 +1,5 @@
-//! The HTTP agent tools end to end, without the GUI: the real listener's `/ctl` route over real
-//! TCP, the real app binary run as `agent-studio http …` / `agent-studio api …`, the real HTTP
-//! engine, and a real hyper server on loopback — the path an agent's command takes, minus the
-//! webview.
-//!
-//! Hermetic: the API store and the history live in a temp dir, the server is in-process on
-//! 127.0.0.1, and the listener is on loopback.
+//! HTTP agent tools end to end without the GUI: the real `/ctl` listener over TCP, the real
+//! binary as `agent-studio http|api …`, the real engine, a loopback hyper server; temp stores.
 
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -501,10 +496,8 @@ async fn the_help_lists_every_http_and_api_command() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// 🔴 The API history holds the user's own sends, and an error recorded by an older build (or
-/// quoting a server) can carry the URL as sent — `{{TOKEN}}` substituted. `agent-studio api
-/// history` never prints a recorded error: a failure reads as its kind, the URL as written with
-/// a literal credential as `***`.
+/// A recorded error may carry the URL as sent (`{{TOKEN}}` substituted), so `api history`
+/// never prints one: a failure reads as its kind, the URL as written, a credential as `***`.
 #[tokio::test]
 async fn api_history_never_prints_a_vault_value_an_error_recorded() {
     let port = serve().await;
@@ -584,10 +577,8 @@ async fn api_history_never_prints_a_vault_value_an_error_recorded() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// 🔴 No guessing oracle, through the real command: an agent that writes a guess of the user's
-/// secret into its own request (a query value, a header name) reads the same replies — the
-/// send's error and `api history` — whether the guess is right or wrong. The sends fail before
-/// any I/O (a header value with a control character).
+/// No guessing oracle: an agent's right guess of a secret (query value, header name) reads the
+/// same as a wrong one, in the send's error and in `api history`.
 #[tokio::test]
 async fn an_agents_right_guess_reads_like_a_wrong_one() {
     let port = serve().await;

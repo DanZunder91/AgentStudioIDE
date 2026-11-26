@@ -1,21 +1,5 @@
-/**
- * `<DbPanel/>` — the DB rail tab.
- *
- * This is the file that proves the feature is WIRED: the dialog was props-only, and every
- * assertion below about `db_test_connection` / `db_connection_upsert` / `db_url_build` /
- * `db_url_parse` being called is an assertion that the panel supplied a real promise where
- * a prop used to be.
- *
- * `dbIpc` is mocked at the module boundary rather than through `installTauriMock`, because
- * the store slice imports it too — one mock covers both halves of the path (the panel's
- * direct calls for the dialog, and the store's for load/upsert/connect), and the argument
- * NAMES are already pinned exhaustively by `dbIpc.test.ts` against the real `invoke`.
- *
- * The claim this file is most careful about is the honest one: expanding a connection
- * connects and shows the server version, and says **in words** that the object tree is not
- * here yet. A test that only checked "something rendered" would be equally happy with a
- * fake tree, which is exactly the outcome to rule out.
- */
+/** `dbIpc` is mocked at the module boundary since the store slice imports it too; arg names are
+ * pinned against the real `invoke` in `dbIpc.test.ts`. */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -33,10 +17,7 @@ const dbIpc = vi.hoisted(() => ({
   dbUrlBuild: vi.fn(),
   dbUrlParse: vi.fn(),
   dbQuery: vi.fn(),
-  // The tree's and the saved queries' edge. Present in this mock because `<DbTree/>` now
-  // mounts inside every expanded row, so a panel test that did not stub these would hit an
-  // undefined function on the first expand (a component that fetches on mount adds a mock
-  // requirement to every tier that renders its host).
+  // `<DbTree/>` mounts in every expanded row and fetches on mount, so these must be stubbed.
   dbChildren: vi.fn(),
   dbSavedQueries: vi.fn(),
   dbSavedQueryUpsert: vi.fn(),
@@ -78,13 +59,8 @@ const conn = (over: Partial<DbConnection> = {}): DbConnection => ({
 
 const OK_PROBE = { ok: true, serverVersion: "PostgreSQL 17.2", latencyMs: 34, error: null };
 
-/**
- * What `db_open` returns — the session AND what answered, in **one** dial.
- *
- * Expanding a row used to cost a probe *and* an open: two TLS handshakes, two authentications, the
- * first connection discarded purely to learn the version string. `OK_PROBE` stays for the dialog's
- * Test Connection button, which asks about an unsaved draft and genuinely has no session to open.
- */
+/** `db_open` returns the session and server version in one dial; `OK_PROBE` is for the
+ * dialog's Test Connection, which has no session to open. */
 const OPENED = { sessionId: "sess-1", serverVersion: "PostgreSQL 17.2", latencyMs: 34 };
 
 /** Render and wait for the one-shot hydrate to land. */
@@ -220,10 +196,7 @@ describe("DbPanel — expanding a connection", () => {
     expect(dbIpc.dbOpen).toHaveBeenCalledWith("c1", null);
     expect(useAppStore.getState().dbSessions.c1.sessionId).toBe("sess-1");
 
-    // 🔴 The claim this panel used to make in prose ("the object tree needs a command this
-    // build does not have") is now a claim about the DOM: the tree is here, it asked the real
-    // command with the real session id, and it rendered what came back — including the
-    // sub-label, which is the field a `ref`-vs-`nodeRef` contract slip would have blanked.
+    // The sub-label is the field a `ref`-vs-`nodeRef` contract slip would blank.
     await waitFor(() => expect(screen.getByTestId("db-tree-c1")).toBeInTheDocument());
     expect(dbIpc.dbChildren).toHaveBeenCalledWith("sess-1", { kind: "root" });
     await waitFor(() => expect(screen.getByText("maestro")).toBeInTheDocument());
@@ -640,14 +613,8 @@ describe("sessionLine", () => {
   });
 });
 
-/**
- * What the number beside the version measures — and why it needs saying.
- *
- * `DbOpened.latencyMs` is the **whole open** (DNS, TLS, auth, version query), not a round trip. On
- * a remote cluster those differ by an order of magnitude: a remote connect can take 5000 ms
- * with almost none of it time on the wire. A bare `· 5000 ms` reads as latency and would be
- * badly misread, so the meaning is in the tooltip.
- */
+/** `latencyMs` is the whole open (DNS, TLS, auth, version query), not a round trip, so the
+ * tooltip says so. */
 describe("sessionTitle — the latency number explains itself", () => {
   it("explains the number only when there is one", () => {
     expect(sessionTitle({ status: "open", latencyMs: 5000 })).toContain("took to open");

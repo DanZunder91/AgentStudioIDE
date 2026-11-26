@@ -1,12 +1,5 @@
-/**
- * Preview zoom — the pure math behind the markdown preview's canvas-style zoom
- * (ctrl/cmd+scroll to zoom, ctrl/cmd+drag to pan, − / % / + buttons in the
- * editor bar).
- *
- * Lives apart from `MarkdownPreview.tsx` so the store can import the exact
- * clamp the UI uses (the `clampSplit` precedent in db/console) without pulling
- * the component's CSS/mermaid imports into its module graph.
- */
+/** Pure math for the markdown preview's zoom (ctrl/cmd+wheel, ctrl/cmd+drag, −/%/+ buttons). Kept
+ * out of `MarkdownPreview.tsx` so the store shares the UI's clamp without its CSS/mermaid. */
 
 export const PREVIEW_ZOOM_MIN = 0.25;
 export const PREVIEW_ZOOM_MAX = 4;
@@ -15,11 +8,7 @@ export const PREVIEW_ZOOM_DEFAULT = 1;
 /** One −/+ button press multiplies/divides by this — ≈ one wheel notch. */
 export const PREVIEW_ZOOM_STEP = 1.25;
 
-/**
- * Wheel-to-zoom rate on pixel-normalized deltas. Chosen so one classic mouse
- * notch (≈100px) ≈ the button step: exp(0.22) ≈ 1.246, and trackpad pinch
- * (ctrlKey wheel events with single-digit deltas) moves in fine increments.
- */
+/** Per pixel-normalized wheel delta: one ~100px notch ≈ the button step (exp(0.22) ≈ 1.246). */
 const WHEEL_ZOOM_RATE = 0.0022;
 
 /* WheelEvent.deltaMode values, named locally so this module stays DOM-free. */
@@ -43,11 +32,8 @@ export function stepPreviewZoom(current: number, direction: 1 | -1): number {
   );
 }
 
-/**
- * The next zoom after a ctrl/cmd+wheel event. Negative deltaY (wheel up /
- * pinch out) zooms in; positive zooms out. Exponential, so steps compose
- * symmetrically and a pinch feels linear.
- */
+/** Zoom after a ctrl/cmd+wheel; negative deltaY zooms in. Exponential, so steps compose
+ * symmetrically. */
 export function wheelPreviewZoom(
   current: number,
   deltaY: number,
@@ -62,12 +48,8 @@ export function wheelPreviewZoom(
   return clampPreviewZoom(clampPreviewZoom(current) * Math.exp(-px * WHEEL_ZOOM_RATE));
 }
 
-/**
- * Scroll adjustment that keeps the content point under the cursor stationary
- * across a zoom change. `unscaled` is the cursor offset in the body's UNSCALED
- * coordinate space ((clientX − bodyRect.left) / oldZoom); the return value is
- * added to scrollLeft/scrollTop after the new scale has been applied.
- */
+/** Scroll delta keeping the content under the cursor still. `unscaled` = (clientX −
+ * bodyRect.left) / oldZoom; add the result to scroll after the new scale is applied. */
 export function anchorScrollDelta(
   unscaled: number,
   oldZoom: number,
@@ -76,26 +58,9 @@ export function anchorScrollDelta(
   return unscaled * (newZoom - oldZoom);
 }
 
-/**
- * The zoom that makes one diagram fit the pane — the "Fit" control pinned to
- * each rendered diagram (a button over the diagram that zooms it automatically,
- * to 50% in some cases and 200% in others). Both of those numbers
- * come out of this one rule: a diagram taller than the pane zooms OUT to be
- * seen whole, a diagram smaller than the pane zooms IN to fill it, and a wide
- * short one is already fitted at 100% and stays there.
- *
- * It is measurement-based, not metadata-based, and that is what makes it exact
- * for every diagram type without asking mermaid anything. The key property:
- * at zoom Z a diagram's on-screen size is `min(natural, paneWidth) · Z`, and
- * that `min` does NOT depend on Z — the CSS ceiling is
- * `calc(100% * var(--mdp-zoom))`, a constant in CSS pixels. So the
- * on-screen size is exactly linear in the zoom, and scaling the CURRENT zoom by
- * the ratio the diagram is currently off by lands on the fit precisely.
- *
- * `diagram` and `pane` are both in device pixels, measured at `current` zoom.
- * A zero or non-finite dimension — a collapsed pane, a diagram that has not
- * been laid out — returns `current` unchanged rather than a garbage zoom.
- */
+/** Zoom that fits one diagram to the pane, out or in. On-screen size is `min(natural, paneWidth)
+ * · Z` and that `min` is independent of Z, so scaling `current` by the ratio fits exactly. Device
+ * px at `current`; a zero or non-finite size returns `current`. */
 export function fitPreviewZoom(
   current: number,
   diagram: { width: number; height: number },

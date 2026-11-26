@@ -1,14 +1,6 @@
-//! The tool registry: every action an agent can take, declared once.
-//!
-//! A [`ToolSpec`] is the single source for all three ways in: the `agent-studio` command line
-//! ([`super::cli`] parses `<group> <verb> [args] [--flags]` from [`ToolSpec::cli`] and
-//! [`ToolSpec::params`]), its help text, and the MCP tool list (name, description and input
-//! schema from [`json_schema`]). Adding a tool is one `ToolSpec` in a `commands/*.rs` table; no
-//! front door changes.
-//!
-//! A tool's `run` receives a [`ToolCtx`] (the app's config dir, the asking terminal, the UI sink)
-//! and validated [`Args`], and answers with a [`ToolOk`] (what the agent reads) or an error
-//! sentence. Secrets never go in either: see each command module for its rules.
+//! The tool registry. One [`ToolSpec`] per action feeds the CLI parser, its help and the MCP tool
+//! list, so adding a tool touches no front door. Secrets never go in a [`ToolOk`] or an error:
+//! see each command module for its rules.
 
 use std::future::Future;
 use std::path::PathBuf;

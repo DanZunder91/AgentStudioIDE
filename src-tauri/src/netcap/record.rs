@@ -1,37 +1,6 @@
-//! The IDE's own API client, recorded straight into the Network store.
-//!
-//! `http_send`, `ws_connect`/`ws_send`/`ws_close` and `grpc_send` run inside the IDE process, so
-//! their traffic never crosses the capture proxy: a request sent from the built-in
-//! API client left Network empty. This module is the **tap** those three
-//! clients report to — no proxy round-trip, no TLS games: each client keeps its own transport
-//! and trust policy and records what it sent and what came back.
-//!
-//! Every row carries `terminalId = "ide-api-client"` ([`IDE_TERMINAL_ID`], reserved — the UI
-//! labels it *API client*) and `client = { pid: <ours>, name: "Agent Studio", path: <this
-//! executable> }` ([`ide_client`]). It is decrypted regardless of the Decrypt toggle (it is our
-//! own client) and recorded even when capture is disabled for terminals — it costs nothing and it
-//! is what the user just clicked. Nothing is redacted: the headers a client
-//! sent, credentials included, are stored verbatim, like a proxied flow's.
-//!
-//! **What differs from a proxied flow** — a proxy sees the wire, a client sees what it handed to
-//! and got from its library:
-//! * **HTTP** — `reqBytes` is the request body as handed to reqwest; `resBytes` is the response
-//!   body *after* reqwest's automatic gzip/br/deflate decoding, so a compressed response shows
-//!   its decoded size, and the response headers are the ones reqwest exposes (it drops
-//!   `content-encoding` and `content-length` when it decoded). The request headers are the
-//!   ones sent, reconstructed from what reqwest and hyper add — `http.rs` owns that knowledge
-//!   and `tests/netcap_record.rs` proves it against a server that echoes what it received.
-//! * **WebSocket** — `reqBytes`/`resBytes` are data-message payload bytes (not frame bytes);
-//!   `wsMessages` counts data messages; the row stays `pending` while the socket is open and
-//!   goes `done` on close, exactly like a proxied one.
-//! * **gRPC** — `reqBytes`/`resBytes` are the protobuf message payloads (no 5-byte gRPC frame
-//!   prefix, no HTTP/2 framing); the bodies are the canonical JSON the console shows, so a
-//!   body's `size` is that JSON's length. tonic's own `user-agent` is not reconstructed.
-//!
-//! A [`Tap`] with no store — the proxy never started, or a test that wants none — records
-//! nothing, and no call here can fail a request: every method on a store-less [`Flow`] is a
-//! no-op. Rows go out on `netcap://flow` through the same emitter (and the same ≤ 1 emit /
-//! 100 ms batching) as proxied flows.
+//! Tap for the IDE's own in-process API client (HTTP, WS, gRPC), whose traffic never crosses
+//! the proxy. Rows use [`IDE_TERMINAL_ID`], always recorded and decrypted, headers verbatim.
+//! Sizes are library-level payloads. Nothing here can fail a request; a store-less [`Tap`] no-ops.
 
 use std::sync::Arc;
 use std::time::Instant;

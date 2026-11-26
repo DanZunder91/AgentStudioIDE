@@ -1,16 +1,5 @@
-/**
- * TerminalRegistry × SearchAddon — the addon lifecycle, against
- * the REAL registry and the REAL `@xterm/addon-search`.
- *
- * jsdom like `agentSpawn.test.ts`: `ensureTerminal` never calls `term.open()`,
- * so no layout is needed — `SearchAddon.activate` only wires buffer listeners.
- * What is pinned:
- *   - every terminal gets its own SearchAddon, reachable via `getSearchAddon`;
- *   - the find overlay's UI state round-trips per terminal;
- *   - `dispose()` disposes the addon WITH the terminal (`term.dispose()` owns
- *     loaded addons) and forgets both the addon and the UI state — the
- *     "terminal closed while the overlay is open" leak path.
- */
+/** Real registry and real `@xterm/addon-search` in jsdom (`ensureTerminal` never calls
+ * `term.open()`). `dispose()` must free the addon and its UI state: the closed-while-open leak. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

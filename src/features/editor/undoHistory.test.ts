@@ -1,19 +1,6 @@
-/**
- * undoHistory — the parking lot that carries an undo stack across a tab CLOSE.
- *
- * Pure module, no CodeMirror: the `json` payload is opaque here on purpose (the
- * registry is the only thing that knows it is an `EditorState.toJSON`), so these
- * tests use marker objects and pin the three rules that actually protect the user:
- *
- *   1. the DOC-IDENTITY guard — a file that changed on disk while closed must
- *      lose its stack rather than have positions replayed onto new text;
- *   2. CONSUMED on take — one dispose, one restore, never a second;
- *   3. BOUNDED — at most 24 paths (least-recently-remembered evicted), and
- *      nothing at all for a doc past the registry's read-only threshold.
- *
- * The close→reopen behaviour these rules serve is proven end-to-end against a real
- * CodeMirror view in `undoAcrossSaveAndClose.test.tsx`.
- */
+/** Opaque marker payloads (only the registry knows it is `EditorState.toJSON`). Pins the
+ * doc-identity guard, consume-on-take and the bounds; close→reopen end to end is in
+ * `undoAcrossSaveAndClose.test.tsx`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -92,10 +79,8 @@ describe("undoHistory", () => {
 
   describe("bounds", () => {
     it("holds at most 24 paths, evicting the least-recently-remembered", () => {
-      // 24 distinct paths, none evicted yet — the size IS the "f0 is still in
-      // here" claim (there is no peek: `takeUndo` would consume it and, worse,
-      // re-remembering it afterwards would move it to the newest slot and quietly
-      // invalidate the eviction this test is about).
+      // The size is the "f0 is still here" check: `takeUndo` would consume it, and re-remembering
+      // it would make it the newest.
       for (let i = 0; i < 24; i++) rememberUndo(`/w/f${i}.ts`, stack(`${i}`), "x");
       expect(undoCacheSize()).toBe(24);
 

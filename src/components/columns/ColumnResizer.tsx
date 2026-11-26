@@ -1,7 +1,5 @@
-/**
- * The drag handle on a header cell's right edge. Pointer drag resizes; ←/→ nudge by 10 px
- * (Shift: 40) for keyboard users; double-click resets to the default width.
- */
+/** Header cell's right-edge handle: drag resizes, ←/→ nudge 10 px (Shift: 40), double-click
+ * resets to the default width. */
 
 import { useRef } from "react";
 

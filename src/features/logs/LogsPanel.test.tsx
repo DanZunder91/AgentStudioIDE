@@ -1,11 +1,3 @@
-/**
- * LogsPanel — the diagnostics-log overlay.
- *
- * Covers: closed-by-default, the empty state, newest-first rendering, the level +
- * text filters, Clear, Copy (mocked clipboard + the missing-clipboard guard), and
- * every close path (Esc, the ✕, the backdrop) plus that an inside click does NOT.
- */
-
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

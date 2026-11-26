@@ -1,11 +1,5 @@
-/**
- * Real layout: the Columns popover must open INSIDE the panel. Anchored to the button's
- * right edge it ran off the panel's left side and was clipped to a blank box (it showed
- * as an oddly formatted popover). Falsified: `left: 0` → `right: 0` in columns.css makes
- * `left` negative here and this goes red.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/components/columns`
- */
+/** Real layout: the Columns popover must open INSIDE the panel; right-anchored (`right: 0` in
+ * columns.css) it runs off the panel's left side, clipped to a blank box. */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 

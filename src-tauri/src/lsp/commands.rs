@@ -1,10 +1,6 @@
-//! The LSP `#[tauri::command]` surface (`docs/design/code-intelligence.md` §6).
-//!
-//! Thin glue over [`LspHandle`], mirroring `terminal_open`: a per-server
-//! `Channel<String>` captured on start (server→client deframed JSON bodies), and
-//! low-frequency commands in. Tauri maps JS camelCase args → snake_case params, so
-//! the UI calls `invoke('lsp_start', { languageId, rootUri, onMessage })`,
-//! `invoke('lsp_send', { serverId, message })`, `invoke('lsp_stop', { serverId })`.
+//! LSP commands (`docs/design/code-intelligence.md` §6), thin glue over [`LspHandle`]: a
+//! per-server `Channel<String>` out, commands in. JS: `invoke('lsp_start', { languageId,
+//! rootUri, onMessage })`, `lsp_send` `{ serverId, message }`, `lsp_stop` `{ serverId }`.
 
 use tauri::ipc::Channel;
 use tauri::State;

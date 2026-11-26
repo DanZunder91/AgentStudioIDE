@@ -1,11 +1,6 @@
-/**
- * Agent Village — the low-level painting primitives every draw module shares.
- *
- * All positions are WORLD pixels (unscaled art); these helpers snap them to the
- * integer screen grid (`round(ox) + floor(round(wx) * zoom)`), so with an integer
- * zoom every art pixel lands on whole screen pixels — no sub-pixel shimmer, no
- * blur — and an overview zoom below 1 (½, ¼, ⅛) still starts everything on one.
- */
+/** Shared painting primitives. Positions are WORLD px snapped to the screen grid
+ * (`round(ox) + floor(round(wx) * zoom)`), so art lands on whole pixels at any integer zoom and at
+ * overview zooms below 1. */
 
 import type { Camera } from "./camera";
 import type { DrawTarget, SpriteImage } from "./renderTypes";
@@ -25,11 +20,8 @@ function span(a: number, b: number, size: number): number {
   return size > 0 ? Math.max(1, b - a) : 0;
 }
 
-/**
- * Fill a world-pixel rectangle. Both edges snap like positions do, so below 1 a rect is still
- * whole pixels (a rack's 1-px LED is 1 px at 9/16, not an antialiased 0.56) and neighbours share
- * their edge exactly; anything non-empty keeps at least 1 px.
- */
+/** Both edges snap like positions, so below zoom 1 a rect is still whole pixels and neighbours
+ * share edges exactly; anything non-empty keeps at least 1 px. */
 export function rect(
   ctx: DrawTarget,
   cam: Camera,

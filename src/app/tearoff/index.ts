@@ -1,9 +1,5 @@
-/**
- * Tab tear-off — public surface (docs/design/tab-tearoff.md).
- *
- * Components use the moves and the gesture; `main.tsx` uses the boot functions; nothing
- * outside this folder needs the mailbox or the registries' hand-off calls directly.
- */
+/** Tab tear-off public surface (docs/design/tab-tearoff.md): moves and gesture for components,
+ * boot for `main.tsx`; the mailbox and registry hand-off calls stay inside this folder. */
 
 export { canTearOff, tabKey, TEAROFF_KINDS } from "./contract";
 export type { EditorBuffer, Mail, ScreenPoint, TornTab } from "./contract";

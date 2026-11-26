@@ -1,27 +1,6 @@
-//! gazelle-like — a small Rust server that behaves like a realistic Rust service where it
-//! matters to the IDE (docs/design/testing-strategy.md, "gazelle-like scenario"):
-//!
-//! * serves HTTP on `127.0.0.1:3000` (`GAZELLE_ADDR`);
-//! * calls an external HTTPS API with **reqwest + rustls + webpki-roots** — it trusts ONLY the
-//!   built-in Mozilla roots, never the OS store, `SSL_CERT_FILE` or the IDE's CA, so the IDE's
-//!   proxy must tunnel it (a MITM would fail with UnknownIssuer);
-//! * reqwest honours `HTTPS_PROXY` from the environment, like any reqwest client, so when it runs
-//!   in an IDE terminal its outbound calls transit the IDE's proxy as `CONNECT`;
-//! * logs tracing-style lines (`<RFC3339> INFO gazelle_like::http: …`) to stdout AND appends them
-//!   to `./gazelle-like.log` (`GAZELLE_LOG`), kept open for writing — the way the IDE finds it.
-//!
-//! Routes:
-//!   GET /health                   → 200 {"status":"ok"}
-//!   GET /shipping/rates?zone=     → one outbound GET to the upstream, then 200 with the rates and
-//!                                   the upstream's status/size; 502 {"error":"upstream failed"}
-//!                                   when the upstream call fails (TLS broken, unreachable…).
-//! The upstream is also called once at startup and every `GAZELLE_UPSTREAM_EVERY_S` (30) seconds.
-//!
-//! Upstream: `GAZELLE_UPSTREAM`, default `https://example.com/` — the only public host the repo's
-//! external E2E tier uses. The hermetic (blocking) spec points it at a local TLS server and hands
-//! that server's test-CA root in `GAZELLE_EXTRA_ROOT` (added to webpki-roots, never replacing
-//! them): the IDE's CA is still NOT trusted, so a MITM would still fail, as for any such client.
-//! No credentials, ever.
+//! Rust-service fixture (docs/design/testing-strategy.md). reqwest + rustls + webpki-roots only, so
+//! the IDE must tunnel it (`GAZELLE_EXTRA_ROOT` adds a test root, never the IDE's CA). Logs go to
+//! stdout and to ./gazelle-like.log, kept open for writing: that is how the IDE finds it.
 
 use std::fs::OpenOptions;
 use std::io::Write;

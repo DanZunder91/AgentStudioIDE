@@ -1,12 +1,5 @@
-/**
- * Find IPC — typed wrapper for the project-wide search command.
- *
- * Kept feature-local so the wire types live next to their feature.
- *
- * The Rust half owns `find_in_files`; these types are the wire contract both
- * halves share. They live here — not in `app/types.ts` — mirroring how
- * `fleetIpc.ts` keeps `FleetSnapshot` local.
- */
+/** Typed wrappers for the find commands; the wire types live here, feature-local, like
+ * `fleetIpc.ts`. */
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -22,11 +15,8 @@ export interface FindOptions {
   glob: string;
 }
 
-/**
- * One hit. Mirrors Rust's `Match`. `line`/`col` are 1-based (editor
- * convention); `matchStart`/`matchEnd` are 0-based char offsets **into
- * `lineText`**, so the UI can highlight the span without re-running the search.
- */
+/** Mirrors Rust's `Match`. `line`/`col` are 1-based; `matchStart`/`matchEnd` are 0-based char
+ * offsets into `lineText`. */
 export interface FindMatch {
   file: string;
   line: number;
@@ -36,39 +26,20 @@ export interface FindMatch {
   matchEnd: number;
 }
 
-/**
- * The whole result set. `truncated` is true when Rust capped the results (a
- * huge repo / a `.*` that matches everything), so the UI can say so rather than
- * imply the list is complete.
- */
+/** `truncated`: Rust capped the results, so the UI must not imply the list is complete. */
 export interface FindResult {
   matches: FindMatch[];
   truncated: boolean;
 }
 
-/**
- * A fresh id for one search, so it can be cancelled later.
- *
- * The same idiom as the store's `newId()` (`crypto.randomUUID()`, `app/store.ts`),
- * which is module-private there — this is the find feature's copy of the scheme, not
- * a second scheme. Only opacity and uniqueness matter: Rust keys its cancel
- * registry on the string we hand it.
- */
+/** Opaque unique id (as the store's `newId()`) that Rust keys its cancel registry on. */
 export function newSearchId(): string {
   return crypto.randomUUID();
 }
 
-/**
- * `find_in_files` — search `root` recursively for `query` under `options`.
- *
- * Rust is security-scoped to the workspace / recent roots (same as `read_dir`),
- * and rejects an invalid regex with a message the panel surfaces inline rather
- * than crashing.
- *
- * `searchId` (optional, trailing — every existing caller keeps working) is the
- * handle {@link cancelFind} stops this walk by. A cancelled search rejects with
- * the message `cancelled`, which is a NORMAL outcome, not a failure.
- */
+/** Search `root` recursively; Rust scopes it to workspace/recent roots and rejects a bad regex
+ * with a message shown inline. `searchId` is the {@link cancelFind} handle; a cancelled search
+ * rejects with `cancelled`, a normal outcome. */
 export function findInFiles(
   root: string,
   query: string,
@@ -78,10 +49,7 @@ export function findInFiles(
   return invoke<FindResult>("find_in_files", { root, query, options, searchId });
 }
 
-/* ── Find Files (fuzzy FILENAME finder) ──────────────────────────────────────
- * A sibling of `find_in_files` that matches file *names* rather than file
- * *content* (the Cmd/Ctrl+Shift+O quick-open). Own command + own wire types,
- * served by the same Rust module. */
+/* ── Find Files: fuzzy filename matching (Cmd/Ctrl+Shift+O), same Rust module ── */
 
 /** The one modifier the filename finder carries (no regex/word/glob here). */
 export interface FindFilesOptions {
@@ -89,31 +57,19 @@ export interface FindFilesOptions {
   caseSensitive: boolean;
 }
 
-/**
- * One filename hit. `path` is RELATIVE to the search root with forward slashes
- * (the same normalization `find_in_files` uses for `file`); `name` is the
- * basename, so the row can show it bold without re-splitting the path.
- */
+/** `path` is relative to the root with forward slashes; `name` is its basename. */
 export interface FindFileHit {
   path: string;
   name: string;
 }
 
-/**
- * The filename result set. `truncated` is true when Rust capped the list (a huge
- * repo / a one-character query), so the panel can say so rather than imply the
- * list is complete — the same contract as `FindResult`.
- */
+/** `truncated`: Rust capped the list (as in `FindResult`). */
 export interface FindFilesResult {
   files: FindFileHit[];
   truncated: boolean;
 }
 
-/**
- * `find_files` — fuzzy-match file NAMES under `root` for `query`.
- * Same security scope as `find_in_files`/`read_dir`; Rust owns the
- * ranking. Separate from `find_in_files`, which searches file *content*.
- */
+/** Fuzzy-match file names under `root`; same scope as `find_in_files`; Rust owns the ranking. */
 export function findFiles(
   root: string,
   query: string,
@@ -123,21 +79,10 @@ export function findFiles(
   return invoke<FindFilesResult>("find_files", { root, query, options, searchId });
 }
 
-/* ── Cancellation ─────────────────────────────────────────────────────────────
- * A search which took too long froze the whole program; it has to run in
- * parallel so that it can be killed. Rust moved the directory walk off the
- * event-loop thread; this is the kill switch. */
+/* ── Cancellation: the walk runs off the event-loop thread so it can be killed ── */
 
-/**
- * `find_cancel` — ask Rust to abandon the walk registered under `searchId`.
- * Resolves true when a live search was found and flagged, false otherwise.
- *
- * **Never throws.** A failed cancel is not the user's problem: it is best-effort
- * cleanup, the search settles on its own either way, and a rejection here would
- * surface as a spurious error on a panel the user has just walked away from. The
- * cancel is also *advisory* — the walk stops at its next check, not instantly —
- * so the caller must return to idle on its own rather than wait for this.
- */
+/** Ask Rust to abandon `searchId`'s walk; true if a live search was flagged. Never throws, and is
+ * advisory (the walk stops at its next check), so callers go idle on their own. */
 export function cancelFind(searchId: string): Promise<boolean> {
   return invoke<boolean>("find_cancel", { searchId }).catch(() => false);
 }

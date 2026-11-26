@@ -1,15 +1,5 @@
-/**
- * The fan-out tree — the product's headline surface, from M3.
- *
- * A flat render of `selectFleetRows`, not a recursive component tree. The
- * recursion happens at build time in `flattenFleet`; see that module's header
- * for the full argument. The short version: a recursive component tree cannot
- * be virtualized, and M3 makes this list unbounded.
- *
- * When virtualization lands, it replaces the `.map()` below and nothing else:
- * `rows` is already the windowable array a virtualizer wants, and `<AgentRow>`
- * already takes its depth as a prop rather than inheriting it from the DOM.
- */
+/** The fan-out tree as a flat render of `selectFleetRows` (see `flatten.ts`), so a virtualizer
+ * can later replace the `.map()` and nothing else. */
 
 import { useAppStore } from "../../app/store";
 import { AgentRow } from "./AgentRow";
@@ -51,12 +41,8 @@ export function AgentTree() {
             rollupError={row.rollup.error}
           />
         ) : (
-          // Roll-up is destructured into PRIMITIVE props on purpose: `<AgentRow>`
-          // is memoized, so handing it the rollup object (fresh identity every
-          // flatten) would re-render every parent row on every activity tick.
-          // Numbers + a bool compare by value, so a row re-renders only when its
-          // own counts actually change. This is what keeps the 600-ticks→0-renders
-          // budget holding at depth.
+          // Rollup as primitives: a fresh object per flatten would defeat
+          // `<AgentRow>`'s memo on every activity tick.
           <AgentRow
             key={row.agentId}
             agentId={row.agentId}

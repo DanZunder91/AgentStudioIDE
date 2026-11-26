@@ -1,32 +1,6 @@
-/**
- * DiffView — the `diff` center tab: this file at HEAD, beside this file on disk.
- *
- * Opened from the file tree's right-click **Git ▸ Compare with HEAD**.
- * One `git_file_diff` on mount, then a `@codemirror/merge`
- * `MergeView` with HEAD on the left (`a`) and the working tree on the right
- * (`b`).
- *
- * **Both sides are read-only, deliberately.** v1 is a *viewer*: you look at what
- * changed, and the two ways to act on it are the editor (for the working side)
- * and the tree's explicit `Revert changes…` (for the whole file, behind a
- * confirm). Editing inside the diff is the obvious follow-on and is NOT built —
- * it needs a save path, a dirty flag and an unsaved-changes story that the
- * read-only tab is exempt from today.
- *
- * For the same reason there are **no `revertControls`**. Per-chunk revert arrows
- * would be a second way to mutate the file, one click deep and with no
- * confirmation, sitting inside a surface whose whole promise is that it only
- * shows. The menu item owns reverting and it asks first.
- *
- * Every non-diff outcome is rendered as its own honest sentence rather than an
- * empty box or a false error: loading, the IPC's message inline, binary,
- * identical to HEAD, no HEAD side yet, deleted on disk. `git_file_diff` reports
- * them as fields precisely so this component can distinguish them.
- *
- * The `MergeView` is disposed on unmount. A CodeMirror view that outlives its
- * host is the exact shape of the "eternal Loading…" orphan and of a listener
- * leak.
- */
+/** The `diff` tab: HEAD (left) vs. the working tree (right) in a `MergeView`. Read-only, no
+ * `revertControls`: reverting is the tree's confirmed menu item. Each non-diff outcome gets its
+ * own sentence. The view is disposed on unmount (an orphaned view leaks listeners). */
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -41,13 +15,8 @@ import { editorChromeTheme } from "../editor/theme";
 import { gitFileDiff, type FileDiff } from "./gitIpc";
 import "./diff.css";
 
-/**
- * What each pane is configured with. `readOnly` (the state facet) is what stops
- * commands and input handlers from producing changes; `editable` is what stops
- * the DOM from being contenteditable at all. Both, because either alone leaves a
- * way in — `readOnly` still renders a text cursor you can type into via IME, and
- * `editable: false` alone still lets a programmatic command mutate the doc.
- */
+/** Both: `readOnly` blocks commands but still takes IME input; `editable: false` alone still lets
+ * a command mutate the doc. */
 const READ_ONLY_PANE: Extension = [
   EditorState.readOnly.of(true),
   EditorView.editable.of(false),
@@ -71,11 +40,7 @@ function basename(path: string): string {
   return parts[parts.length - 1];
 }
 
-/**
- * The two-pane surface. Split out so its host div is rendered UNCONDITIONALLY:
- * the layout effect then always finds the ref set, and there is no null branch
- * to guard (and none left uncovered) — the same argument `CodeEditor` makes.
- */
+/** Split out so its host div always renders and the layout effect never sees a null ref. */
 function MergeSurface({ a, b }: { a: string; b: string }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
 
@@ -163,16 +128,8 @@ function DiffBody({ state }: { state: DiffState }): React.JSX.Element {
 }
 
 export function DiffView({ path }: { path: string }): React.JSX.Element {
-  /**
-   * The fetched answer, TAGGED with the path it is about.
-   *
-   * Tagging is what resets the view when `path` changes, instead of a
-   * `setState({loading})` in the effect body: that shape is a cascading render
-   * (and `react-hooks/set-state-in-effect` rejects it), and it also paints one
-   * frame of the PREVIOUS file's diff under the new file's heading before the
-   * effect runs. Deriving "is this answer about the file I am showing?" during
-   * render has neither problem.
-   */
+  /** Tagged with its path, so a path change resets the view during render: no setState in the
+   * effect (`react-hooks/set-state-in-effect`), no frame of the previous file's diff. */
   const [result, setResult] = useState<{ path: string; state: DiffState } | null>(null);
 
   useEffect(() => {

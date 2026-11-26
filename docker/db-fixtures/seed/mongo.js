@@ -1,22 +1,6 @@
-// ═════════════════════════════════════════════════════════════════════════════
-//  MongoDB seed — Agent Studio database-client fixture
-//  Run once by the image's entrypoint via mongosh, with `db` = `maestro`.
-//  TEST FIXTURE ONLY.
-//
-//  Two things are load-bearing here and are easy to lose if this file is edited:
-//
-//  1. There are EXACTLY SIX collections. The tree shows the count ("6
-//     collections"), and both the smoke check ("collections (6)") and the live
-//     tests assert it literally. compose.yaml's healthcheck also counts 6, so
-//     adding a seventh collection breaks `up --wait` immediately rather than one
-//     test later. If you need another collection, change all three places
-//     together and say so in the commit.
-//  2. `tracks` covers explicit-null AND missing-field AND empty-string, which in
-//     Mongo are three distinct states, not two. Document 2 has `tag: null`,
-//     document 3 has `tag: ""`, document 6 OMITS `tempo` and `raw` entirely —
-//     so the column-union projection the results grid needs is exercised by the
-//     data instead of being assumed.
-// ═════════════════════════════════════════════════════════════════════════════
+// Mongo seed, run once by the entrypoint. EXACTLY SIX collections: smoke, live tests and compose's
+// healthcheck all count 6, so change all three together. `tracks` keeps null, "" and missing
+// fields distinct so the results grid's column union is exercised by data.
 
 const maestro = db.getSiblingDB("maestro");
 

@@ -1,23 +1,11 @@
-/**
- * FindFiles — the fuzzy filename finder overlay (Cmd/Ctrl+Shift+O).
- *
- * `findIpc` and the workspace `read_dir` are mocked at the module boundary (both
- * cross Tauri, which does not belong in jsdom; the marshalling is pinned in
- * `findIpc.test.ts`). Under test: the global toggle + focus, the debounced
- * filename search against the resolved scope root, opening a hit (click or Enter)
- * reveals + closes, and the calm empty / no-match / no-root / error states.
- *
- * Fake timers + `fireEvent` make the debounce deterministic, exactly as in
- * `FindInFiles.test.tsx`.
- */
+/** `findIpc` and `read_dir` are mocked at the module boundary (marshalling is in
+ * `findIpc.test.ts`). Fake timers + `fireEvent` keep the debounce deterministic. */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `newSearchId` and `cancelFind` MUST be listed here: this factory REPLACES the
-// module wholesale, and an export it forgets arrives at the component as
-// `undefined` — a crash inside an effect that Vitest reports as a stray "Error"
-// while the suite stays green.
+// The factory replaces the module: a forgotten export arrives as `undefined` and crashes inside
+// an effect while the suite stays green.
 const findIpc = vi.hoisted(() => ({
   findFiles: vi.fn(),
   cancelFind: vi.fn(),
@@ -390,11 +378,8 @@ describe("FindFiles — search", () => {
   });
 });
 
-/**
- * "All workspaces" — the filename fan-out. Two roots, the scope
- * switched to the sentinel: one search per root, merged + repo-labeled, and both
- * the click and the Enter path open in the RIGHT repo.
- */
+/** Fan-out over two roots: one search per root, merged, repo-labelled; click and Enter both open
+ * in the right repo. */
 describe("FindFiles — All workspaces (fan-out)", () => {
   const CI = { caseSensitive: false };
 
@@ -462,13 +447,8 @@ describe("FindFiles — All workspaces (fan-out)", () => {
   });
 });
 
-/**
- * Cancelling a slow filename search. The problem covers BOTH overlays — the
- * Cmd+F function and the Cmd+O function alike — so Cmd/Ctrl+Shift+O gets the
- * same kill switch as Shift+F, and the
- * same honesty rule: a search that was stopped never claims the project has no
- * matching files. Every test holds a search still (a promise that never settles).
- */
+/** The same kill switch as Find in Files; a stopped search never claims no matching files.
+ * Searches are held still (never-settling promises). */
 describe("FindFiles — cancelling a slow search", () => {
   /** A search that never settles — a slow walk, held still. */
   const hangs = () =>
@@ -668,13 +648,8 @@ describe("FindFiles — cancelling a slow search", () => {
   });
 });
 
-/**
- * The CONTEXT default: Ctrl+F and Ctrl+O searched every
- * workspace by default, when they should follow the window that is open — from
- * a gazelle file or a gazelle terminal the search should cover gazelle. Two
- * roots open — the PRIMARY is alpha, so the old default would
- * search alpha — and the focused tab lives in gazelle.
- */
+/** Two roots with alpha as primary; the focused tab lives in gazelle, so the search must cover
+ * gazelle. */
 describe("FindFiles — scope follows the focused tab", () => {
   const CI = { caseSensitive: false };
   const workspaceSelect = () => screen.getByLabelText("Search workspace");

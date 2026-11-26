@@ -1,12 +1,5 @@
-/**
- * ScopeSelector — the shared Workspace/Folder scope picker.
- *
- * `read_dir` is mocked at the module boundary (the real one crosses Tauri, which
- * does not belong in jsdom). What is under test: the Workspace dropdown's option
- * set (it MUST include the primary `workspaceRoot`), the Folder dropdown loaded
- * from `read_dir` (dirs only), the controlled `onChange` contract, the calm
- * no-workspace state, and the pure helpers (`scopeRootOf`, `workspaceOptions`).
- */
+/** `read_dir` is mocked at the module boundary. The Workspace options must include the primary
+ * `workspaceRoot`; the Folder dropdown lists dirs only. */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -255,12 +248,7 @@ describe("ScopeSelector — component", () => {
   });
 });
 
-/**
- * useScope — the shared scope state (its `isAll` + `scopeRoots` fan-out set).
- * Driven through a tiny harness that wires the hook to the real
- * `<ScopeSelector/>`, exactly as the overlays do, so a Workspace-dropdown change
- * flows back through `setScope`.
- */
+/** Through a harness wiring the hook to the real `<ScopeSelector/>`, as the overlays do. */
 describe("useScope — scopeRoots + isAll", () => {
   function ScopeHarness(): React.JSX.Element {
     const { effectiveScope, isAll, scopeRoot, scopeRoots, setScope } = useScope();

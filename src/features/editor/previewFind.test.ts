@@ -1,23 +1,6 @@
-/**
- * previewFind — the pure/DOM half of "search inside the rendered .md".
- * jsdom, no React.
- *
- * jsdom is a genuinely good host for most of this: it has `TreeWalker`,
- * `NodeFilter`, real text nodes and real `Range`s. What it does NOT have is
- * `CSS.highlights`, `Highlight`, or `Element.scrollIntoView` — so the
- * "unavailable engine" arm of `paintHighlights` is not an exotic branch here,
- * it is the DEFAULT path, and the tests treat it as the first-class state it is.
- * Where the API's presence matters the registry is stubbed, and the stub's
- * absence is asserted two-sidedly so a test can never pass by measuring nothing.
- *
- * The claims that would be easy to get wrong, and each has its own case:
- *   - a match that SPANS text nodes (`**find** me`) — the case a naive
- *     "one node per match" implementation silently truncates;
- *   - the skipped regions are really skipped, and a normal paragraph really is
- *     indexed (two-sided, or it proves nothing);
- *   - SVG tag names are LOWER-case, so a `tagName === "SVG"` test would index
- *     every hydrated diagram while looking correct.
- */
+/** jsdom has TreeWalker and real Ranges but no `CSS.highlights` or `scrollIntoView`, so the
+ * absent-engine path is the default; where the API matters it is stubbed, and the stub's absence
+ * is asserted too. */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -53,11 +36,7 @@ class FakeHighlight {
   }
 }
 
-/**
- * Install a fake `CSS.highlights` + `Highlight` for the duration of one test,
- * restoring jsdom's real (absent) state afterwards. Returns the registry map so
- * assertions can read what was painted.
- */
+/** A fake `CSS.highlights` + `Highlight` for one test; returns the registry to read paints. */
 function withHighlightApi(): Map<string, FakeHighlight> {
   const registry = new Map<string, FakeHighlight>();
   const g = globalThis as unknown as Record<string, unknown>;

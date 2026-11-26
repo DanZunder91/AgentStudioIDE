@@ -1,10 +1,3 @@
-/**
- * SaveRequestDialog — the "name this request" modal. `apiStoreIpc` is
- * mocked (persist crosses Tauri). Under test: it renders only while a prompt is set,
- * Save persists under the typed name + retitles the tab + closes, Cancel/Esc close
- * without saving, Enter confirms, and an empty name can't be saved.
- */
-
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

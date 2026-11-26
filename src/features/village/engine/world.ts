@@ -1,41 +1,6 @@
-/**
- * The village map: which houses exist (`planHouses`) and the tile/prop layout
- * built from them (`buildWorld`). Pure and deterministic — the same plans
- * always produce an identical `World`, so the sim and renderer can rebuild it
- * freely without the scene jumping.
- *
- * Layout (tiles):
- *
- *   grass margin
- *   ┌house┐ ┌house┐ ┌house┐      ← a row of houses, bottoms aligned
- *   └─d───┘ └─d───┘ └─d───┘        d = door gap in the bottom wall
- *  |  :s      :s      :s    |    ← yard: path stub below each door + sign
- *  |========================|    ← horizontal road under the row
- *  |      plaza band        |    ← fountain, campfire, lamps, pond (once, mid-way)
- *   ...more house rows...
- *
- * `|` are vertical roads between every house column; they cross every road
- * row and the plaza band, so every door is path-connected to the plaza.
- *
- * Inside a house: decor along the top wall, then rows of 4 workstations
- * (2×1 desk + pc on its left tile + chair below facing up), one walkway row
- * after each, then (only when the house has sub-agents) rows of TEAM TABLES,
- * and a sofa/bin row at the bottom. The interior's middle column (the door
- * column) is always clear — but for a house with team tables, whose Wi-Fi
- * router (not blocking) hangs on the back wall at the top of that column.
- *
- * Team tables are where sub-agents sit — each at its own laptop. One team row
- * is 6 tiles tall and holds up to two 3×3 tables (left and right of the door
- * column), each seating 4: two chairs above it facing down, two below facing
- * up, a laptop on the table in front of every chair:
- *
- *      c . c          c = chair (top pair faces down, bottom pair faces up)
- *      L T L          L = laptop on the table's top / bottom row, T = table
- *      T T T
- *      L T L
- *      c . c
- *      . . .          walkway
- */
+/** Village map: `planHouses` and `buildWorld`. Pure and deterministic, so the sim and renderer can
+ * rebuild it freely without the scene jumping. Roads connect every door to the plaza; a house's
+ * door column is always clear (bar a non-blocking router). */
 
 import {
   TILE,
@@ -73,11 +38,8 @@ export const TEAM_TABLE_H = 3;
 /** Interior column offsets of the team tables in a row — symmetric about the door column. */
 const TABLE_OFFSETS = [1, 9];
 
-/**
- * The root a sub-agent ultimately belongs to: follow `parentKey` up through
- * `byKey` (sub-agents of sub-agents included). null when the chain breaks
- * (an unknown parent) or loops.
- */
+/** Root of `a` via `parentKey` through `byKey` (nested sub-agents too); null when the chain
+ * breaks or loops. */
 export function rootOf<T extends { key: string; parentKey: string | null }>(a: T, byKey: ReadonlyMap<string, T>): T | null {
   let cur: T | undefined = a;
   const seen = new Set<string>();
@@ -89,18 +51,9 @@ export function rootOf<T extends { key: string; parentKey: string | null }>(a: T
   return cur ?? null;
 }
 
-/**
- * One house per folder that has at least one ROOT agent. Sub-agents never get a
- * house of their own: the sim seats them at their ROOT's team tables (or by the
- * plaza when the root is unknown), so a sub-agent in another folder (a worktree,
- * a parent that `cd`'d) would otherwise leave an empty house nobody can enter.
- * Seats = root agents in the folder rounded UP to a multiple of 4 (min 4), so the
- * layout doesn't churn every time one agent appears. Sub-agents count towards their
- * ROOT's house (whatever their own folder): `subSeats` = those rounded up to a
- * multiple of 4, 0 when there are none (a sub-agent whose root is unknown counts
- * nowhere). IDE houses first, then by key (code-unit order, not locale order —
- * deterministic on every machine).
- */
+/** One house per folder with a ROOT agent; sub-agents count towards their root's house (or none if
+ * the root is unknown). Seats and `subSeats` round up to multiples of 4 so the layout doesn't
+ * churn. IDE houses first, then by key in code-unit order (deterministic on every machine). */
 export function planHouses(agents: VillageAgent[]): HousePlan[] {
   const byKey = new Map<string, { roots: number; subs: number; hasIde: boolean }>();
   for (const a of agents) {
@@ -153,10 +106,7 @@ export const CAPACITY_KINDS: readonly CapacityKind[] = ["seats", "memory", "usag
 /** Their boards' names (the figure is added each frame: `CapacityFrame.captions`). */
 export const CAPACITY_LABEL: Readonly<Record<CapacityKind, string>> = { seats: "Seats", memory: "Memory", usage: "Usage", lounge: "Lounge" };
 
-/**
- * The house (village) / floor (city) key of a capacity building. A `/` can never be in a folder's
- * basename, so no project's house can ever share it.
- */
+/** Capacity building key: `/` never appears in a folder basename, so no project can share it. */
 export function capacityKey(kind: CapacityKind): string {
   return `cap/${kind}`;
 }
@@ -170,10 +120,7 @@ const GAUGE_OFFSETS = [2, 9];
 /** Interior height of the Memory and Usage houses: decor, walkway, the 2-tile-tall row, walkway, lounge. */
 const CIVIC_LOW_H = 6;
 
-/**
- * The Seats hall (the selected agent's context window as `/context`'s 200 seats,
- * render/hall.ts): `HALL_H` tiles tall, the whole interior wide, right under the decor row.
- */
+/** Seats hall (render/hall.ts): `HALL_H` tiles tall, full interior width, under the decor row. */
 export const HALL_H = 9;
 /** Interior height of the Seats house: the decor row, the hall, and the lounge row by the door. */
 const SEATS_H = 1 + HALL_H + 1;
@@ -238,12 +185,8 @@ function civicHeight(kind: CapacityKind): number {
   return kind === "seats" ? SEATS_H : CIVIC_LOW_H;
 }
 
-/**
- * Deterministic village layout for `plans` (in the given order). With `capacity`, a CIVIC ROW of
- * three capacity houses — Seats, Memory, Usage — faces the plaza from the north (the grid is at
- * least three houses wide then, and narrower project rows are centred on it); without it the
- * layout is exactly the plain village.
- */
+/** Deterministic layout for `plans` in order. `capacity` adds a civic row (Seats, Memory, Usage)
+ * north of the plaza, the grid then at least three houses wide; without it, the plain village. */
 export function buildWorld(plans: HousePlan[], capacity?: CapacityLayout): World {
   const n = plans.length;
   const perRow = Math.max(1, Math.ceil(Math.sqrt(n)));
@@ -442,12 +385,8 @@ export function buildWorld(plans: HousePlan[], capacity?: CapacityLayout): World
   return { cols, rows, tiles, houses, props, seats, plaza };
 }
 
-/**
- * A capacity house's furniture. Seats: the HALL — the whole interior under the decor row, its 200
- * seats painted by the frame (render/hall.ts: the selected agent's context window, a character in
- * its category's colour on every taken seat). Memory: a row of server racks. Usage: two gauges, the
- * 5-hour window and the week.
- */
+/** Capacity house furniture: Seats, the hall (its seats painted by render/hall.ts); Memory, server
+ * racks; Usage, two gauges (the 5-hour window and the week). */
 function furnishCivic(props: Prop[], kind: CapacityKind, k: string, hc: number, hr: number): void {
   if (kind === "seats") {
     props.push({ id: `${k}:hall`, kind: "hall", col: hc, row: hr + 1, w: IW, h: HALL_H, capacity: kind });
@@ -519,22 +458,15 @@ function indoorGrid(world: World): Uint8Array {
   return grid;
 }
 
-/**
- * True when (col,row) is indoors: inside some house's interior rect, or its door
- * tile — in a city, anywhere inside a building's shell below its roof. Walls and everything else are
- * outdoors (rain falls on the roof walls, not on the floor). Out of bounds → false. The
- * weather never draws on indoor tiles, and in bad weather idle agents only wander among them.
- */
+/** Indoors: a house's interior or door tile, or in a city anywhere in a building's shell below its
+ * roof; walls are outdoors; out of bounds → false. Weather never draws on indoor tiles. */
 export function isIndoorTile(world: World, col: number, row: number): boolean {
   if (col < 0 || row < 0 || col >= world.cols || row >= world.rows) return false;
   return indoorGrid(world)[row * world.cols + col] === 1;
 }
 
-/**
- * A hot-path "is world px (wx, wy) indoors?" test for ONE world: the grid is looked
- * up once here, not per call (the weather fx asks ~1000× a frame). Same answers as
- * `isIndoorTile` on the tile under the point.
- */
+/** Hot-path indoor test for ONE world (weather asks ~1000× a frame): the grid is built once; same
+ * answers as `isIndoorTile` on the tile under the point. */
 export function indoorTest(world: World): (wx: number, wy: number) => boolean {
   const grid = indoorGrid(world);
   const { cols, rows } = world;

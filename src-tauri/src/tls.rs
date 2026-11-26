@@ -1,62 +1,19 @@
-//! Process-wide TLS policy for the three outbound network clients.
-//!
-//! `http.rs` (`reqwest`), `ws.rs` (`tokio-tungstenite`) and `grpc.rs` (`tonic`) all sit on
-//! the same rustls 0.23 stack. Before this policy they disagreed on both axes that matter,
-//! and the manifest's comments asserted the opposite of what was resolved:
-//!
-//! * **Provider.** `reqwest`'s plain `rustls` feature is an alias for
-//!   `__rustls-aws-lc-rs`, so `aws-lc-rs` + `aws-lc-sys` (a BoringSSL fork, C + asm) were
-//!   compiled and linked *alongside* the `ring` that `tokio-tungstenite` and
-//!   `tonic/tls-ring` pull. Two C crypto stacks in one binary.
-//! * **Trust roots.** That same feature pulls `rustls-platform-verifier`, so `reqwest`
-//!   verified against the OS trust store while WS and gRPC verified against bundled
-//!   Mozilla roots — three clients, two trust stories, neither of them chosen.
-//!
-//! Now: **one provider (`ring`, installed here) and one trust policy (the OS trust store,
-//! unioned with the bundled Mozilla set).** The full reasoning — why `ring` over
-//! `aws-lc-rs`, why the OS store for a desktop IDE pointed at internal hosts, and the one
-//! place the *mechanism* still differs between the clients — lives in the TLS policy block
-//! at the top of `Cargo.toml`'s `[dependencies]`, next to the feature flags that implement
-//! it. Read that before changing any of this.
-//!
-//! ## Why this file has to exist
-//!
-//! `reqwest`'s `rustls-no-provider` feature gives us `__rustls` **without** a
-//! `CryptoProvider`. `ClientBuilder::build()` then calls
-//! `CryptoProvider::get_default()` and, finding nothing, **panics** with
-//! *"No rustls crypto provider is configured"*. `tonic` and `tokio-tungstenite` are
-//! gentler — they fall back to whatever provider their own crate features enabled — but
-//! they check `get_default()` first too. So installing `ring` here is not decoration: it
-//! is what makes `http_send` work at all, and it is what makes all three clients provably
-//! agree instead of each falling back to its own crate-feature default.
+//! One TLS policy for `http.rs`, `ws.rs`, `grpc.rs`: the `ring` provider (installed here) and
+//! the OS trust store plus bundled Mozilla roots; the reasoning is in `Cargo.toml`'s TLS block.
+//! Required: with `rustls-no-provider`, `reqwest`'s `build()` panics without a provider.
 
 use std::sync::Once;
 
-/// Guards the one-time install. `CryptoProvider::install_default()` is itself
-/// race-free (it writes a `OnceLock` and returns `Err` if it lost), but a `Once` keeps
-/// the hot path — every `http_send` / `ws_connect` / gRPC dial calls this — down to a
-/// single acquire load, and keeps the "already installed" case from looking like an
-/// error we're swallowing.
+/// A `Once` keeps the hot path (every client call) to one acquire load; `install_default`
+/// alone is race-free but would report "already installed" as an `Err`.
 static INSTALL: Once = Once::new();
 
-/// Install `ring` as the process-wide rustls [`CryptoProvider`], exactly once.
-///
-/// Idempotent and thread-safe, so it is called from **two** kinds of place on purpose:
-///
-/// * once at startup from `run()`, so the choice happens deterministically at launch
-///   rather than on whichever request happens to be first, and
-/// * at the head of each client's entry point (`http::send`, `ws::run_connection`,
-///   `grpc::connect_channel`), because `cargo test` never goes through `run()` — without
-///   that, every `#[tokio::test]` in `http.rs` would panic inside
-///   `reqwest::ClientBuilder::build()`.
-///
-/// [`CryptoProvider`]: rustls::crypto::CryptoProvider
+/// Install `ring` as the process-wide [`CryptoProvider`](rustls::crypto::CryptoProvider), once.
+/// Called from `run()` and at each client entry point: `cargo test` never runs `run()`.
 pub fn install_crypto_provider() {
     INSTALL.call_once(|| {
-        // `Err` means someone (a dependency, or a second call that raced past the `Once`
-        // in a future refactor) already installed one. Either way a provider is present,
-        // which is the whole postcondition — so this is genuinely nothing to report.
-        // The *identity* of what ends up installed is asserted by the tests below.
+        // `Err` = a provider is already installed, which is the postcondition; the tests below
+        // assert which one.
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
 }
@@ -65,10 +22,8 @@ pub fn install_crypto_provider() {
 mod tests {
     use super::*;
 
-    /// Cipher-suite + key-exchange names of a provider, as comparable strings. Field
-    /// identity is what distinguishes `ring` from `aws-lc-rs` at runtime: the aws-lc
-    /// provider's `DEFAULT_KX_GROUPS` carry the ML-KEM hybrids (`X25519MLKEM768`,
-    /// `SECP256R1MLKEM768`, …) that `ring` has no implementation for.
+    /// Cipher-suite and key-exchange names: aws-lc's default KX groups carry ML-KEM hybrids
+    /// (`X25519MLKEM768`, …) that `ring` lacks, which tells the providers apart.
     fn fingerprint(p: &rustls::crypto::CryptoProvider) -> (Vec<String>, Vec<String>) {
         (
             p.cipher_suites

@@ -1,7 +1,4 @@
-/**
- * Agent Village renderer — public API (the panel consumes only this).
- * Contract types (DrawItem, CharacterView, …) live in ../villageTypes.ts.
- */
+/** Renderer public API: the panel consumes only this. Contract types live in ../villageTypes.ts. */
 
 export type { DrawTarget, SpriteBank } from "./renderTypes";
 export type { Camera } from "./camera";

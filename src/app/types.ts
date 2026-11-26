@@ -1,14 +1,6 @@
-/**
- * THE CONTRACT — canonical shared types.
- *
- * Source of truth: docs/design/ARCHITECTURE.md §2. Mirrored in Rust in
- * src-tauri/src/model.rs (serde: structs camelCase, enums snake_case).
- *
- * Do not fork these types into feature modules. If a shape must change, change
- * it here AND in model.rs AND note it in ARCHITECTURE.md §2.
- *
- * Wire types cross the Rust<->JS boundary. UI-only types never do.
- */
+/** Canonical shared types: docs/design/ARCHITECTURE.md §2, mirrored in src-tauri/src/model.rs
+ * (serde: structs camelCase, enums snake_case). Change all three together; never fork these types.
+ * Wire types cross the Rust<->JS boundary; UI-only types never do. */
 
 /* ────────────────────────── identifiers ────────────────────────── */
 
@@ -34,15 +26,8 @@ export const asTabId = (s: string) => s as TabId;
 export type AgentStatus = "idle" | "running" | "waiting_input" | "done" | "error";
 export type AgentKind = "orchestrator" | "subagent";
 
-/**
- * A fan-out tree node **as Rust sends it** — mirrored by the serde struct in
- * `src-tauri/src/model.rs`.
- *
- * This is deliberately split from `AgentNode`. The fields below the line in the
- * store version are client-only and Rust *cannot* populate them; declaring them
- * required on the wire was a lie that surfaces as a runtime `undefined`, not a
- * type error. If it isn't in this interface, Rust never sent it.
- */
+/** A fan-out tree node as Rust sends it (serde struct in `src-tauri/src/model.rs`). Client-only
+ * fields live on `AgentNode`: if it isn't in this interface, Rust never sent it. */
 export interface AgentNodeWire {
   id: AgentId;
   parentId: AgentId | null; // null => root orchestrator
@@ -58,64 +43,35 @@ export interface AgentNodeWire {
   error?: string;
 }
 
-/**
- * A fan-out tree node **as the store holds it**: the wire shape plus the fields
- * only the client can know. Hydrate wire → store at the ONE boundary (bridge /
- * fleet_snapshot). Never assume Rust sent these.
- */
+/** A fan-out tree node as the store holds it: the wire shape plus client-only fields.
+ * Hydrate wire → store at the ONE boundary (bridge / fleet_snapshot). */
 export interface AgentNode extends AgentNodeWire {
   childIds: AgentId[]; // derived from parentId edges; ordered
   sessionId: SessionId | null; // root agents own a Session; sub-agents null in v1
   expanded: boolean; // AgentTree disclosure
   unread: number; // notifications attributable to this agent
-  /**
-   * User's custom name for this agent, or null to use the derived `title`.
-   * Client-only (never on `AgentNodeWire`); `hydrateAgent` preserves it across
-   * re-snapshots so a Rust title/status update never wipes it. Shown in the rail
-   * row AND the agent's center tab — one custom name per agent.
-   */
+  /** Custom name, or null for the derived `title`; shown in the rail row and the agent's tab.
+   * Client-only: `hydrateAgent` preserves it across re-snapshots. */
   customTitle?: string | null;
-  /**
-   * Whether the user pinned this ROOT agent for restore-on-restart.
-   * Client-only (never on `AgentNodeWire`): the durable source of truth is
-   * Rust's pin registry (`pinned-agents.json`, read via `pinned_agents()`); this
-   * flag is the store's in-session mirror, exactly as `recentProjects` mirrors
-   * the persisted recents. `hydrateAgent` preserves it across re-snapshots like
-   * `customTitle`/`expanded` (`prev?.pinned ?? false`, no wire fallback), so a
-   * stale re-snapshot can never flip a pin the user set (or one seeded at boot by
-   * `applyPinnedAgents`). Only ever true for a root orchestrator — sub-agents are
-   * transcript-derived and re-materialize for free once the root resumes.
-   */
+  /** User pinned this ROOT for restore-on-restart. Client-only mirror of Rust's pin registry
+   * (`pinned-agents.json`); `hydrateAgent` keeps `prev?.pinned ?? false` so a re-snapshot never
+   * flips a pin. Never set on sub-agents: they re-materialize once the root resumes. */
   pinned?: boolean;
-  /**
-   * How this ROOT came back after Agent Studio restarted — the "Resumed after restart"
-   * marker (phase 1 of "agents survive a restart", `src-tauri/src/open_agents.rs`).
-   * Client-only like `pinned`: seeded once at boot from `restored_agents()`
-   * (`applyRestoredAgents`), preserved across re-snapshots by `hydrateAgent`, and
-   * cleared at the agent's next turn (`running`) or its end (`exited`) — the same
-   * moments Rust drops it, so a webview reload re-reads the same truth. `null`/absent:
-   * not a restored agent, or the marker has done its job.
-   */
+  /** How this ROOT came back after a restart (`src-tauri/src/open_agents.rs`). Client-only: seeded
+   * at boot (`applyRestoredAgents`), kept by `hydrateAgent`, cleared on the next `running` or
+   * `exited` exactly when Rust drops it. null/absent: not restored, or the marker is done. */
   restored?: RestoredMarker | null;
 }
 
-/**
- * The rung of the restore ladder (docs/design/agent-restart-restore.md) a restored agent
- * came back on: `resumed` — the same conversation (`claude --resume`); `fresh` — a new
- * conversation in the same folder (the old one was never saved); `dormant` — not
- * re-launched (its folder is gone, or it would not start), shown ended until the user
- * closes it.
- */
+/** Restore-ladder rung (docs/design/agent-restart-restore.md): `resumed` = same conversation,
+ * `fresh` = new conversation in the same folder, `dormant` = not relaunched, shown ended. */
 export type RestoreOutcome = "resumed" | "fresh" | "dormant";
 
 /** See `AgentNode.restored`. */
 export interface RestoredMarker {
   outcome: RestoreOutcome;
-  /**
-   * `true`: it was mid-turn when Agent Studio closed — the quit interrupted it, and only
-   * the user can tell it to continue (nothing is ever sent on their behalf). `false`:
-   * it was idle. `null`: the app did not close cleanly, so nobody knows.
-   */
+  /** true: mid-turn at quit; only the user may tell it to continue (nothing is sent for them).
+   * false: idle. null: the app did not close cleanly, so unknown. */
   wasWorking: boolean | null;
 }
 
@@ -160,14 +116,8 @@ export interface TerminalMeta {
   agentId?: AgentId;
 }
 
-/**
- * Returned by `fleet_snapshot` — the whole fleet in one shot.
- *
- * Two jobs: the initial paint on startup, and re-attaching to still-live PTYs
- * after the UI restarts. It is also the ONLY way a terminal's death is
- * observable (`TerminalMeta.status`/`exitCode` are written on child exit but
- * were unreadable until this existed).
- */
+/** The whole fleet in one shot: startup paint and re-attach to live PTYs after a UI restart.
+ * Also the only way a terminal's death (`TerminalMeta.status`/`exitCode`) is observable. */
 export interface FleetSnapshot {
   agents: AgentNodeWire[]; // wire shape — the store hydrates these into AgentNode
   terminals: TerminalMeta[];
@@ -212,12 +162,8 @@ export interface Tab {
   id: TabId;
   kind: TabKind;
   title: string;
-  /**
-   * User's custom name for this tab, or null to use the derived `title`. For an
-   * agent-terminal / agent-activity tab the custom name lives on the AGENT
-   * (`AgentNode.customTitle`) so the rail row and the tab stay in lockstep —
-   * this field is used only by plain terminal / editor tabs.
-   */
+  /** Custom tab name, or null for `title`. Plain terminal / editor tabs only: agent tabs use
+   * `AgentNode.customTitle` so the rail row and the tab stay in lockstep. */
   customTitle?: string | null;
   icon?: string;
   ref:
@@ -236,32 +182,19 @@ export interface Tab {
     // `sequenceId` into the api slice — like `api-request`, the tab carries no
     // data of its own, so it cannot go stale against the store.
     | { kind: "sequence"; sequenceId: string }
-    // Past Claude sessions for a folder ("Recover session"). Keyed by the
-    // folder's cwd — the picker lists `~/.claude/projects/<mangled-cwd>/*.jsonl`
-    // (read-only; the app must never WRITE under `~/.claude`) and double-click resumes
-    // one via the existing `resumeSessionId` spawn path.
+    // Past Claude sessions for a folder ("Recover session"): lists
+    // `~/.claude/projects/<mangled-cwd>/*.jsonl` read-only (never WRITE under `~/.claude`);
+    // double-click resumes one via `resumeSessionId`.
     | { kind: "session-picker"; cwd: string }
-    // The Claude metrics dashboard. A **singleton** tab — there is one set
-    // of numbers about this machine, so a second one would be the same panel twice.
-    // The ref carries the project root the report is scoped to; the panel hands it
-    // to the metrics store, which does the (Rust-side, read-only) scan.
+    // Claude metrics dashboard; a singleton tab (one set of numbers per machine).
+    // `cwd` scopes the report; the metrics store does the read-only Rust-side scan.
     | { kind: "metrics"; cwd: string | null }
-    // The database client's query console. Keyed by the SAVED
-    // connection's id — everything else the console needs (the engine's query language,
-    // the guardrails, the live session) is read from the `db` slice by that id, so the
-    // tab carries no connection data and cannot go stale against the store. One console
-    // per connection: a second tab for the same connection would be the same session
-    // twice, which is how a read-only badge and a running query disagree.
+    // Database query console, keyed by the SAVED connection id; everything else is read from the
+    // `db` slice, so the tab cannot go stale. One console per connection (one session).
     | { kind: "db-console"; connectionId: string }
-    // "Compare with HEAD" for one file. Keyed by the same
-    // absolute path an `editor` tab is keyed by, and deduped the same way — a
-    // second Compare on a file already being compared re-focuses that tab rather
-    // than minting a twin. The two kinds are distinct refs on purpose: a file can
-    // legitimately be open for editing AND open as a diff at the same time, and
-    // one dedupe key covering both would make the second gesture steal the first
-    // tab. Read-only, so it never carries `dirty` and never reaches the
-    // unsaved-changes flow (which narrows on `kind === "editor"`), and it is not
-    // persisted — a diff is re-openable from the tree it was launched from.
+    // "Compare with HEAD" for one file: keyed and deduped by absolute path like `editor`, but a
+    // distinct kind so a file can be open for editing AND as a diff. Read-only (no `dirty`, never
+    // in the unsaved-changes flow) and not persisted.
     | { kind: "diff"; path: string }
     // The fleet-wide log stream.
     // A **singleton**, like `metrics`: there is one fleet, so a second tab would be the
@@ -277,10 +210,7 @@ export interface Tab {
   dirty?: boolean;
 }
 
-/**
- * One entry of a sub-agent's transcript (M3, `subagent_activity`). Rendered
- * read-only, chat-style: user/assistant `text`, and `tool` name for a tool call.
- */
+/** One sub-agent transcript entry (`subagent_activity`), rendered read-only, chat-style. */
 export interface ActivityEntry {
   role: string;
   text: string;
@@ -288,11 +218,8 @@ export interface ActivityEntry {
   timestamp: number;
 }
 
-/**
- * One entry from a directory read (M4 workspace tree). The wire shape of Rust's
- * `read_dir` command: it is security-scoped to the workspace/recent roots and
- * returns Err for a path outside them (surfaced as a calm empty state).
- */
+/** One `read_dir` entry. Rust scopes `read_dir` to the workspace/recent roots and errs outside
+ * them (shown as a calm empty state). */
 export interface FsEntry {
   name: string;
   path: string;
@@ -362,18 +289,8 @@ export interface Workspace {
   expandedIds: Set<WsNodeId>;
 }
 
-/**
- * Which PERSISTENT panel the right rail shows.
- *
- * ⚠️ This union once drifted into a lie: it still read
- * `"files" | "find" | "vault"` while `store.ts` had grown `"history"` and
- * `"collections"` inline and dropped `"find"` (Find became a momentary overlay,
- * `findInFilesOpen`, so it never changes which panel is mounted). Two declarations of the
- * same set, and the one in the contract was the wrong one — `RightRailTab` was imported
- * nowhere, so nothing noticed. It is now the single declaration: `store.ts`'s `UiState` and
- * `RailTabs`' `TABS` table both read it, so a new tab cannot be added to one and not the
- * other.
- */
+/** Which persistent panel the right rail shows; the single declaration (`store.ts`'s `UiState`
+ * and `RailTabs`' `TABS` read it). Union order is the display order of `RailTabs`' strip. */
 export type RightRailTab =
   | "files"
   | "vault"
@@ -381,20 +298,10 @@ export type RightRailTab =
   | "collections"
   /** The database client's saved-connection list. */
   | "db"
-  /**
-   * Self-contained developer utilities — the epoch ↔ human date converter first
-   * (a small Tools tab, placed next to the database tab). Purely local: no PTY,
-   * no Rust command, no network, so unlike every other panel here it has nothing
-   * to go stale against. Added LAST on purpose — the
-   * order of this union is the display order of `RailTabs`' strip.
-   */
+  /** Self-contained developer utilities (epoch ↔ date converter): no PTY, Rust or network. */
   | "tools"
-  /**
-   * Source control: working-tree changes per workspace root
-   * (added / modified / deleted, the same colors the Files tree wears) and the
-   * project's open GitHub pull requests with an author filter. One tab hosts both
-   * views — the strip's width budget is why (see `RailTabs`' header).
-   */
+  /** Source control: working-tree changes per root plus the project's open GitHub PRs. One tab
+   * hosts both because of the strip's width budget (see `RailTabs`' header). */
   | "git";
 
 /** The single pivot: changing selectedAgentId re-points center + right rail. */

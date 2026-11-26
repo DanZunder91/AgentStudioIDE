@@ -1,14 +1,6 @@
-//! **Agent Village — `list_external_agents`** (`src/features/village/villageTypes.ts`
-//! `ExternalAgentsReport`). Same rules as the parent file: the real production path,
-//! the typed struct serialised as Tauri would, normalised only where volatile.
-//!
-//! | golden | produced by |
-//! |---|---|
-//! | `external-agents.json` (`ExternalAgentsReport` by scenario) | `external_agents::scan_external` over a tempdir copy of `tests/fixtures/external_agents` (mtimes stamped `T0 - secs` from its `mtimes.json`), the IDE's own session excluded; `macos-linux`: a live `claude` for every in-window session (bare in alpha and beta, `--resume` in gamma under iTerm2, `--session-id` in zeta under Terminal, the IDE's own by id), so every activity and both host answers show; `dead-hidden`: only beta's `claude` lives, so every other session is dropped; `windows`: no process table (liveness unknown, nothing hidden); `no-sessions`: an empty projects dir |
-//!
-//! **Normalised:** the opaque keys (a per-process random SipHash) → `k1`, `k2`, … in
-//! order of appearance, `parentKey` mapped through the same table — so the TREE is
-//! pinned while the hash is not.
+//! Golden `external-agents.json`: `external_agents::scan_external` over a temp copy of
+//! `tests/fixtures/external_agents` (mtimes from `mtimes.json`), per process-table scenario.
+//! Opaque SipHash keys → `k1`, `k2`, … (and `parentKey`): the tree is pinned, not the hash.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};

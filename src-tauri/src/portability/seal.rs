@@ -1,50 +1,6 @@
-//! Passphrase sealing for shareable config bundles — PBKDF2-HMAC-SHA256 → AES-256-GCM.
-//!
-//! Contract: `src/features/portability/types.ts` (`SealedPayload`). Crypto is `ring` and only
-//! `ring`.
-//!
-//! ## Deliberately the only file in `portability/` that knows any cryptography
-//!
-//! `bundle.rs` owns the *format* and this file owns the *wrapper*, because "one shape for both
-//! modes with sealing as a wrapper" (the contract's own words) is only true if the two are not
-//! interleaved. Everything here takes bytes and returns bytes; it has never heard of a DB
-//! connection.
-//!
-//! ## The parameters, and why each is recorded in the file rather than assumed
-//!
-//! | | value | why |
-//! |---|---|---|
-//! | KDF | PBKDF2-HMAC-SHA256, [`KDF_ITERATIONS`] = 600 000 | OWASP 2023 for this PRF |
-//! | salt | 16 random bytes, per bundle | |
-//! | AEAD | AES-256-GCM, 12-byte random nonce, per bundle | one bundle, one key, one nonce |
-//! | AAD | the canonical header (`kind|version|mode|createdAtMs|label`) | see below |
-//!
-//! Every one of them travels in the clear inside `SealedPayload`, which is normal (a decryptor
-//! needs them) and is what lets the iteration count be raised later without making today's files
-//! unreadable. [`open`] therefore reads them from the file — and so must **bound** them, because
-//! a hostile file that declared 4 000 000 000 iterations would otherwise be a one-line
-//! denial-of-service (see [`MAX_KDF_ITERATIONS`]).
-//!
-//! ## What the AAD buys, precisely
-//!
-//! The header is *outside* the ciphertext so a sealed bundle can describe itself before anyone
-//! types a passphrase. Binding it as AEAD additional data is what stops that from being a hole:
-//! a ciphertext cannot be lifted into a bundle that says it is smaller, older or friendlier,
-//! because the tag was computed over those exact bytes. `relabelling_a_sealed_bundle_stops_it_from_opening`
-//! is the test for it, and it was verified by breaking the AAD and watching it go red.
-//!
-//! ## Stated limitations, so nothing here reads as more than it is
-//!
-//! * **PBKDF2 is markedly weaker than Argon2id against GPU cracking.** It was chosen because
-//!   `ring` is already the whole binary's crypto provider and Argon2 would be a new
-//!   dependency. A weak passphrase is still the weak link, which is why
-//!   [`MIN_PASSPHRASE_LENGTH`] is enforced **here** and not only in the dialog.
-//! * **Nothing is zeroized.** The derived key and the plaintext live in ordinary `Vec`s; there is
-//!   no `zeroize` dependency in this tree and adding one would be a false comfort while the same
-//!   plaintext is also handed to `serde_json`. What *is* guaranteed is that the plaintext never
-//!   crosses IPC and never touches disk (types.ts's "the bundle's bytes never cross the IPC
-//!   boundary").
-//! * **`bad-passphrase` and `tampered` are not fully distinguishable** — see [`open`].
+//! Passphrase sealing: PBKDF2-HMAC-SHA256 → AES-256-GCM with `ring` only; the only crypto in
+//! `portability/`. Params travel in the file, so [`open`] bounds them ([`MAX_KDF_ITERATIONS`]).
+//! The header is bound as AAD so it can't be relabelled. Nothing is zeroized; PBKDF2 < Argon2id.
 
 use std::num::NonZeroU32;
 
@@ -66,21 +22,15 @@ pub const KDF_ITERATIONS: u32 = 600_000;
 pub const SALT_LEN: usize = 16;
 /// AES-GCM's nonce length. Not a choice — 96 bits is what the construction takes.
 pub const NONCE_LEN: usize = 12;
-/// The floor on a sealing passphrase, enforced in Rust (contract: `MIN_PASSPHRASE_LENGTH`).
-///
-/// Counted in **characters, not bytes**: a 12-character passphrase of non-ASCII is a
-/// 12-character passphrase, and counting bytes would silently accept a 3-character one made of
-/// 4-byte code points.
+/// Passphrase floor (contract: `MIN_PASSPHRASE_LENGTH`), counted in chars, not bytes, so 4-byte
+/// code points can't sneak a short one through.
 pub const MIN_PASSPHRASE_LENGTH: usize = 12;
 
 /// Accepted salt lengths on read. Wider than [`SALT_LEN`] so a future writer can grow it;
 /// bounded so a one-byte salt cannot be smuggled in.
 const SALT_LEN_ACCEPTED: std::ops::RangeInclusive<usize> = 8..=64;
-/// The ceiling on a file-declared iteration count.
-///
-/// ~8× today's value, so the count can be raised several times without a format break, and far
-/// below the point where opening a bundle stops being a user action and becomes a hang. A file
-/// asking for more than this is refused rather than obeyed.
+/// Ceiling on a file-declared iteration count: ~8× today's, room to raise without a format
+/// break, below where opening becomes a hang. More is refused.
 const MAX_KDF_ITERATIONS: u64 = 5_000_000;
 /// AES-GCM's authentication tag, appended to the ciphertext by `seal_in_place_append_tag`.
 const GCM_TAG_LEN: usize = 16;
@@ -113,11 +63,8 @@ pub struct AeadParams {
     pub nonce_b64: String,
 }
 
-/// Seal `plaintext` under `passphrase`, binding `aad` (the canonical header).
-///
-/// `iterations` is a parameter rather than a constant so the *mechanics* can be unit-tested in
-/// milliseconds while [`the_shipped_iteration_count_round_trips`] proves the shipped constant.
-/// Every production caller passes [`KDF_ITERATIONS`]; nothing in the command path can lower it.
+/// Seal `plaintext`, binding `aad` (the canonical header). `iterations` is a parameter for fast
+/// tests; every production caller passes [`KDF_ITERATIONS`].
 pub fn seal(
     passphrase: &str,
     aad: &str,
@@ -170,35 +117,9 @@ pub fn seal(
     })
 }
 
-/// Open `payload` under `passphrase`, requiring `aad` to be the canonical header it was sealed
-/// against.
-///
-/// ## The one place this module cannot give the contract what it asks for
-///
-/// `types.ts` lists both `bad-passphrase` and `tampered`, the latter for "the AEAD tag failed in
-/// a way that implicates the header binding, not the passphrase". **With the fields
-/// `SealedPayload` defines, that distinction is not computable.** AES-GCM's tag check fails
-/// identically for a wrong key and for altered additional data, and there is nothing else in the
-/// file — no key-check value, no header MAC — to tell the two apart. Telling them apart would
-/// need a field the contract does not have.
-///
-/// So the split implemented here is the honest one, and it is structural rather than
-/// cryptographic:
-///
-/// * **`tampered`** — the file's *sealing parameters* are impossible: an algorithm it does not
-///   name, base64 that does not decode, a nonce of the wrong length, a ciphertext too short to
-///   contain a tag, an iteration count outside [`MAX_KDF_ITERATIONS`]. None of those can be
-///   caused by mistyping a passphrase, so blaming the passphrase would send the user hunting for
-///   the wrong thing.
-/// * **`bad-passphrase`** — well-formed inputs, tag check failed. This covers a mistyped
-///   passphrase *and* a flipped ciphertext byte *and* a relabelled header, which is exactly what
-///   the contract's own comment already admits ("indistinguishable from tampering to AES-GCM,
-///   but *usually* this"). The important guarantee — that none of the three opens the file — is
-///   unaffected and is what the tests assert.
-///
-/// [`MIN_PASSPHRASE_LENGTH`] is deliberately **not** enforced here: refusing to open a bundle a
-/// colleague sealed under an older, shorter rule would destroy data to enforce a policy that only
-/// makes sense at creation time.
+/// Open `payload`, requiring `aad` to match. GCM can't tell a wrong key from altered AAD, so
+/// `tampered` = impossible parameters (algorithm, base64, nonce, length, iterations); any tag
+/// failure is `bad-passphrase`. No passphrase-length check: older bundles must still open.
 pub fn open(payload: &SealedPayload, passphrase: &str, aad: &str) -> Result<Vec<u8>, PortError> {
     if !payload.kdf.algorithm.eq_ignore_ascii_case(KDF_ALGORITHM) {
         return Err(tampered(format!(
@@ -400,15 +321,8 @@ mod tests {
         );
     }
 
-    /// 🔴 **This is what the AAD is for**, and it is the test most likely to be skipped.
-    ///
-    /// The header lives outside the ciphertext so a sealed bundle can describe itself before
-    /// anyone types a passphrase. Without the binding, a ciphertext could be lifted into a
-    /// header claiming a friendlier label or a smaller payload and nothing would notice.
-    ///
-    /// Falsified: with `aead::Aad::from(aad)` replaced by `aead::Aad::empty()` in **both**
-    /// `seal` and `open`, this test failed with
-    /// `a relabelled header must not open: Ok([112, 108, ...])`.
+    /// Without the AAD binding a ciphertext could be lifted into a friendlier header unnoticed.
+    /// Falsify: `aead::Aad::empty()` in both `seal` and `open`.
     #[test]
     fn relabelling_a_sealed_bundle_stops_it_from_opening() {
         let payload = sealed(b"plaintext");

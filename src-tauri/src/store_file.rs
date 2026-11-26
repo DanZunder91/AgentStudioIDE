@@ -1,32 +1,6 @@
-//! The one writer for the app's JSON stores: a per-file process-wide lock for
-//! load → modify → save, and a crash-safe atomic replace with a **unique** temp name.
-//!
-//! **Why.** `api-store.json` (the Vault) has four writers — the webview's blob save, the folder
-//! commands, a DB password saved "forever", and a portability import — and before this module none
-//! of them took a lock, and every one wrote the same fixed temp name (`api-store.json.tmp`),
-//! `remove_file`-ing it before `create_new`. So:
-//! * two concurrent load → edit → save cycles lost one update (the second save wrote a store
-//!   loaded before the first save landed); and
-//! * writer B could delete writer A's half-written temp, or rename it into place, or A could
-//!   rename B's — a torn or foreign file where a store should be.
-//!
-//! The fix, on every OS:
-//! * [`lock`] — one re-entrant lock per store file, held across the whole read-modify-write.
-//!   Re-entrant on the same thread, so a caller holding it (an import editing three stores) can
-//!   still call a `save` that takes it again without deadlocking.
-//! * [`write_atomic`] — a sibling temp named `<file>.<ulid>.tmp` (unique per write, so no
-//!   writer can touch another's), `create_new`, `sync_all`, `rename` over the target, and the
-//!   temp removed on ANY failure — it may hold secrets, and a leftover is a copy nobody tracks.
-//!   A crash can still strand one between the fsync and the rename, so each write also removes
-//!   the store's temps older than [`STALE_TEMP_AGE`].
-//!   `private` makes both the temp and the result `0600` on unix (born that way, never chmod-ed
-//!   after the bytes are in).
-//!
-//! **Windows only:** `rename` over a file that another process holds open without
-//! `FILE_SHARE_DELETE` — antivirus scanning the new file, the search indexer, an editor —
-//! fails with `ERROR_ACCESS_DENIED` (5) or `ERROR_SHARING_VIOLATION` (32). Those holds are
-//! brief, so the rename is retried with a short backoff ([`RENAME_BACKOFF`]) and then fails
-//! cleanly. macOS and Linux replace an open file without complaint and never retry.
+//! The one writer for the app's JSON stores: a re-entrant per-file lock across load → modify →
+//! save, and an atomic replace via a unique `<file>.<ulid>.tmp`, removed on failure (secrets).
+//! Windows: renaming over a briefly held file fails, so it retries with [`RENAME_BACKOFF`].
 
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -72,10 +46,8 @@ fn key(path: &Path) -> PathBuf {
     }
 }
 
-/// Take the process-wide lock for the store at `path`, blocking until no other thread holds
-/// it. Re-entrant on the same thread. Hold it across load → modify → save; [`write_atomic`]
-/// alone does not take it (a `save` that only replaces the whole file still should, so it
-/// queues behind an in-flight edit instead of overwriting it).
+/// Take the re-entrant, process-wide lock for the store at `path`; hold it across load → modify →
+/// save. [`write_atomic`] does not take it, but a whole-file `save` should, to queue behind edits.
 pub fn lock(path: &Path) -> StoreGuard {
     static LOCKS: OnceLock<Mutex<HashMap<PathBuf, &'static FileLock>>> = OnceLock::new();
     let lock: &'static FileLock = {
@@ -146,11 +118,8 @@ fn is_temp_of(name: &str, candidate: &str) -> bool {
             .is_some_and(|id| ulid::Ulid::from_string(id).is_ok())
 }
 
-/// Remove `path`'s temps last written [`STALE_TEMP_AGE`] or more before `now`.
-/// A crash between the temp's `fsync` and the rename leaves one behind, and every
-/// write uses a new name, so nothing else would ever remove it, and for the Vault, history
-/// and DB stores it is a full copy of their secrets. The same goes for a temp whose `remove_file`
-/// failed because antivirus still held it. Best-effort: a sweep that fails must not fail the save.
+/// Remove `path`'s temps older than [`STALE_TEMP_AGE`]: a crash before the rename strands one with
+/// a full copy of the store's secrets, and unique names mean nothing else removes it. Best-effort.
 fn sweep_stale_temps(path: &Path, now: std::time::SystemTime) {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
         return;

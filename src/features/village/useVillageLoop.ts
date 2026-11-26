@@ -1,9 +1,5 @@
-/**
- * Agent Village — the animation loop. A `requestAnimationFrame` loop that runs only
- * while `running` is true: the panel passes "the document is visible", and the loop
- * is torn down on unmount (the Pane renders only the ACTIVE tab, so a hidden village
- * tab is unmounted). No background CPU either way.
- */
+/** The village's rAF loop: runs only while `running` (document visible) and is torn down on
+ * unmount (the Pane renders only the active tab), so no background CPU. */
 
 import { useEffect, useRef, useState } from "react";
 
@@ -25,16 +21,9 @@ export function useDocumentVisible(): boolean {
   return visible;
 }
 
-/**
- * Call `onFrame(now)` on every animation frame while `running`; `onStop` when the
- * loop stops (pause or unmount). The latest callbacks are used without restarting.
- *
- * A frame that throws neither ends the loop (that left a frozen — on the first frame,
- * blank — canvas until the tab was reopened) nor floods: the error is reported ONCE per
- * streak of failing frames (diagnostics log + console), and after LOOP_MAX_FAILURES in a
- * row the loop retries once every LOOP_RETRY_MS instead of 60 times a second. The first
- * frame that paints again ends the streak.
- */
+/** `onFrame(now)` each frame while `running`, `onStop` when it stops; latest callbacks, no restart.
+ * A throwing frame neither ends the loop nor floods: one report per failing streak, and after
+ * LOOP_MAX_FAILURES in a row it retries every LOOP_RETRY_MS until a frame paints again. */
 export function useAnimationLoop(onFrame: (nowMs: number) => void, running: boolean, onStop?: () => void): void {
   const frameRef = useRef(onFrame);
   const stopRef = useRef(onStop);

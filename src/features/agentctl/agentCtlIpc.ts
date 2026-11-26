@@ -1,18 +1,12 @@
-/**
- * What an agent did through the `agent-studio` command or MCP tools (Rust `agent_ctl`), as the
- * webview hears it. Rust emits one event per action on `agent-ctl://event`; this module is the
- * only place that knows the event's name and envelope. What each `kind` means is its handler's
- * business (`dispatch.ts`).
- */
+/** Agent actions via the `agent-studio` command or MCP tools (Rust `agent_ctl`), one event each
+ * on `agent-ctl://event`; only this module knows that name and envelope. Kinds: `dispatch.ts`. */
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Mirrors `agent_ctl::EVENT`. */
 export const AGENT_CTL_EVENT = "agent-ctl://event";
 
-/**
- * Mirrors `agent_ctl::CtlEvent`: a `kind`, the terminal the agent runs in (an agent's id IS its
- * terminal's id), and the kind's own fields beside them.
- */
+/** Mirrors `agent_ctl::CtlEvent`: `kind`, the agent's terminal (its id IS the agent's id), and
+ * the kind's own fields. */
 export type AgentCtlEvent = { kind: string; terminalId: string } & Record<string, unknown>;
 
 /** Subscribe for the process's lifetime. A payload without a string `kind` is dropped. */

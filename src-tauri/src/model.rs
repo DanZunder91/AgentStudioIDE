@@ -1,14 +1,6 @@
-//! THE CONTRACT — canonical wire types (Rust side).
-//!
-//! Source of truth: `docs/design/ARCHITECTURE.md` §2.5. Mirrored in TypeScript in
-//! `src/app/types.ts`. Serde convention: **structs → camelCase** (match TS
-//! fields), **enums → snake_case** (match TS string unions).
-//!
-//! Do not fork these types into other modules. If a shape must change, change it
-//! here AND in `types.ts` AND note it in ARCHITECTURE.md §2.
-//!
-//! M1 carries only the terminal slice of the contract; `AgentNode` / `AgentEvent`
-//! / `DirEntry` / `FsPatch` land with M2–M4.
+//! THE CONTRACT: canonical wire types, mirrored in `src/app/types.ts` (ARCHITECTURE §2.5).
+//! Structs → camelCase, enums → snake_case. Never fork these; change here AND in `types.ts`
+//! AND note it in ARCHITECTURE.md §2.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,10 +11,6 @@ pub type AgentId = String;
 pub type TerminalId = String;
 
 /// TS: `type AgentStatus = 'idle' | 'running' | 'waiting_input' | 'done' | 'error'`.
-///
-/// M2 only ever produces `Running`, `Done` and `Error`. `Idle` and `WaitingInput`
-/// need telemetry we do not have until M3's transcript tailer — the enum carries
-/// them because it is the locked contract, not because M2 can infer them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentStatus {
@@ -41,13 +29,8 @@ pub enum AgentKind {
     Subagent,
 }
 
-/// A node in the fan-out tree (ARCHITECTURE §2.5).
-///
-/// This is the **wire** shape only. `types.ts` augments it with `childIds`,
-/// `sessionId`, `expanded` and `unread`, which are store-maintained and must NOT
-/// be sent from here. In particular `sessionId` there is the **UI layout Session**
-/// — unrelated to the agent runtime's own session identity, which stays internal
-/// to the supervisor (see `supervisor::AgentRuntime::session_key`).
+/// A fan-out tree node, wire shape only: `types.ts` adds store-maintained `childIds`,
+/// `sessionId` (the UI layout Session, not the runtime's), `expanded`, `unread`; never send them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentNode {
@@ -71,10 +54,6 @@ pub struct AgentNode {
 }
 
 /// The ONLY payload on `agent://event` (ARCHITECTURE §2.5), tagged by `t`.
-///
-/// M2 emits `AgentStarted`, `Status` and `Exited`. `SubagentSpawned` is the M3
-/// headline and is carried here so the contract is complete and the tailer has an
-/// obvious seam to fill — nothing in M2 constructs it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum AgentEvent {
@@ -109,10 +88,8 @@ pub enum AgentEvent {
     Title { agent_id: AgentId, title: String },
 }
 
-/// Return of `fleet_snapshot` — the initial paint and the restart/re-attach path.
-///
-/// This is what makes a terminal's death visible: `TerminalMeta.status`/`exitCode`
-/// are written on child exit but, before this existed, no caller could read them.
+/// Return of `fleet_snapshot`: the initial paint and the restart/re-attach path, and how a
+/// terminal's death (`status`/`exitCode`) becomes visible.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FleetSnapshot {
@@ -120,11 +97,8 @@ pub struct FleetSnapshot {
     pub terminals: Vec<TerminalMeta>,
 }
 
-/// One line of a sub-agent's activity feed. A sub-agent has no PTY — its
-/// work lives in its transcript — so selecting it in the rail shows this instead.
-///
-/// TS mirror: `interface ActivityEntry { role: string; text: string; tool?: string;
-/// timestamp: number }`. Returned by `subagent_activity`, chronological.
+/// One line of a sub-agent's activity feed (it has no PTY), returned chronologically by
+/// `subagent_activity`. TS mirror: `interface ActivityEntry`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityEntry {
@@ -141,12 +115,8 @@ pub struct ActivityEntry {
     pub timestamp: i64,
 }
 
-/// One entry in the workspace file tree (M4). The right rail lazy-loads a folder's
-/// immediate children on expand; each child is one of these.
-///
-/// TS mirror: `interface FsEntry { name: string; path: string; isDir: boolean }`.
-/// Returned by `read_dir`, sorted directories-first then case-insensitive alpha.
-/// `path` is the absolute path to pass back to `read_dir` to expand a directory.
+/// One file-tree entry, returned by `read_dir` (dirs first, then case-insensitive). TS mirror:
+/// `FsEntry`; `path` is absolute, passed back to `read_dir` to expand.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FsEntry {
@@ -173,11 +143,8 @@ pub struct FindOptions {
     pub glob: Option<String>,
 }
 
-/// One search hit. TS: `interface Match { file: string; line: number; col: number;
-/// lineText: string; matchStart: number; matchEnd: number }`.
-///
-/// `file` is relative to the search root; `line`/`col` are 1-based; `matchStart`/
-/// `matchEnd` are **byte** offsets of the match span within `lineText`.
+/// One search hit (TS `Match`): `file` relative to the search root, `line`/`col` 1-based,
+/// `matchStart`/`matchEnd` BYTE offsets within `lineText`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Match {
@@ -209,12 +176,8 @@ pub enum LspStatus {
     NotInstalled,
 }
 
-/// Result of `lsp_start` (code-intelligence.md §6). The `serverId` is
-/// minted Rust-side and used for `lsp_send`/`lsp_stop`.
-///
-/// TS mirror: `interface LspStartInfo { serverId: string; languageId: string;
-/// status: LspStatus; installHint?: string; serverName?: string }`. `installHint` is
-/// present only for `not_installed`; both optionals are omitted (not `null`).
+/// Result of `lsp_start` (TS `LspStartInfo`); `serverId` is minted here for `lsp_send`/`lsp_stop`.
+/// `installHint` only for `not_installed`; both optionals are omitted, not `null`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LspStartInfo {
@@ -246,10 +209,8 @@ pub enum TerminalStatus {
     Exited,
 }
 
-/// PTY metadata — **never bytes**. Returned by `terminal_open`.
-///
-/// `exitCode` / `agentId` are `?`-optional in TS, so they are omitted (not
-/// `null`) when absent.
+/// PTY metadata, never bytes; returned by `terminal_open`. `exitCode`/`agentId` are omitted
+/// (not `null`) when absent, matching TS `?` optionals.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalMeta {

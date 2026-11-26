@@ -1,16 +1,6 @@
-/**
- * Ambience — the village's sky: which part of the day it is on the user's LOCAL
- * clock, how bright it is outdoors, the colour grade, and what the weather does to
- * the villagers (lamps on, campfire out, everyone indoors).
- *
- * Weather and time of day follow the user's local conditions: when it is raining there it rains
- * here, and in the afternoon it is afternoon outside the house. Pure: the clock is passed in (`now`) and only its LOCAL wall-clock fields
- * are read (`getHours`/`getMinutes`/`getSeconds`), so the result is the same on any
- * DST offset — 15:00 is afternoon whether the zone is UTC+1 or UTC+2 today.
- *
- * Also the City's sky (`citySky`): its colours per time of day, keyframed on `skyClock` (the
- * phase plus how far through it the clock is) and painted through the outdoor grade's inverse.
- */
+/** The sky: day phase from the user's LOCAL clock, light, grade and weather effects. Pure: `now` is
+ * passed in and only its local wall-clock fields are read, so DST offsets don't matter. Also the
+ * City's sky (`citySky`), keyframed on `skyClock` and painted through the grade's inverse. */
 
 import type { Ambience, DayPhase, PhaseOverride, WeatherKind, WeatherOverride, WeatherWire } from "../villageTypes";
 
@@ -31,13 +21,8 @@ function wrapDay(m: number): number {
   return ((m % DAY_MIN) + DAY_MIN) % DAY_MIN;
 }
 
-/**
- * Put sunrise, sunset and the clock on ONE unwrapped timeline. A sunset at or
- * before sunrise on the wall clock (Reykjavik in June: up 02:55, down 00:03) is
- * really after midnight, so it moves a day later; and a minute just past midnight
- * that still belongs to that late dusk moves a day later too, so dusk keeps
- * fading past 00:00 instead of snapping to night.
- */
+/** Sunrise, sunset and the clock on ONE unwrapped timeline: a sunset at/before sunrise on the wall
+ * clock (Reykjavik in June) moves a day later, as do minutes past midnight still in that dusk. */
 function timeline(localMinutes: number, sunriseMin: number, sunsetMin: number): { m: number; sr: number; ss: number } {
   const m = wrapDay(localMinutes);
   const sr = sunriseMin;
@@ -45,13 +30,9 @@ function timeline(localMinutes: number, sunriseMin: number, sunsetMin: number): 
   return { m: m < sr - 45 && m + DAY_MIN < ss + 40 ? m + DAY_MIN : m, sr, ss };
 }
 
-/**
- * The part of the day at `localMinutes` (minutes since local midnight). Sunrise /
- * sunset default to 06:00 / 18:00 when null; a sunset past midnight is handled.
- * Windows:
- *   dawn sunrise±45m · morning → 11:30 · noon 11:30–13:30 · afternoon → sunset−90m
- *   · evening → sunset−20m · dusk → sunset+40m · night otherwise.
- */
+/** Phase at `localMinutes` (since local midnight); sunrise/sunset default 06:00/18:00. dawn
+ * sunrise±45m · morning → 11:30 · noon → 13:30 · afternoon → sunset−90m · evening → sunset−20m ·
+ * dusk → sunset+40m · night otherwise. */
 export function dayPhaseAt(localMinutes: number, sunriseMin: number | null, sunsetMin: number | null): DayPhase {
   const { m, sr, ss } = timeline(localMinutes, sunriseMin ?? DEFAULT_SUNRISE_MIN, sunsetMin ?? DEFAULT_SUNSET_MIN);
   if (m >= sr - 45 && m < sr + 45) return "dawn";
@@ -99,10 +80,8 @@ const WARM: Grade = { color: hex("#ffb060"), alpha: 0.1 };
 const SUNSET: Grade = { color: hex("#ff7a30"), alpha: 0.24 };
 const TWILIGHT: Grade = { color: hex("#6a3a8c"), alpha: 0.38 };
 
-/**
- * Daylight at the START and END of each phase, and the tint stops spread evenly
- * across it; values match across boundaries so the sky never pops.
- */
+/** Daylight at each phase's start and end, tint stops spread evenly; boundary values match so the
+ * sky never pops. */
 const CURVES: Record<DayPhase, { light: [number, number]; tint: Grade[] }> = {
   night: { light: [0.15, 0.15], tint: [NIGHT, NIGHT] },
   dawn: { light: [0.15, 0.7], tint: [NIGHT, DAWN_GLOW] },
@@ -185,11 +164,8 @@ const FORCED_ARC: Record<DayPhase, NonNullable<Ambience["arc"]>> = {
   night: { body: "moon", t: 0.5 },
 };
 
-/**
- * The sun from sunrise to sunset, the moon from sunset to the next sunrise, each by how far
- * through its span `m` is — all on `timeline`'s unwrapped minutes, so a sunset past midnight
- * keeps the sun up until it really sets.
- */
+/** Sun from sunrise to sunset, moon until the next sunrise, by how far through its span `m` is,
+ * on `timeline`'s unwrapped minutes. */
 export function skyArc(m: number, sr: number, ss: number): NonNullable<Ambience["arc"]> {
   if (m >= sr && m < ss) return { body: "sun", t: (m - sr) / (ss - sr) };
   const since = m >= ss ? m - ss : m + DAY_MIN - ss;
@@ -204,12 +180,8 @@ function overcast(base: Grade, g: number): Grade {
   return { color: lerpRgb(base.color, OVERCAST_GREY, w), alpha };
 }
 
-/**
- * Everything the renderer needs for the sky this frame. `now`'s local wall clock
- * picks the phase (sunrise/sunset from `weather` when it has them); `weather` null →
- * clear, calm. HUD overrides win over the live values. `zone` (the machine's IANA time zone)
- * is carried through for the City's skyline landmarks.
- */
+/** The sky this frame. `now`'s local clock picks the phase (sun times from `weather` if present;
+ * null → clear, calm); HUD overrides win. `zone` (IANA) is carried for the City's landmarks. */
 export function computeAmbience(
   now: Date,
   weather: WeatherWire | null,
@@ -275,10 +247,8 @@ export function veilAlpha(amb: Pick<Ambience, "weather" | "intensity">): number 
   return VEIL[amb.weather] * (0.5 + 0.5 * amb.intensity);
 }
 
-/**
- * The outdoor grade as one affine map, `seen = paint·k + c`: exactly what `paintAmbience` does to an
- * opaque outdoor pixel — the tint at its (capped) alpha, then the veil over that.
- */
+/** The outdoor grade as one affine map `seen = paint·k + c`: what `paintAmbience` does to an
+ * opaque outdoor pixel (the tint at its capped alpha, then the veil). */
 function gradeMap(amb: Pick<Ambience, "tint" | "weather" | "intensity">): { k: number; c: Rgb } {
   const a = amb.tint.alpha > 0 ? Math.min(1, amb.tint.alpha) : 0;
   const v = veilAlpha(amb);
@@ -296,39 +266,22 @@ export function gradeColor(amb: Pick<Ambience, "tint" | "weather" | "intensity">
   return toHex({ r: p.r * k + c.r, g: p.g * k + c.g, b: p.b * k + c.b });
 }
 
-/**
- * The colour to PAINT so that, after the outdoor grade, the viewer sees `seen` — the grade's inverse,
- * clamped to what a canvas can hold (a grade at alpha `a` caps how bright and how dark anything under
- * it can end up; past that cap the nearest reachable colour is the answer).
- */
+/** The colour to PAINT so the viewer sees `seen` after the grade: its inverse, clamped to the
+ * nearest reachable colour (a grade at alpha `a` caps how bright or dark a result can be). */
 function ungrade(map: { k: number; c: Rgb }, seen: Rgb): Rgb {
   if (map.k < 1e-6) return seen;
   const ch = (s: number, c: number) => Math.min(255, Math.max(0, (s - c) / map.k));
   return { r: ch(seen.r, map.c.r), g: ch(seen.g, map.c.g), b: ch(seen.b, map.c.b) };
 }
 
-// ───────────────────────────── the City's sky ─────────────────────────────
-//
-// On a City still at 16:19 in Tokyo, sunset 17:05, the sky did not look
-// like 4 pm, and a sunset would suit that hour better. The sky used to be ONE day
-// gradient, tinted by the outdoor grade — and an orange tint at alpha ≤ 0.24 over blue makes
-// grey-lavender, never a sunset. So the City's sky now has its own colours per time of day,
-// keyframed on `skyClock` and blended between neighbours, so it glides minute by minute.
-//
-// The grade still goes over the WHOLE city, sky included: everything standing in the sky (trees,
-// lamps, landmarks, the far skyline's neighbours) must be lit exactly like the street, and the
-// village (no sky) must not change at all. The sky's colours are therefore authored as SEEN and
-// painted through the grade's inverse (`ungrade`), so the grade lands on them exactly once.
-// Through the plain day (late morning → mid-afternoon) the sky is the old day sky under the
-// grade, unchanged — `CITY_DAY` is painted as it always was.
+// ─── the City's sky ─── its own colours per time of day (a tinted day gradient never looks like
+// a sunset), authored as SEEN and painted through `ungrade`, since the grade covers the whole city.
+// Late morning to mid-afternoon it is `CITY_DAY` under the grade, unchanged.
 
 const PHASE_ORDER: readonly DayPhase[] = ["night", "dawn", "morning", "noon", "afternoon", "evening", "dusk"];
 
-/**
- * Where in the day the sky is, as ONE continuous number: night 0 · dawn 1…2 · morning 2…3 ·
- * noon 3…4 · afternoon 4…5 · evening 5…6 · dusk 6…7 (and 7 is night again). Each phase ends exactly
- * where the next one starts, so the number never jumps — except 7 → 0, which is the same sky.
- */
+/** The day as one continuous number: night 0 · dawn 1…2 · morning 2…3 · noon 3…4 · afternoon 4…5
+ * · evening 5…6 · dusk 6…7 (7 = night again). Never jumps except 7 → 0, the same sky. */
 export function skyClock(amb: Pick<Ambience, "phase" | "progress">): number {
   if (amb.phase === "night") return 0;
   return PHASE_ORDER.indexOf(amb.phase) + clamp01(finiteOr(amb.progress ?? 0.5, 0.5));
@@ -349,18 +302,12 @@ export const CITY_DAY = {
 
 export type CloudShade = keyof typeof CITY_DAY.cloud;
 
-/**
- * How many sky bands the City paints, top → horizon: twice the day's ten, so a sunset steps in
- * finer bands. By day each pair is one colour, and the painter merges equal neighbours — the
- * plain day is still exactly its ten bands.
- */
+/** Sky bands, top → horizon: twice the day's ten for finer sunset steps; by day pairs match and
+ * the painter merges them, so the plain day is still its ten bands. */
 export const SKY_BANDS = 2 * CITY_DAY.sky.length;
 
-/**
- * One keyframe of the City's look, as SEEN. `sky` holds five stops (top → horizon) at `SKY_STOPS`;
- * `cloud` / `under` are LIGHT colours a cloud's own shade is multiplied by (white = as by day), so a
- * storm cloud stays dark at sunset and a fair one turns gold.
- */
+/** One keyframe of the City's look, as SEEN: `sky` = five stops at `SKY_STOPS`; `cloud`/`under`
+ * are LIGHT colours multiplying a cloud's shade (white = as by day). */
 interface SkyKey {
   at: number;
   sky: readonly [string, string, string, string, string];
@@ -477,11 +424,8 @@ const KEYS: readonly SkyKey[] = [
   { at: 7, ...NIGHT_KEY }, // night (sunset + 40 min)
 ];
 
-/**
- * How much the sky follows its own keyframes (1) rather than being the plain `CITY_DAY` sky under the
- * shared grade (0): 0 from late morning to mid-afternoon — the day looks as it always did — ramping
- * in over the morning and out into golden hour.
- */
+/** How much the sky follows its keyframes (1) vs plain `CITY_DAY` under the grade (0): 0 from late
+ * morning to mid-afternoon, ramping in over the morning and out into golden hour. */
 export function dayWeight(s: number): number {
   if (s <= 2 || s >= 5) return 1;
   if (s < 2.8) return (2.8 - s) / 0.8;
@@ -489,12 +433,9 @@ export function dayWeight(s: number): number {
   return 0;
 }
 
-/**
- * Share of the far skyline's windows with a light on, 0..1: none by day, the first few as golden hour
- * deepens (about 70 minutes before sunset — "after 4 pm" in Tokyo in October), more through sunset
- * and twilight, the most at night, going out again at dawn. Each window has its own threshold
- * (render/city.ts `windowLit`), so the set of lit windows only grows as this rises.
- */
+/** Share of far skyline windows lit, 0..1: none by day, rising from ~70 min before sunset to most
+ * at night, out again at dawn. Each window has its own threshold (render/city.ts `windowLit`), so
+ * the lit set only grows as this rises. */
 const LIT: readonly [number, number][] = [
   [0, 0.4],
   [1, 0.4],
@@ -521,10 +462,7 @@ export function litShare(s: number): number {
 export interface CitySky {
   /** The sky bands, top → horizon (`SKY_BANDS` of them; equal neighbours are painted as one). */
   bands: string[];
-  /**
-   * What each band is MEANT to look like once graded — the authored colour. The canvas shows exactly
-   * this wherever the grade can reach it, and the nearest reachable colour where it cannot.
-   */
+  /** Each band's authored colour once graded; shown exactly wherever the grade can reach it. */
   seen: string[];
   sun: { color: string; core: string; glow: string; r: number };
   /** The warm glow low on the sun's side; alpha 0 = none. `side` 0 = the left end of the sun's arc, 1 = the right. */
@@ -568,10 +506,8 @@ function weathered(c: Rgb, cover: number): Rgb {
 
 let memo: { amb: Ambience | undefined; sky: CitySky } | null = null;
 
-/**
- * The City's sky this frame (memoised per Ambience object: the backdrop and the after-grade pass
- * ask for it in the same frame). No ambience = the plain day, no windows lit.
- */
+/** The City's sky this frame, memoised per Ambience (backdrop and after-grade pass both ask). No
+ * ambience = the plain day, no windows lit. */
 export function citySky(amb: Ambience | undefined): CitySky {
   if (memo && memo.amb === amb) return memo.sky;
   const sky = buildCitySky(amb);

@@ -1,19 +1,6 @@
-/**
- * LogsPanel — the diagnostics-log feed overlay.
- *
- * Shown when `useLogStore(s => s.visible)`; the titlebar `<LogsButton/>` toggles
- * it. Entries render newest-first with a formatted time, a level chip, the source
- * and the message (the `detail` is the row's `title`, revealed on hover). Provides
- * a level filter, a text filter, Clear, and Copy (the visible entries as text).
- *
- * Closes on Esc / the ✕ / an outside (backdrop) click. Like the shortcuts overlay,
- * the Esc effect is always mounted (before the null return) so it is installed
- * regardless of visibility. It subscribes only to the LOG store (no Tauri event
- * plumbing), so it is inert in the browser tier — nothing to mock.
- *
- * a11y: plain buttons with aria, NOT a `role="tab"` group (see RailTabs' note — a
- * second tab group would make the E2E single-`role="tab"` lookup ambiguous).
- */
+/** Diagnostics-log overlay toggled by `<LogsButton/>`, newest first. The Esc effect mounts before
+ * the null return so it is always installed. Plain aria buttons, not `role="tab"`: a second tab
+ * group would make the E2E tab lookup ambiguous. */
 
 import { useEffect } from "react";
 

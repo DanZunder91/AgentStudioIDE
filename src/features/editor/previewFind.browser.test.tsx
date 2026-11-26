@@ -1,55 +1,6 @@
-/**
- * Find-in-preview — layer 5, the real-browser tier (testing-strategy §1).
- *
- * The jsdom suites (`previewFind.test.ts`, `PreviewFindBar.test.tsx`, the seam
- * block in `MarkdownPreview.test.tsx`) pin the index, the arithmetic and the
- * wiring. They cannot pin the one thing the whole design rests on, because
- * jsdom ships neither `CSS.highlights` nor `Highlight` nor a layout engine:
- *
- *   1. **The CSS Custom Highlight API is really there, and really takes our
- *      Ranges.** This is the claim that justified choosing Ranges over `<mark>`
- *      injection in the first place (previewFind.ts's header: an injected node
- *      is erased by the next `innerHTML` assignment — and, inside
- *      an un-hydrated ```mermaid block, is read back as diagram SOURCE and
- *      rendered as "Diagram error"). In jsdom `paintHighlights` is a documented
- *      no-op, so *every* jsdom assertion about painting is vacuous by
- *      construction. Here the registry is real: the ranges are read back out of
- *      it, the current match is a separate highlight, and its priority is what
- *      puts it on top.
- *   2. **The `::highlight()` rules survived the bundler and the parser.** A
- *      pseudo-element the engine does not understand is dropped from
- *      `cssRules` silently, which would leave the search working and invisible
- *      — the exact failure nobody would notice in a test suite.
- *   3. **The highlight survives the preview's CSS `zoom`.** The rule for this
- *      component is to MEASURE the zoom's effect rather than reason about it
- *      (only a layout property magnifies a document). A `Range`
- *      is a live position, so a zoomed match must report a proportionally
- *      larger rect in the same place — under `transform: scale` this would be a
- *      raster claim; under `zoom` it is a layout one, and only a layout engine
- *      can settle it.
- *   4. **The bar itself does NOT zoom.** It is a sibling of
- *      `.markdown-preview__body`, not a child, precisely so the body's `zoom`
- *      cannot reach it — the same hazard the Fit control needed
- *      `zoom: calc(1 / var(--mdp-zoom))` for. No CSS runs under jsdom, so this
- *      claim can only live here.
- *   5. **The current match is scrolled into view.** `scrollIntoView` does not
- *      exist in jsdom (the call site is optional for exactly that reason), and
- *      "below the fold" is a property only a real scroll box has.
- *
- * What this tier still CANNOT prove is the pixels' COLOUR: a painted highlight
- * has no DOM observable, and `getComputedStyle` has no ::highlight surface.
- * Claims 1-3 pin the mechanism that produces it — the registry holds the right
- * live Ranges, the rules parsed, and the geometry follows the zoom — and that
- * is stated plainly rather than dressed up as a paint assertion.
- *
- * The fixture is plain markdown ON PURPOSE, following
- * `markdownPreviewZoom.browser.test.tsx`: mermaid renders async and
- * nondeterministically, and images would reach for the un-stubbed image-read
- * IPC.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts \
- *        src/features/editor/previewFind.browser.test.tsx`
- */
+/** Find-in-preview in a real browser: jsdom has no `CSS.highlights`, layout or `scrollIntoView`.
+ * Pins the mechanism (live Ranges in the registry, parsed ::highlight rules, zoom geometry), not
+ * colour, which has no DOM observable. Plain markdown fixture: no mermaid, no image IPC. */
 
 import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
@@ -98,11 +49,7 @@ function search(query: string): void {
   fireEvent.change(screen.getByTestId("preview-find-input"), { target: { value: query } });
 }
 
-/**
- * The live Ranges a highlight holds. `CSS.highlights` is Maplike and `Highlight`
- * is Setlike at runtime; TypeScript's lib.dom exposes only `forEach` on both, so
- * the read goes through a structural cast rather than a `Map` assumption.
- */
+/** `CSS.highlights` is Maplike and `Highlight` Setlike at runtime; lib.dom types only `forEach`. */
 function highlightRanges(name: string): AbstractRange[] {
   const registry = CSS.highlights as unknown as { get(n: string): Highlight | undefined };
   const out: AbstractRange[] = [];
@@ -176,10 +123,7 @@ describe("find in the rendered preview — real Chromium", () => {
     render(view(1));
     const selectors = parsedSelectors();
 
-    // Two-sided: a control selector from the same stylesheet proves the sheet
-    // loaded at all, so a missing ::highlight rule means the RULE was dropped
-    // (unsupported pseudo-element, or a bundler that mangled it) rather than
-    // the file never having been imported.
+    // A control selector proves the sheet loaded: a missing ::highlight rule means it was dropped.
     expect(selectors).toContain(".preview-find__count");
     expect(selectors.some((s) => s.includes(`::highlight(${FIND_HIGHLIGHT})`))).toBe(true);
     expect(
@@ -219,10 +163,7 @@ describe("find in the rendered preview — real Chromium", () => {
   });
 
   it("keeps the find bar the SAME SIZE ON SCREEN at 100% and at 400%", () => {
-    // The bar is a SIBLING of `.markdown-preview__body`, never a child, because
-    // the body carries the inline `zoom` and nested zoom multiplies — the exact
-    // hazard the Fit control needs `zoom: calc(1 / var(--mdp-zoom))` for. Move
-    // the bar inside the body and this goes red at 4x.
+    // The bar is a sibling of the zoomed body, never a child: nested zoom multiplies.
     const { rerender } = render(view(1));
     search("needle");
 
@@ -246,24 +187,15 @@ describe("find in the rendered preview — real Chromium", () => {
   });
 
   it("takes focus from a REAL click, so the container-scoped shortcut is reachable", async () => {
-    // `tabIndex={-1}` makes a scroll container focusable-but-not-tabbable, and
-    // real browsers focus the nearest focusable ANCESTOR on mousedown. jsdom
-    // implements none of that — it never moves focus on a click — so this is the
-    // only tier that can say whether clicking the preview and pressing Cmd+F
-    // works without the window fallback carrying it.
+    // jsdom never moves focus on click; only a real browser shows the container taking focus.
     render(view(1));
     const el = container();
     expect(el.tabIndex).toBe(-1);
     document.body.focus();
     expect(el.contains(document.activeElement)).toBe(false);
 
-    // A REAL click, driven through the browser's own input pipeline. A
-    // synthetic `fireEvent.mouseDown` is not enough and the difference matters:
-    // focusing the nearest focusable ancestor is a USER-AGENT action on real
-    // input, not a side effect any dispatched event carries. Measured, not
-    // assumed — a dispatched mousedown leaves focus on <body>, which is exactly
-    // what makes the window-level fallback load-bearing rather than belt-and-
-    // braces for the tests.
+    // A real click: focusing the nearest focusable ancestor is a user-agent action on real input; a
+    // dispatched mousedown leaves focus on <body>.
     const paragraph = el.querySelector("p") as HTMLElement;
     await userEvent.click(paragraph);
 

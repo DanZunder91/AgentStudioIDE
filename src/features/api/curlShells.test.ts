@@ -1,10 +1,5 @@
-/**
- * curlShells — cmd.exe's caret pass, the C runtime's argv split, PowerShell's
- * argument split and 5.1's legacy re-quoting. The expected values marked
- * "measured" were observed on Windows 11 (cmd.exe, Windows PowerShell
- * 5.1.26100, System32 curl.exe 8.22, and node's MSVC-CRT argv) — they are the
- * shells' real behaviour, not a reading of documentation.
- */
+/** Values marked "measured" were observed on Windows 11 (cmd.exe, PowerShell 5.1.26100,
+ * System32 curl.exe 8.22, node's MSVC-CRT argv): real shell behaviour, not documentation. */
 
 import { describe, expect, it } from "vitest";
 

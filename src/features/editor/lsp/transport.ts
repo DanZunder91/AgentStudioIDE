@@ -1,12 +1,5 @@
-/**
- * The `@codemirror/lsp-client` Transport, backed by our Tauri relay (M5).
- *
- * The Transport is a 3-method string interface — `send`/`subscribe`/`unsubscribe`
- * (JSON-RPC bodies). Outgoing → `lsp_send`; incoming ← the per-server
- * `Channel<String>` captured at `lsp_start`. Rust moves bytes; the client owns
- * the protocol. The channel is created here and handed to `lsp_start`; the
- * server id is bound once `lsp_start` returns.
- */
+/** `@codemirror/lsp-client` Transport over the Tauri relay. The channel is created here and handed
+ * to `lsp_start`; the server id is bound once that returns. */
 
 import { Channel } from "@tauri-apps/api/core";
 import type { Transport } from "@codemirror/lsp-client";
@@ -37,10 +30,8 @@ export function makeConnection(): LspConnection {
 
   const transport: Transport = {
     send: (message) => {
-      // Silently drop until bound: nothing should send before `lsp_start`
-      // resolves. And a send that FAILS — the server exited, or the webview was
-      // torn down so the relay is gone — must never surface as an unhandled
-      // rejection: a dropped send is inert, the client keeps working.
+      // Drop sends until `lsp_start` binds the id. A failed send (server exited, relay gone)
+      // must not become an unhandled rejection: a dropped send is inert.
       if (serverId !== null) void lspSend(serverId, message).catch(() => {});
     },
     subscribe: (handler) => {

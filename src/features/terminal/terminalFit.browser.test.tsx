@@ -1,34 +1,6 @@
-/**
- * Layer 5 (testing-strategy §1, §7.5) — the PTY never learns a bogus size.
- *
- * ## The bug this pins
- *
- * `attach()` fits synchronously, and inside `allotment` the host has **no size
- * yet** at that moment (allotment learns its geometry from ResizeObserver, which
- * has not delivered). The obvious guard — "skip if proposeDimensions() came back
- * empty" — does not work, and the reason is worth stating because it is not
- * guessable:
- *
- *   FitAddon does NOT return undefined for a zero-size host. It clamps:
- *     cols: Math.max(MINIMUM_COLS /* 2 *\/, Math.floor(availableWidth  / cellW))
- *     rows: Math.max(MINIMUM_ROWS /* 1 *\/, Math.floor(availableHeight / cellH))
- *   With no layout, availableWidth is negative (0 minus padding minus the 14px
- *   scrollbar), so it hands back exactly `{cols: 2, rows: 1}` — which sails past
- *   any `>= 1` sanity check.
- *
- * So we pushed `terminal_resize(rows: 1, cols: 2)` down the PTY on every
- * structural change (each split/drag/reorder remounts the allotment subtree and
- * every xterm host with it). With a shell that is invisible — a prompt reflows.
- * With `claude` in the terminal (M2) it is not: a TUI told it has 2 columns
- * redraws its whole interface — boxes, tables, status lines — 2 characters wide.
- *
- * ## Why this file asserts the journey, not the destination
- *
- * The settled state is *correct* — the ResizeObserver lands ~50ms later and
- * fits properly. The bug lives entirely in the transient, so a test that only
- * samples the end state passes while the child is being wrecked. Every command
- * is therefore recorded and the **whole timeline** is asserted, per phase.
- */
+/** FitAddon clamps a zero-size host to `{cols: 2, rows: 1}` rather than returning undefined, so
+ * an unlaid-out `allotment` host would resize the PTY to 2 columns (a TUI redraws 2 chars wide).
+ * The bug is transient, so the whole command timeline is asserted per phase, not the end state. */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -188,18 +160,8 @@ describe("terminal fit — the PTY never sees a degenerate size", () => {
     expect(panes().length).toBe(3);
   });
 
-  /**
-   * NOT the regression test — be clear about this.
-   *
-   * Measured: with both guards removed, this case still passes. The drag lands
-   * a tab into a pane that is already laid out, so the host is never 0-width at
-   * attach and the bug does not manifest on this path. Only the split cases
-   * above fail before the fix.
-   *
-   * It is kept anyway: it asserts the same invariant across the gesture the
-   * user actually performs, and would catch a *future* regression that broke
-   * the drag path specifically. It just must not be mistaken for proof.
-   */
+  /** Not the regression test: it passes even without the guards (the target pane is already
+   * laid out). Kept to guard the drag path; not proof of the fix. */
   it("holds the invariant while dragging a tab between panes", async () => {
     phase = "mount";
     render(<App />);

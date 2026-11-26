@@ -1,17 +1,6 @@
-/**
- * The backdrop's `towers` layer (big lit buildings by night and by day): high-rises standing up out
- * of the haze.
- *
- * The layout — world-locked chunks of loose clusters, sized against the city's sky, six silhouettes,
- * never into Fuji's snow cap (a sweep of cities); the day pass — what it paints, where, in what colours,
- * and that the face `faceAt` reports is exactly the painted outline; and the night pass — lit floors at
- * fixed thresholds, crown bands and blinking aviation lights, every one through `fillLit`, none by day.
- *
- * A recording fake stands in for the canvas (jsdom has none): rects are rastered here into world pixels
- * at zoom 1 (screen px are world px less the camera's offset). Expectations are written by hand:
- * sizes from the design, colours from the palette, never read back off the
- * painter under test. Real pixels are backdropTowers.browser.test.tsx's.
- */
+/** A recording fake stands in for the canvas (jsdom has none). Expectations are hand-written (sizes
+ * from the design, colours from the palette), never read back off the painter under test; real
+ * pixels are backdropTowers.browser.test.tsx's. */
 
 import { describe, expect, it } from "vitest";
 

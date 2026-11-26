@@ -42,10 +42,8 @@
   justify-content: flex-end;
   padding: 0 2px 4px;
 }
-/* The crosshair's tooltip host. A disabled button is inert to the pointer, so its
-   own `title` may never surface; this wrapper is never disabled, so the reason
-   the button is greyed out is always one hover away. `display: inline-flex` keeps
-   it exactly the button's box — it adds no layout of its own. */
+/* A disabled button never surfaces its own `title`; this never-disabled wrapper (exactly the
+   button's box) keeps the reason it is greyed out one hover away. */
 .workspace-tree__tool-slot {
   display: inline-flex;
 }
@@ -209,13 +207,9 @@ p.workspace-tree__note {
   margin-left: 16px;
 }
 
-/* ── semantic folder roles + git-status row colors ─────────────────────────
-   Every rule in this block is DELIBERATELY (0,2,0) specificity and sits BEFORE
-   the `.workspace-node.is-selected` rules below: the selected row's white
-   (0,2,0 on the row, 0,3,0 on its parts) must always win, by specificity AND
-   by source order — belt and braces, so neither a refactor of one nor the
-   other silently paints color onto a selected row. Tokens carry literal
-   fallbacks (house idiom) so they read even where the theme vars are absent. */
+/* ── semantic folder roles + git-status row colors ── Every rule is (0,2,0) and precedes
+   `.workspace-node.is-selected`, so the selected row's white wins by specificity AND source
+   order. Tokens carry literal fallbacks for where the theme vars are absent. */
 .workspace-tree {
   --vcs-added: var(--green, #3fb950); /* added AND untracked (both green) */
   --vcs-modified: #4da3ff;
@@ -291,10 +285,8 @@ p.workspace-tree__note {
   color: var(--text-dim);
   flex: 0 0 auto;
 }
-/* The name is in this white-override list because the role/git rules above
-   color it DIRECTLY (a direct rule beats the row's inherited #fff) — without
-   this line a selected modified file would stay blue. (0,3,0) beats their
-   (0,2,0) regardless of order; order matches anyway. */
+/* The role/git rules color the name directly, beating the row's inherited #fff, so it is listed
+   here or a selected modified file stays blue. (0,3,0) beats their (0,2,0). */
 .workspace-node.is-selected .workspace-node__icon,
 .workspace-node.is-selected .workspace-node__caret,
 .workspace-node.is-selected .workspace-node__name {

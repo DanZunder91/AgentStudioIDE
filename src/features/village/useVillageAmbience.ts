@@ -1,24 +1,6 @@
-/**
- * `useVillageAmbience` — the DATA side of the village sky (weather and
- * time of day that follow the user's local conditions — rain when it rains, afternoon in the afternoon).
- *
- * It owns three things and nothing else:
- *   - the LIVE weather report (`village_weather`), fetched on mount and every
- *     {@link WEATHER_REFRESH_MS} while the tab is mounted AND the document is visible — a
- *     hidden window does not poll a weather service for a sky nobody sees. Coming back to a
- *     visible window refetches only when the last attempt is stale;
- *   - the local clock `now`, ticked every {@link CLOCK_TICK_MS} (phase changes are minutes
- *     apart, so a 30 s tick is plenty and keeps React work negligible);
- *   - the HUD override ({@link AmbienceOverride}), persisted per viewer under
- *     {@link AMBIENCE_STORAGE_KEY}. Storage is a convenience: every access is wrapped, and a
- *     throwing / empty / corrupt store simply means "auto".
- *
- * Turning that into an {@link Ambience} (phase, grade, particles) is the engine's job — this
- * hook stays pure plumbing so the sky maths is unit-tested without React.
- *
- * Errors keep the last good report (a stale sky beats a blank one) and surface as a CODE
- * (`externalErrorCode`), never the raw string — the HUD shows "time only" gracefully.
- */
+/** Sky data: live weather (`village_weather`) every {@link WEATHER_REFRESH_MS} only while mounted
+ * and visible, a {@link CLOCK_TICK_MS} clock, and the per-viewer override (wrapped storage). Errors
+ * keep the last good report and surface as a code, never the raw string. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 

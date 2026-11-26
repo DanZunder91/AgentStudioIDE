@@ -1,8 +1,5 @@
-/**
- * The IPC seam, pinned: exact command names, no args, the event name, and that the
- * handler receives the batch payload (not the Tauri event envelope). The Rust side
- * matches these strings — a rename here without one there is a silent dead view.
- */
+/** The IPC seam: command names, no args, the event name, and a handler fed the batch payload (not
+ * the envelope). Rust matches these strings; renaming one side alone is a silent dead view. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

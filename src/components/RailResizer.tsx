@@ -1,14 +1,5 @@
-/**
- * RailResizer — a draggable divider that resizes a side rail (the left and right
- * panels must be resizable).
- *
- * A thin vertical grabber sitting on the seam between a rail and the center. On
- * pointer-drag it updates `leftRailWidth`/`rightRailWidth` in the store (clamped
- * there), which feeds the `.app-shell` grid's `--left-col`/`--right-col` vars.
- *
- * Uses window-level move/up listeners (not pointer capture) so the drag keeps
- * tracking even when the cursor leaves the 6px strip — robust and jsdom-testable.
- */
+/** Draggable divider resizing a side rail via the store's (clamped) rail widths. Window-level
+ * move/up listeners, not pointer capture, keep tracking off the 6px strip, jsdom-testable. */
 
 import { useAppStore } from "../app/store";
 
@@ -24,12 +15,9 @@ export function RailResizer({ side }: { side: "left" | "right" }): React.JSX.Ele
         ? useAppStore.getState().leftRailWidth
         : useAppStore.getState().rightRailWidth;
 
-    // While dragging, kill text selection + force the resize cursor GLOBALLY —
-    // otherwise sweeping the pointer over the rails selects their labels as the
-    // pointer passes over them. Done via a
-    // body class so the CSS can use BOTH `-webkit-user-select` (WKWebView needs the
-    // prefix — the unprefixed property alone did not take) and `user-select`, with
-    // `!important` on every descendant.
+    // Kill text selection and force the cursor globally while dragging, via a body class so CSS
+    // can set `-webkit-user-select` (WKWebView needs the prefix) and `user-select`, `!important`
+    // on every descendant.
     document.body.classList.add("is-resizing");
 
     const onMove = (ev: PointerEvent | MouseEvent) => {

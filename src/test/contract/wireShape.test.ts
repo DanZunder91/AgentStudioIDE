@@ -1,20 +1,6 @@
-/**
- * Structural contract check — every key Rust sends is a key the TS type declares, and every
- * key the TS type declares is one Rust sends, with the JSON type the TS type promises
- * (a field that exists on one side only is a feature that silently does not exist).
- *
- * How both directions are enforced:
- * - The SHAPE tables are typed `Record<keyof T, Json>`. A field added to a TS interface without
- *   a row here is a compile error (missing property); a row for a field the interface does not
- *   have is a compile error (excess property). So the tables cannot drift from the TS types.
- * - At run time each golden object (written by Rust from real values) must have EXACTLY the
- *   table's keys, each with the table's JSON type. A new Rust field is an extra key → red;
- *   a TS field Rust never sends is a missing key → red; `u64` turning into a string → red.
- * - Enum spellings: every wire value of a union must be one the exhaustive TS list names
- *   (`rename_all` drift, e.g. `tool-result` → `toolResult`, is exactly this failure).
- *
- * The expectations are written out by hand, never derived from the goldens.
- */
+/** Both directions: SHAPE tables typed `Record<keyof T, Json>` cannot drift from the TS types, and
+ * each Rust-written golden object must have exactly their keys and JSON types; union spellings
+ * must be in the exhaustive TS list. Expectations are written by hand, never from the goldens. */
 
 import { describe, expect, it } from "vitest";
 

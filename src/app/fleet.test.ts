@@ -1,11 +1,5 @@
-/**
- * The fleet slice: the agent forest, telemetry reduction, and the pivot.
- *
- * Written journey-first. Every bug this project has actually shipped lived in a
- * *transition* — a stale snapshot landing after an exit, a prune that forgot a
- * flag — not in settled state. So the headline tests here drive whole
- * lifecycles (snapshot → spawn → status → exit) and assert at each step.
- */
+/** The fleet slice: agent forest, telemetry reduction, the pivot. Bugs live in transitions, so
+ * headline tests drive whole lifecycles (snapshot → spawn → status → exit) step by step. */
 
 import fc from "fast-check";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -92,18 +86,9 @@ describe("createAgent", () => {
     expect(terminal.configureTerminal).toHaveBeenCalledTimes(1);
   });
 
-  /**
-   * The identity that makes an agent terminal work at all (ARCHITECTURE §2.4).
-   *
-   * `agent_spawn` takes NO terminalId — Rust keys the PTY by the agentId
-   * (`supervisor/mod.rs`: `let terminal_id = spec.agent_id.clone()`). So the
-   * frontend does not get to choose: an agent terminal's TerminalId *is* its
-   * AgentId, or every write/resize/close addresses an id Rust never registered.
-   *
-   * Worth pinning by name because of HOW it fails: not with an error, but as a
-   * **dead keyboard**. `agent_spawn` succeeds, bytes stream (the Channel was
-   * handed over directly), the terminal looks alive — and typing does nothing.
-   */
+  /** `agent_spawn` takes no terminalId: Rust keys the PTY by agentId (`supervisor/mod.rs`), so an
+   * agent terminal's TerminalId must be its AgentId (ARCHITECTURE §2.4). Else it fails as a dead
+   * keyboard: output streams, but writes address an id Rust never registered. */
   describe("an agent terminal's TerminalId IS its AgentId", () => {
     const terminalIdOfTab = (tabId: TabId) => {
       const ref = state().tabs[tabId].ref;
@@ -640,10 +625,8 @@ describe("subagent_spawned — wired, inert until M3", () => {
   });
 
   it("a child first seen ALREADY ENDED reads ended — the status Rust sends right after the spawn", () => {
-    // After a restart `claude --resume` re-reads a session whose sub-agents ended long
-    // ago; Rust emits `subagent_spawned` (no status on the wire) then `status`. The
-    // row must end `done`/`error`, never stay "running" forever — and the
-    // parent's own status must not move.
+    // After a restart Rust emits `subagent_spawned` (no status) then `status` for long-ended
+    // sub-agents; the row must end `done`/`error` and the parent's status must not move.
     act().applyAgentEvent(started("root"));
     for (const [kid, status] of [
       ["old-done", "done"],
@@ -711,10 +694,7 @@ describe("live fan-out: a depth-2 tree from SubagentSpawned events", () => {
     }
   };
 
-  /**
-   * The Rust fixture's shape: a root, 19 sub-agents at depth 1, and 5 at depth 2
-   * (under the first depth-1 sub-agent). Returns the ids for assertions.
-   */
+  /** The Rust fixture's shape: a root, 19 depth-1 sub-agents, 5 at depth 2 under the first. */
   function buildFixture() {
     act().applyAgentEvent(started("root", { title: "Pull latest changes" }));
     const depth1 = Array.from({ length: 19 }, (_, i) => `c${i}`);
@@ -859,11 +839,8 @@ describe("forest consistency under out-of-order telemetry", () => {
     });
 
   it("adopts an orphan when its parent finally arrives", () => {
-    // THE M3 ordering hazard: events are not ordered across agents, so
-    // `subagent_spawned` can beat the parent's `agent_started`. Without
-    // adoption the child renders as a top-level orchestrator forever — a
-    // sub-agent masquerading as a root, which is the headline feature failing
-    // silently rather than loudly.
+    // Events are unordered across agents, so `subagent_spawned` can beat the parent's
+    // `agent_started`; without adoption the child stays a top-level root forever, silently.
     spawn("root", "kid");
     expect(state().rootAgentIds).toEqual([id("kid")]); // visible, if misplaced
 
@@ -974,10 +951,8 @@ describe("waiting_input bubbles up the ancestor chain", () => {
   });
 
   it("clears the badge on an agent that is ALREADY selected", () => {
-    // The journey bug. The already-selected agent is exactly the one that can
-    // raise a badge while you watch it — it blocks on a prompt, the row lights
-    // up, you click it. With the "already selected → bail out" guard ahead of
-    // the clear, nothing happens and the badge sticks for the session.
+    // The selected agent can raise a badge while watched; an "already selected, bail out" guard
+    // before the clear would leave the badge stuck.
     const a = act().createAgent({ cwd: "/w/gazelle" });
     expect(state().selection.selectedAgentId).toBe(a); // createAgent selected it
 
@@ -990,10 +965,8 @@ describe("waiting_input bubbles up the ancestor chain", () => {
   });
 
   it("unwinds the roll-up: reading a descendant clears its ancestors too", () => {
-    // The badge bubbles up so a blocked descendant is visible from a collapsed
-    // trunk. If reading it only cleared the leaf, the trunk would advertise a
-    // "needs input" that was already answered — and a badge that never clears
-    // trains the user to ignore the one signal that matters.
+    // The badge bubbles up to collapsed trunks, so reading it must clear the whole chain, or the
+    // trunk advertises a "needs input" that was already answered.
     act().applyAgentEvent(started("root"));
     spawn("root", "mid");
     spawn("mid", "deep");
@@ -1246,10 +1219,8 @@ describe("removeAgent", () => {
   });
 
   it("leaves the forest untouched for an unknown agent, but still tombstones it", () => {
-    // Removing an id we don't hold changes no agent — but it DOES tombstone,
-    // deliberately: a dismiss can race ahead of the create it is cancelling, and
-    // "dismissed" must win regardless of arrival order. So the forest is
-    // identical while the id is now blocked from ever appearing.
+    // Removing an unknown id changes no agent but tombstones it: a dismiss can race ahead of the
+    // create it cancels, and "dismissed" must win regardless of arrival order.
     act().applyAgentEvent(started("a1"));
     const agentsBefore = state().agents;
 
@@ -1597,10 +1568,8 @@ describe("dismissAgent — late telemetry cannot resurrect a ghost", () => {
   });
 
   it("adoption cannot smuggle a dismissed parent back as a ghost root", () => {
-    // The specific mechanism at risk: after removal, a late
-    // `subagent_spawned` naming the dead parent could re-create it via the
-    // orphan/adopt path. The child may surface (it is a genuinely new id), but
-    // the dismissed PARENT must stay gone.
+    // A late `subagent_spawned` naming the dismissed parent could re-create it via orphan/adopt;
+    // the child may surface (a new id), but the parent must stay gone.
     act().applyAgentEvent(started("root"));
     act().dismissAgent(id("root"));
     expect(agentOf("root")).toBeUndefined();
@@ -1729,11 +1698,8 @@ describe("ad-hoc agent — `claude` typed in a plain terminal", () => {
   });
 
   it("a re-run in the SAME terminal revives a done agent (back to a live idle root)", () => {
-    // Sequential `claude`s reuse the terminal, so they reuse the AgentId. First
-    // run finishes → greyed `done`; the user runs `claude` again → a fresh
-    // agent_started for the same id must revive it (new session, live and idle at
-    // its prompt), not leave it greyed. Already handled by hydrateAgent's `...wire`
-    // spread — status/startedAt/finishedAt come from the new event — so this pins it.
+    // Sequential `claude`s in one terminal reuse the AgentId: a fresh agent_started must revive a
+    // greyed `done` agent (hydrateAgent's `...wire` spread does it).
     const { tabId, agentId } = openPlainTerminal();
     act().applyAgentEvent(started(agentId as unknown as string));
     act().applyAgentEvent({ t: "exited", agentId, code: 0 });
@@ -1810,10 +1776,8 @@ describe("ad-hoc agent — `claude` typed in a plain terminal", () => {
   });
 
   it("promotes the tab whose id MATCHES, not just the first plain terminal", () => {
-    // The decoy is opened FIRST, so "promote the first terminal tab" (a
-    // plausible wrong implementation) would grab the decoy. Promotion must key
-    // on terminalId === agentId, so the decoy stays plain and the agent's own
-    // shell — opened second — is the one that promotes.
+    // The decoy opens first, so "promote the first terminal tab" would grab it; promotion must key
+    // on terminalId === agentId.
     const decoyTab = layout().openTerminalTab({ cwd: "/w/other-shell" });
     const { tabId: agentTab, agentId } = openPlainTerminal("/w/agent-shell");
 

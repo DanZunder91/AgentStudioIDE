@@ -1,8 +1,5 @@
-/* ── ContextMenu — a floating right-click menu surface ──────────────────────
-   A calm, rounded panel consistent with the app's dark chrome: subtle border,
-   soft shadow, muted separators, hover/focus highlight, and a danger accent for
-   destructive items. Rendered above the tree via z-index; fixed-positioned by
-   the component at the clamped (x, y). */
+/* ── ContextMenu: floating right-click surface, fixed-positioned by the component at the
+ * clamped (x, y), above the tree via z-index. ── */
 .context-menu {
   position: fixed;
   z-index: 1000;
@@ -68,12 +65,8 @@
   background: var(--border);
 }
 
-/* ── Submenus ───────────────────────────────────────────────────────────────
-   A submenu is another `.context-menu` surface, rendered INSIDE its parent's
-   DOM subtree (so the outside-click check still sees it as "inside") and
-   fixed-positioned by the component beside its parent item. The row wrapper is
-   `display: contents` so that nesting costs the flat menu no layout at all —
-   the button still lays out as a direct child of the menu box. */
+/* ── Submenus: another `.context-menu`, rendered INSIDE its parent's DOM (outside-click sees it
+ * as inside); the row wrapper is `display: contents`, so nesting costs the menu no layout. ── */
 .context-menu__row {
   display: contents;
 }

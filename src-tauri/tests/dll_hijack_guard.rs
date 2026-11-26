@@ -1,32 +1,6 @@
-//! Security gate: the Windows ConPTY DLL-hijack hole must stay closed.
-//!
-//! **The vulnerability.** `portable-pty` 0.9.0 (`src/win/psuedocon.rs`) preferred a
-//! *sideloaded* `conpty.dll`, loading it by **bare name**:
-//!
-//! ```text
-//! ConPtyFuncs::open(Path::new("conpty.dll"))  ->  LoadLibraryW(L"conpty.dll")
-//! ```
-//!
-//! A bare name sends Windows down the standard DLL search order, which includes
-//! **the directory the .exe was loaded from** and **the current directory**. Anyone
-//! who can drop a `conpty.dll` in either one gets their `DllMain` run inside our
-//! process, with our privileges — and we spawn shells and read the user's files.
-//! That is CWE-427 (uncontrolled search path element). The `kernel32.dll` load
-//! beside it is safe only because kernel32 is a protected **KnownDLL**, resolved
-//! from `\KnownDlls` with the app directory ignored; `conpty.dll` gets no such
-//! protection.
-//!
-//! **Why a source-level assertion rather than a behavioural test.** The hole is
-//! Windows-only and lives in a `lazy_static` inside a dependency, so there is no
-//! API to interrogate at runtime and no portable way to observe *which* library
-//! backed the ConPTY calls. What we can do — on **every** platform, including the
-//! macOS and Linux CI legs — is assert the dangerous construct is absent from the
-//! source we actually compile. That makes this gate useful precisely where a
-//! Windows-only test would not run at all.
-//!
-//! This exists to survive a re-vendor: bumping or re-copying `portable-pty` would
-//! silently restore upstream's sideload, and this test is what turns that from a
-//! shipped vulnerability into a red build.
+//! Security gate: vendored `portable-pty` must never load `conpty.dll` by bare name (CWE-427:
+//! the exe dir and cwd are searched; only KnownDLLs like kernel32 are safe). A source check runs
+//! on every OS, so re-vendoring upstream's sideload turns the build red.
 
 use std::path::PathBuf;
 
@@ -69,11 +43,7 @@ fn vendored_portable_pty_is_present() {
     );
 }
 
-/// **The core assertion: no bare-name `conpty.dll` load.**
-///
-/// Matches the dangerous *construct* (`open(...)` on a bare `conpty.dll`) rather
-/// than the string `conpty.dll`, which legitimately appears throughout the file's
-/// comments and in the explanation of what was removed.
+/// Matches the bare-name `open(...)` construct, not the string `conpty.dll`, which comments use.
 #[test]
 fn vendored_conpty_has_no_sideload_call() {
     let src = std::fs::read_to_string(vendored_psuedocon()).expect("read vendored psuedocon.rs");
@@ -104,10 +74,8 @@ fn vendored_conpty_has_no_sideload_call() {
     );
 }
 
-/// ConPTY itself must survive the patch: the `kernel32` load is the whole point of
-/// keeping the function, and Windows terminals are non-negotiable (ARCHITECTURE §6).
-/// Deleting `load_conpty`'s kernel32 path would break every Windows terminal —
-/// which the Windows CI leg would catch, but this fails faster and everywhere.
+/// ConPTY must survive the patch: the `kernel32` load is why the function stays (ARCHITECTURE
+/// §6); this fails faster than Windows CI, and on every OS.
 #[test]
 fn vendored_conpty_still_loads_kernel32() {
     let src = std::fs::read_to_string(vendored_psuedocon()).expect("read vendored psuedocon.rs");

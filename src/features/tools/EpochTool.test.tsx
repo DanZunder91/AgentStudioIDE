@@ -1,52 +1,6 @@
-/**
- * EpochTool — the Tools rail's epoch ⇄ date converter.
- *
- * ── How this file is written, and why ────────────────────────────────────────
- * **The real component over the real engine.** Nothing here is `vi.mock`ed: test the
- * layer the user touches — a dialog can ship visibly broken with every test green when
- * every test sits a layer below the screen. A converter's deliverable IS the screen, so
- * the tests render it and read the strings a person would read.
- *
- * **Arrived at the way a user arrives**: every input is TYPED with
- * `userEvent`, never pushed into state. The now-row test clicks the now row. The clear
- * test clicks the ×.
- *
- * **Literal expectations**. Every date, every epoch and every sentence
- * below is written out by hand, cross-checked against an INDEPENDENT oracle (`date -u -r
- * …` / `date -u -j -f …` on the host) rather than derived by calling the engine. An
- * expectation computed from the code under test can only ever catch plumbing.
- *
- * **Hermetic**: `clock` and `timeZone` are pinned in every test, so nothing
- * depends on when or where the suite runs. `Europe/Paris` is the default zone here
- * because its offset is non-zero AND seasonal — a hard-coded `+00:00`, or a formatter that
- * quietly used UTC for the "local" line, cannot pass. One case pins `"UTC"` so the
- * zero-offset rendering is real too.
- *
- * ── Falsification (every change must move a test) ────────────────────────────
- * Six load-bearing lines were mutated, the run watched, and the line restored. The
- * failures below are the ones those runs printed (sample values since updated), not
- * predictions:
- *
- *  1. Dropped `<p className="epoch-because">{epoch.chosen.because}</p>` — **3 red**:
- *     `AssertionError: expected '' to be '10 digits — 11 or fewer digits reads …' //
- *     Object.is equality`, and the same for the 19-digit and the explicit-suffix cases.
- *     The required explanation is pinned in all three shapes, not just the happy one.
- *  2. Swapped the UTC row's value for `view.local` — **8 red**, e.g.
- *     `- "UTC": "Tue, 14 Nov 2023 · 22:13:20 UTC"` / `+ "UTC": "Tue, 14 Nov 2023 ·
- *     23:13:20"`. `Europe/Paris` is what makes this visible at all; under a UTC-only
- *     suite the mutant survives, which is why the zone is what it is.
- *  3. Collapsed `parse.readings.map(…)` to `readings[0]` — **1 red**:
- *     `AssertionError: expected …(1) to have a length of 2 but got 1`.
- *  4. Deleted the `return () => clearInterval(id)` cleanup — **1 red**:
- *     `AssertionError: expected 1 to be +0 // Object.is equality`.
- *  5. Deleted the `setInterval` itself (leaving the cleanup) — **2 red**:
- *     `AssertionError: expected +0 to be 1` plus the relative-line test. Both directions
- *     of the timer claim fail, so the assertion is two-sided rather than a
- *     count that happens to be right.
- *  6. Forced `alternative` to `null` — **2 red**: the row map lost
- *     `"Or, read in Europe/Paris — seconds": "1706137200"`, and the copy test lost its
- *     button.
- */
+/** The real component over the real engine, nothing mocked; inputs are typed via `userEvent`.
+ * Expectations are literals checked against an independent oracle. `clock` and `timeZone` are
+ * pinned; `Europe/Paris` (non-zero, seasonal offset) catches a formatter quietly using UTC. */
 
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -91,12 +45,7 @@ function rows(root: ParentNode = document): Record<string, string> {
   return out;
 }
 
-/**
- * Replace whatever `navigator.clipboard` currently is with a spy.
- *
- * Must be called AFTER `userEvent.setup()`, which installs a clipboard stub of its own —
- * a spy defined before it is thrown away, and the copy assertions then see zero calls.
- */
+/** Spy on `navigator.clipboard`. Call AFTER `userEvent.setup()`, which installs its own stub. */
 function stubClipboard(writeText = vi.fn().mockResolvedValue(undefined)) {
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
   return writeText;

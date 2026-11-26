@@ -1,13 +1,6 @@
-//! `locate_transcript` must find a session by its `<id>/` **directory**, not only
-//! its `<id>.jsonl` file (M3 headline fix).
-//!
-//! Measured against a real spawned session: `claude` wrote
-//! `<id>/subagents/*.meta.json` for the sub-agents it spawned but **never wrote the
-//! root `<id>.jsonl`**. The old `locate` required the root file, returned `None`,
-//! and the tailer spun forever delivering nothing. This pins the fix: locate on the
-//! directory, and reconstruct the depth-1 tree from the sidecars.
-//!
-//! In its own binary because it sets `HOME` (process-global) to redirect the glob.
+//! `locate_transcript` must find a session by its `<id>/` directory, not only `<id>.jsonl`:
+//! a running `claude` writes sidecars before any root `.jsonl` (measured), so the depth-1 tree
+//! comes from the sidecars. Own binary: it sets the process-global `HOME`.
 
 mod common;
 

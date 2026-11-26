@@ -1,11 +1,5 @@
-/**
- * Helpers for the real-browser tier: drive the app's DnD gesture and read back
- * REAL pixel geometry.
- *
- * Everything here is deliberately measurement-based. Under jsdom these helpers
- * would all report 0 and every caller would be vacuously green — which is why
- * they live in a `-browser` file and are only imported by `*.browser.test.tsx`.
- */
+/** Helpers that measure REAL pixel geometry: under jsdom they would report 0 and pass vacuously,
+ * so only `*.browser.test.tsx` imports them. */
 
 import { act } from "@testing-library/react";
 
@@ -17,14 +11,8 @@ import { TAB_DND_MIME } from "../components/TabBar";
 /** Where on the target pane's body the tab is dropped. */
 export type Edge = "left" | "right" | "top" | "bottom";
 
-/**
- * A point inside `rect` that `zoneFor()` resolves to `edge`.
- *
- * `zoneFor` calls an edge when the nearest normalized edge distance is <=
- * EDGE_RATIO (0.25), so 10% in from the chosen side is comfortably inside the
- * band while the orthogonal axis sits at the midpoint (0.5) and cannot win the
- * "nearest" contest.
- */
+/** A point `zoneFor()` resolves to `edge`: 10% in from that side (inside EDGE_RATIO 0.25), the
+ * other axis at the midpoint so it cannot win the "nearest" contest. */
 export function pointOnEdge(rect: DOMRect, edge: Edge): { clientX: number; clientY: number } {
   const cx = rect.left + rect.width / 2;
   const cy = rect.top + rect.height / 2;
@@ -40,22 +28,9 @@ export function pointOnEdge(rect: DOMRect, edge: Edge): { clientX: number; clien
   }
 }
 
-/**
- * A drag in progress, so a test can inspect the preview BETWEEN the dragover
- * and the drop — which is the only moment the preview exists, and therefore the
- * only moment its correctness is observable.
- *
- * Uses real `DragEvent`s carrying one real `DataTransfer` across the whole
- * gesture — exactly as the browser threads it through a native drag — so the
- * component's `setData`/`types`/`getData` path is the one under test rather
- * than a hand-rolled stand-in. React's root-level delegation picks these up.
- *
- * Note the browser's own rule, which the components are built around: during
- * `dragover` the drag data store is in **protected mode**, so `getData()`
- * returns `""` and only `types` is readable. These helpers reproduce that
- * faithfully by threading one real `DataTransfer` through, rather than a stub
- * that would happily hand `getData()` back early and hide the constraint.
- */
+/** A drag in progress, so a test can inspect the preview between dragover and drop. One real
+ * `DataTransfer` threads the gesture, keeping the browser's protected mode (`getData()` is `""`
+ * during dragover, only `types` readable) that a stub would hide. */
 export class DragGesture {
   readonly dataTransfer = new DataTransfer();
   constructor(private readonly source: HTMLElement) {}

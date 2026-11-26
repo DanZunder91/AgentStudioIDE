@@ -1,8 +1,6 @@
-//! End-to-end tests of the capture proxy (`src/netcap/`), in process and hermetic:
-//! every upstream is a loopback server started here, every client is a real
-//! client pointed at a real `Netcap` on 127.0.0.1, the trust anchors are test CAs — no
-//! internet, no OS trust store, no `~/.claude`, no login shell. Each test starts its own
-//! proxy instance, so they run in parallel with no shared state.
+//! End-to-end tests of the capture proxy (`src/netcap/`), hermetic: loopback upstreams, real
+//! clients, test CAs; no internet, OS trust store, `~/.claude` or login shell.
+//! Each test starts its own proxy, so they run in parallel with no shared state.
 
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -409,10 +407,8 @@ async fn a_client_that_rejects_our_leaf_is_explained_then_passed_through() {
     );
 }
 
-/// **Never break a client.** Decrypt is ON and the client (this test
-/// binary's reqwest — a compiled Rust client like `gazelle`, trusting only its
-/// own roots) is NOT on the allowlist: the proxy must tunnel it, so the request succeeds end to
-/// end, and the row explains why it was not decrypted — without calling it an error.
+/// The client is this binary's reqwest (trusts only its own roots); the row must say why it was
+/// not decrypted without calling it an error.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn decrypt_on_never_breaks_a_client_that_is_not_on_the_allowlist() {
     let upstream_ca = Ca::generate().unwrap();
@@ -458,10 +454,8 @@ async fn decrypt_on_never_breaks_a_client_that_is_not_on_the_allowlist() {
     );
 }
 
-/// **Per-app decrypt opt-in**, end to end through the real proxy. An external client
-/// (this test binary — like Postman, not on the allowlist) that trusts the IDE's CA is
-/// tunnelled until the user opts it in with `set_app_decrypt`; then its HTTPS is decrypted
-/// (path + status visible). Opting out tunnels it again. No `also_decrypt_for` seam here.
+/// Through the real proxy via `set_app_decrypt`: this binary trusts the IDE's CA but is not on the
+/// allowlist. No `also_decrypt_for` seam here.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_app_the_user_opted_in_is_decrypted_and_opting_out_tunnels_it_again() {
     let upstream_ca = Ca::generate().unwrap();
@@ -564,11 +558,9 @@ async fn spawn_tagged(addr: std::net::SocketAddr, tag: &'static str) -> std::io:
     Ok(port)
 }
 
-/// `localhost` resolves to both `::1` and `127.0.0.1` (in an order the OS picks). A direct
-/// client falls back across the addresses until one answers; the proxy must too, or a dev
-/// server that listens on only one family (Vite on `::1`, a Rust service on `127.0.0.1`) is
-/// unreachable through it. Proved on both upstream paths: the pooled plain-HTTP client and the
-/// raw `TcpStream::connect` of a `CONNECT` tunnel.
+/// `localhost` resolves to `::1` and `127.0.0.1` in OS order; the proxy must fall back across them
+/// like a direct client, or a dev server on one family is unreachable. Covers both upstream paths:
+/// the pooled plain-HTTP client and a `CONNECT` tunnel's raw `TcpStream::connect`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn localhost_reaches_a_server_on_either_address_family_only() {
     let resolved: Vec<std::net::SocketAddr> = tokio::net::lookup_host(("localhost", 1))
@@ -814,11 +806,9 @@ async fn a_connect_to_a_dead_port_is_502_and_an_error_flow() {
     assert_client_is_me(&f);
 }
 
-/// Seen from a client: a refused plain-HTTP upstream used to come back as
-/// `502 "Agent Studio capture proxy: upstream: Connection refused"` — an HTTP response where the
-/// client expects a transport error, so every "unreachable host → error" test (a service's
-/// `http://127.0.0.1:1`) failed inside an IDE terminal. Now the proxy ends the client's connection
-/// without writing a single byte, and still records the refusal as an error flow.
+/// A client expects a transport error for an unreachable host, so the proxy closes the connection
+/// without writing a byte (a 502 would fail such tests run in an IDE terminal), and still records
+/// the refusal as an error flow.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_plain_request_to_a_refused_port_ends_the_connection_never_a_502() {
     let dead = {
@@ -903,10 +893,9 @@ async fn reqwest_through_the_proxy_to_port_1_is_an_error_never_a_502() {
 
 // ── Real tools (not hermetic — they run system binaries) ───────────────────────────
 
-/// The env a real tool gets: exactly what `pty_env` hands a terminal, plus a minimal PATH/HOME.
-/// On Windows the minimum is different: `PATH` is System32, and a process started
-/// with a cleared environment also needs `SystemRoot` (Winsock and the crypto providers fail
-/// to load without it) and a temp dir.
+/// Exactly what `pty_env` hands a terminal, plus a minimal PATH/HOME. On Windows PATH is System32,
+/// and a cleared environment also needs `SystemRoot` (Winsock and the crypto providers fail to load
+/// without it) and a temp dir.
 fn tool_env(env: &[(String, String)]) -> Vec<(String, String)> {
     let mut out = env.to_vec();
     let temp: String = std::env::temp_dir().to_string_lossy().into();
@@ -1030,18 +1019,9 @@ async fn node_fetch(env: &[(String, String)], url: &str) -> Option<(String, std:
     Some((version, out))
 }
 
-/// Without the shim, an agent in an IDE terminal running
-/// `curl -s --noproxy '*' http://127.0.0.1:3000/…` bypassed Network entirely. Now the IDE
-/// terminal's `PATH` starts with the curl shim (`netcap::shim`), so the SAME command — typed
-/// into a REAL PTY spawned with the injected env, resolved through `PATH` like any shell
-/// does — runs the real `/usr/bin/curl` through the proxy, attributed to the terminal. Plain
-/// `http://127.0.0.1:<port>` through the proxy is served correctly (the body comes back).
-///
-/// Falsified in the same run: with `strictAgentCapture` off the identical command bypasses
-/// the proxy again (still succeeds, no flow) — so it is the shim, not luck, that captures it.
-/// No env value is ever printed.
-///
-/// Run: `cargo test --test netcap_e2e -- --ignored --exact real_curl_noproxy_in_a_pty_is_captured_by_the_shim`.
+/// The terminal's PATH starts with the curl shim (`netcap::shim`), so `curl --noproxy '*'` typed in
+/// a real PTY still goes through the proxy. Falsified in the same run: with `strictAgentCapture`
+/// off the same command bypasses it. No env value is ever printed.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "local integration: a real PTY running the system /usr/bin/curl through the shim"]
@@ -1151,28 +1131,9 @@ async fn real_curl_noproxy_in_a_pty_is_captured_by_the_shim() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Local integration (`#[ignore]`d — it drives system binaries; `npm run verify` runs it as a
-/// blocking local step). Decrypt ON, env exactly as `pty_env` hands a terminal:
-/// 1. `/usr/bin/curl` (allowlisted) `http://localhost/…` — loopback is captured;
-/// 2. `/usr/bin/curl` with the injected `CURL_CA_BUNDLE` → `https://localhost/…` DECRYPTED
-///    (path, status, `client.name == "curl"`);
-/// 3. `node` `fetch` with `NODE_USE_ENV_PROXY=1` + `NODE_EXTRA_CA_CERTS` → decrypted (skipped
-///    with a printed reason when node is absent or too old to honour the variable);
-/// 4. **the documented limitation**: an allowlisted client that explicitly distrusts us
-///    (`curl --cacert <the upstream's own CA>`) fails ONCE (`tls rejected → passthrough`),
-///    then that (executable, host) is tunnelled and works.
-///
-///
-/// **On Windows** (the same test, the Windows contract): the system curl
-/// is `System32\curl.exe`, a Schannel build that is deliberately NOT decrypted
-/// (`reads_injected_ca_on`). So step 2 there proves the other half of the promise: curl,
-/// trusting only the upstream's OWN CA (`--cacert`, `--ssl-no-revoke` because Schannel checks
-/// revocation and a test CA has no CRL), succeeds through the proxy — which it could not if the
-/// IDE had put its leaf in the way — and the row is a tunnel with the "doesn't read the IDE's
-/// CA" note. Step 4 does not apply (a client that is never decrypted has nothing to reject) and
-/// says so. Steps 1 and 3 are identical.
-///
-/// Run: `cargo test --test netcap_e2e -- --ignored --exact real_curl_through_the_proxy_is_captured`.
+/// Local integration, blocking in `npm run verify`. curl http captured; curl https decrypted;
+/// node fetch decrypted (skipped if absent or too old); a curl that distrusts us fails once, then
+/// tunnels. Windows: Schannel curl.exe is never decrypted: step 2 checks the tunnel, 4 is skipped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "local integration: drives the system curl (and node, if installed)"]
 async fn real_curl_through_the_proxy_is_captured() {
@@ -1228,6 +1189,7 @@ async fn real_curl_through_the_proxy_is_captured() {
     if cfg!(windows) {
         // 2 (Windows) — Schannel curl is tunnelled, never broken: verifying the upstream's own
         // certificate succeeds through the proxy, and the row says why it was not decrypted.
+        // `--ssl-no-revoke`: Schannel checks revocation and a test CA has no CRL.
         let url = format!("https://localhost:{tls}/curl-tls");
         let out = curl(&env, &["--cacert", &theirs, "--ssl-no-revoke", &url]).await;
         assert!(
@@ -1416,20 +1378,9 @@ impl WinTerm {
     }
 }
 
-/// **Windows, end to end** (local integration, `#[ignore]`d like the other real-tool tests).
-/// A REAL Windows PowerShell terminal — ConPTY, the IDE's startup command
-/// (`pty::shell_startup_args`), the env `pty_env` hands a terminal (config dir, so the curl
-/// shim and the Node preload exist) — runs what a user types:
-/// 1. `(Get-Command curl).Source` is `System32\curl.exe`: the shim is NOT on a Windows
-///    terminal's `PATH` (PowerShell would try to open the extensionless file as a document);
-/// 2. `curl.exe http://127.0.0.1:<port>/…` → captured, `client.name == "curl"` (no `.exe`);
-/// 3. `node -e "fetch(…)"` → captured, `client.name == "node"`, and no `[UNDICI-EHPA]`
-///    warning printed (skipped with the reason when node is absent or too old to proxy);
-/// 4. `Invoke-WebRequest http://<a .invalid host>/…` → reaches the proxy (the startup
-///    command's `DefaultWebProxy`) and is attributed to the TERMINAL from the client's own
-///    environment, though Windows PowerShell sends no proxy credentials.
-///
-/// Run: `cargo test --test netcap_e2e -- --ignored --exact on_windows_a_powershell_terminal_is_captured`.
+/// Real PowerShell in ConPTY with the IDE's startup command and `pty_env`. The curl shim is not on
+/// PATH (PowerShell would open the extensionless file as a document); curl.exe and node are
+/// captured by name; Invoke-WebRequest is attributed to the terminal despite no proxy credentials.
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "local integration: a real PowerShell terminal running curl.exe, node and Invoke-WebRequest"]
@@ -1569,18 +1520,9 @@ async fn on_windows_a_powershell_terminal_is_captured() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// **External, non-blocking** (`#[ignore]`d — public internet; `npm run verify` reports it but
-/// a third party's outage is not our regression). ONE reputable host only: `example.com`
-/// (IANA's reserved documentation domain). Decrypt ON, the proxy's upstream trust = the app's
-/// real policy (OS anchors ∪ Mozilla set), env exactly as `pty_env` hands a terminal:
-/// (a) `/usr/bin/curl` (allowlisted) → DECRYPTED: 200, path `/`, body "Example Domain". On
-///     Windows `curl.exe` is a Schannel client, not allowlisted → a working tunnel with the note;
-/// (b) this test binary's reqwest (NOT allowlisted, platform verifier) → the request SUCCEEDS
-///     and the flow is a tunnel with the "not decrypted" note — never-break against a real site;
-/// (c) `node` fetch with `NODE_USE_ENV_PROXY=1` → decrypted (skipped, with the reason printed,
-///     when node is absent or too old). No credentials; finite timeouts.
-///
-/// Run: `cargo test --test netcap_e2e -- --ignored --exact live_example_com_through_the_proxy`.
+/// External, non-blocking: public internet, only reported by `npm run verify`. One host only.
+/// Decrypt ON with the app's real upstream trust (OS anchors + Mozilla set): curl is decrypted
+/// (Windows curl.exe tunnels), this binary's reqwest tunnels with a note, node fetch is decrypted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "external: reaches https://example.com/ over the public internet"]
 async fn live_example_com_through_the_proxy() {

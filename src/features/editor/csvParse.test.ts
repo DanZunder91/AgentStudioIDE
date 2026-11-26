@@ -1,9 +1,3 @@
-/**
- * Parser tests. This is the risky logic, so it is tested
- * hardest: quoting, embedded commas/newlines, escaped quotes,
- * both line endings, the trailing-newline rule, and the empty cases.
- */
-
 import { describe, expect, it } from "vitest";
 
 import { parseCsv } from "./csvParse";

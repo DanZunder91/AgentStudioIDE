@@ -1,10 +1,4 @@
-/**
- * Public surface of the API client feature (M6).
- *
- * `<ApiRequestView/>` renders one request tab (keyed by requestId); the titlebar
- * `<ApiRequestButton/>` opens a new one. The IPC wrapper + wire types are exported
- * for the bridge and for tests.
- */
+/** Public surface of the API client feature (M6). */
 
 export { ApiRequestView } from "./ApiRequestView";
 export { ApiRequestButton } from "./ApiRequestButton";
@@ -51,10 +45,7 @@ export { activeVars, substituteVars } from "./substitute";
 // M6 follow-on: request history IPC + wire types.
 export { loadApiHistory, saveApiHistory } from "./historyIpc";
 export type { HistoryEntry, HistoryStore } from "./historyIpc";
-// Navigable history: the pure shaping behind the
-// panel — newest-first day buckets, the recent/grouped split, and the search
-// filter. Pure and clock-injected, so the panel and any future consumer
-// (a command palette, an export) can never disagree about what "Yesterday" means.
+// History shaping: pure and clock-injected, so every consumer agrees on what "Yesterday" means.
 export {
   dayKey,
   dayLabel,

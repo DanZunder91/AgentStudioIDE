@@ -1,11 +1,6 @@
-//! The **whole fan-out tailer loop, end to end** (M3): locate the transcript by
-//! session id → poll → parse the real fixture → diff → emit `SubagentSpawned`. This
-//! is the one test that exercises the live polling loop rather than its components.
-//!
-//! It runs in its own binary because it points the tailer at a temporary
-//! `~/.claude/projects/` by setting `HOME` (process-global), and speeds the poll to
-//! 50 ms via `AGENTSTUDIO_FANOUT_POLL_MS`. Still no real `claude` — the stub adapter
-//! tails via the real Claude parser over the committed fixture.
+//! The whole live fan-out tailer loop: locate by session id → poll → parse → diff → emit. Own
+//! binary: it sets the process-global `HOME` and `AGENTSTUDIO_FANOUT_POLL_MS` (50 ms); stub
+//! adapter, real Claude parser, committed fixture.
 
 mod common;
 
@@ -124,10 +119,8 @@ async fn the_tailer_loop_reconstructs_the_real_tree_from_disk() {
         .expect("agent00 missing");
     assert_eq!(child.parent_id.as_deref(), Some(term.as_str()));
 
-    // **Cascade + the tailer must be ABORTED, not merely idle.** Close the root:
-    // the whole tree is removed. Then a *new* sub-agent appears in the transcript
-    // on disk. A live (un-aborted) tailer would detect it and resurrect an orphan
-    // under the dead root; an aborted tailer never sees it.
+    // Close cascades the tree; then a new sub-agent appears on disk, which only an un-aborted
+    // tailer would pick up (resurrecting an orphan).
     sup.close(term.clone()).await.expect("close failed");
     tokio::time::sleep(Duration::from_millis(120)).await;
     assert_eq!(

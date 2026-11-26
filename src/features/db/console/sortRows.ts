@@ -1,39 +1,6 @@
-/**
- * sortRows — ordering the results grid by a column.
- *
- * Pure, so the comparison can be tested exhaustively without a DOM — and it
- * needs to be, because "sort a column of strings" is wrong in three separate
- * ways for real database output.
- *
- * 🔴 **1. Numbers are not their text.** A `NUMERIC` amount column can hold
- * `2468013579246801357` next to `7531975319753197` — as
- * text, the shorter one sorts higher. And values like these are past
- * `Number.MAX_SAFE_INTEGER` (9007199254740991), so parsing them as `number`
- * silently rounds: two different amounts can compare EQUAL. Integers are therefore
- * compared as `BigInt` when both sides are integral, and only fall back to
- * `Number` for genuine decimals.
- *
- * 🔴 **2. NULL is not a value.** It sorts last in BOTH directions rather than
- * flipping with the arrow: the user is looking for the biggest amount or the newest
- * record, and a screenful of empties at the top is never the answer they wanted.
- * (SQL's own default is NULLS LAST for ASC and FIRST for DESC — deliberately not
- * copied, because this is a view over rows already fetched, not a query.)
- *
- * 🔴 **3. A timestamp is not a string** unless every row shares an offset.
- * `2026-08-25 13:51:06+00` and `2026-08-25 09:51:06-04` are the same instant and
- * sort apart lexicographically, so datetimes are parsed and compared as instants,
- * falling back to text when a value will not parse.
- *
- * ## What this deliberately does NOT do
- *
- * It reorders **the rows already fetched** — it never re-runs the query with an
- * `ORDER BY`. Rewriting arbitrary user SQL is not something this app will do
- * (`guard.rs` refuses to be a SQL semantic authority). The consequence is real
- * and the UI states it: on a TRUNCATED result, this sorts the page you have, not
- * the table. Sorting 1,000 of 40,000 rows by amount and calling the top one "the
- * largest amount" would be exactly the kind of quiet lie this codebase keeps
- * refusing.
- */
+/** Integers compare as BigInt (NUMERIC exceeds MAX_SAFE_INTEGER), NULL sorts last both ways, and
+ * datetimes compare as instants (offsets differ). Reorders only the fetched rows, never re-runs
+ * with ORDER BY (guard.rs is no SQL authority), so a truncated result sorts only its page. */
 
 import type { DbCellKind } from "../types";
 
@@ -53,12 +20,7 @@ function isIntegerText(s: string): boolean {
   return /^[+-]?\d+$/.test(s);
 }
 
-/**
- * Compare two non-null cells of a column of `kind`.
- *
- * Returns the usual negative / zero / positive, always in ASCENDING order; the
- * caller flips it for descending, so the direction lives in exactly one place.
- */
+/** Always ASCENDING; the caller flips it for descending, so direction lives in one place. */
 export function compareCells(kind: DbCellKind, a: string, b: string): number {
   if (kind === "number") {
     // BigInt first: these are the values a `number` would round away.
@@ -96,12 +58,7 @@ export function compareCells(kind: DbCellKind, a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/**
- * A copy of `rows`, ordered by one column.
- *
- * Stable: `Array#sort` is specified stable, so rows that tie keep the order the
- * server sent them in — which is the closest thing to "unsorted" a tie can have.
- */
+/** Stable (Array#sort), so ties keep the server's order. */
 export function sortRows(
   rows: Cell[][],
   { columnIndex, direction }: SortState,
@@ -119,14 +76,7 @@ export function sortRows(
   });
 }
 
-/**
- * The next sort state when a header is clicked: unsorted → asc → desc →
- * unsorted, and clicking a different column starts that column at asc.
- *
- * The third click returning to the SERVER's order matters: it is the only way
- * back to the ordering the query itself asked for, and a grid you cannot restore
- * has taken something away.
- */
+/** asc, desc, then unsorted: the only way back to the server's order. New columns start at asc. */
 export function nextSort(current: SortState | null, columnIndex: number): SortState | null {
   if (current === null || current.columnIndex !== columnIndex) {
     return { columnIndex, direction: "asc" };

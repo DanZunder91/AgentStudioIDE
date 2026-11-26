@@ -1,7 +1,4 @@
-/**
- * Flow → cURL / API-client request. Nothing is redacted: credentials
- * are exported verbatim so the replay is the request that was sent.
- */
+/** Nothing is redacted: credentials export verbatim so the replay is the request that was sent. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

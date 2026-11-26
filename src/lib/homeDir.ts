@@ -1,12 +1,5 @@
-/**
- * homeDir — the user's home folder, for showing paths as `~/…` (`paths.tildeHome`).
- *
- * Read once from Tauri's core path API (`plugin:path|resolve_directory`, granted by
- * `core:default` → `core:path:default`; no OS prompt, no Rust of ours): `/Users/me` on macOS,
- * `/home/me` on Linux, `C:\Users\me` on Windows. Cached for the session — it cannot change
- * under a running app. A failure (no Tauri, as in a browser test) is `null`, which every
- * caller treats as "show the path as it is".
- */
+/** Home folder for `~/…` display, read once via Tauri's path API (`core:path:default`, no OS
+ * prompt) and cached for the session. A failure (no Tauri) is `null`: show the path as is. */
 
 import { homeDir } from "@tauri-apps/api/path";
 import { useEffect, useState } from "react";

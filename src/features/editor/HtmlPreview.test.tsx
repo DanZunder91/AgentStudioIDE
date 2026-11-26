@@ -1,48 +1,6 @@
-/**
- * HtmlPreview tests — jsdom tier.
- *
- * ## 🔴 What this tier proves, and what it emphatically does NOT
- *
- * jsdom does not load an iframe's `src`, does not implement the `preview://`
- * scheme, does not execute a framed document, and — most importantly — **does
- * not implement `sandbox` or CSP at all**. So nothing here is evidence that the
- * jail *holds*. What it is evidence of is that the host **asks for** the right
- * jail and the right URL, which is the half of the feature that lives in this
- * repository's TypeScript:
- *
- *   - the `sandbox` attribute is the exact string `"allow-scripts"` — asserted
- *     character-for-character, plus token-by-token for the dangerous ones, so a
- *     future `allow-same-origin` cannot slip in as a "small" widening;
- *   - `referrerPolicy` is `no-referrer`;
- *   - the URL is built correctly from a filesystem path, on both platform
- *     spellings, with each SEGMENT percent-encoded and the `/` separators not;
- *   - the frame is genuinely **remounted** (a new DOM node) on a save, on a
- *     Reload click and on a path change, and is NOT remounted on an unrelated
- *     re-render;
- *   - the two known limitations are stated in the chrome, quietly (collapsed by
- *     default), and expand on demand.
- *
- * What would still have to be checked in a real packaged build, by a human
- * driving the app:
- *
- *   - that a page actually renders, with its sibling `.css`, `.js`, ES-module
- *     imports and local `@font-face` resolving through the scheme;
- *   - that WebKit enforces the sandbox and Rust's `PREVIEW_CSP` as intended
- *     (`connect-src 'none'`, no remote origin, no reach into Tauri IPC);
- *   - that a save is visible after a reload — i.e. that the engine does not
- *     serve a stale `style.css` out of its own HTTP cache. That is an engine
- *     behaviour no test in this repo can observe.
- *
- * ## Why there is no browser-tier test here
- *
- * There deliberately is none, and its absence is a finding rather than an
- * omission. The browser tier runs **Chromium**, the app ships **WebKit**, and
- * per `docs/design/csp.md` the browser tier applies **no CSP at all**. A green
- * Chromium assertion about this frame would be a false green: it would prove
- * nothing about the engine that ships and nothing about the policy that is the
- * feature's security. Writing one for the look of it would be worse than not
- * having it, because a passing test is read as evidence.
- */
+/** jsdom implements neither `sandbox` nor CSP: these prove the host ASKS for the right jail and
+ * URL, not that it holds. No browser-tier test on purpose: it runs Chromium with no CSP
+ * (`docs/design/csp.md`) while the app ships WebKit, so a pass would be a false green. */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -104,12 +62,8 @@ describe("previewUrlFor", () => {
     expect(previewUrlFor("/Users/sam/a:b/index.html")).toBe(
       "preview://localhost/Users/sam/a%3Ab/index.html",
     );
-    // 🔴 The `^` anchor, pinned. A drive-letter-SHAPED run in the middle of a
-    // POSIX path (`wget -r` makes `https:/` directories; a repo can hold a
-    // literal `C:` folder) must NOT re-spell the URL as the Windows one — that
-    // would hand macOS a `http://preview.localhost/...` URL pointing nowhere and
-    // the user would get a blank preview with nothing to explain it. Found by
-    // falsification: dropping the anchor left every other test green.
+    // The `^` anchor: a drive-letter-shaped segment inside a POSIX path (a `C:` folder) must
+    // not re-spell the URL the Windows way, which would leave macOS with a blank preview.
     expect(previewUrlFor("/Users/sam/C:/site/index.html")).toBe(
       "preview://localhost/Users/sam/C%3A/site/index.html",
     );

@@ -1,13 +1,6 @@
-/**
- * AppPicker — "all apps, or pick some" (with many apps running, both views need a
- * per-app filter as well as an all-apps option). Shared by the Logs and
- * Network views.
- *
- * `selected === null` means ALL — deliberately distinct from `[]` (nothing), so an app that
- * appears after the choice is included under "All" and excluded under a pick. The trigger
- * names the choice (`All apps` / the one name / `3 apps`); the popover is a searchable
- * checklist with an All row and a per-row **Only**. Esc and an outside click close it.
- */
+/** "All apps, or pick some", shared by Logs and Network. `selected === null` means ALL, distinct
+ * from `[]`, so a later app is included under All and excluded under a pick. Searchable checklist
+ * with an All row and per-row **Only**; Esc and outside click close it. */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 

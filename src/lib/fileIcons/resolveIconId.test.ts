@@ -1,17 +1,6 @@
-/**
- * resolveFileIconId — the §3 ladder (files branch) of docs/design/file-icons.md.
- *
- * All ladder tests run against a HAND-WRITTEN fixture map (an expectation
- * derived from the table under test proves nothing about values — the real
- * generated table's integrity is the generator's drift test, not ours).
- * Fixture ids are deliberately tier-named ("name-…", "ext-…", "lang-…")
- * and every tier's entry DISAGREES with the tiers below it, so a reordering of
- * the ladder flips a concrete assertion red.
- *
- * Tier 5 goes through the REAL `detectLanguage` on purpose — the resolver's
- * contract is "the detector is authoritative for ambiguous/extensionless
- * files", so stubbing it would test a different ladder than the one shipped.
- */
+/** Ladder tests use a hand-written fixture map whose tier-named entries disagree with the tiers
+ * below, so a reordering turns red. Tier 5 uses the REAL `detectLanguage`: the detector is
+ * authoritative for ambiguous and extensionless files. */
 
 import { describe, expect, it } from "vitest";
 
@@ -127,14 +116,8 @@ describe("resolveFileIconId — total function (every input lands on defaultFile
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Integration expectations against the REAL generated ICON_MAP.
-//
-// These MUST be green: they prove the generated table is wired in. An empty
-// or placeholder map resolves every name below to its defaultFile, so these
-// four assertions fail — the fixture suites above prove the ladder itself.
-// Expected ids follow the vendored Material Icon Theme's vocabulary.
-// ─────────────────────────────────────────────────────────────────────────────
+// ── REAL ICON_MAP: an empty or placeholder map resolves these to defaultFile, so they prove the
+// generated table is wired in. Ids follow the vendored Material Icon Theme's vocabulary.
 describe("REAL ICON_MAP integration expectations", () => {
   it('"cargo.toml" → "rust"', () => {
     expect(resolveFileIconId("cargo.toml")).toBe("rust");

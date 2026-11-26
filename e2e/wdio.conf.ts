@@ -1,24 +1,6 @@
-/**
- * WebdriverIO config — the E2E driver harness (layer 6).
- *
- * Drives the REAL built app over WebDriver via a self-managed `tauri-driver`
- * proxy (no `@wdio/tauri-service`), on Linux + Windows only. macOS cannot drive
- * a WKWebView over `tauri-driver` (Apple limitation), so this suite is NOT run on
- * the dev host — see e2e/README.md.
- *
- * Determinism (all via seams that ALREADY exist in the app — no Rust change):
- *   - `AGENTSTUDIO_CLAUDE_BIN` → e2e/fixtures/claude-stub.sh, so `agent_spawn`
- *     drives a stub instead of the real `claude` (agent/claude.rs resolve_binary).
- *   - `AGENTSTUDIO_FANOUT_POLL_MS=50` → the transcript tailer polls fast
- *     (supervisor/mod.rs fanout_poll).
- *   - launch **cwd = the fixture workspace**, so `default_workspace`
- *     (git-root-of-launch, workspace.rs) roots the tree/find/quick-launch there.
- *     tauri-driver launches the app inheriting this process's cwd + env.
- *
- * tauri-driver is spawned ONCE in onPrepare (after the build) and reaped in
- * onComplete — robust across the multiple spec files (each spec file is a fresh
- * WebDriver session = a fresh app launch against the one proxy).
- */
+/** WebdriverIO harness: the real built app via a self-managed tauri-driver (not macOS; see
+ * e2e/README.md). Deterministic via existing seams: claude stub, fast fan-out poll, cwd = fixture
+ * workspace. tauri-driver starts once in onPrepare; each spec file is a fresh app. */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { homedir, platform } from "node:os";
@@ -92,12 +74,8 @@ function waitForPort(port: number, timeoutMs: number): Promise<void> {
   });
 }
 
-/**
- * Make the fixture workspace its own git repo (idempotent). `find_repo_root`
- * walks up to the nearest `.git`; without one here the app would root in the
- * outer Agent Studio repo. The `.git` is not committed (a nested repo cannot be) —
- * it is created here and git-ignored via e2e/.gitignore.
- */
+/** Without its own `.git` the app would root in the outer repo; a nested repo can't be committed,
+ * so it is created here (git-ignored). */
 function seedFixtureRepo(): void {
   if (fs.existsSync(path.join(E2E_WORKSPACE, ".git"))) return;
   const git = (...args: string[]): void => {
@@ -110,18 +88,8 @@ function seedFixtureRepo(): void {
   git(...id, "commit", "-q", "-m", "e2e fixture workspace");
 }
 
-/**
- * The agent registries a launch RESTORES from (docs/design/agent-restart-restore.md): every
- * open root agent (`open-agents.json`) and every pinned one (`pinned-agents.json`) comes back when the
- * app starts. Every spec file of a run shares one container — so one app-config dir — and an agent a
- * spec left open (e.g. find-scope's quick-launched agent in /tmp/e2e-roots/gazelle) would be
- * restored into the next spec's app: no empty pane to open a terminal from, an extra row in the rail,
- * an extra floor in the City. So each spec FILE starts with neither (`beforeSession`, before its app
- * launches; a spec's own `browser.reloadSession()` does not re-run it, so the restart spec keeps its
- * registry across its own restarts). The app-config dir is Tauri's for this app's identifier, under
- * the CONTAINER's `$XDG_CONFIG_HOME` / `~/.config`; Docker only — on any other machine that dir is a
- * real person's, and this deletes nothing there.
- */
+/** Each spec file starts with no restorable agents: all share one app-config dir. reloadSession
+ * does not re-run this. Docker only: elsewhere that dir is a real person's. */
 function clearAgentRegistries(spec: string): void {
   if (IS_WIN || !fs.existsSync("/.dockerenv")) return;
   const tauriConf = JSON.parse(fs.readFileSync(path.join(ROOT, "src-tauri", "tauri.conf.json"), "utf8")) as { identifier: string };
@@ -170,11 +138,7 @@ export const config: WebdriverIO.Config = {
   // Real PTYs / a real Rust link / a real build need generous waits.
   mochaOpts: { ui: "bdd", timeout: 120_000 },
 
-  /**
-   * Build the app once, seed the fixture repo, and start tauri-driver — before
-   * any worker. Fails loudly if the binary is missing (a broken build must not
-   * silently "pass" zero specs).
-   */
+  /** Fails loudly if the binary is missing: a broken build must not "pass" zero specs. */
   onPrepare: async () => {
     seedFixtureRepo();
 
@@ -210,14 +174,8 @@ export const config: WebdriverIO.Config = {
     driver?.kill();
   },
 
-  // A spec that photographs a time-zone theme (support/app-zone.ts APP_ZONES: village-city → Asia/Tokyo)
-  // gets its OWN app launched through a `TZ=… exec <binary>` launcher: wdio creates the session from these
-  // same capabilities right after this hook (@wdio/runner), and tauri-driver — one process for the whole
-  // run — is untouched, so no other spec's app (and not this worker) changes zone.
-  //
-  // Opt-in video (`node scripts/e2e-linux.mjs --record` → E2E_RECORD=1, support/record.ts): the whole
-  // xvfb display, one mp4 + GIF per spec file. Starts before the session so the app's launch is in it.
-  // Both are no-ops when not recording — the default, and what `npm run verify` runs.
+  // Time-zone specs (support/app-zone.ts) get their own app via a TZ launcher; tauri-driver is
+  // untouched. Recording starts before the session so the launch is filmed. Both no-op otherwise.
   beforeSession: (_config, caps, specs) => {
     const name = specName(specs);
     clearAgentRegistries(name);
@@ -233,10 +191,8 @@ export const config: WebdriverIO.Config = {
     await stopRecording();
   },
 
-  // Evidence (added for scripts/e2e-linux.mjs): when E2E_SCREENSHOT_DIR is set, a failing test
-  // saves a screenshot of the real app window there; with E2E_CHECKPOINTS=1 EVERY test does
-  // (prefixed `ok__`), so a human can look at what each passing test actually saw — the visuals
-  // are checked, not only the assertions. No-op otherwise.
+  // E2E_SCREENSHOT_DIR: a failing test saves a screenshot; with E2E_CHECKPOINTS=1 every test does
+  // (`ok__` prefix), so the visuals get checked too.
   afterTest: async (test, _context, { passed }) => {
     const dir = process.env.E2E_SCREENSHOT_DIR;
     if (!dir || (passed && process.env.E2E_CHECKPOINTS !== "1")) return;

@@ -1,15 +1,6 @@
-/**
- * Structural contract check for the Agent Village's `list_external_agents` reply
- * (`villageTypes.ts` `ExternalAgentsReport` / `ExternalAgentWire`) — the TS half of
- * `src-tauri/tests/contract_goldens/village.rs`, which WROTE `goldens/external-agents.json`
- * from the real `external_agents::scan_external` over the checked-in transcript fixture.
- *
- * Both directions, the `wireShape.test.ts` way: the SHAPE tables are typed
- * `Record<keyof T, Json>` (a TS field without a row, or a row without a TS field, is a
- * compile error), and every golden object must carry EXACTLY those keys with those JSON
- * types (a Rust-only field, a TS-only field or a changed type is red). Every `activity`
- * must be a spelling the TS union names. Expectations are written by hand.
- */
+/** TS half of `src-tauri/tests/contract_goldens/village.rs`, which writes the golden. SHAPE tables
+ * are `Record<keyof T, Json>`; golden objects carry exactly those keys and JSON types, and every
+ * `activity` is a TS union spelling. Expectations are written by hand. */
 
 import { describe, expect, it } from "vitest";
 

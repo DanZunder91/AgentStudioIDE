@@ -1,41 +1,6 @@
-/**
- * `metricsStore` — the on-demand metrics store.
- *
- * Covers: the success/failure state shapes (including "a failure never blanks the last
- * good report"), the `loading` flag through both outcomes, single-flight dedupe
- * *asserted on IPC call counts*, the ordering guarantee (**peak mocked-IPC concurrency
- * asserted === 1**), query changes refetching, a redundant query change NOT refetching,
- * `ensureMetrics`'s cases, and — deliberately — that this store installs **no timer**,
- * because a filesystem sweep is not a 5 s cadence.
- *
- * 🔴 **The default query is the headline assertion in this file.** `("last_24h", "all",
- * null)`. An earlier default was `("last_24h", "project", null)`, which `claude_metrics`
- * rejected with `scan-failed` — so the packaged dashboard showed "Could not read your
- * sessions" whenever no agent was selected. That triple is pinned here, and the panel-level
- * consequence is pinned in `metricsNoSelectionSeam.test.tsx`.
- *
- * The other new rule with teeth: in `"all"` scope the cwd is **carried but not an input**,
- * so changing it records and does not fetch. Both halves are asserted, because either alone
- * is a bug — no record and the scope toggle cannot enable, no fetch and a project switch
- * would sweep megabytes off disk to recompute the identical answer.
- *
- * ── How this suite stays hermetic and non-flaky ──────────────────────────────
- *
- * `vi.mock("./metricsIpc")` — no Tauri IPC is ever touched.
- * `claudeMetrics` is a `vi.fn()` handed deferreds, so *when* a response lands is the
- * test's decision, never a timing accident.
- *
- * `vi.mock("./metricsFormat")` — `parseMetricsError` is a spy, not the real classifier.
- * That module has its own exhaustive suite; stubbing it keeps this file testing the
- * STORE's contract ("hand the raw rejection to the parser and store what comes back")
- * instead of re-testing theirs, and lets us assert the raw reason arrived unmangled.
- *
- * `vi.resetModules()` before every test, with the module imported *inside* each test:
- * `metricsStore` keeps its single-flight gate in module scope (plumbing, not rendered
- * state) and it is not reachable via `setState`, so a shared module instance would leak
- * an in-flight promise into the next test. `vi.hoisted` keeps the mocks stable across
- * those resets. Mirrors `usageStore.test.ts` exactly.
- */
+/** IPC and `parseMetricsError` are mocked; `claudeMetrics` gets deferreds so tests decide when
+ * responses land. `vi.resetModules()` per test: the single-flight gate is module state that
+ * `setState` cannot reach. Mirrors `usageStore.test.ts`. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -137,12 +102,7 @@ describe("refresh — the success path", () => {
     await useMetricsStore.getState().refresh();
 
     expect(mockMetrics).toHaveBeenCalledTimes(1);
-    // 🔴 THE DEFAULT QUERY, and the one-line fix for the no-selection bug. `"all"`,
-    // not `"project"`: the tab opens with nothing selected far more often than not, and
-    // an earlier version paired that null cwd with `scope: "project"`, which Rust rejected
-    // with `scan-failed` — so the dashboard read "Could not read your sessions" over a
-    // machine full of them. It is also the dashboard's question: total usage on this
-    // machine, not one folder's.
+    // The default is `"all"`: the tab usually opens with nothing selected (a null cwd).
     expect(mockMetrics).toHaveBeenCalledWith("last_24h", "all", null);
     expect(useMetricsStore.getState()).toMatchObject({
       report: reportA,
@@ -315,10 +275,7 @@ describe("the query is state, and changing it refetches", () => {
     const { useMetricsStore } = await loadStore();
     mockMetrics.mockResolvedValue(reportA);
 
-    // In `all` scope the cwd is not an input to the scan, so re-pointing the tab at
-    // another project cannot change the answer — and must therefore not sweep megabytes off
-    // disk to produce the same numbers. The cwd is still recorded, because the scope
-    // toggle needs to know a project is available.
+    // In `all` scope the cwd is recorded (for the scope toggle) but is no scan input, so no fetch.
     await useMetricsStore.getState().setCwd("/work/proj");
     await useMetricsStore.getState().setCwd("/work/other");
     await useMetricsStore.getState().setCwd(null);
@@ -390,10 +347,7 @@ describe("ensureMetrics", () => {
     ensureMetrics("/work/proj");
     await flush();
 
-    // Two things had to happen and neither is optional: the cwd is recorded (or the scope
-    // toggle could not tell that narrowing is possible) and a scan runs (or the panel sits
-    // on its placeholder forever). In `all` scope the first does NOT imply the second, so
-    // an `if/else` here — as an earlier version had — would silently do only one of them.
+    // Both must happen: in `all` scope recording the cwd does not imply a scan.
     expect(useMetricsStore.getState().query.cwd).toBe("/work/proj");
     expect(mockMetrics).toHaveBeenCalledTimes(1);
     expect(mockMetrics).toHaveBeenCalledWith("last_24h", "all", "/work/proj");
@@ -475,12 +429,7 @@ describe("ensureMetrics", () => {
 
 describe("no timer", () => {
   it("🔴 installs NO interval or timeout — a filesystem sweep is not a 5 s cadence", async () => {
-    // `usageStore` polls every 5 s, correctly: that is a ~1 s CLI call for a live
-    // account limit. A 24 h scan reads megabytes and a 7 d scan far more, so polling it
-    // would spend the user's disk on numbers that move by a rounding error — and the
-    // live account figure is already covered by the usage strip. Asserted, not
-    // promised, because "we removed the timer" is exactly the kind of decision a
-    // later copy-paste from usageStore would silently undo.
+    // No timer: a filesystem sweep is not a 5 s cadence like `usageStore`'s CLI poll.
     const setInterval = vi.spyOn(globalThis, "setInterval");
     const setTimeout = vi.spyOn(globalThis, "setTimeout");
 

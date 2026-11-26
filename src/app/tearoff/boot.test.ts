@@ -1,11 +1,5 @@
-/**
- * Tear-off wiring per window: what the MAIN window's host listens for and forwards, and how
- * a DETACHED window boots, reports, hands its tabs back and closes itself.
- *
- * The event plane is mocked so the test can BE Rust (ring a doorbell, broadcast holdings,
- * press the close button); the IPC mock answers the commands; the store is real. The
- * registries are mocked at their module boundary — their crossings have their own suites.
- */
+/** Tear-off wiring per window (main host forwarding; detached boot, report, hand-back, close).
+ * The event plane is mocked so the test can BE Rust; the store is real, registries mocked. */
 
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

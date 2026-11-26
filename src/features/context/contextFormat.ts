@@ -1,15 +1,5 @@
-/**
- * Context-window formatting and geometry — every string and every proportion the
- * "Context window" card renders, and nothing else.
- *
- * Pure, for the same reasons as `usageFormat.ts` and `metricsFormat.ts`: no clock (the
- * relative "measured 3 min ago" takes `nowMs` as a parameter), no locale (no
- * `toLocaleString`), no DOM. The card's two drawings — the stacked bar and the
- * `/context`-style grid — are computed HERE as plain numbers and arrays, so their
- * proportions are pinned by jsdom tests with literal expectations instead of only by
- * a screenshot. The browser tier then checks the one thing jsdom cannot: that the
- * real layout engine honours those numbers.
- */
+/** Every string and proportion the Context window card renders. Pure (no clock, locale or DOM), so
+ * jsdom tests pin the geometry with literals; the browser tier checks the real layout. */
 
 import type { ContextError } from "./contextIpc";
 import type { ContextCategory, ContextUsage } from "./contextTypes";
@@ -19,18 +9,8 @@ export const UNKNOWN = "—";
 
 /* ── numbers ────────────────────────────────────────────────────────────────── */
 
-/**
- * Tokens in the CLI's own short form: `717`, `2.3k`, `290.7k`, `33k`, `1m`, `1.2m`.
- *
- * Deliberately NOT `metricsFormat.formatTokens`, which renders `33.0k` / `1.0M`: this
- * card sits beside the user's memory of `/context`, which prints `33k` and `1m`, and
- * two spellings of the same reading is how a user starts wondering which is right. So
- * the trailing `.0` is dropped and the million suffix is a lower-case `m`, exactly as
- * the CLI prints them.
- *
- * Rounds to one decimal of the unit, and the unit is chosen AFTER rounding — so
- * 999,950 is `1m`, never `1000k`.
- */
+/** The CLI's own short form (717, 2.3k, 33k, 1m), not metricsFormat's 33.0k / 1.0M: users compare
+ * it with /context. The unit is chosen AFTER rounding, so 999,950 is 1m, never 1000k. */
 export function formatContextTokens(n: number): string {
   if (!Number.isFinite(n) || n < 0) return UNKNOWN;
   if (n < 1_000) return `${Math.round(n)}`;
@@ -44,14 +24,8 @@ function trimZero(x: number): string {
   return `${Number(x.toFixed(1))}`;
 }
 
-/**
- * A category's share of the window: `0.2%`, `25.8%`, `29%`.
- *
- * One decimal at most, matching the CLI (which prints `0.2%` for the system prompt —
- * rounding that to `0%` would claim the system prompt costs nothing). Clamped to
- * 0..=100 and `NaN` → `0%`, for the reason `usageFormat.clampPct` gives: across an IPC
- * seam "in practice" is not a guarantee, and `-3%` or `NaN%` reads as a broken app.
- */
+/** At most one decimal, like the CLI (0.2% must not round to 0%). Clamped, NaN to 0%: values
+ * across IPC are not guaranteed. */
 export function formatContextPct(pct: number): string {
   return `${trimZero(clampPct(pct))}%`;
 }
@@ -64,14 +38,8 @@ function clampPct(pct: number): number {
 /** Fill severity of the window, painted on the header chip via `data-tone`. */
 export type ContextTone = "ok" | "warn" | "danger";
 
-/**
- * Green below 50%, amber from 50% to 80%, red above 80%.
- *
- * Not `usageTone`'s 60/90: a usage window that is 60% spent is a budget, while a
- * context window that is 80% full is a few turns from compaction, and compaction is
- * the event the user is watching for. 80 itself is still amber ("> 80%" is the red
- * band); 50 is already amber.
- */
+/** Green below 50, amber 50 to 80 inclusive, red above 80. Stricter than usageTone's 60/90: a
+ * context window 80% full is a few turns from compaction. */
 export function contextTone(pct: number): ContextTone {
   const p = clampPct(pct);
   if (p > 80) return "danger";
@@ -79,13 +47,8 @@ export function contextTone(pct: number): ContextTone {
   return "ok";
 }
 
-/**
- * `"measured just now"` / `"measured 3 min ago"` / `"measured 2 h ago"` / `"measured 1 d ago"`.
- *
- * Under a minute — and a reading timestamped AFTER the caller's tick, which happens
- * whenever a refresh lands between two 30 s clock ticks — reads "just now": the panel's
- * clock is the stale one there, not the reading.
- */
+/** Under a minute, or a reading newer than the caller's tick (a refresh between 30 s ticks),
+ * reads "just now". */
 export function formatMeasuredAt(measuredAtMs: number, nowMs: number): string {
   const delta = nowMs - measuredAtMs;
   if (!(delta >= 60_000)) return "measured just now";
@@ -101,14 +64,8 @@ export const FREE_KEY = "free-space";
 /** The CLI's "Autocompact buffer" row: hatched in the bar, crossed in the grid. */
 export const BUFFER_KEY = "autocompact-buffer";
 
-/**
- * The header's summary: `"290.7k of 1m · compacts at 967k"`.
- *
- * "compacts at" is `window − autocompact buffer` — the point the bar's thin marker sits
- * at. When the CLI printed no buffer row (autocompact off), there is no compaction point
- * to name, so the clause is dropped rather than shown as "compacts at 1m", which would
- * be a claim about an event that will not happen.
- */
+/** "290.7k of 1m · compacts at 967k" (window minus buffer, where the marker sits). With no buffer
+ * row (autocompact off) the clause is dropped: there is no compaction point. */
 export function formatContextSummary(usage: ContextUsage): string {
   const head = `${formatContextTokens(usage.usedTokens)} of ${formatContextTokens(usage.windowTokens)}`;
   const buffer = usage.categories.find((c) => c.key === BUFFER_KEY);
@@ -118,11 +75,7 @@ export function formatContextSummary(usage: ContextUsage): string {
 
 /* ── colours ────────────────────────────────────────────────────────────────── */
 
-/**
- * The categories with a fixed colour, mapped to their CSS variable in `context.css`.
- * `agents` and `custom-agents` are one colour: the CLI has printed both labels for the
- * same row across versions, and the row should not change colour on a CLI upgrade.
- */
+/** agents and custom-agents share a colour: the CLI has printed both labels for one row. */
 const KNOWN_COLOURS: Readonly<Record<string, string>> = {
   "system-prompt": "--context-system-prompt",
   "system-tools": "--context-system-tools",
@@ -141,14 +94,7 @@ const KNOWN_COLOURS: Readonly<Record<string, string>> = {
 /** How many `--context-extra-N` slots `context.css` declares for unknown keys. */
 export const EXTRA_COLOURS = 6;
 
-/**
- * The colour of a category, as a `var(...)` reference.
- *
- * A key the CLI adds tomorrow still gets a colour — and the SAME colour on every
- * render, every refresh and every machine, because the slot is a hash of the key
- * rather than its position (a position-based fallback would repaint every unknown
- * row whenever a row above it appeared or vanished).
- */
+/** Unknown keys get a hashed slot, not a positional one, so their colour is stable everywhere. */
 export function contextColour(key: string): string {
   return `var(${contextVar(key)})`;
 }
@@ -161,13 +107,8 @@ function contextVar(key: string): string {
   return `--context-extra-${hashKey(key) % EXTRA_COLOURS}`;
 }
 
-/**
- * `context.css`'s palette as hex, by variable. A canvas cannot read a CSS variable, and the
- * Village's Seats hall (its seats are the `/context` grid's cells) dresses each seated
- * character in its category's colour — the same one the card paints.
- * `contextFormat.test.ts` reads `context.css` and holds every entry here equal to it, so the
- * two can never drift apart.
- */
+/** context.css's palette as hex, for canvas (the Village's Seats hall). contextFormat.test.ts holds
+ * it equal to context.css. */
 export const CONTEXT_HEX: Readonly<Record<string, string>> = {
   "--context-system-prompt": "#a1a1aa",
   "--context-system-tools": "#71717a",
@@ -218,19 +159,9 @@ export interface BarLayout {
   compactAtPct: number | null;
 }
 
-/**
- * Lay the categories out along the bar, widths ∝ tokens / window, in printed order.
- *
- * Widths come from TOKENS, not from the printed percent: the percent is rounded to one
- * decimal by the CLI, so 0.07% prints as `0.1%` and eight rounded percents can sum to
- * 100.2. Tokens are what the user's eye should be measuring.
- *
- * The marker's position is the buffer segment's own left edge, computed by the same
- * running sum — so the marker and the hatched segment can never visibly disagree, even
- * when the categories do not sum exactly to the window. A zero window (a reading we
- * cannot scale) yields zero widths rather than `NaN%`, which a browser drops silently
- * and would leave every segment at its content width.
- */
+/** Widths come from tokens, not the CLI's rounded percents (which can sum past 100). The marker is
+ * the buffer segment's left edge from the same running sum, so they never disagree. A zero window
+ * yields zero widths, not NaN% (which browsers drop silently). */
 export function barLayout(usage: ContextUsage): BarLayout {
   const capacity = usage.windowTokens > 0 ? usage.windowTokens : 0;
   let cursor = 0;
@@ -252,20 +183,9 @@ export const GRID_ROWS = 10;
 /** 200 cells, so each cell is 0.5% of the window — `/context`'s own resolution. */
 export const GRID_CELLS = GRID_COLUMNS * GRID_ROWS;
 
-/**
- * The grid, cell by cell: the category key each of the 200 cells is painted with.
- *
- * - A used category with ANY tokens gets at least one cell. 717 tokens is 0.14 of a
- *   cell; rounding it to zero would make a row that is in the legend vanish from the
- *   picture, and "it's in the list but not the grid" reads as a bug.
- * - The autocompact buffer is counted like a used category (it is reserved space).
- * - Free space is the REMAINDER, not its own rounded count, so the grid always has
- *   exactly 200 cells no matter how the others round. It is drawn where the CLI prints
- *   it (before the buffer); if the CLI printed no free-space row, the remainder is
- *   still drawn, just before the buffer — the cells exist whether or not they are named.
- * - An overfull reading (more than the window, which the CLI should never print) is
- *   cut at 200: the grid is the window, and nothing past it can be drawn.
- */
+/** 200 cells. Any used category (the buffer included) gets at least one cell; free space is the
+ * remainder, drawn before the buffer even if unnamed, so the total is always 200. An overfull
+ * reading is cut at 200. */
 export function gridCells(usage: ContextUsage): string[] {
   const capacity = usage.windowTokens;
   const count = (c: ContextCategory): number => {
@@ -298,15 +218,8 @@ export function gridCells(usage: ContextUsage): string[] {
 
 /* ── errors ─────────────────────────────────────────────────────────────────── */
 
-/**
- * One short, TRUE sentence per code — what happened and the next move. Same rules as
- * `describeUsageError`: never blame the user, never invent a cause we did not observe,
- * and never point at a retry that cannot help (`parse`, `bad-session`).
- *
- * `no-session` is not a failure at all — a freshly spawned agent simply has no
- * conversation to measure yet — so its sentence says what WILL happen, and the card
- * renders it in the calm (not the warning) colour.
- */
+/** One true sentence per code: never blame the user, invent a cause, or offer a useless retry.
+ * no-session is not a failure (a fresh agent), so the card shows it in the calm colour. */
 export function describeContextError(code: ContextError): string {
   switch (code) {
     case "no-session":

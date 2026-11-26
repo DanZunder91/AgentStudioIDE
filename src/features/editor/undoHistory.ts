@@ -1,32 +1,6 @@
-/**
- * undoHistory — the undo stack's carry-over across a tab CLOSE (undo must keep
- * working even after the file was saved or closed).
- *
- * `EditorRegistry.dispose()` destroys the `EditorView`, and CodeMirror's history
- * lives *inside* that view's state — so without this module, closing a tab throws
- * the user's undo stack away. Undo-after-SAVE needs nothing (save only writes to
- * disk and moves `entry.baseline`; it never touches `state.doc`), but
- * undo-after-CLOSE needs the history to outlive the view. That is all this is: a
- * small parking lot keyed by path, written on dispose and read once on the next
- * `createView`.
- *
- * ── Why in-memory, and only for this session ─────────────────────────────────
- * State living only in the JS heap is state you have decided to lose — and that
- * is the right call here, deliberately. An undo stack
- * is transient by nature (IntelliJ and VS Code both drop it on restart), and a
- * stack recorded three days ago, replayed onto a file that agents have rewritten
- * since, is a corruption risk dressed as a feature. Session-scoped is the whole
- * ask; nothing here reaches the disk.
- *
- * ── The doc-identity guard is the load-bearing part ──────────────────────────
- * A CodeMirror history event is a list of document POSITIONS. Replaying it against
- * a buffer whose text has moved underneath — an agent wrote the file, git switched
- * branches, another tool reformatted it — does not fail loudly; it silently splices
- * text at the wrong offsets. So `takeUndo` hands the snapshot back only when the
- * text just read from disk is byte-for-byte what was in the buffer at dispose
- * time. A file that changed while closed loses its undo stack. That is the correct
- * track: a lost stack is an inconvenience, a corrupted buffer is data loss.
- */
+/** Parks CM6 undo history by path across a tab close (dispose destroys the view; save needs
+ * nothing). In memory, session-only. Restored only onto a byte-identical doc: history is
+ * positions, and replaying onto moved text splices at the wrong offsets. */
 
 /** One parked history: the CM6 state JSON plus the doc it is valid against. */
 export interface UndoSnapshot {
@@ -36,26 +10,14 @@ export interface UndoSnapshot {
   json: unknown;
 }
 
-/**
- * How many closed files keep their stack. A user cycling through files should
- * find undo intact on the ones they were actually working in; past a couple of
- * dozen this is just memory held for a buffer nobody is coming back to.
- */
+/** Closed files that keep their stack; past a couple of dozen it is memory nobody returns to. */
 const MAX_PATHS = 24;
 
-/**
- * Skip anything past this — the same threshold `EditorRegistry` uses to open a
- * file read-only. A file we refuse to let the user edit has no undo stack worth
- * parking, and a multi-megabyte string per closed tab is exactly the leak this
- * cache must not become.
- */
+/** `EditorRegistry`'s read-only threshold: no parked history for files we won't let you edit. */
 const TOO_BIG = 2_000_000;
 
-/**
- * Insertion order IS the recency order: `rememberUndo` deletes before it sets, so
- * the oldest *remembered* entry is always `keys().next()`. A module singleton, like
- * the registry it serves — `clearUndoCache()` is how tests reset it.
- */
+/** Insertion order is recency (`rememberUndo` deletes before it sets). `clearUndoCache()` resets
+ * it for tests. */
 const cache = new Map<string, UndoSnapshot>();
 
 /** Park `path`'s history (called from `dispose`, before the view is destroyed). */
@@ -71,14 +33,8 @@ export function rememberUndo(path: string, json: unknown, doc: string): void {
   }
 }
 
-/**
- * Consume `path`'s parked history. Returns the state JSON **only** when `doc` —
- * the text just read from disk — is identical to the text at dispose time.
- *
- * Consumed either way, on purpose: a snapshot that did not match is a snapshot
- * that is already wrong, and leaving it parked would hand it to some later reopen
- * that happens to line up by coincidence. One dispose, one restore.
- */
+/** Consume `path`'s history: the state JSON only if `doc` equals the doc at dispose. Consumed
+ * either way, so a mismatched snapshot cannot match a later reopen by coincidence. */
 export function takeUndo(path: string, doc: string): unknown | null {
   const snapshot = cache.get(path);
   if (!snapshot) return null;

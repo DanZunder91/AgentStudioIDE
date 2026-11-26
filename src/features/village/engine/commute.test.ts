@@ -1,9 +1,5 @@
-/**
- * The commute's route and stepping (engine/commute.ts): bench → aisle → the lounge's lift → the far
- * sidewalk → across the road → the near sidewalk → the building's door → its lift → the seat. The
- * expected waypoints are read off the World CONTRACT (the lift stops, the street row, the bench props,
- * the seat) — never off the module's own arithmetic.
- */
+/** Expected waypoints come from the World contract (lift stops, street row, benches, seat), never
+ * from the module's own arithmetic. */
 
 import { describe, expect, it } from "vitest";
 

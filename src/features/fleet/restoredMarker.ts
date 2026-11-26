@@ -1,27 +1,6 @@
-/**
- * The words on the "Resumed after restart" marker — one place, so the rail row and the
- * agent's tab can never say different things about the same agent.
- *
- * Agents are sometimes still working when the window or the app is closed, for example to
- * update, so the app reopens with every agent that was working before. Phase 1 re-opens
- * them (`src-tauri/src/open_agents.rs`); it does NOT keep them running. So the marker has
- * one job beyond "this came back": to say, honestly, when the quit INTERRUPTED a turn —
- * the agent is sitting at its prompt with half a task done, and only the user can tell it
- * to continue. We never send it a message on their behalf.
- *
- * Three facts decide the copy (say what is real):
- * - the rung it came back on (`resumed` / `fresh` / `dormant`);
- * - whether it was working when the app closed — `true`, `false`, or `null` when the app
- *   did not close cleanly and nobody recorded it;
- * - for a dormant agent, the reason Rust wrote on its row (`AgentNode.error`).
- *
- * The LABEL is short on purpose: it sits beside the status pill on a rail row at the default
- * rail width, and a longer wording ("Reopened after restart · new conversation") was cut off
- * mid-word there. The `↻` both the row and the tab draw in front
- * of it already says "after a restart", so the label only says which way it came back; the
- * tooltip carries the whole sentence. The glyph is NOT part of the label: the label is also the
- * tab glyph's accessible name, and a screen reader should hear "Resumed", not an arrow.
- */
+/** "Resumed after restart" wording, shared by rail row and tab. Restored agents are reopened, not
+ * kept running (`open_agents.rs`), so the copy says when a quit interrupted a turn. The label is
+ * short to fit beside the pill; `↻` is not in it (the label is the tab glyph's a11y name). */
 
 import type { RestoredMarker } from "../../app/types";
 

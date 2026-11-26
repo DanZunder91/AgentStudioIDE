@@ -1,12 +1,5 @@
-/**
- * `.github/workflows/build.yml` — the two facts that keep release builds from filling the
- * account's Actions artifact storage (at 7 days for every build it filled, and every bundle upload
- * then failed), and the facts that keep a macOS build macOS refuses to open from being published
- * (an unsigned bundle is reported as "damaged", with no way to open it).
- *
- * Read as text: the repo has no YAML parser, and these are one-line facts. Literal expectations,
- * never read back from the file under test.
- */
+/** build.yml facts that keep release builds from filling Actions artifact storage and keep
+ * unsigned ("damaged") macOS bundles unpublished. Read as text (no YAML parser); literal values. */
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";

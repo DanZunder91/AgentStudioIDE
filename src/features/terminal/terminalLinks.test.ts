@@ -1,8 +1,5 @@
-/**
- * Terminal links (OSC 8 and WebLinks) open only https URLs, only in the OS browser.
- * xterm's default accepted any scheme and called `window.open()` inside the app's
- * webview.
- */
+/** Links open only https URLs, only in the OS browser: xterm's default accepted any scheme and
+ * called `window.open()` inside the webview. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gitIpc = vi.hoisted(() => ({ urlOpen: vi.fn(() => Promise.resolve()) }));

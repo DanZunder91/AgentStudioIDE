@@ -141,11 +141,8 @@ fn a_substituted_value_keeps_its_name_over_the_mask() {
     );
 }
 
-/// 🔴 The URL parser (WHATWG's, which reqwest uses) reads a userinfo after any run of `/` and
-/// `\` behind a special scheme, in any case, with tabs and newlines dropped and the ends
-/// trimmed — and sends it as Basic auth. Each of those spellings is masked, and its credentials
-/// are listed for the redactor. Falsify: find the userinfo only after a literal `://` (as
-/// before) — the one- and three-slash rows go red.
+/// reqwest's WHATWG parser reads a userinfo after any run of `/` and `\` behind a special scheme,
+/// in any case, with tabs/newlines dropped and ends trimmed, and sends it as Basic auth.
 #[test]
 fn userinfo_is_masked_in_every_spelling_the_url_parser_reads() {
     let cases = [
@@ -222,10 +219,7 @@ fn userinfo_is_masked_in_every_spelling_the_url_parser_reads() {
     assert!(parsed_with_userinfo >= 100, "{parsed_with_userinfo}");
 }
 
-/// The webhook URLs Slack and Discord hand out are a credential in their path, and so is a
-/// Telegram bot's token: masked by host and path shape, listed for the redactor; a `{{NAME}}`
-/// stays, and other hosts and paths are left alone. Falsify: make `path_secrets` return nothing
-/// — the masked rows go red.
+/// Slack/Discord webhook URLs and Telegram bot tokens carry a credential in their path.
 #[test]
 fn credentials_in_well_known_webhook_and_bot_paths_are_masked() {
     let cases = [
@@ -347,11 +341,8 @@ fn a_failure_kind_and_a_status_reason_come_from_fixed_words_and_numbers() {
     assert_eq!(status_reason(true, 99), Some("Unknown"));
 }
 
-/// 🔴 Every piece of a userinfo is a credential — a token as the user name (`ghp_…@`), a key
-/// with an empty password (`sk_live_…:@`, Stripe's documented form) — and so is the value of a
-/// credential-named parameter in the query or the fragment (`#access_token=…`). References stay:
-/// they name, they do not reveal. Falsify: mask only a non-empty password (as before) — the
-/// userinfo rows go red; leave the fragment as written — the fragment rows go red.
+/// A token as user name and a key with an empty password (Stripe's form) are credentials too;
+/// references only name a secret, so they stay.
 #[test]
 fn url_credentials_and_secret_named_parameters_are_masked_but_references_stay() {
     let cases = [

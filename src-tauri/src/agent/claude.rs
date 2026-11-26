@@ -1,7 +1,5 @@
-//! The Claude Code adapter — **the only Claude-specific code in the core**.
-//! Everything else talks to [`AgentAdapter`].
-//!
-//! Verified against `claude` 2.1.212 on macOS.
+//! The Claude Code adapter: the only Claude-specific code in the core (verified against
+//! `claude` 2.1.212 on macOS).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,23 +19,11 @@ pub const RUNTIME_ID: &str = "claude-code";
 /// hook from the user's and stay idempotent + reversible.
 const HOOK_MARKER: &str = "agentstudio-hook";
 
-/// Explicit override for the `claude` binary.
-///
-/// Both a user escape hatch (non-standard installs) and the seam that lets the
-/// tests drive a stub binary instead of a real `claude` — which would need auth
-/// and a network, and would make the suite slow and flaky.
+/// User escape hatch for non-standard installs, and the seam tests use to drive a stub.
 pub const CLAUDE_BIN_ENV: &str = "AGENTSTUDIO_CLAUDE_BIN";
 
-/// Where `claude` actually installs, in resolution order.
-///
-/// **This list is why the app works when double-clicked.** A GUI process on macOS
-/// does not inherit the shell's `PATH` — a Finder-launched app gets roughly
-/// `/usr/bin:/bin:/usr/sbin:/sbin`. The official installer puts `claude` in
-/// `~/.local/bin`, which is on none of those. Verified: with that minimal PATH,
-/// `command -v claude` finds nothing on a machine where `claude` works fine in a
-/// terminal. Relying on a bare `PATH` lookup would therefore work throughout
-/// `npm run tauri dev` (which inherits the dev shell) and fail for every real
-/// user — the worst possible failure mode, invisible exactly where we test.
+/// Why the app works when double-clicked: a GUI process doesn't inherit the shell's `PATH`, and
+/// the installer's `~/.local/bin` is on none of the defaults. A bare lookup works in dev only.
 const KNOWN_INSTALL_PATHS: &[&str] = &[
     ".local/bin/claude",    // official installer (home-relative)
     ".claude/local/claude", // `claude migrate-installer` / local install
@@ -51,11 +37,8 @@ const KNOWN_ABSOLUTE_PATHS: &[&str] = &[
     "/usr/bin/claude",
 ];
 
-/// The absolute fallbacks for this OS: none on Windows. There
-/// `/usr/local/bin/claude` means `<current drive>:\usr\local\bin\claude`, a folder any standard
-/// user can create, and `Command::new` runs an extensionless file there as a program: the usage
-/// strip resolves `claude` every 5 s, so a file planted by another account would run as the
-/// user who opened the IDE, unprompted. Same class of risk as the `docker` binary lookup.
+/// None on Windows: `/usr/local/bin/claude` there is `<drive>:\usr\local\bin`, creatable by any
+/// user, and the usage strip resolves `claude` every 5 s, so a planted file would run unprompted.
 fn known_absolute_paths(windows: bool) -> &'static [&'static str] {
     if windows {
         &[]
@@ -143,14 +126,8 @@ impl AgentAdapter for ClaudeAdapter {
         // ConPTY's `CreateProcessW` cannot run a batch file, and cmd.exe would re-parse the
         // prompt.
         let claude = resolve_invocation()?;
-        // Restore path: impose the persisted session id and RESUME its
-        // conversation. Fresh path: mint a brand-new id and start clean. Either way
-        // the returned `session_key` is the one the supervisor binds + tails on.
-        //
-        // The caller (`pinned_agents::restore_on_boot`) only passes `resume_session_id`
-        // when the conversation actually EXISTS on disk — `claude --resume <id>` errors
-        // for an id with no saved transcript, so a pinned-but-never-conversed agent is
-        // handed `None` here and takes the fresh path (reopen in place, no error).
+        // `resume_session_id` comes only when the transcript exists (`claude --resume` errors
+        // otherwise); either way `session_key` is what the supervisor binds and tails.
         let (session_key, args) = match req.resume_session_id {
             Some(resume) => (resume.clone(), build_resume_args(resume, req.prompt)),
             None => {
@@ -174,27 +151,9 @@ impl AgentAdapter for ClaudeAdapter {
     }
 }
 
-/// Mint the session identity we will **impose** on `claude`.
-///
-/// Must be a UUID: `claude --session-id <uuid>` documents "must be a valid UUID",
-/// and it rejects anything else. That is why this is not our `AgentId` — those are
-/// ULIDs (ARCHITECTURE §2.0), a different 128-bit encoding. Two ids, deliberately:
-/// `AgentId` is ours and crosses the wire, `SessionKey` is the runtime's and does
-/// not.
-///
-/// Built from a fresh ULID's bytes rather than adding a `uuid` dependency: both
-/// are 128 bits and `ulid` is already a runtime dep. The layouts line up exactly —
-/// a ULID is a 48-bit big-endian millisecond timestamp followed by 80 random bits,
-/// which *is* **UUIDv7**. So stamping the version and variant nibbles yields a
-/// genuinely RFC-4122-conformant UUID that stays time-ordered, for free.
-///
-/// **The stamping is not cosmetic.** Raw ULID bytes rendered as a UUID leave the
-/// version/variant nibbles wherever the randomness falls — measured, a real mint
-/// produced version `c`, variant `1100`, which RFC 4122 permits for neither.
-/// `claude` 2.1.212 happens to accept that, but its own flag says "must be a valid
-/// UUID", so relying on the lax parse would be depending on a bug. Verified
-/// end-to-end: the real `claude` accepts these and writes
-/// `~/.claude/projects/<project>/<our-uuid>.jsonl`.
+/// A UUID (`--session-id` requires one), unlike our ULID `AgentId`. ULID bytes are UUIDv7's
+/// layout, so stamping the version/variant nibbles gives an RFC 4122 UUID without a `uuid` dep.
+/// The stamping is not cosmetic: raw bytes yield invalid nibbles only a lax parser accepts.
 fn mint_session_key() -> SessionKey {
     let mut bytes = ulid::Ulid::new().to_bytes();
     bytes[6] = (bytes[6] & 0x0f) | 0x70; // version 7
@@ -210,15 +169,8 @@ fn mint_session_key() -> SessionKey {
     ))
 }
 
-/// The `claude` argv.
-///
-/// Interactive on purpose — no `-p`: agents run in real terminals the
-/// user sees, and `claude`'s TUI draws itself into our PTY.
-///
-/// `--session-id` is the whole point: it makes `TerminalId ↔ AgentId ↔ SessionKey`
-/// a fact. Verified end-to-end against `claude` 2.1.212 — the transcript appears at
-/// `~/.claude/projects/<project>/<our-uuid>.jsonl`, with a matching `sessionId`
-/// field inside.
+/// Interactive on purpose (no `-p`): the TUI draws into our PTY. `--session-id` makes
+/// `TerminalId ↔ AgentId ↔ SessionKey` a fact (transcript at `projects/<project>/<uuid>.jsonl`).
 fn build_args(session_key: &SessionKey, prompt: Option<&str>) -> Vec<String> {
     let mut args = vec!["--session-id".to_string(), session_key.0.clone()];
     // A positional prompt seeds the conversation but keeps the session
@@ -229,23 +181,9 @@ fn build_args(session_key: &SessionKey, prompt: Option<&str>) -> Vec<String> {
     args
 }
 
-/// The `claude` argv for RESUMING a persisted conversation (pinned
-/// agents). `-r/--resume <session-id>` re-opens the exact conversation whose id we
-/// minted at first spawn — so `claude` continues writing to the same
-/// `~/.claude/projects/<project>/<id>.jsonl` and the fan-out tailer, keyed on that
-/// same id, transparently re-anchors to it and the sub-agent subtree re-materialises.
-///
-/// Still interactive on purpose (no `-p`) — the resumed TUI draws into our
-/// PTY exactly like a fresh one. Verified against `claude` 2.1.212 that
-/// `--resume <unknown-id>` fails **cleanly** (`No conversation found with session ID`
-/// then exit), so a stale id degrades to a visible exit, never a hang.
-///
-/// **Only reached when the conversation exists on disk** — `restore_on_boot` gates the
-/// resume id on `locate_transcript`, because `claude --resume <id>` errors on an id with
-/// no saved transcript (a pinned-but-never-conversed agent — this happens in practice;
-/// it now takes the fresh path). **⚠️ Verification caveat:** that a
-/// resume of a *real* transcript keeps the TUI interactive in our PTY still needs a live
-/// in-app check.
+/// `--resume <id>` continues the same transcript, so the tailer re-anchors. Only reached when it
+/// exists on disk; an unknown id exits cleanly. Unverified: that a real resume stays interactive
+/// in our PTY needs a live in-app check.
 fn build_resume_args(session_key: &SessionKey, prompt: Option<&str>) -> Vec<String> {
     let mut args = vec!["--resume".to_string(), session_key.0.clone()];
     if let Some(p) = prompt.filter(|p| !p.trim().is_empty()) {
@@ -254,18 +192,9 @@ fn build_resume_args(session_key: &SessionKey, prompt: Option<&str>) -> Vec<Stri
     args
 }
 
-/// Parse a `claude` `SessionStart`/`SessionEnd` hook payload.
-///
-/// The payload schema (verified against `claude` 2.1.212): a JSON object with
-/// `hook_event_name` (`"SessionStart"` | `"SessionEnd"`), `session_id`, a `cwd`
-/// (the directory the session is running in), and — on `SessionStart` — an
-/// absolute `transcript_path`. We return the transcript path verbatim; **never
-/// compute it** (the cwd→dir mangling is dead: `claude` resolves symlinks, so
-/// `/tmp/x` lands under `-private-tmp-x`).
-///
-/// The `cwd` is captured so the supervisor can anchor an ad-hoc root to where
-/// `claude` is *actually* running (the user may have `cd`'d away from the spawn
-/// cwd before typing it), rather than to the terminal's launch dir.
+/// Payload (claude 2.1.212): `hook_event_name`, `session_id`, `cwd`, and on SessionStart an
+/// absolute `transcript_path`, returned verbatim, never computed (`claude` resolves symlinks).
+/// `cwd` is where claude actually runs (the user may have `cd`'d).
 fn parse_session_event(body: &[u8]) -> Option<SessionEvent> {
     let v: serde_json::Value = serde_json::from_slice(body).ok()?;
     let kind = match v.get("hook_event_name")?.as_str()? {
@@ -300,24 +229,13 @@ fn parse_session_event(body: &[u8]) -> Option<SessionEvent> {
     })
 }
 
-/// The `.claude/settings.local.json` content that makes a bare `claude` phone home.
-///
-/// Verified end-to-end against real `claude` 2.1.212: written into
-/// `<cwd>/.claude/settings.local.json`, a bare `claude` in that cwd fires both
-/// `SessionStart` and `SessionEnd`, and the hook delivers our token + terminal id.
-///
-/// The command is **inert unless our env is set** (`[ -n "$AGENTSTUDIO_HOOK_URL" ]`),
-/// so if this file outlives us and the user runs `claude` here from an unrelated
-/// terminal, the hook is a clean no-op. `curl … || true` keeps a dead listener
-/// from ever failing the session (measured non-blocking).
+/// The hook for `<cwd>/.claude/settings.local.json`. Inert unless our env is set, so a leftover
+/// file is a no-op elsewhere; `|| true` keeps a dead listener from failing the session. Verified
+/// with `claude` 2.1.212.
 fn hook_command() -> String {
-    // The `# agentstudio-hook` marker makes the merge idempotent and reversible.
-    // `--noproxy '*'`: every PTY's HTTP(S)_PROXY points at the capture proxy and loopback is
-    // no longer in NO_PROXY — the hook and
-    // its token must still go straight to our listener, never through capture — and
-    // `AGENTSTUDIO_PROXY_STRICT=0` keeps the strict curl shim (netcap::shim, first on PATH) from
-    // dropping that `--noproxy`. A changed
-    // command reaches existing installs via the merge's in-place upgrade (settings_merge).
+    // The marker makes the merge idempotent and reversible. `--noproxy '*'` keeps the hook and
+    // token off the capture proxy; `AGENTSTUDIO_PROXY_STRICT=0` stops the curl shim dropping it.
+    // Changed commands reach installs via settings_merge's in-place upgrade.
     format!(
         "[ -n \"${ENV_HOOK_URL}\" ] && {} || true  # {HOOK_MARKER}",
         hook_post()
@@ -336,14 +254,9 @@ fn hook_post() -> String {
     )
 }
 
-/// What the `SessionStart` hook tells the agent about the capture proxy.
-///
-/// Why: an agent with stale advice in its memory ("strip *_proxy vars — the Agent Studio
-/// proxy breaks rustls", true only of an older proxy) launches services with the proxy
-/// stripped and `curl --noproxy '*'`, so none of its HTTP shows in the Network view.
-/// The proxy now never decrypts a client that does not trust it. The text contains an
-/// apostrophe ("Agent Studio's"), which is why the JSON is built with serde and
-/// shell-quoted by [`sh_single_quote`], never concatenated by hand.
+/// Corrects stale agent advice to strip proxy vars (the proxy never decrypts a client that does
+/// not trust it). It has an apostrophe, so the JSON is built with serde and shell-quoted by
+/// [`sh_single_quote`], never concatenated.
 pub(crate) const PROXY_CONTEXT: &str = "This terminal runs inside Agent Studio. Its HTTP(S) goes \
 through Agent Studio's local capture proxy (HTTP_PROXY/HTTPS_PROXY, localhost included) so the \
 user can see every request in the Network view. The proxy only decrypts programs that trust its \
@@ -373,15 +286,9 @@ pub(crate) fn session_context() -> String {
     format!("{PROXY_CONTEXT}\n\n{TOOLS_CONTEXT}")
 }
 
-/// Put the IDE's `curl` shim back at the front of `PATH` for every later Bash command of the
-/// session (`crate::netcap::shim`): Claude Code's Bash tool runs commands from a LOGIN-shell
-/// snapshot, and macOS's `path_helper` there moves `/usr/bin` ahead of the shim dir the PTY
-/// was given — so the PTY's `PATH` alone would lose to `/usr/bin/curl`. Claude Code sources
-/// `$CLAUDE_ENV_FILE` (set only for SessionStart hooks) before each Bash command.
-///
-/// The line is written literally (`$AGENTSTUDIO_SHIM_DIR`, expanded when Claude sources it), so a
-/// path with spaces (`Application Support`) needs no quoting here. Once per file (`grep -q`),
-/// silent, and inert unless both variables are set — no shim (capture off) = no line.
+/// Claude's Bash tool runs from a login-shell snapshot where `path_helper` puts `/usr/bin` ahead
+/// of the curl shim, so this `$CLAUDE_ENV_FILE` line re-prepends the shim dir. Written literally
+/// (expanded on source), once per file, inert unless both variables are set.
 fn env_file_shim_path() -> String {
     env_file_shim_path_for(cfg!(windows))
 }
@@ -389,13 +296,8 @@ fn env_file_shim_path() -> String {
 /// The env-file line for macOS and Linux — unchanged since it shipped.
 const ENV_FILE_LINE: &str = r#"export PATH="$AGENTSTUDIO_SHIM_DIR:$PATH"  # agentstudio-curl-shim"#;
 
-/// The env-file line for Windows (platform-native: the Windows way, beside the macOS one).
-/// Claude Code runs its Bash tool through Git Bash there, and `AGENTSTUDIO_SHIM_DIR` is a Windows
-/// path (`C:\Users\…\netcap\bin`): put verbatim in front of `PATH`, bash would split it at the
-/// drive colon. So the line converts it with Git Bash's `cygpath -u` (`/c/Users/…`) at the
-/// moment Claude Code sources the file, which lands it ahead of Git Bash's own
-/// `/clangarm64/bin` / `/mingw64/bin`. Guarded both ways (no variable, no `cygpath`) and an
-/// `if` rather than `&&`, so the sourced file always ends with status 0.
+/// Git Bash would split a Windows `AGENTSTUDIO_SHIM_DIR` at the drive colon, so it is converted
+/// with `cygpath -u` when sourced. Guarded both ways, and an `if` (not `&&`) so the file exits 0.
 const ENV_FILE_LINE_WINDOWS: &str = r#"if [ -n "${AGENTSTUDIO_SHIM_DIR:-}" ] && command -v cygpath >/dev/null 2>&1; then PATH="$(cygpath -u "$AGENTSTUDIO_SHIM_DIR"):$PATH"; export PATH; fi  # agentstudio-curl-shim"#;
 
 /// [`env_file_shim_path`] for a named platform (a parameter, so both are tested everywhere).
@@ -447,12 +349,9 @@ fn sh_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// The `SessionStart` command: the same POST as every other event, then — only when our
-/// env is set — print `hookSpecificOutput.additionalContext` JSON on stdout (Claude Code
-/// adds it to the session's context; a top-level `additionalContext` would be ignored).
-/// The curl's own output goes to /dev/null, so the JSON is the ONLY stdout, and a dead
-/// listener still yields it. `; true` → always exit 0: SessionStart can't block, but a
-/// non-zero exit would surface as a hook error. Outside our PTYs it prints nothing.
+/// Prints `hookSpecificOutput.additionalContext` JSON (a top-level one is ignored) as the ONLY
+/// stdout, even with a dead listener; `; true` since a non-zero exit shows as a hook error.
+/// Prints nothing outside our PTYs.
 fn session_start_hook_command() -> String {
     let json = serde_json::json!({
         "hookSpecificOutput": {
@@ -478,11 +377,8 @@ fn hook_settings() -> serde_json::Value {
     let start = serde_json::json!({
         "hooks": [ { "type": "command", "command": session_start_hook_command() } ]
     });
-    // SessionStart/End are the bind/unbind signals. UserPromptSubmit/
-    // Stop/Notification are the turn/activity signals that drive the real
-    // idle/running/waiting status — they reuse the SAME inert-without-our-env
-    // command + marker, so the merge stays idempotent and the file is a clean no-op
-    // outside our PTYs. All are workspace-scoped (never ~/.claude).
+    // SessionStart/End bind and unbind; the turn events drive status. All share the inert command
+    // and marker (idempotent merge) and are workspace-scoped, never ~/.claude.
     serde_json::json!({
         "hooks": {
             "SessionStart":     [ start ],
@@ -494,13 +390,8 @@ fn hook_settings() -> serde_json::Value {
     })
 }
 
-/// Find the `claude` binary. See [`KNOWN_INSTALL_PATHS`] for why a bare `PATH`
-/// lookup is not enough.
-///
-/// `pub(crate)` for the usage strip, which shells out to `claude -p "/usage"` and
-/// must resolve the binary the SAME way an agent spawn does. Two copies of this
-/// logic would drift, and the drift would only show up in a packaged build (the
-/// GUI-PATH case that this function exists for) — the one place we don't test.
+/// `pub(crate)` so the usage strip resolves `claude` exactly as a spawn does: a second copy would
+/// drift, visibly only in a packaged build (the GUI-PATH case), where we don't test.
 pub(crate) fn resolve_binary() -> Result<String> {
     // 1. Explicit override always wins.
     if let Some(p) = std::env::var_os(CLAUDE_BIN_ENV) {
@@ -598,24 +489,9 @@ pub(crate) fn resolve_invocation() -> Result<ClaudeInvocation> {
 /// `node.exe` for an npm shim whose own folder has none (shared: [`crate::winshim::find_node`]).
 use crate::winshim::find_node;
 
-/// How to run `binary` (module doc of [`ClaudeInvocation`]).
-///
-/// **Why an npm `claude.cmd` is unwrapped instead of run through `cmd.exe`.** An npm
-/// install on Windows is `%APPDATA%\npm\claude.cmd`, a batch file, and `CreateProcess`
-/// cannot run one; the only way to run it is `cmd.exe /c`, and cmd re-parses the whole
-/// command line: `%VAR%` expands even inside quotes, `^ & | < >` act outside them, and a
-/// newline ends the command. Agent arguments include the user's prompt, verbatim, so that
-/// is an injection seam — and a multi-line prompt cannot be passed through cmd at all (std
-/// refuses such an argument for a batch file). So the shim is READ instead: npm's
-/// `cmd-shim` writes one line that ends in `"<interpreter>" "%dp0%\<target>" %*`
-/// ([`parse_cmd_shim`]), and its target is run directly — with `node` for a script (the
-/// shim's own `node.exe` first, as the shim does), on its own for an `.exe`. The arguments
-/// then go through ordinary `CreateProcess` quoting, which Node parses back exactly. A
-/// `.cmd` that is not an npm shim falls back to the npm package layout next to it
-/// (`node_modules\@anthropic-ai\claude-code\cli.js`); failing that it is an error that
-/// says what to do, never a `cmd.exe` launch. `windows` and `node` are parameters, so every
-/// OS tests this against shims in a temp dir. The unwrapping itself is shared with the
-/// language servers ([`crate::winshim::unwrap_npm_shim`]).
+/// An npm `claude.cmd` is unwrapped, never run via `cmd.exe`: cmd re-parses the prompt (`%VAR%`,
+/// `^&|<>`, newlines), an injection seam. The shim's target runs directly, else the npm package
+/// layout, else an error saying what to do ([`crate::winshim::unwrap_npm_shim`]).
 pub fn invocation_for(
     binary: &Path,
     windows: bool,
@@ -654,10 +530,7 @@ const NPM_CLI_JS: &str = "node_modules/@anthropic-ai/claude-code/cli.js";
 
 pub use crate::winshim::{parse_cmd_shim, ShimTarget};
 
-/// A [`KNOWN_INSTALL_PATHS`] entry as the file it is on this OS. The installer writes
-/// `~/.local/bin/claude` on macOS and Linux and `%USERPROFILE%\.local\bin\claude.exe` on
-/// Windows — without the extension the fallback never matched there, so a Windows app whose
-/// `PATH` lacked that folder could not find Claude Code at all.
+/// The installer writes `claude.exe` on Windows; without the extension the fallback never matched.
 fn known_install_file(rel: &str, windows: bool) -> String {
     if windows {
         format!("{rel}.exe")
@@ -666,10 +539,8 @@ fn known_install_file(rel: &str, windows: bool) -> String {
     }
 }
 
-/// The file names `program` may have on this OS, in preference order: on Windows the
-/// native `.exe`, then npm's `.cmd` shim (an `npm i -g @anthropic-ai/claude-code` install
-/// is only `claude.cmd` + `claude.ps1`, and `.ps1` is not runnable by `CreateProcess`
-/// either); elsewhere the bare name.
+/// Windows: `.exe`, then npm's `.cmd` shim (a global npm install is only `.cmd` + `.ps1`, and
+/// `CreateProcess` cannot run a `.ps1`).
 fn program_file_names(program: &str, windows: bool) -> Vec<String> {
     if windows {
         vec![format!("{program}.exe"), format!("{program}.cmd")]
@@ -691,10 +562,7 @@ pub fn home_dir() -> Option<PathBuf> {
     }
 }
 
-/// A regular file we are allowed to execute.
-///
-/// The `is_file` check matters: a *directory* named `claude` on the PATH would
-/// otherwise be "found" and then fail at spawn with a baffling error.
+/// `is_file` matters: a directory named `claude` on PATH would fail at spawn confusingly.
 fn is_executable(path: &Path) -> bool {
     let Ok(meta) = std::fs::metadata(path) else {
         return false;
@@ -713,24 +581,16 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-// ── Fan-out parsing (M3, ARCHITECTURE §5) ────────────────────────────────────
-//
-// Every claim here is verified against a large corpus of real transcripts, NOT
-// re-derived from the spec — the spec was wrong once (`TaskCreate` finds no real
-// agents, only phantoms; the spawn tool is `Agent`).
-//
-// Re-measured over a whole `~/.claude/projects` (over a thousand sidecars, dozens of
-// workflow runs) because a second claim here was wrong too — see
-// [`parse_fanout`]'s note on `subagents/workflows/`.
+// ── Fan-out parsing (M3, ARCHITECTURE §5) ──
+// Claims are verified against real transcripts, not the spec (the spawn tool is `Agent`, not
+// `TaskCreate`); see [`parse_fanout`] on `subagents/workflows/`.
 
 /// The spawn tool. **`Agent`, never `TaskCreate`** — the latter is a to-do tool. A
 /// parser matching `TaskCreate` reconstructs a tree of phantoms.
 const SPAWN_TOOL: &str = "Agent";
 
-/// The **other** spawn tool. `Workflow` launches a scripted background run that
-/// fans out a whole batch of sub-agents at once. Measured: nearly half of all the
-/// sidecars in a `~/.claude/projects` belong to one, so a parser that knows only
-/// [`SPAWN_TOOL`] loses nearly half the tree.
+/// The other spawn tool: `Workflow` fans out a batch at once. Nearly half of measured sidecars
+/// belong to one, so knowing only [`SPAWN_TOOL`] loses nearly half the tree.
 const WORKFLOW_TOOL: &str = "Workflow";
 
 /// The directory under `<session>/subagents/` that holds one dir per workflow run.
@@ -752,33 +612,20 @@ const SUMMARY_LINE: &str = "Summary:";
 /// Not an `agentType` any sidecar reports: the run is a container, not an agent.
 const WORKFLOW_KIND: &str = "workflow";
 
-/// A workflow run's own append-only progress log, written beside its sidecars. Two
-/// event types, measured over every run: `{"type":"started","agentId":…}` (exactly
-/// one per sidecar) and `{"type":"result","agentId":…,"result":…}` (one per finished
-/// sub-agent).
-/// It is the **only** completion signal these sub-agents have.
+/// A workflow run's append-only log beside its sidecars: one `started` per sidecar and one
+/// `result` per finished sub-agent; the ONLY completion signal these sub-agents have.
 const WORKFLOW_JOURNAL: &str = "journal.jsonl";
 
 /// Cap a derived title (the fallback label — see [`Sidecar::title`]).
 const SIDECAR_TITLE_MAX: usize = 120;
 
-/// A sidecar's `requestShape` when its `Agent` call launched it in the BACKGROUND.
-/// Such a launch's `tool_result` comes back in the parent at once ("Async agent
-/// launched …", `toolUseResult.status: "async_launched"`), so it says nothing about
-/// the sub-agent's end — see [`background_end`]. Measured over every sidecar in a
-/// `~/.claude/projects`: **every** ordinary sidecar is `background` (the workflow
-/// ones are `foreground`) — on CLI 2.1.30x every `Agent` launch is one, so reading
-/// its launch ack as "done" greyed every sub-agent the moment it started.
+/// Background launches ack at once (`async_launched`), so that `tool_result` says nothing about
+/// the end ([`background_end`]). On CLI 2.1.30x every ordinary `Agent` launch is background.
 const BACKGROUND_SHAPE: &str = "background";
 
-/// A background sub-agent silent this long with no end marker is taken as finished.
-/// The CLI does not always write one (a few background sidecars measured have
-/// neither a `<task-notification>` nor a `finished` flag, all long silent — e.g. a
-/// parent killed mid-run), and those would read as working forever. A heuristic — a
-/// sub-agent inside one tool call longer than this reads `Done` until its next line
-/// lands, then `Running` again. Shared with the Village's scan of agents outside the
-/// IDE (`external_agents`), so the two views agree on when a quiet sub-agent stops
-/// counting.
+/// A background sub-agent silent this long with no end marker counts as finished (a killed parent
+/// leaves none). A heuristic: a long tool call reads `Done` until its next line. Shared with
+/// `external_agents` so both views agree.
 pub const SUBAGENT_STALE_MS: u64 = 5 * 60_000;
 
 /// The tags around one background task's end report in its parent's transcript.
@@ -788,21 +635,9 @@ const TASK_NOTIFICATION_CLOSE: &str = "</task-notification>";
 /// The `AgentNode.runtime` label for a Claude sub-agent.
 pub const FANOUT_RUNTIME: &str = RUNTIME_ID;
 
-/// Locate a session's transcript directory by globbing `~/.claude/projects/*/` for
-/// the session id.
-///
-/// Globbing by the **globally-unique** session id is deliberate: it finds the
-/// session no matter how `claude` mangled the cwd into the project dir name
-/// (symlink resolution makes that mangling unpredictable — `/tmp/x` →
-/// `-private-tmp-x`). We never compute the dir; we search for the id.
-///
-/// **Matches on EITHER the root `<id>.jsonl` file OR the `<id>/` directory.**
-/// Measured against a real spawned session: claude wrote
-/// `<id>/subagents/*.meta.json` for the sub-agents it spawned but **never wrote the
-/// root `<id>.jsonl`**. Requiring the root file (as before) made `locate` return
-/// `None`, so the tailer spun forever and delivered nothing.
-/// The `<id>/` subdir is the reliable anchor; `parse_fanout` tolerates a missing
-/// root transcript (the sidecars carry the depth-1 tree on their own).
+/// Globs `~/.claude/projects/*/` by the unique session id, never computing the dir (symlinks).
+/// Matches the root `<id>.jsonl` OR the `<id>/` dir: claude may write only sidecars, and
+/// `parse_fanout` tolerates a missing root transcript.
 pub fn locate_transcript(session_id: &str) -> Option<crate::agent::fanout::TranscriptLocation> {
     let projects = home_dir()?.join(".claude/projects");
     // Reject anything that isn't a bare id, so we can't be steered outside the dir.
@@ -827,100 +662,9 @@ pub fn locate_transcript(session_id: &str) -> Option<crate::agent::fanout::Trans
     None
 }
 
-/// Reconstruct the fan-out tree for a root session.
-///
-/// - `root_transcript` — the root session `.jsonl`.
-/// - `subagents_dir` — the `<session>/subagents/` dir.
-/// - `root_id` — the id to use as the parent of depth-1 agents.
-///
-/// # Where sidecars actually live
-///
-/// This comment used to assert that *"every descendant, at every depth, lands here"*
-/// — i.e. that `subagents/` is flat. **That was false, and it cost nearly half the
-/// tree.** A census of every `*.meta.json` under a `~/.claude/projects` found exactly
-/// two shapes, and only the first was being read:
-///
-/// ```text
-///   <session>/subagents/agent-<agentId>.meta.json                       ← read
-///   <session>/subagents/workflows/wf_<runId>/agent-<agentId>.meta.json  ← lost
-/// ```
-///
-/// What remains true is the *reason* the old sentence was written: **directory
-/// nesting still does not encode the tree.** A workflow's sub-agents sit in one
-/// directory because they belong to one *run*, not because that directory says who
-/// their parent is. We never read parentage out of a path — see below.
-///
-/// # Edges
-///
-/// Two independent derivations for an ordinary sub-agent, cross-checked:
-/// 1. **Primary — the `.meta.json` sidecar**: `parentAgentId` (depth ≥ 2) or the
-///    root (depth 1), plus `spawnDepth`, `agentType`, `description`, `toolUseId`.
-/// 2. **Cross-check — the `Agent` tool_use edges**: the transcript that *contains*
-///    the `Agent` tool_use whose `id == toolUseId` is the true parent. A
-///    disagreement is recorded in [`FanoutResult::edge_mismatches`], not silently
-///    resolved.
-///
-/// **Neither is available for a workflow's sub-agents.** Their sidecars hold only
-/// `{"agentType":…,"spawnDepth":…}` (+ sometimes `model`) — no `toolUseId`, no
-/// `parentAgentId` (measured on every one). So the edge is derived one hop away, from
-/// the launch itself:
-///
-/// ```text
-///   Workflow tool_use   id = toolu_0001…              ← owned by the launching agent
-///   … its tool_result   tool_use_id = toolu_0001…
-///                       "Transcript dir: …/wf_00000001-000"
-/// ```
-///
-/// which yields `wf_<runId> → toolUseId → launching agent` — **the same `toolUseId`
-/// edge derivation (2) already uses**, just reached through the run directory's name
-/// instead of through a sidecar field. We emit one synthetic node per run (id =
-/// `wf_<runId>`, kind [`WORKFLOW_KIND`]) under that launcher, and hang the run's
-/// sidecars off it. The path is matched on its **last segment only**, never on the
-/// absolute path in the transcript, which is one machine's `~/.claude`.
-///
-/// **When the launch cannot be found** (an old session, a truncated log, a run
-/// launched from a transcript we do not scan) the run is still emitted, parented to
-/// `root_id` and titled `… (launcher unknown)`. A missing edge costs the *edge*,
-/// never the node: the alternative — dropping the run — is the near-half loss again,
-/// and re-parenting its children directly onto the root would silently mix them in
-/// with genuine depth-1 agents. The loss is written where the user will see it (the
-/// title), because `FanoutResult` has nowhere else to put it.
-///
-/// # Status
-///
-/// For an ordinary FOREGROUND sub-agent: the `tool_result` for its `toolUseId`
-/// (present ⇒ `Done`, `is_error` ⇒ `Error`, absent ⇒ `Running`) — derived
-/// independently per agent, so a child finishing never greys its parent.
-///
-/// A BACKGROUND one (`requestShape: "background"`, [`BACKGROUND_SHAPE`]) gets its
-/// `tool_result` at launch, so that result is ignored. It ends when the parent's
-/// transcript holds a `<task-notification>` for its id that it has not written past
-/// (`completed`/`killed` ⇒ `Done`, `failed` ⇒ `Error`), when its sidecar says
-/// `"finished": true`, or after [`SUBAGENT_STALE_MS`] of silence — see
-/// [`background_end`]. Everything it needs is on the read path this function already
-/// had: the transcripts are read whole anyway, and `now_ms` is the only new input.
-///
-/// A workflow's sub-agents have no `toolUseId`, so that route yields `Running`
-/// forever (measured: it would be wrong for most of them). Their completion signal is
-/// the run's own [`WORKFLOW_JOURNAL`]: `result` ⇒ `Done`, `started`-only ⇒
-/// `Running`. The journal has no failure event, so `Error` is unreachable for them —
-/// stated rather than faked. The run node itself is `Done` only when every one of
-/// its sub-agents is, and `Error` if the *launch* `tool_result` was an error; note
-/// the launch result arrives at **launch** time ("Workflow launched in background",
-/// every time), so its mere presence must never be read as "finished".
-///
-/// # What this deliberately does NOT do
-///
-/// Workflow sub-agents' own transcripts are **not** scanned for edges, unlike
-/// ordinary sub-agents'. Measured: none of them contains an `Agent` tool_use, and
-/// every run is announced in a *root* transcript, so the scan would find nothing —
-/// while costing a re-read of hundreds of files (tens of MB) on every tailer poll.
-/// It degrades gracefully if that ever changes: a workflow
-/// sub-agent that spawned an `Agent` would still place its child correctly (the
-/// child's own sidecar carries `parentAgentId`, the primary source); only the
-/// cross-check would be unavailable, and a workflow launched from *inside* another
-/// workflow would land in the orphan case above rather than disappear. Re-measure
-/// before assuming it still holds.
+/// Sidecars: `subagents/` and `subagents/workflows/wf_<run>/`; paths never encode parentage. Edges:
+/// sidecar `parentAgentId`, checked against `Agent` tool_use; a workflow run hangs off its launch
+/// (else root). Status: foreground `tool_result`, [`background_end`], [`WORKFLOW_JOURNAL`].
 pub fn parse_fanout(root_transcript: &Path, subagents_dir: &Path, root_id: &str) -> FanoutResult {
     parse_fanout_at(root_transcript, subagents_dir, root_id, now_ms())
 }
@@ -1020,12 +764,8 @@ pub fn parse_fanout_at(
                 FanoutStatus::Running
             };
             let title = sc.title();
-            // `spawnDepth` on these sidecars is depth *inside the run* — it is 1 for
-            // nearly every sidecar measured (a few omit it), so on current data it
-            // nests nothing and only says "directly under the run". It is still honoured
-            // rather than hardcoded, because a run that nests deeper would then
-            // place correctly; `.max(1)` only guarantees a child is never reported
-            // at or above its own run node.
+            // `spawnDepth` here is depth inside the run (1 almost always); honoured so deeper runs
+            // place correctly, and `.max(1)` keeps a child below its run node.
             let depth = parent_depth + 1 + sc.spawn_depth.unwrap_or(1).max(1);
             workflow_nodes.push(FanoutAgent {
                 agent_id: sc.agent_id,
@@ -1110,26 +850,16 @@ struct SessionScan {
     ends: TaskEnds,
 }
 
-/// Scan one transcript for spawn tool_use blocks ([`SPAWN_TOOL`] **and**
-/// [`WORKFLOW_TOOL`] — both create descendants), `tool_result` completions, the
-/// `Workflow` launch announcements that name a run directory, and the
-/// `<task-notification>`s that report a background task's end. Spawns are attributed
-/// to `owner`. Robust to a truncated final line (a live file mid-write) —
-/// unparseable lines are skipped, not fatal.
-///
-/// Returns the newest record `timestamp` in the file (`None`: unreadable, or no
-/// stamped record yet) — for a background sub-agent's own transcript, the moment it
-/// last did anything, which is what tells a resume from an end ([`background_end`]).
+/// Spawns ([`SPAWN_TOOL`], [`WORKFLOW_TOOL`]), results, workflow launches and task notifications,
+/// attributed to `owner`; torn lines are skipped. Returns the newest record timestamp, which tells
+/// a background sub-agent's resume from its end ([`background_end`]).
 fn scan_transcript_edges(path: &Path, owner: &str, scan: &mut SessionScan) -> Option<i64> {
     let Ok(content) = std::fs::read_to_string(path) else {
         return None;
     };
     let mut last_write = None;
     for line in content.lines() {
-        // Cheap pre-filter on the raw line: a launch announcement is a handful of
-        // lines in a transcript with thousands, and neither space nor colon is
-        // escaped inside a JSON string, so the marker survives verbatim. Without
-        // this we would re-render every tool_result's content to text just to look.
+        // Cheap raw-line pre-filter: the marker survives JSON escaping verbatim; launches are rare.
         let maybe_launch = line.contains(TRANSCRIPT_DIR_LINE);
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue; // truncated/garbage line — skip (transcript-rewrite safe)
@@ -1189,30 +919,20 @@ fn scan_transcript_edges(path: &Path, owner: &str, scan: &mut SessionScan) -> Op
     last_write
 }
 
-// ── Background sub-agents: how they end ──────────────────────────────────────
-//
-// Measured on a 20-agent run (CLI 2.1.309), and on every background sidecar in a
-// `~/.claude/projects`. Shared with `external_agents`, which reads the same evidence
-// from bounded tails.
+// ── Background sub-agents: how they end (measured on CLI 2.1.309; shared with external_agents) ──
 
 /// One `<task-notification>` block: the task it reports on and how it stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TaskNotification<'a> {
     pub task_id: String,
     pub status: String,
-    /// The raw text between the tags. Byte-identical in every record that carries
-    /// the same notification (measured on over a thousand, grouped by task, status
-    /// and `<usage>`: all identical, bar a few that lack a `<usage>` to group by) —
-    /// which is how a copy of one notification is told apart from a SECOND
+    /// Byte-identical in every copy of one notification, which tells a copy apart from a SECOND
     /// notification for the same agent.
     pub block: &'a str,
 }
 
-/// Every well-formed `<task-notification>` block in a raw transcript line. String
-/// search, not JSON: the block sits inside a `queue-operation`'s `content`, an
-/// attachment's `prompt` or a user message, and the tags survive each one's
-/// escaping. A block missing its `task-id` or `status` is skipped; one cut off by
-/// the end of the line (a torn write) still counts if both made it.
+/// String search, not JSON: the block sits in various escaped containers and its tags survive.
+/// Missing `task-id`/`status` → skipped; a block torn at line end counts if both made it.
 pub(crate) fn task_notifications(line: &str) -> Vec<TaskNotification<'_>> {
     let mut out = Vec::new();
     for chunk in line.split(TASK_NOTIFICATION_OPEN).skip(1) {
@@ -1259,26 +979,9 @@ pub(crate) struct TaskEnd {
     pub failed: bool,
 }
 
-/// How each background task last stopped, folded from every `<task-notification>`
-/// in the transcripts read.
-///
-/// Two facts make "a notification exists ⇒ done" wrong:
-/// - **One agent notifies many times.** In a 20-agent run each of the 20 did so
-///   2–4 times; the CLI's own note: *"A task-notification fires each time this
-///   agent stops … The user can send it another message and resume it, so the same
-///   task-id may notify more than once."* A `SendMessage` resumes a stopped agent.
-/// - **Each notification is written several times** — the queue `enqueue`, the
-///   `queued_command` attachment, the user turn it is delivered as, the queue
-///   `remove`, later request snapshots — the later copies up to ~10 s after the
-///   stop. Measured over more than a thousand instances: the earliest stamped copy is
-///   the `enqueue` itself, or the attachment ≤ 2 ms before it, for every instance that
-///   has an `enqueue`; only a handful have no stamped copy at all.
-///
-/// So copies are merged by their identical block text, an instance stopped at its
-/// EARLIEST stamped copy, and a task's end is its newest instance — an unstamped one
-/// counting as newest, the old "any notification ends it" for data without clocks.
-/// Taking the latest copy instead would read a resume that began between the enqueue
-/// and the delivery as an end.
+/// An agent may notify many times (it can be resumed), and each notification is written several
+/// times up to ~10 s apart. So copies merge by block text, an instance stops at its EARLIEST
+/// stamped copy, and a task's end is its newest instance (an unstamped one counts as newest).
 #[derive(Debug, Default)]
 pub(crate) struct TaskEnds {
     /// task id → notification block → that instance's end.
@@ -1314,26 +1017,9 @@ impl TaskEnds {
     }
 }
 
-/// What a background sub-agent's evidence says about its end: `Some(failed)` once
-/// it has stopped, `None` while it may still be working (the caller then applies
-/// its own silence rule — [`SUBAGENT_STALE_MS`]).
-///
-/// 1. **The parent's newest `<task-notification>`** ends it — unless the agent's own
-///    transcript has a record stamped AFTER that stop: a resume (a `SendMessage`
-///    lands as a new user turn in the sub-agent's transcript). Measured over that
-///    20-agent run: an agent's last record precedes its notification's enqueue by
-///    1–460 ms, and a resume follows it by 8 ms to seconds, so the comparison is
-///    strict and has no slack. Over every background sidecar measured, this rule
-///    agrees with `finished` on all but one of those that carry it.
-/// 2. **`"finished": true` in the sidecar** (CLI ≥ 2.1.30x) ends it. The CLI
-///    rewrites the sidecar WITHOUT it when the agent is resumed, so it is current
-///    state, not history — but it is not written for a `killed` agent, nor before
-///    the CLI learned it (many completed sidecars measured have none), and it cannot say
-///    `failed`; hence second. It covers that one exception: a stop the parent never
-///    enqueued.
-///
-/// The sub-agent's own last line is deliberately NOT an end signal: in a real run
-/// an `end_turn` is routinely followed by a Stop-hook nudge and more work.
+/// `None` while it may be working (the caller applies [`SUBAGENT_STALE_MS`]). Ends: the parent's
+/// newest notification unless the agent wrote after it (a resume), else sidecar `finished: true`.
+/// Never its own last line: a Stop-hook nudge often brings more work.
 pub(crate) fn background_end(
     end: Option<TaskEnd>,
     last_write: Option<i64>,
@@ -1348,10 +1034,7 @@ pub(crate) fn background_end(
     finished.then_some(false)
 }
 
-/// A background sub-agent's fan-out status: [`background_end`], else `Done` once its
-/// own transcript has been silent for [`SUBAGENT_STALE_MS`], else `Running`. A
-/// sidecar with no stamped record yet (the CLI can write the `.meta.json` first) is
-/// never stale — it has not started being silent.
+/// A sidecar with no stamped record yet is never stale: it has not started being silent.
 fn background_status(ends: &TaskEnds, sc: &Sidecar, now_ms: i64) -> FanoutStatus {
     match background_end(ends.latest(&sc.agent_id), sc.last_write, sc.finished) {
         Some(true) => FanoutStatus::Error,
@@ -1374,13 +1057,8 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Pull `(wf_<runId>, summary)` out of a `Workflow` tool_result's content.
-///
-/// The announcement is plain prose, so this reads the two labelled lines and
-/// nothing else. **Only the final path segment of `Transcript dir:` is used** —
-/// the value written there is an absolute path into the *authoring machine's*
-/// `~/.claude`, which is neither portable nor something we should ever compare
-/// against a path of our own.
+/// Only the last segment of `Transcript dir:` is used: the value is an absolute path into the
+/// authoring machine's `~/.claude`.
 fn parse_workflow_launch(content: Option<&serde_json::Value>) -> Option<(String, String)> {
     let text = brief_tool_result(content);
     let mut run_id = None;
@@ -1429,16 +1107,8 @@ struct Sidecar {
 }
 
 impl Sidecar {
-    /// The label the rail shows.
-    ///
-    /// `description` is the runtime's own and always wins. A **workflow** sub-agent
-    /// has none — measured over every one, their sidecars carry only `agentType`,
-    /// `spawnDepth` and occasionally `model` — so without a fallback the headline
-    /// tree would gain hundreds of rows with nothing written on them, which for the user is
-    /// barely better than the rows being missing. The fallbacks are, in order, the
-    /// first line of the agent's own opening prompt (real, if generic: sibling
-    /// agents in one run are often handed near-identical preambles) and finally the
-    /// id, which is at least unique. Nothing here is invented.
+    /// `description` wins; workflow sub-agents have none, so: the opening prompt's first line, then
+    /// the id. Nothing is invented.
     fn title(&self) -> String {
         if !self.description.is_empty() {
             return self.description.clone();
@@ -1458,13 +1128,8 @@ struct WorkflowRun {
     completed: std::collections::HashSet<String>,
 }
 
-/// Read every workflow run directory under `<subagents>/workflows/`.
-///
-/// A run with **no sidecars yet** is skipped rather than emitted as an empty node:
-/// about a third of the runs measured are in that state (resumed from cache, or
-/// never spawned anything), and a row that can never gain a child is a phantom —
-/// the failure mode this parser exists to avoid. It appears the moment its first
-/// sub-agent's sidecar lands, which the tailer picks up on its next poll.
+/// Runs with no sidecars yet are skipped (a row that can never gain a child is a phantom); they
+/// appear on the poll after their first sidecar lands.
 fn read_workflow_runs(subagents_dir: &Path) -> Vec<WorkflowRun> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(subagents_dir.join(WORKFLOWS_DIR)) else {
@@ -1491,10 +1156,7 @@ fn read_workflow_runs(subagents_dir: &Path) -> Vec<WorkflowRun> {
     out
 }
 
-/// The set of `agentId`s a run's journal reports a `result` for — i.e. finished.
-/// A missing/unreadable journal yields an empty set, so every sub-agent reads as
-/// `Running`, which is the state that holds before any completion is observed
-/// rather than a guess in the other direction.
+/// No journal → empty set, so every sub-agent reads `Running`: the state before any completion.
 fn read_workflow_journal(path: &Path) -> std::collections::HashSet<String> {
     let mut done = std::collections::HashSet::new();
     let Ok(content) = std::fs::read_to_string(path) else {
@@ -1514,14 +1176,8 @@ fn read_workflow_journal(path: &Path) -> std::collections::HashSet<String> {
     done
 }
 
-/// Read every `agent-<id>.meta.json` + `agent-<id>.jsonl` pair in one directory.
-///
-/// Used for both shapes: the session's own `subagents/` and each
-/// `subagents/workflows/wf_<runId>/`. It is deliberately **not** recursive —
-/// `read_workflow_runs` enumerates the run dirs explicitly, so a future third shape
-/// has to be noticed and handled rather than silently swept in under the wrong
-/// parent. (The bug this replaces was the opposite mistake: a flat read that
-/// silently ignored a shape it did not know about.)
+/// Not recursive: `read_workflow_runs` enumerates run dirs explicitly, so a future third shape
+/// is noticed rather than swept in under the wrong parent.
 fn read_sidecars(subagents_dir: &Path) -> Vec<Sidecar> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(subagents_dir) else {
@@ -1589,15 +1245,8 @@ fn read_sidecars(subagents_dir: &Path) -> Vec<Sidecar> {
     out
 }
 
-/// Pull `cwd` / `gitBranch` / the opening prompt from a sub-agent transcript's first
-/// parseable line.
-///
-/// **Streams instead of slurping.** Only the first line is ever wanted, and this is
-/// called once per sidecar on *every* tailer poll: a busy session has over a thousand
-/// of them and the workflow transcripts run past 100 KB each, so `read_to_string` would
-/// move tens of megabytes a second to read a few hundred bytes. Measured on real data:
-/// every workflow transcript opens with a `type:"user"` line whose
-/// `message.content` is the task string.
+/// Streams only the first line: this runs per sidecar on every poll, over 100 KB+ transcripts.
+/// Workflow transcripts open with a `type:"user"` line whose content is the task.
 fn read_identity(transcript: &Path) -> (String, String, String) {
     use std::io::BufRead;
     let Ok(file) = std::fs::File::open(transcript) else {
@@ -1648,18 +1297,12 @@ fn first_line_label(text: &str) -> String {
     format!("{}…", &line[..end])
 }
 
-// ── Sub-agent activity feed ──────────────────────────────────────────────────
-//
-// A sub-agent has no PTY; its work is its transcript. Selecting it in the rail
-// shows a chronological activity feed parsed from `agent-<id>.jsonl`.
+// ── Sub-agent activity feed (a sub-agent has no PTY; its transcript is its work) ──
 
 /// Cap each entry's text (~2 KB), so one giant tool result can't bloat the feed.
 const ACTIVITY_TEXT_MAX: usize = 2048;
 
-/// The activity feed for a sub-agent by its id. Missing/unreadable/not-yet-written
-/// transcript → an empty vec, never an error (the sub-agent may have just spawned).
-///
-/// Frontend contract: `invoke<ActivityEntry[]>('subagent_activity', { agentId })`.
+/// Missing or unwritten transcript → empty, never an error (it may have just spawned).
 #[tauri::command]
 pub fn subagent_activity(agent_id: String) -> Vec<crate::model::ActivityEntry> {
     match locate_subagent_transcript(&agent_id) {
@@ -1668,17 +1311,8 @@ pub fn subagent_activity(agent_id: String) -> Vec<crate::model::ActivityEntry> {
     }
 }
 
-/// Find `agent-<agent_id>.jsonl` under any `~/.claude/projects/*/*/subagents/`.
-///
-/// A sub-agent's file is named by its **agent id** (not a session id). We search by
-/// the id, never computing a path — same reasoning as [`locate_transcript`] (the
-/// cwd→dir mangling is dead).
-///
-/// **Both sidecar shapes are searched** — `subagents/` and
-/// `subagents/workflows/wf_<runId>/` (see [`parse_fanout`]). Checking only the first
-/// is what made every workflow sub-agent's activity feed come back empty: the node
-/// would be in the rail and open to nothing, which is the missing-agent bug wearing
-/// a different hat.
+/// Searched by agent id, never a computed path, in both sidecar shapes (see [`parse_fanout`]):
+/// otherwise workflow sub-agents open to an empty feed.
 pub fn locate_subagent_transcript(agent_id: &str) -> Option<PathBuf> {
     // Reject anything that isn't a bare id, so a crafted id can't escape the tree.
     if agent_id.is_empty()
@@ -1719,12 +1353,7 @@ pub fn locate_subagent_transcript(agent_id: &str) -> Option<PathBuf> {
     None
 }
 
-/// Parse a sub-agent transcript into a chronological activity feed.
-///
-/// JSONL is already append-order chronological, so we preserve file order (and
-/// carry each line's timestamp for display). Robust to a truncated final line and
-/// to unknown block types — unparseable lines and noise (`attachment`, `thinking`)
-/// are skipped, never fatal.
+/// File order is chronological; truncated lines and unknown blocks are skipped, never fatal.
 pub fn parse_subagent_activity(transcript: &Path) -> Vec<crate::model::ActivityEntry> {
     use crate::model::ActivityEntry;
     let Ok(content) = std::fs::read_to_string(transcript) else {
@@ -1911,11 +1540,8 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 
 // ── Agent Logs: tool calls off the transcripts ──────────────────────────────
 
-/// Every transcript under a root session: the root's own, then every sub-agent's —
-/// both sidecar shapes (`subagents/agent-<id>.jsonl` and
-/// `subagents/workflows/wf_<run>/agent-<id>.jsonl`, see [`parse_fanout`]). Only lists
-/// directories; nothing is read here. The agent id is the file stem after `agent-`,
-/// the same id the fan-out gives the node.
+/// Lists directories only, both sidecar shapes. The agent id is the file stem after `agent-`,
+/// the same id the fan-out uses.
 pub fn tool_transcripts(
     loc: &crate::agent::fanout::TranscriptLocation,
     root_id: &str,
@@ -1956,10 +1582,8 @@ pub fn tool_transcripts(
     out
 }
 
-/// The `tool_use` / `tool_result` blocks on one transcript line, summarised for the
-/// log: `Bash: <command>` (its `description` as detail), `Edit|Write|Read|NotebookEdit:
-/// <file_path>`, `WebFetch: <url>`, `WebSearch: <query>`, `Grep|Glob: <pattern>`,
-/// `Agent|Task: <description>`, otherwise the bare tool name.
+/// Summaries: `Bash: <command>`, `<file tool>: <file_path>`, `WebFetch: <url>`,
+/// `WebSearch: <query>`, `Grep|Glob: <pattern>`, `Agent|Task: <description>`, else the tool name.
 pub fn parse_tool_line(line: &str) -> Vec<crate::agent::tools::ToolBlock> {
     use crate::agent::tools::ToolBlock;
     // Cheap pre-filter: most lines carry no tool block at all, and parsing each one
@@ -1998,10 +1622,8 @@ pub fn parse_tool_line(line: &str) -> Vec<crate::agent::tools::ToolBlock> {
                 let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
                 let input = block.get("input");
                 let (summary, detail) = summarize_tool_use(name, input);
-                // The full shell command, so the result can open with `$ <command>`
-                // (tools.rs module doc) — the summary keeps only its first line. Claude
-                // Code on Windows also has a `PowerShell` tool, same input shape
-                // (`command`); the bypass tail reads its commands too (`agent::tools`).
+                // The full command, so the result can open with `$ <command>`; Windows Claude
+                // Code's `PowerShell` tool has the same input shape.
                 let command = matches!(name, "Bash" | "PowerShell")
                     .then(|| {
                         input
@@ -2063,13 +1685,8 @@ const MONITOR_MARKER: &str = "Monitor started (task ";
 /// A background Bash's result: `Command running in background with ID: <id>.`
 const BG_ID_MARKER: &str = "with ID: ";
 
-/// The [`ToolBlock::BgLaunch`]/[`ToolBlock::BgStop`] a `tool_use` implies, if any: a
-/// `Bash` with `run_in_background: true` or a `Monitor` launches; `TaskStop` /
-/// `KillShell` (older CLIs: `KillBash`) stop. `cwd` is the transcript line's, for a
-/// launch's relative redirect targets.
-///
-/// [`ToolBlock::BgLaunch`]: crate::agent::tools::ToolBlock::BgLaunch
-/// [`ToolBlock::BgStop`]: crate::agent::tools::ToolBlock::BgStop
+/// `Bash` with `run_in_background` or `Monitor` launches; `TaskStop`/`KillShell`/`KillBash`
+/// stop. `cwd` resolves a launch's relative redirect targets.
 fn background_signal(
     id: &str,
     name: &str,
@@ -2120,10 +1737,8 @@ fn background_signal(
     }
 }
 
-/// `(task id, output path)` when a result reports a background task started. The path
-/// is read off the text (the sentence ends with a `.` that is not part of it); the id off
-/// the text, else the line's `toolUseResult` (`backgroundTaskId` / `taskId`), else the
-/// output file's stem. Whether the result belongs to a launch is the tail's call.
+/// Path and id read off the text (the id falls back to `toolUseResult`, then the file stem);
+/// whether the result belongs to a launch is the tail's call.
 fn parse_bg_started(
     output: &str,
     tool_use_result: Option<&serde_json::Value>,
@@ -2175,17 +1790,8 @@ fn parse_bg_started(
     Some((task_id, path))
 }
 
-/// `<claude temp root>/<project dir>/<session>/tasks/<task>.output` — where Claude writes
-/// a task's output (verified with a real `Monitor`, CLI 2.1.x). The project dir and
-/// session are the root transcript's (`~/.claude/projects/<project>/<session>.jsonl`).
-/// The first root whose session dir exists wins; with none, the first root. Nothing is
-/// created or read here (beyond listing a root's directories).
-///
-/// On Windows the project level is NOT the transcript's project-dir name but a 16-hex hash
-/// (`%TEMP%\claude\0123456789abcdef\<session>\tasks`, measured). The session id
-/// is a UUID and so names its directory on its own: when `<root>/<project>/<session>` is
-/// not there, the root's directories are searched for a `<session>` child (every OS — it is
-/// a fallback, and the macOS layout never reaches it).
+/// `<claude temp>/<project>/<session>/tasks/<task>.output` (verified, CLI 2.1.x); creates nothing.
+/// On Windows the project level is a 16-hex hash, so the session dir is searched for by name.
 pub fn task_output_path(
     loc: &crate::agent::fanout::TranscriptLocation,
     task_id: &str,
@@ -2772,10 +2378,7 @@ node  \"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n)\r\n";
                 "UUID must be hex + dashes: {s}"
             );
 
-            // RFC 4122 conformance, not just the shape. Raw ULID bytes land these
-            // nibbles at random (a real mint produced version `c`, variant `1100`);
-            // `claude` tolerates that today, but its flag says "must be a valid
-            // UUID" and we should not depend on a lax parse.
+            // RFC 4122 conformance, not just shape: raw ULID bytes land these nibbles at random.
             let hex: String = s.chars().filter(|c| *c != '-').collect();
             assert_eq!(
                 hex.as_bytes()[12] as char,
@@ -2965,11 +2568,8 @@ node  \"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n)\r\n";
         }
     }
 
-    /// The shell Claude Code runs a hook command with: `/bin/sh` on macOS and Linux; on
-    /// Windows, Git Bash — Claude Code requires Git for Windows there and runs both its
-    /// Bash tool and hook commands through its `bash.exe` (`CLAUDE_CODE_GIT_BASH_PATH`
-    /// overrides the default install). A Windows machine without it cannot run Claude Code
-    /// at all, so its absence is a loud failure here, not a skip.
+    /// Git Bash on Windows (Claude Code requires it; `CLAUDE_CODE_GIT_BASH_PATH` overrides), so
+    /// its absence fails loudly rather than skipping.
     fn hook_shell() -> PathBuf {
         #[cfg(unix)]
         {
@@ -3007,10 +2607,8 @@ node  \"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n)\r\n";
         }
     }
 
-    /// Run a hook command exactly as Claude Code does — `/bin/sh -c` (absolute, no login
-    /// shell; Git Bash on Windows, [`hook_shell`]), payload on stdin — with a scrubbed env:
-    /// only `PATH`, plus our vars when `ours` is set. The listener URL is dead (port 9 on
-    /// loopback, discard), so the curl fails fast; no network, no `~/.claude`.
+    /// As Claude Code runs it (`/bin/sh -c`, payload on stdin) with a scrubbed env; the listener is
+    /// a dead port, so curl fails fast: no network, no `~/.claude`.
     fn run_hook(cmd: &str, ours: bool) -> std::process::Output {
         use std::io::Write as _;
         let mut c = std::process::Command::new(hook_shell());
@@ -3101,10 +2699,8 @@ node  \"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n)\r\n";
         child.wait_with_output().unwrap()
     }
 
-    /// The SessionStart hook appends the shim `PATH` line to `$CLAUDE_ENV_FILE` exactly once
-    /// (a resume fires SessionStart again), and sourcing that file — what Claude Code does
-    /// before each Bash command — puts the shim dir (with a space in it) back in front of a
-    /// login shell's `/usr/bin`-first `PATH`. Its stdout stays the one JSON document.
+    /// Once per file (a resume fires SessionStart again); sourcing it puts the shim dir (with a
+    /// space) back ahead of a login shell's `/usr/bin`. Stdout stays one JSON document.
     #[cfg(unix)]
     #[test]
     fn session_start_puts_the_curl_shim_first_for_claudes_bash_tool() {
@@ -3391,13 +2987,8 @@ node  \"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n)\r\n";
         (port, heads)
     }
 
-    /// Windows, end to end through the real Git Bash Claude Code uses: the SessionStart hook
-    /// writes the Windows env-file line; a fresh LOGIN shell (Claude Code's Bash tool runs
-    /// from a login snapshot, and Git Bash puts `/clangarm64/bin` first) that sources the file
-    /// finds the shim as `curl`; and a `curl --noproxy '*' http://127.0.0.1:…`
-    /// then reaches the capture proxy (a recorder here) with the terminal's credentials,
-    /// through Git's own real curl. Falsified in the same run: with strict capture off the
-    /// identical command goes straight to the target.
+    /// Through the real Git Bash: a fresh login shell sourcing the env file finds the shim as
+    /// `curl`, and `--noproxy '*'` still reaches the proxy; with strict capture off it goes direct.
     #[cfg(windows)]
     #[test]
     fn on_windows_git_bash_sources_the_env_file_and_curl_goes_through_the_proxy() {

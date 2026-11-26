@@ -1,12 +1,5 @@
-/**
- * The fleet rail: rows, selection, disclosure — and the re-render budget.
- *
- * The render-count suite at the bottom is the point of this file. cmux shipped a
- * sidebar where every row subscribed to a store and it span a core at 100%
- * (issue #2586); we have the same shape plus live telemetry. Rendering correctly
- * is table stakes — rendering *only what changed* is the requirement, and it is
- * invisible to every other kind of assertion.
- */
+/** The render-count suite at the bottom is the point: rendering only what changed is invisible
+ * to every other assertion. */
 
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -25,12 +18,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => dialog);
 // The launch controls push to the persisted recents; stub the IPC wrapper.
 const fleetIpc = vi.hoisted(() => ({ pushRecentProject: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("./fleetIpc", () => fleetIpc);
-// The rail mounts <UsageLimits/>, which subscribes to its own store and
-// starts a 5s poller on mount — a hidden test-mock requirement for EVERY test in
-// this file. Unmocked, each render here would fire a real `invoke`
-// and leave a live timer behind, so the render-count suite below would be timing
-// against a component doing background work. Stubbed to the empty-loading state:
-// the panel's own behaviour is `UsageLimits.test.tsx`'s job, not this file's.
+// <UsageLimits/> would invoke and start a 5 s poller on every mount, skewing the render counts;
+// stubbed to the empty-loading state.
 const usageStore = vi.hoisted(() => {
   const state = { snapshot: null, error: null, loading: true, refresh: vi.fn() };
   return {
@@ -84,14 +73,7 @@ const expandAll = () =>
     });
   });
 
-/**
- * The row whose TITLE is exactly `title`.
- *
- * Deliberately not `getByRole("treeitem", { name: /…/ })`: a row's accessible
- * name concatenates title + status + "branch • cwd", so a title that appears
- * anywhere in another row's status or path matches both. Anchoring on the title
- * element makes the lookup exact.
- */
+/** Matched on the title element: a row's accessible name also holds status and "branch • cwd". */
 const rowFor = (title: string) =>
   screen
     .getByText(title, { selector: ".fleet-row__title" })
@@ -111,12 +93,7 @@ beforeEach(() => {
 
 describe("LeftRail — rendering", () => {
   it("names the quick-launch TARGET FOLDER, since the titlebar no longer does", async () => {
-    // The titlebar used to show one project name even when two projects were
-    // open. It was `basename(workspaceRoot)` — a single value in a
-    // deliberately multi-root app, so it named one project arbitrarily and scoped
-    // nothing. It was removed; the one useful thing it hinted at (where a NEW agent
-    // starts) moved onto the control that decides it. These assertions are what stop
-    // that information from being lost again.
+    // Where a new agent starts is named on the quick-launch control, not a titlebar project label.
     const user = userEvent.setup();
 
     // Falls back to workspaceRoot when there are no recents…
@@ -150,11 +127,7 @@ describe("LeftRail — rendering", () => {
   });
 
   it("survives a launch target that is only separators (the basename fallback)", () => {
-    // Covers `basename`'s `|| path` branch, which once shipped uncovered —
-    // caught by a coverage measurement, not by review. A path of only
-    // separators strips to "", whose basename is "" (falsy), so the helper falls back
-    // to the path itself rather than rendering "Quick-launch an agent in ".
-    // Reachable in practice: a persisted recents entry of "/" from an older build.
+    // A path of only separators has an empty basename, so the helper falls back to the path.
     act(() => {
       useAppStore.setState((s) => {
         s.recentProjects = ["///"];
@@ -183,12 +156,7 @@ describe("LeftRail — rendering", () => {
   });
 
   it("mounts the usage panel as the rail's FOOTER, after the agents list", () => {
-    // The usage strip is the rail's footer, NOT a header. Asserted by DOCUMENT
-    // ORDER (and that it is the rail's last element child) rather than by a class
-    // name, so a future restyle cannot quietly move it back to the top and stay
-    // green. The bottom PINNING itself is `margin-top:auto` in fleet.css — jsdom
-    // has no layout engine, so order is the honest thing to assert here; the
-    // visual pin is verified in the real app (DoD rule 3).
+    // Asserted by document order: jsdom has no layout, and `margin-top:auto` does the pinning.
     act(() => {
       fleet().applyAgentEvent(started("a1"));
     });
@@ -494,10 +462,7 @@ describe("LeftRail — selection (the pivot)", () => {
 });
 
 describe("LeftRail — launch controls", () => {
-  // The accessible name now NAMES the target folder: the titlebar's
-  // project label was removed for being arbitrary in a multi-root app, and this
-  // button is where "where will a new agent start" actually belongs. Matched by
-  // prefix so the folder-specific assertions below stay the ones that pin the name.
+  // Prefix match; the folder-specific tests pin the full name.
   const quickLaunch = () =>
     screen.getByRole("button", { name: /^Quick-launch an agent in / });
   const openProject = () => screen.getByRole("button", { name: "Open project folder" });

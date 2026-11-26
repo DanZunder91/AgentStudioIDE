@@ -1,21 +1,6 @@
-/**
- * IdeAppCapture — what an IDE-started app's capture looks like, in words the user can act on
- * (the bug: for `gazelle`, started by an agent with the proxy variables stripped, Whole Mac's
- * guide showed the EXTERNAL-app steps — set `HTTPS_PROXY` by hand, trust the CA in gazelle —
- * and "appear under IDE traffic as external · gazelle", which was wrong, and gave no way to
- * tell where to look). Shown by the dev-app card and by Whole Mac's guide for a row whose pid
- * is an IDE app. No manual env or certificate steps: the IDE owns an IDE app's environment.
- *
- * | state (`networkApps.captureState`) | shows |
- * |---|---|
- * | `uncaptured` | why (its launcher removed the proxy variables) · **Restart with capture** · "Right now — its live connections" from the Whole Mac sampler (what can be seen without capture) · "all connections in Whole Mac →" |
- * | `captured` | "✓ Receiving gazelle's requests — N so far" · **Show them** · where exactly they appear (Source, Process) · the Rust/Go decrypt caveat |
- * | `unknown` / `external` | nothing (the card's other lines cover it) |
- *
- * The restart confirm is rendered by the component that owns the restart flow on that screen: the
- * card renders its own `RestartDialog`; the guide passes `ownsDialog` ({@link
- * RestartWithCaptureFlow}).
- */
+/** Capture status of an IDE-started app (dev-app card; Whole Mac's guide for an IDE app's pid).
+ * No manual env or certificate steps: the IDE owns an IDE app's environment. The restart
+ * confirm is rendered by the flow's owner: the card's RestartDialog or the guide (`ownsDialog`). */
 
 import { useEffect, useMemo } from "react";
 
@@ -107,11 +92,8 @@ export function IdeAppCapture({ app, source, onShowRequests, onShowConnections, 
   return null;
 }
 
-/**
- * "Right now — its live connections": the pid's sockets from the Whole Mac sampler (~1 s),
- * listeners left out (they are not calls). Samples while mounted — the sampler is shared and
- * ref-counted, so this adds nothing when Whole Mac is also open.
- */
+/** The pid's live sockets (listeners excluded) from the Whole Mac sampler while mounted.
+ * The sampler is shared and ref-counted, so this adds nothing when Whole Mac is also open. */
 export function LiveConnections({ pid }: { pid: number }): React.JSX.Element {
   useEffect(() => {
     acquireMachine();
@@ -154,11 +136,8 @@ export function LiveConnections({ pid }: { pid: number }): React.JSX.Element {
   );
 }
 
-/**
- * The restart-with-capture flow for a screen that has no dev-app card (Network's banner and
- * Apps sidebar, Whole Mac's guide): its failure line, and its confirm while one is requested
- * for this app. A confirmed restart focuses the new terminal, as the card does.
- */
+/** Restart-with-capture flow for screens with no dev-app card (Network banner, Apps sidebar,
+ * Whole Mac's guide): failure line and confirm. A confirmed restart focuses the new terminal. */
 export function RestartWithCaptureFlow({ app }: { app: DevApp }): React.JSX.Element | null {
   const restart = useProcsStore((s) => (s.restart?.appKey === app.key ? s.restart : null));
   if (restart === null) return null;

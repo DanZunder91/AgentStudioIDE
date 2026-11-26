@@ -1,8 +1,3 @@
-/**
- * "↻ Resume": a finished root continues its saved
- * conversation through the existing `resumeSessionId` launch path; a refusal is
- * written into the ended agent's own terminal, in plain words.
- */
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

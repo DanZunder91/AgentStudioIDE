@@ -1,8 +1,3 @@
-/**
- * Sorting the results grid. Pure, so every way "sort a column of strings" is
- * wrong for database output gets its own case.
- */
-
 import { describe, expect, it } from "vitest";
 
 import { compareCells, nextSort, sortRows, type SortState } from "./sortRows";

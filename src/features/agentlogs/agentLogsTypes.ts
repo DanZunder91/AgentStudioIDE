@@ -1,24 +1,10 @@
-/**
- * Agent Logs — the wire contract.
- *
- * Mirrors `logstream::LogLine` in `src-tauri/src/logstream/` (serde camelCase). If a
- * field is not in this interface, Rust never sent it — the UI-only view state lives in
- * `agentLogsStore.ts`, never here (the `AgentNodeWire` rule in `app/types.ts`).
- */
+/** Agent Logs wire contract, mirroring `logstream::LogLine` (`src-tauri/src/logstream/`, serde
+ * camelCase). If it isn't here, Rust never sent it; UI view state lives in `agentLogsStore.ts`. */
 
 export type LogLevel = "error" | "warn" | "info" | "debug";
-/**
- * `machine` = a line from another app on the computer (`syslog/`).
- * `task` = a line from a background task an agent started — e.g. the service Claude ran with
- * `run_in_background`, tailed from its output file. Its `source` is
- * `<program> · bg`, `detail` the full command + the output path. It is IDE content: it came
- * from an agent, so the "IDE terminals & agents" switch covers it.
- * `app` = a line from a dev app's log the user chose to Stream from its card
- * (a file the process writes, or a container's `docker logs -f`). Its `source` is
- * `<app name> · <file basename>` / `<container> · docker`, `detail` where it comes from
- * (the file's path — see `src/test/contract/goldens/app-lines.json`). Raw like a service. It is NOT IDE content — the user picked it on this
- * machine, like a Mac app — so the "IDE terminals & agents" switch leaves it on screen.
- */
+/** `machine`: another app on the computer (`syslog/`). `task`: an agent's background task, tailed
+ * (source `<program> · bg`), IDE content. `app`: a dev app log the user streamed from its card
+ * (`src/test/contract/goldens/app-lines.json`): NOT IDE content, so the IDE switch keeps it. */
 export type LogKind = "output" | "tool" | "tool-result" | "system" | "machine" | "task" | "app";
 
 export interface LogLine {
@@ -37,13 +23,9 @@ export interface LogLine {
   text: string;
   /** E.g. a Bash `description`, or the full multi-line result. */
   detail: string | null;
-  /**
-   * The transcript's `tool_use.id`, set on `tool` and `tool-result` lines:
-   * the key that pairs a call with its result into one command block — never a guess.
-   * Null on every other kind. A line from a Rust build that predates the field arrives
-   * without it; `pairToolLines` tolerates that (nearest preceding unpaired call of the same
-   * agent), so the view degrades to a heuristic rather than to no blocks at all.
-   */
+  /** The transcript's `tool_use.id` on `tool`/`tool-result` lines, pairing call and result; null
+   * otherwise. Older Rust builds omit it; `pairToolLines` then uses the agent's oldest unanswered
+   * call. */
   toolUseId: string | null;
 }
 

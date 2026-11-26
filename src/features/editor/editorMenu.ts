@@ -1,17 +1,5 @@
-/**
- * editorMenu — the items behind the editor's right-click "Editor tools" menu.
- *
- * The requirement: right-clicking inside the code editor must show OUR tools,
- * not the native WebKit menu — and git blame lives here, as a right-click tool,
- * not as a header button. CodeEditor owns the `contextmenu` handler and the
- * `<ContextMenu>` mounting; this module owns WHAT is in the menu, built from a
- * small context snapshot so it stays a pure, unit-testable function.
- *
- * Clipboard rules (zero-crash, LogsPanel precedent): `navigator.clipboard` may
- * be missing or reject in a non-secure webview context — every path is a calm
- * no-op, never a throw out of a menu click. Cut deletes ONLY after the copy
- * resolved, so a failed clipboard write never loses the selection.
- */
+/** Items for the editor's right-click menu (CodeEditor owns the handler and mounting). Clipboard
+ * paths never throw; Cut deletes only after the copy resolves, so a failed write loses nothing. */
 
 import type { EditorView } from "@codemirror/view";
 
@@ -71,12 +59,8 @@ function pasteClipboard(view: EditorView): void {
   view.focus();
 }
 
-/**
- * Build the "Editor tools" menu. Disabled items never fire their `onSelect`
- * (ContextMenu renders native `disabled` buttons), so the `view!` assertions
- * inside the handlers are safe: every view-needing item is disabled while
- * `view` is null.
- */
+/** Disabled items never fire `onSelect`, and every view-needing item is disabled while `view` is
+ * null, so the `view!` assertions in the handlers are safe. */
 export function buildEditorMenu({
   view,
   editable,

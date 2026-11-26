@@ -1,44 +1,6 @@
-//! **Dev apps on this machine** (a way to
-//! find the running JVM, Node (or other JS) and Cargo/Rust apps, and to open each one's log
-//! files or console directly).
-//!
-//! # Pieces
-//!
-//! | module | does | tested |
-//! |---|---|---|
-//! | [`classify`] | which process is a dev app, its runtime, entry and name | pure table |
-//! | [`mask`] | secrets in argv, masked for display | pure table |
-//! | [`logfiles`] | console kind, offered log files, listening ports from an fd table | pure table |
-//! | [`os`] | reading this user's processes (macOS libproc/sysctl, Linux `/proc`, Windows below) | live |
-//! | [`winparse`] | the Windows table's bytes → facts (argv rules, PEB walk, SID → uid, fd shapes) | pure, every OS |
-//! | `winproc` | the Windows API calls behind [`os`] (`cfg(windows)`) | live, Windows only |
-//! | [`docker`] | containers via an already-installed `docker` CLI | parser table |
-//! | [`restart`] | Restart in the IDE: token store, SIGTERM-only stop | pure + live |
-//! | [`capture`] | `DevApp.captured`: does an IDE app's env still point at the IDE's proxy | pure table + live |
-//! | [`ide`] | which IDE terminal / agent started a process; claude's helpers | pure table + live |
-//! | [`assemble`] (here) | raw processes → `DevApp[]` (placed by [`ide::place`], launchers collapsed) | pure, golden |
-//!
-//! Tails live in [`crate::logstream::apps`]; this module decides what may be tailed.
-//!
-//! # The tail guard
-//!
-//! `logstream_tail_app({ pid, path })` opens a file only when, **at that moment**, the pid
-//! has that very file open (both sides canonicalised), or the path came back from
-//! `logstream_pick_file` — a native dialog the user drove. Never an arbitrary path from the
-//! webview. The file is then opened `O_NOFOLLOW` (Windows: `FILE_FLAG_OPEN_REPARSE_POINT`, and a
-//! reparse point is refused) and must be a regular file.
-//!
-//! # Windows
-//!
-//! Discovery works ([`os`] → `winproc`): this user's processes (owner = the token's user SID,
-//! hashed to a stable "uid"), exe, argv, start time, cwd, ports — and what
-//! fds 1/2 point at and the files a process holds open for writing, from its own handle table
-//! (no administrator rights; `winproc`'s module doc says how it never hangs). So
-//! `npm run dev > dev.log 2>&1` reads as `console: "file"` with `dev.log` offered as stdout, a
-//! log the app opened itself is offered as `log`, and the tail guard admits exactly those (plus
-//! a file picked in the dialog). Paths are never verbatim (`\\?\`) on the wire
-//! ([`crate::paths::canonicalize`]). Restart's stop is `TerminateProcess` (Windows
-//! has no SIGTERM — `winproc::terminate`).
+//! Dev apps on this machine (JVM, Node, Rust, …) and their logs/consoles; pure submodules are
+//! table-tested on every OS. Tail guard: a file opens only if the pid has it open now or the
+//! user picked it in a dialog, then `O_NOFOLLOW`/no reparse point, regular files only.
 
 pub mod capture;
 pub mod classify;
@@ -180,10 +142,9 @@ pub fn candidate(p: &RawProc, parent: Option<&RawProc>) -> bool {
     .is_some()
 }
 
-/// Raw processes → dev apps (module doc): each classified against its parent, then placed
-/// ([`ide::place`] — the IDE pid, its tooling, the `claude` CLI and claude's own helpers
-/// dropped; the rest `ide` or `external`), a launcher dropped when a kept descendant is a
-/// dev app (`cargo run` → its `target/debug/gazelle`), sorted by name then pid. Pure.
+/// Raw processes → dev apps: classified against the parent, placed ([`ide::place`]; IDE
+/// tooling, `claude` and its helpers dropped), a launcher dropped for a kept dev-app
+/// descendant, sorted by name then pid. Pure.
 pub fn assemble(procs: &[RawProc], opts: &AssembleOpts) -> Vec<DevApp> {
     let by_pid: HashMap<u32, &RawProc> = procs.iter().map(|p| (p.pid, p)).collect();
     let classified: Vec<(&RawProc, classify::Classified, Placement)> = procs
@@ -348,10 +309,8 @@ pub fn scan(opts: &AssembleOpts) -> Vec<DevApp> {
     apps
 }
 
-/// Set `captured` on every `origin: "ide"` app ([`capture::captured`]); external apps and
-/// containers stay `None`. `env_of(pid)` is read for IDE apps only, and only when the IDE is
-/// injecting a proxy — each env is reduced to the boolean and dropped here (an environment
-/// holds secrets, so no value or key list leaves this function).
+/// Set `captured` on `origin: "ide"` apps only, and only while the IDE injects a proxy. Each
+/// env is reduced to the boolean and dropped here: no value or key list leaves this function.
 pub fn mark_captured(
     apps: &mut [DevApp],
     proxy_port: Option<u16>,
@@ -385,10 +344,8 @@ fn home_dir() -> Option<String> {
 /// Why a tail was refused (a plain sentence for the UI).
 pub type Refusal = String;
 
-/// The canonical path of a file `pid` may be tailed for, or why not (module doc).
-/// `open_of(pid)` lists the regular files the pid has open (canonicalised here). Canonical =
-/// [`crate::paths::canonicalize`] on both sides: never `\\?\` (it reaches the tail's key and
-/// `detail`), and the dialog's `picked` set is spelled the same way.
+/// Canonical path of a file `pid` may be tailed for, or why not. Both sides go through
+/// [`crate::paths::canonicalize`] (never `\\?\`), matching the dialog's `picked` set.
 pub fn authorize(
     path: &Path,
     pid: Option<u32>,
@@ -427,11 +384,8 @@ pub fn authorize(
     }
 }
 
-/// Open a guarded file for reading without following a link — `O_NOFOLLOW` on unix;
-/// on Windows `FILE_FLAG_OPEN_REPARSE_POINT` opens a symlink/junction ITSELF, which is then
-/// refused — and only a regular file. Windows: std's share mode is read | write | delete, so
-/// the app keeps writing, and can still rotate (rename) or delete the file, while it is tailed
-/// (`logstream::apps`' Windows test holds that against a real writer).
+/// Open a guarded regular file without following a link (`O_NOFOLLOW`; Windows refuses a
+/// reparse point). Windows' share mode lets the app keep writing, rotating or deleting it.
 pub(crate) fn open_regular(canon: &Path) -> Result<std::fs::File, Refusal> {
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true);
@@ -1067,11 +1021,8 @@ mod tests {
         crate::paths::canonicalize(&raw).unwrap()
     }
 
-    /// Windows, the whole pipeline on a real process: a node server listening on a port is
-    /// listed (snapshot → candidate → PEB cwd + std handles → TCP listener → assemble) with its
-    /// runtime, port, cwd and — its stdout a pipe — a `pipe` console, and Restart's stop — with
-    /// the real same-user / same-start-time guards — ends it. Skipped, and said so, without
-    /// node.
+    /// Windows, real process: a listening node server is listed with runtime, port, cwd and a
+    /// `pipe` console, and Restart's guarded stop ends it. Skipped (said so) without node.
     #[cfg(windows)]
     #[test]
     fn windows_a_real_node_server_is_discovered_and_stopped() {
@@ -1174,12 +1125,8 @@ mod tests {
         }
     }
 
-    /// Windows, logs end to end — a Windows user must see all their dev apps' logs: node
-    /// run as `node app.js > dev.log 2>&1` that also appends to a `held.log` it keeps open
-    /// is listed with `console: "file"`, `dev.log` as stdout and `held.log` as a log; the
-    /// tail guard admits both (the handle walk is its `open_of`); both stream live lines
-    /// into the hub while node writes; the key is not verbatim; and the streams end with
-    /// "process exited" when node is killed. Skipped, and said so, without node.
+    /// Windows logs end to end: `node app.js > dev.log 2>&1` holding `held.log` lists both, the
+    /// tail guard admits both, lines stream live, keys aren't verbatim, "process exited" ends them.
     #[cfg(windows)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn windows_a_redirected_node_apps_logs_are_offered_and_streamed() {

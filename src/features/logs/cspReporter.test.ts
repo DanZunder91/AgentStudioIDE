@@ -1,29 +1,6 @@
-/**
- * cspReporter — the webview's `securitypolicyviolation` reports → the diagnostics log.
- *
- * Two halves, deliberately in one file:
- *
- *  1. **The reporter.** Synthetic violation events dispatched at `document`, with
- *     the resulting log lines asserted as LITERALS (an expectation read out of
- *     the code under test proves nothing about values). Covers a
- *     fully-populated violation, one with every optional field missing/empty, the
- *     returned unsubscribe, and the no-`document` no-op.
- *
- *     jsdom has **no `SecurityPolicyViolationEvent` constructor** (checked: it is
- *     `undefined` on the jsdom window), and it never generates the event itself
- *     because it enforces no CSP. So the events here are `new Event(...)` with the
- *     report fields assigned — which is exactly the shape a listener sees, and it
- *     lets a test model a browser that omits a field.
- *
- *  2. **The policy itself.** A regression guard over `src-tauri/tauri.conf.json`:
- *     the CSP must stay non-null, must keep a `default-src`, and must never grow
- *     `'unsafe-eval'` in `script-src`. It lives here — not next to the JSON — for
- *     one blunt reason: `vitest.config.ts` only collects `src/**` and
- *     `scripts/**`, so a test file anywhere else would silently never run,
- *     and JSON cannot carry the reasoning itself. The reasoning is
- *     in `docs/design/csp.md`; this is the gate that stops someone quietly
- *     setting `csp` back to `null`.
- */
+/** The reporter (synthetic `Event`s with report fields assigned: jsdom has no
+ * `SecurityPolicyViolationEvent` and enforces no CSP) and a guard over `tauri.conf.json`'s CSP,
+ * kept here because vitest only collects `src/**` and `scripts/**`. See docs/design/csp.md. */
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -58,12 +35,7 @@ interface Report {
   sample?: string;
 }
 
-/**
- * Dispatch one synthetic violation report at `document`.
- *
- * `Object.assign` onto a plain `Event` rather than `new SecurityPolicyViolationEvent`
- * — see the file header: jsdom does not implement that constructor.
- */
+/** Dispatch a synthetic violation at `document` (a plain `Event`: jsdom lacks the constructor). */
 function violate(report: Report): void {
   const event = new Event("securitypolicyviolation");
   Object.assign(event, report);
@@ -210,10 +182,8 @@ describe("startCspReporter — lifecycle", () => {
 /* ── the shipped policy (regression guard over tauri.conf.json) ───────────── */
 
 describe("tauri.conf.json — the Content-Security-Policy", () => {
-  // Read from disk, from the repo root (`process.cwd()` under vitest — `new URL(…,
-  // import.meta.url)` is not a `file:` URL here, the module graph is served over
-  // http by vite-node). Deliberately NOT `import`ed: `tsconfig.json` only covers
-  // `src`, so importing JSON from outside it would break `npm run typecheck`.
+  // Read from the repo root (`process.cwd()`; `import.meta.url` is not a `file:` URL under
+  // vite-node). Not imported: `tsconfig.json` covers only `src`, so typecheck would break.
   const CONF_PATH = resolve(process.cwd(), "src-tauri/tauri.conf.json");
   const conf = JSON.parse(readFileSync(CONF_PATH, "utf8")) as {
     app: { security: { csp?: string | null; devCsp?: string | null } };
@@ -250,11 +220,8 @@ describe("tauri.conf.json — the Content-Security-Policy", () => {
   });
 
   it("never allows eval in `script-src` — in production OR in dev", () => {
-    // `'unsafe-eval'` would hand a future XSS a code-generation primitive on top
-    // of the 44 IPC commands. Nothing in the bundle needs it: `grep` over
-    // `dist/assets/*.js` finds no `new Function(` and no direct `eval(`, and
-    // the editor's highlighter uses Shiki's JavaScript RegExp engine, not the Oniguruma
-    // WASM one, so `'wasm-unsafe-eval'` is not needed either. See docs/design/csp.md.
+    // Nothing in the bundle evals, and Shiki uses the JS RegExp engine (no WASM), so neither
+    // `'unsafe-eval'` nor `'wasm-unsafe-eval'` is needed. See docs/design/csp.md.
     for (const policy of [csp as string, devCsp as string]) {
       const scriptSrc = directives(policy)["script-src"];
       expect(scriptSrc).not.toContain("'unsafe-eval'");
@@ -286,10 +253,8 @@ describe("tauri.conf.json — the Content-Security-Policy", () => {
   });
 
   it("needs `'unsafe-inline'` on `style-src`, and says so in one place only", () => {
-    // CodeMirror (via style-mod: `doc.createElement("style")`), xterm.js and
-    // mermaid all inject <style> at runtime, and React writes inline `style`
-    // attributes (App.tsx's rail-width CSS vars). There is no nonce available to
-    // us. Documented residual risk, not an oversight — docs/design/csp.md.
+    // CodeMirror, xterm.js and mermaid inject <style>, React writes inline styles, and no nonce
+    // exists: a documented residual risk (docs/design/csp.md).
     expect(directives(csp as string)["style-src"]).toBe("'self' 'unsafe-inline'");
   });
 
@@ -301,18 +266,9 @@ describe("tauri.conf.json — the Content-Security-Policy", () => {
     expect(prod["form-action"]).toBe("'none'");
   });
 
-  /**
-   * `frame-src` was `'none'` before the HTML preview existed. It now
-   * names exactly ONE source — our own `preview://` scheme, whose every URL is served
-   * by `src-tauri/src/html_preview.rs` behind `resolve_in_scope`. Both platform
-   * spellings are listed for the same reason `connect-src` lists both IPC spellings:
-   * macOS/Linux use `preview://localhost`, Windows uses `http://preview.localhost`.
-   *
-   * 🔴 The assertion that matters is the second one. A wildcard here would let any
-   * page the app ever renders frame arbitrary remote content, which is the thing
-   * `'none'` was protecting against — so widening this must stay a deliberate edit
-   * to a failing test, never a quiet relaxation.
-   */
+  /** `frame-src` admits only our `preview://` scheme (served by `html_preview.rs` behind
+   * `resolve_in_scope`), in both platform spellings. A wildcard would let rendered pages frame
+   * remote content. */
   it("admits the preview scheme to frame-src, and nothing else", () => {
     for (const policy of [csp, devCsp]) {
       const frameSrc = directives(policy as string)["frame-src"];

@@ -1,19 +1,5 @@
-/**
- * Tests for the database client's connection-dialog logic.
- *
- * ── Expectations are never read from the table under test ───────────────────
- * `engineFieldRows` is a function *over a data table*, which is exactly the shape that
- * invites the trap: `expect(rows.map(r => r.key)).toEqual([...common, ...spec.extraFields.map(f => f.key)])`
- * reads its expectation from the same descriptor the code reads, passes forever, and
- * cannot fail on a wrong value. So every expectation below is **written out literally**
- * — the fixtures are inputs only. Renaming `readPreference` in `dbFixtures.ts` must
- * break a test here, and it does.
- *
- * Everything in `engineFields.ts` is DOM-free, so this file needs no renderer: the
- * risky logic (validation messages, the engine-switch preservation rule, secret
- * redaction, the focus-trap arithmetic) is pinned directly rather than through a
- * component that could mask it.
- */
+/** Expectations are written literally, never read from the descriptor table under test, so a
+ * wrong value can fail. */
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -388,11 +374,8 @@ describe("urlHint / connectModeNote / srvPortHint / portTip", () => {
       "`mongodb+srv://` resolves the hosts, the port and the replica set from DNS, so no port " +
         "is sent. This is how MongoDB Atlas is reached.",
     );
-    // 🔴 This used to be "The fields below are kept for reference and are not
-    // used." — false for the Password field, which a URL-only connection usually HAS to fill
-    // in (the parser strips a pasted credential and does not give it back). The literal is
-    // spelled out rather than compared against the constant on purpose: a test that reads its
-    // expectation from the source it is checking cannot fail on a wrong sentence.
+    // Spelled out, not read from the constant, so a wrong sentence fails. The Password field still
+    // matters in URL mode: the parser strips a pasted credential.
     expect(connectModeNote(POSTGRES_ENGINE, "url")).toBe(
       "The connection string decides the host, port, database and user — the fields below are " +
         "kept for reference. The Password field is still used: it fills the gap when the " +
@@ -1104,11 +1087,7 @@ describe("applyParsedUrl", () => {
       POSTGRES_ENGINE,
     );
     expect(report.notices).toContain(PASSWORD_MOVED_NOTICE);
-    // The wording matters, and it used to be WRONG: it said the password
-    // had been "stored separately", which describes the SAVE path. `db_url_parse` is pure
-    // — it strips the value and DISCARDS it, so the old sentence told the user their
-    // password was safe at the moment it had just been thrown away, and the failure showed
-    // up as an auth error one save later with nothing on screen to explain it.
+    // `db_url_parse` discards the stripped password; the notice must not claim it was stored.
     expect(PASSWORD_MOVED_NOTICE).toContain("was NOT kept");
     expect(PASSWORD_MOVED_NOTICE).toContain("type it into the Password field");
     expect(PASSWORD_MOVED_NOTICE).not.toContain("stored separately");
@@ -1269,23 +1248,13 @@ describe("applyParsedUrl", () => {
   });
 });
 
-/* ══════════════ the credential parameter (`?password=`) survives a paste ══════════════
- * `?password=` stays part of the path, because every database system follows that
- * convention. Rust honoured it on the SAVE path; the
- * PASTE path lost it, and the `{{VAR}}` came back in the userinfo instead — silently moving
- * a credential to a different place in the string.
- *
- * Every expectation below is a LITERAL string. That is not stylistic here: the whole bug
- * was about *which position* a substring ends up in, and an expectation assembled from the
- * same pieces the code assembles would be blind to exactly that. */
+/* `?password=` must survive a paste in place, not move into the userinfo. Expectations are
+ * literal strings: the bug was about which position a substring lands in. */
 
 describe("importUrlOverride", () => {
   it("🔴 KEEPS a pasted URL whose credential was in the userinfo — the Atlas bug", () => {
-    // The regression this file exists to prevent. This case used to return `url: null`: the
-    // rule was "keep the string only if it carried a credential query PARAMETER", so an Atlas
-    // URI with `user:pw@` was discarded whole — `mongodb+srv` scheme and all — and what
-    // connected was rebuilt from the fields as `mongodb://…:27017/`, which Atlas does not
-    // answer. A pasted URL is what the user asked for.
+    // A pasted `user:pw@` URL is kept whole, scheme and all; rebuilt from the fields it became
+    // `mongodb://…:27017/`, which Atlas does not answer.
     expect(
       importUrlOverride(
         parsed({
@@ -1365,10 +1334,8 @@ describe("importUrlOverride", () => {
   });
 
   it("cannot keep the parameter when the draft has no reference yet, and says so by keptParam", () => {
-    // The ordinary fresh paste. The value is not returned to this window (by design) and
-    // the Vault variable's name is minted by Rust at save time, so there is genuinely
-    // nothing to write into the parameter. `keptParam: null` is what drives the honest
-    // notice instead of a silently reshaped string. The STRING is still kept.
+    // Rust mints the Vault variable's name at save time, so there is nothing to write into the
+    // parameter; `keptParam: null` drives the notice. The string is still kept.
     expect(
       importUrlOverride(
         parsed({
@@ -1566,12 +1533,8 @@ describe("applyParsedUrl — the credential's position", () => {
     expect(report.draft.url).toBe("postgresql://ro@db.internal:5432/maestro");
     expect(report.notices).toContain(passwordParamUnplacedNotice("password"));
     expect(report.notices).not.toContain(passwordParamKeptNotice("password"));
-    // 🔴 The half that makes the `?password=` rule hold for the gesture a user
-    // actually performs. The stripped string above has no parameter left, so this FIELD is
-    // the only surviving evidence of where the credential belongs; Rust
-    // (`DbConnectionInput::password_param`) writes the reference back into it at save time.
-    // Without this the `{{VAR}}` landed in `user:password@` and the saved string described
-    // the connection differently from how it was pasted.
+    // The stripped string has no parameter left, so this field is the only record of where the
+    // credential belongs; Rust's `DbConnectionInput::password_param` writes the reference there.
     expect(report.draft.passwordParam).toBe("password");
   });
 
@@ -1811,10 +1774,8 @@ describe("canonicalScheme", () => {
   });
 
   it("returns \"\" for a descriptor that lists no scheme", () => {
-    // `urlSchemes` is a plain array in the contract, so "none" is expressible even
-    // though every shipped descriptor has one. Without the guard the import prompt
-    // would read "undefined://" — a fake scheme is worse than no prompt. Covering the
-    // branch was prompted by a coverage measurement, not by review.
+    // `urlSchemes` may be empty per the contract; without the guard the prompt would read
+    // "undefined://".
     const noScheme: EngineSpec = { ...POSTGRES_ENGINE, urlSchemes: [] };
     expect(canonicalScheme(noScheme)).toBe("");
   });

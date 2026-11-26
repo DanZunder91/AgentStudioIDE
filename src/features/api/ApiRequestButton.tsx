@@ -1,8 +1,4 @@
-/**
- * ApiRequestButton — the titlebar affordance that opens a new API request tab.
- * Mirrors `<ShortcutsButton/>`: a small icon button that drives one
- * store action. Sits next to the shortcuts button in `App.tsx`.
- */
+/** Titlebar button opening a new API request tab; like `<ShortcutsButton/>`, one store action. */
 
 import { useAppStore } from "../../app/store";
 

@@ -1,24 +1,6 @@
-//! `SessionSupervisor` — the actor that owns every `TerminalRuntime` and the
-//! agent forest.
-//!
-//! **Concurrency model** (ARCHITECTURE §3): one task owns the registry, driven by
-//! an mpsc command loop. Tauri commands, waiter threads and (from M3) transcript
-//! tailers all just send it messages. No `Arc<Mutex<HashMap>>`, no contention.
-//!
-//! **Governing invariant:** the hot byte path does *not* go through here. Reader
-//! thread → coalescer → `Channel` is lock-free per terminal; the supervisor only
-//! sits on the low-frequency control path (open/write/resize/close/exit/spawn).
-//!
-//! **M2 adds agents.** An agent is a terminal plus a node in the forest: the PTY
-//! path below is shared verbatim with plain terminals, and the only difference is
-//! *who chose the argv* (an `AgentAdapter`) and that we keep an `AgentNode` beside
-//! the `TerminalRuntime`.
-//!
-//! **M3 adds the fan-out tree.** Each root starts a tailer task
-//! ([`start_fanout_tailer`]) that polls its session's transcript and reports
-//! sub-agents as [`SupervisorMsg::FanoutDelta`]; those become `Subagent` nodes and
-//! `agent://event` `SubagentSpawned`/`Status` payloads. Sub-agents have no PTY —
-//! `terminal_id` is `None` — and cascade-remove with their root.
+//! `SessionSupervisor`: the actor owning every `TerminalRuntime` and the agent forest, driven
+//! by an mpsc loop (ARCHITECTURE §3). Invariant: the hot byte path never passes through here.
+//! An agent is a terminal plus a forest node; sub-agents (from the fan-out tailer) have no PTY.
 
 pub mod commands;
 
@@ -75,17 +57,13 @@ pub struct AgentSpawnSpec {
     pub cols: u16,
     /// Optional seed prompt. M2's command passes `None`.
     pub prompt: Option<String>,
-    /// A persisted session id to **resume** instead of minting a fresh one.
-    /// `Some` only on boot-restore of a pinned root; `None` for every
-    /// interactive `+`/⚡ spawn. Threaded into the adapter's [`SpawnRequest`] so the
-    /// same conversation + transcript are re-anchored (`claude --resume <id>`).
+    /// A persisted session id to resume (`claude --resume <id>`); `Some` only on boot-restore
+    /// of a pinned root.
     pub resume_session_id: Option<String>,
 }
 
-/// The internal facts needed to persist a pinned root, gathered from
-/// live supervisor state so the **session id never crosses the JS wire**: the
-/// `pin_agent` command asks for this in-process, builds the store entry, and writes
-/// it. Only ever produced for a **root** agent (sub-agents are not pinnable).
+/// Facts needed to persist a pinned root, gathered in-process so the session id never crosses
+/// the JS wire. Roots only (sub-agents are not pinnable).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinnableAgent {
     pub agent_id: AgentId,
@@ -101,18 +79,11 @@ pub struct PinnableAgent {
     pub finished: bool,
 }
 
-// ── "Would closing this terminal lose work?" (close confirmation) ──
-//
-// Closing a terminal that is running `claude` first asks for
-// confirmation. The frontend asks this once, at the moment of the close
-// gesture, and throws the answer away — see `src/features/terminal/terminalBusyIpc.ts`
-// for why it is asked rather than pushed (any pushed field would be stale by
-// construction, and a stale "not busy" is exactly the answer that loses the session).
+// ── Close confirmation: "would closing this terminal lose work?" ──
+// Asked at the close gesture, never pushed (see `src/features/terminal/terminalBusyIpc.ts`).
 
-/// Why a terminal counts as busy. Drives the dialog's wording, not its logic.
-///
-/// Wire contract: serialises to `"agent"` / `"command"` — the `BusyReason` string
-/// union in `src/features/terminal/terminalBusyIpc.ts`.
+/// Why a terminal counts as busy (dialog wording only). Wire: `"agent"` / `"command"`, the
+/// `BusyReason` union in `src/features/terminal/terminalBusyIpc.ts`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BusyReason {
@@ -124,11 +95,8 @@ pub enum BusyReason {
     Command,
 }
 
-/// One busy terminal, as `terminals_busy` reports it.
-///
-/// Wire contract: `interface BusyTerminal { id: TerminalId; reason: BusyReason;
-/// label: string }`. Only busy terminals appear in the result — idle, exited and
-/// unknown ids are simply absent, never an error.
+/// One busy terminal from `terminals_busy` (wire: `BusyTerminal { id, reason, label }`);
+/// idle, exited and unknown ids are absent, never an error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalBusy {
@@ -224,51 +192,35 @@ pub enum SupervisorMsg {
     Bypasses {
         events: Vec<crate::agent::tools::BypassEvent>,
     },
-    /// Install the ad-hoc-detection hook for a workspace `root` opened without
-    /// spawning a terminal (the multi-root Files "Open a folder").
-    /// Terminal/agent spawn already installs it; this covers a folder the user
-    /// opens but never launches a terminal in. Idempotent + non-fatal.
+    /// Install the ad-hoc-detection hook at a folder opened without a terminal. Idempotent,
+    /// non-fatal.
     EnsureAgentHooks {
         root: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
-    /// A terminal's shell `cd`'d into a new directory. Sent by that
-    /// terminal's cwd poller ([`spawn_cwd_poller`]) each time the polled cwd
-    /// *changes*, so the actor can install the ad-hoc hook at the new cwd's git root
-    /// — extending detection to repos the app never explicitly opened, as the user
-    /// moves around. Carries only the cwd (like `EnsureAgentHooks`/`FanoutDelta`,
-    /// not the terminal id): the install is keyed purely by cwd→git-root and is
-    /// idempotent, and the poller's own lifetime — aborted on close/exit — is what
-    /// scopes it to a live terminal. Fire-and-forget; no reply.
+    /// The shell's polled cwd changed ([`spawn_cwd_poller`]): install the ad-hoc hook at its git
+    /// root. Keyed by cwd only; the poller's lifetime scopes it to a live terminal. No reply.
     CwdChanged { cwd: String },
-    /// Read the internal facts needed to pin a root agent. Answered from
-    /// live state so the `pin_agent` command can write the store WITHOUT the session
-    /// id ever crossing the JS wire. `None` when the id is unknown or not a pinnable
-    /// root (a sub-agent).
+    /// Facts to pin a root agent, so `pin_agent` writes the store without the session id
+    /// crossing the JS wire. `None` for an unknown id or a sub-agent.
     DescribeAgent {
         agent_id: AgentId,
         reply: oneshot::Sender<Option<PinnableAgent>>,
     },
-    /// Every Claude session id the IDE owns (the Agent Village): each root's
-    /// `session_key` plus every live binding. Answered in-process so
-    /// `list_external_agents` can leave the IDE's own sessions out of the "outside
-    /// the IDE" list WITHOUT those ids ever crossing the JS wire.
+    /// Every Claude session id the IDE owns (root keys + live bindings), so
+    /// `list_external_agents` can exclude them without the ids crossing the JS wire.
     OwnedSessionIds {
         reply: oneshot::Sender<std::collections::HashSet<String>>,
     },
-    /// Re-open the agents of the last session (`open_agents::restore_on_boot`): the
-    /// registry's open entries plus `pins`, once each, minus `already_running` (empty in
-    /// phase 1), each down the restore ladder. Enqueued synchronously from `setup`,
-    /// before the webview can ask for a snapshot — the FIFO is what guarantees the first
-    /// snapshot has them.
+    /// Re-open the last session's agents (open entries plus `pins`, once each, minus
+    /// `already_running`). Enqueued from `setup` before the webview exists: the FIFO guarantees
+    /// the first snapshot has them.
     Restore {
         pins: Vec<PinnedAgent>,
         already_running: std::collections::HashSet<String>,
     },
-    /// The app is quitting (sent by [`SupervisorHandle::begin_shutdown`], AFTER the
-    /// shutting-down flag is raised): record which open agents were working, in one
-    /// write, and confirm. A `std` channel because the caller is the event-loop thread,
-    /// blocking with a budget — not an async task.
+    /// App quitting (after the shutting-down flag is raised): record which open agents were
+    /// working in one write, then confirm. A `std` channel: the caller is the event-loop thread.
     Shutdown {
         reply: std::sync::mpsc::SyncSender<()>,
     },
@@ -291,27 +243,19 @@ struct TerminalRuntime {
     /// to swap the output sink after a webview reload. Dropped on
     /// teardown, which ends the pump.
     pump_ctrl: mpsc::Sender<crate::stream::coalesce::PumpControl>,
-    /// The per-terminal cwd poller: watches the shell child's working
-    /// directory and, on each change, sends [`SupervisorMsg::CwdChanged`] so the
-    /// hook is (re)installed at the new git root. Aborted on child exit and on
-    /// close — a dropped tokio `JoinHandle` *detaches* (keeps polling a dead pid
-    /// forever), it does not cancel, exactly like the fan-out tailer.
+    /// The cwd poller, sending [`SupervisorMsg::CwdChanged`] on each change. Abort it on exit
+    /// and close: a dropped tokio `JoinHandle` detaches, it does not cancel.
     cwd_poll: tauri::async_runtime::JoinHandle<()>,
 }
 
 /// One agent: its wire node plus the internals the wire must not carry.
 struct AgentRuntime {
     node: AgentNode,
-    /// The terminal this agent's process runs in, for a **root** (spawned or
-    /// ad-hoc): `TerminalId ↔ AgentId` is a recorded fact that lets `ChildExited`
-    /// update the right node. **`None` for a sub-agent** (M3) — sub-agents are
-    /// pure forest records with no PTY of their own, so no terminal maps to them.
+    /// The terminal a ROOT runs in (`TerminalId ↔ AgentId`, so `ChildExited` updates the right
+    /// node); `None` for a sub-agent, which has no PTY.
     terminal_id: Option<TerminalId>,
-    /// The runtime's own session identity. For a **spawned** agent this is the
-    /// minted `--session-id`; for an **ad-hoc** one it is the
-    /// `session_id` the hook reported. Either way it is M3's foundation: the tailer
-    /// is handed the exact transcript identity rather than inferring it from the
-    /// cwd (which cannot tell two agents in one directory apart). Unread until M3.
+    /// The runtime's session identity: the minted `--session-id` (spawned) or the hook's
+    /// `session_id` (ad-hoc), so the tailer gets the exact transcript, not a cwd guess.
     #[allow(dead_code)]
     session_key: SessionKey,
     /// Absolute transcript path, when a hook told us (always for ad-hoc; for
@@ -319,17 +263,12 @@ struct AgentRuntime {
     /// directly instead of computing a path — the cwd→dir mangling is dead.
     #[allow(dead_code)]
     transcript_path: Option<String>,
-    /// `true` for an agent detected from a typed `claude` (ad-hoc); `false` for
-    /// one spawned via `+`. The distinction matters at session end: an ad-hoc
-    /// agent's `claude` is a *child inside the shell*, so when it ends only the
-    /// hook's `SessionEnd` tells us (the PTY child — the shell — lives on). A
-    /// spawned agent's `claude` *is* the PTY child, so `on_child_exited` owns its
-    /// status with the real exit code, and `SessionEnd` must not pre-empt it.
+    /// Ad-hoc (typed `claude`) vs spawned. An ad-hoc session ends only via the hook's
+    /// `SessionEnd` (the shell lives on); a spawned one's status comes from `on_child_exited`'s
+    /// real exit code, which `SessionEnd` must not pre-empt.
     is_ad_hoc: bool,
-    /// The fan-out tailer task for a **root** (M3): polls this session's transcript
-    /// and reports sub-agents via `SupervisorMsg::FanoutDelta`. `None` for a
-    /// sub-agent (they don't own a tailer — their root's tailer sees them). Aborted
-    /// when the agent is removed, or it would outlive its node.
+    /// A root's fan-out tailer (reports sub-agents via `FanoutDelta`); `None` for sub-agents.
+    /// Aborted on removal, or it would outlive its node.
     tailer: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
@@ -346,10 +285,8 @@ pub struct SupervisorHandle {
 }
 
 impl SupervisorHandle {
-    /// The table of live terminals (PTY child pid → terminal, title, tty, bound agent)
-    /// that dev-app discovery reads to say "this app runs in IDE terminal X, started by
-    /// agent Y". Lock-cheap and never touched by the actor
-    /// loop except for a pointer swap when it changes — see [`publish_ide_terminals`].
+    /// Live terminals table (child pid → terminal, title, tty, agent) for dev-app discovery;
+    /// the actor only swaps a pointer on change ([`publish_ide_terminals`]).
     pub fn ide_terminals(&self) -> IdeTerminals {
         self.ide.clone()
     }
@@ -462,10 +399,8 @@ impl SupervisorHandle {
             .map_err(|_| "supervisor dropped the reply".to_string())
     }
 
-    /// Which of `ids` are busy right now (the close confirmation). Only busy
-    /// terminals come back; idle, exited and unknown ids are absent rather than an
-    /// error — the UI is about to close them either way, and a hard error here would
-    /// strand the user in a tab they cannot close.
+    /// Busy terminals among `ids` (close confirmation). Others are absent, not an error: a hard
+    /// error would strand the user in a tab they cannot close.
     pub async fn terminals_busy(&self, ids: Vec<TerminalId>) -> Result<Vec<TerminalBusy>, String> {
         let (reply, rx) = oneshot::channel();
         self.send(SupervisorMsg::TerminalsBusy { ids, reply })
@@ -509,12 +444,8 @@ impl SupervisorHandle {
             .map_err(|_| "supervisor dropped the reply".to_string())
     }
 
-    /// Re-open the last session's agents (`open_agents::restore_on_boot`). **Synchronous
-    /// on purpose**: called from `setup`, it puts the restore in the actor's queue before
-    /// the webview exists, so no `fleet_snapshot` can overtake it (the actor is a FIFO).
-    ///
-    /// `already_running`: agents that must NOT be launched because they are alive
-    /// elsewhere — always empty in phase 1; phase 2's host passes its live agents.
+    /// Re-open the last session's agents. Synchronous on purpose: from `setup` it enqueues before
+    /// the webview exists, so no `fleet_snapshot` overtakes it. `already_running` is skipped.
     pub fn restore(
         &self,
         pins: Vec<PinnedAgent>,
@@ -528,15 +459,9 @@ impl SupervisorHandle {
             .map_err(|e| format!("supervisor refused the restore: {e}"))
     }
 
-    /// The app is shutting down. Raises the shutting-down flag FIRST — synchronously,
-    /// so every PTY exit or close the actor handles from now on leaves the agent in
-    /// `open-agents.json` (phase 1 of "agents survive a restart") — then asks the actor
-    /// to record which agents were working and waits up to `budget` for that one write.
-    ///
-    /// Idempotent: only the first call does anything (the main window's destruction,
-    /// `ExitRequested` and `Exit` can all arrive for one quit). Returns whether THIS
-    /// call saw the write confirmed. Blocking — call it from the event-loop thread, not
-    /// from inside the async runtime the actor runs on.
+    /// Raise the shutting-down flag FIRST (so later exits keep agents in `open-agents.json`), then
+    /// wait up to `budget` for the actor's working-agents write. Idempotent; returns whether THIS
+    /// call saw it confirmed. Blocking: call from the event-loop thread, not the async runtime.
     pub fn begin_shutdown(&self, budget: std::time::Duration) -> bool {
         if !self.shutdown.raise() {
             return false;
@@ -557,21 +482,16 @@ impl SupervisorHandle {
             .map_err(|_| "supervisor dropped the reply".to_string())
     }
 
-    /// Deliver a token-checked hook POST (from the listener) — fire-and-forget.
-    ///
-    /// Non-blocking `try_send`: the hook path must never stall (the `curl` on the
-    /// far side has a short timeout), and the control queue is deep, so a rare drop
-    /// under impossible load is preferable to backpressuring a session's `curl`.
+    /// Deliver a token-checked hook POST with a non-blocking `try_send`: the hook's `curl` has
+    /// a short timeout, so a rare drop beats stalling a session.
     pub fn deliver_hook(&self, terminal_id: TerminalId, body: Vec<u8>) {
         let _ = self
             .tx
             .try_send(SupervisorMsg::HookReceived { terminal_id, body });
     }
 
-    /// Inject a fan-out delta directly (bypassing the tailer). The tailer uses the
-    /// internal `tx`; this exists so the wiring — `Spawned` → `SubagentSpawned` + a
-    /// node, `StatusChanged` → `Status` — is testable without the real transcript
-    /// polling loop and its `~/.claude` glob.
+    /// Inject a fan-out delta, bypassing the tailer, so the wiring is testable without polling
+    /// real transcripts under `~/.claude`.
     pub async fn deliver_fanout_delta(
         &self,
         delta: crate::agent::fanout::FanoutDelta,
@@ -584,16 +504,12 @@ impl SupervisorHandle {
 struct Fleet {
     terminals: HashMap<TerminalId, TerminalRuntime>,
     agents: HashMap<AgentId, AgentRuntime>,
-    /// **The binding table**: `terminal_id → live root session_id`.
-    /// A spawned agent's terminal is bound at spawn; an ad-hoc one on its first
-    /// `SessionStart`. Presence of a *different* session on a terminal is exactly
-    /// what marks a nested `claude` as a phantom root to suppress. Unbound on the
-    /// union of `SessionEnd` and PTY child exit.
+    /// The binding table: `terminal_id → live root session_id` (spawned: at spawn; ad-hoc: first
+    /// `SessionStart`). A different session on a bound terminal is a nested `claude` to suppress.
+    /// Unbound on `SessionEnd` or PTY child exit.
     bindings: HashMap<TerminalId, String>,
-    /// Every session id the IDE has owned this run — grows only, never pruned on
-    /// close, exit, evict or rebind. The Agent Village's external scan subtracts it,
-    /// so a session the user just closed here (its transcript still inside the
-    /// village window) never comes back as an "outside the IDE" character.
+    /// Every session id owned this run, never pruned, so the village's external scan never shows
+    /// a session just closed here as "outside the IDE".
     owned_sessions: std::collections::HashSet<String>,
     adapters: Vec<Arc<dyn AgentAdapter>>,
     sink: Arc<dyn EventSink>,
@@ -649,14 +565,9 @@ impl Fleet {
     }
 }
 
-/// Spawn the supervisor actor. Register the returned handle as managed state:
-/// `app.manage(spawn_supervisor(sink, adapters, hook))`.
-///
-/// `sink`, `adapters` and `hook` are injected rather than constructed here so the
-/// whole agent lifecycle is testable: the tests pass a recording sink and a stub
-/// adapter and never spawn a real `claude` (which would need auth and a network).
-/// `hook` is the running listener's config, or `None` to run the fleet without the
-/// ad-hoc pipeline.
+/// Spawn the supervisor actor; register the handle as managed state. `sink`, `adapters` and
+/// `hook` are injected so tests use a recording sink and stub adapter, never a real `claude`;
+/// `hook = None` runs without the ad-hoc pipeline.
 pub fn spawn_supervisor(
     sink: Arc<dyn EventSink>,
     adapters: Vec<Arc<dyn AgentAdapter>>,
@@ -677,10 +588,8 @@ pub fn spawn_supervisor_with_logs(
     spawn_supervisor_with_store(sink, adapters, hook, logs, None)
 }
 
-/// [`spawn_supervisor_with_logs`] plus the open-agents registry (`open_agents.rs`):
-/// with `Some(path)`, every spawned root is recorded there and comes back on the next
-/// launch. The path is injected so the tests point it at a temp dir; `lib.rs` passes
-/// the real app-config file.
+/// [`spawn_supervisor_with_logs`] plus the open-agents registry: with `Some(path)` every
+/// spawned root is recorded and restored next launch (tests pass a temp dir).
 pub fn spawn_supervisor_with_store(
     sink: Arc<dyn EventSink>,
     adapters: Vec<Arc<dyn AgentAdapter>>,
@@ -812,11 +721,8 @@ pub fn spawn_supervisor_with_store(
                 }
 
                 SupervisorMsg::EnsureAgentHooks { root, reply } => {
-                    // A folder opened without a terminal. Install the
-                    // git-root-aware hook so a `claude` typed in a terminal opened
-                    // here later is detected. Gated on a live listener (the hook is
-                    // inert without one) and best-effort — always reply Ok, even when
-                    // the write is skipped (home dir, symlink, or no listener).
+                    // A folder opened without a terminal: install the hook only when a
+                    // listener runs (inert otherwise). Best-effort; always replies Ok.
                     if fleet.hook.is_some() {
                         install_ad_hoc_hooks(&fleet, &root);
                     }
@@ -870,10 +776,8 @@ pub fn spawn_supervisor_with_store(
                 }
 
                 SupervisorMsg::Close { id, reply } => {
-                    // Dropping the runtime kills the child (PtyHandle::drop) and
-                    // closes the PTY; the reader thread and coalescer unwind on
-                    // their own. Abort the pump so nothing lingers if the child
-                    // ignored the kill.
+                    // Dropping the runtime kills the child and closes the PTY; abort the pump
+                    // too in case the child ignored the kill.
                     let res = match fleet.terminals.remove(&id) {
                         Some(rt) => {
                             drop(rt.pty);
@@ -881,12 +785,8 @@ pub fn spawn_supervisor_with_store(
                             // Stop the cwd poller too, or a detached (not cancelled)
                             // tokio handle would keep polling the now-dead pid.
                             rt.cwd_poll.abort();
-                            // A close is the user saying "gone, for good" — so
-                            // *remove* the agent from the forest rather than keeping
-                            // it as a `done` node. A later `fleet_snapshot` must not
-                            // bring it back. (A natural exit takes the other path,
-                            // `on_child_exited`, and is retained for inspection.)
-                            // No-op for a plain terminal: it has no agent.
+                            // A close REMOVES the agent (a natural exit retains it via
+                            // `on_child_exited`), so no later snapshot brings it back.
                             fleet.bindings.remove(&id);
                             if let Some(hub) = &fleet.logs {
                                 let source = log_source_of(hub, &id, &rt.meta.title, &rt.meta.cwd);
@@ -926,20 +826,9 @@ pub fn spawn_supervisor_with_store(
     handle
 }
 
-/// Rebuild the `{ PTY child pid → terminal }` table dev-app discovery reads
-/// and publish it **only when it changed**.
-///
-/// Run after every message, keystrokes included, on purpose: enumerating "the messages
-/// that can change a terminal, a binding or a title" is a list a future message would
-/// silently fall off. The rebuild is a walk over the live terminals (a handful) and a
-/// comparison under a read lock; the write lock is taken — for a pointer swap — only on
-/// open / exit / close / bind / unbind / rename. procscan's side holds the read lock for
-/// one `Arc` clone, so the actor loop never waits on a scan.
-///
-/// A terminal whose child has exited (`pty: None`) is not in the table: its pid is free
-/// for the OS to reuse, and a stranger's process must never be attributed to it. The
-/// agent is the **bound** root (the binding table) — a terminal whose session
-/// ended keeps its `agent_id` in the meta but no longer lends it to what runs there.
+/// Rebuild the `{ PTY child pid → terminal }` table for dev-app discovery, publishing only on
+/// change; run after every message on purpose. Exited terminals are left out (their pid may be
+/// reused); the agent is the BOUND root, not the meta's `agent_id`.
 fn publish_ide_terminals(fleet: &Fleet) {
     let table: HashMap<u32, IdeTerminal> = fleet
         .terminals
@@ -989,10 +878,8 @@ fn open_plain_terminal(
     // workspace.
     let cwd = crate::workspace::resolve_cwd(&spec.cwd);
 
-    // Install the ad-hoc binding hook in this cwd BEFORE the shell starts, so a
-    // `claude` the user types immediately picks it up. Best-effort and
-    // non-fatal: a failure just means this terminal's ad-hoc `claude`s won't be
-    // auto-detected — the terminal still opens normally.
+    // Install the ad-hoc hook BEFORE the shell starts so a `claude` typed at once is detected;
+    // best-effort, the terminal opens regardless.
     if fleet.hook.is_some() {
         install_ad_hoc_hooks(fleet, &cwd);
     }
@@ -1019,10 +906,8 @@ fn open_plain_terminal(
     )
 }
 
-/// `agent_spawn`: an agent terminal plus its node in the forest.
-///
-/// Deliberately built on the same [`open_terminal`] as a plain terminal — an agent
-/// is *a terminal whose argv an adapter chose*, not a second PTY implementation.
+/// `agent_spawn`: an agent terminal plus its forest node, built on the same [`open_terminal`]:
+/// an agent is a terminal whose argv an adapter chose.
 fn spawn_agent(
     fleet: &mut Fleet,
     tx: &mpsc::Sender<SupervisorMsg>,
@@ -1084,11 +969,8 @@ fn spawn_agent(
         parent_id: None,
         kind: AgentKind::Orchestrator,
         title,
-        // Born IDLE, not Running: a just-spawned `claude` sits at its prompt and
-        // has not processed a turn yet. `UserPromptSubmit` flips it to Running;
-        // `Stop` back to Idle (turn hooks). A `Running` default was a latch that never
-        // cleared for a session that never runs a turn — a fresh welcome screen
-        // never emits `Stop`, so it showed "Running" forever.
+        // Born Idle: `UserPromptSubmit` → Running, `Stop` → Idle. A fresh session that never
+        // runs a turn never emits `Stop`, so a Running default would stick.
         status: AgentStatus::Idle,
         branch: branch.clone(),
         cwd: cwd.clone(),
@@ -1099,12 +981,8 @@ fn spawn_agent(
         error: None,
     };
 
-    // Bind the terminal to its session AT SPAWN. This is what
-    // neutralises the phantom-root trap: when this agent later shells out
-    // `claude -p`, that nested `SessionStart` lands on an already-bound terminal
-    // with a *different* session id and is suppressed, instead of forging a
-    // second root. `session_key` == the `--session-id` we minted == the
-    // `session_id` claude reports.
+    // Bind at spawn: a nested `claude -p` then reports a different session id on a bound
+    // terminal and is suppressed instead of forging a phantom root.
     fleet
         .bindings
         .insert(terminal_id.clone(), spawned.session_key.0.clone());
@@ -1182,10 +1060,8 @@ struct OpenParams {
     cwd: String,
 }
 
-/// Open one terminal: PTY → reader thread → coalescer → the UI's `Channel`.
-/// Synchronous by design — nothing here awaits, so the actor loop never stalls.
-///
-/// The single PTY path, shared by plain terminals and agents alike.
+/// Open one terminal: PTY → reader thread → coalescer → the UI's `Channel`; the single PTY
+/// path for terminals and agents. Synchronous: nothing awaits, so the actor never stalls.
 fn open_terminal(
     fleet: &mut Fleet,
     tx: &mpsc::Sender<SupervisorMsg>,
@@ -1196,10 +1072,8 @@ fn open_terminal(
         return Err(format!("terminal already open: {}", params.terminal_id));
     }
 
-    // Inject the ad-hoc-detection env into EVERY PTY: whatever the user
-    // runs — including a `claude` they type — inherits our terminal id, callback
-    // URL and token, so it can phone home. Harmless to a plain shell; the hook that
-    // reads these is inert unless they are set.
+    // Every PTY gets the ad-hoc-detection env (terminal id, callback URL, token) so a typed
+    // `claude` can phone home; inert unless set.
     inject_hook_env(fleet, &params.terminal_id, &mut params.spec);
     // …and the capture-proxy env: every PTY's HTTP/WS/gRPC
     // traffic is attributable to it in the Network tab. Empty when capture is off or
@@ -1222,26 +1096,13 @@ fn open_terminal(
         mut child,
     } = spawn;
 
-    // The shell child's pid, recorded on the handle at spawn (see
-    // `PtyHandle::child_pid`) — read here rather than off `child`, which is about to
-    // be moved into the waiter thread. The cwd poller needs it to read the process's
-    // working directory, and the close-confirmation's tier 2 compares it against the
-    // tty's foreground process group. A `None` (portable-pty could not report one)
-    // just means no cwd tracking and no foreground check for this terminal.
+    // Read the child's pid off the handle (`child` moves to the waiter thread). The cwd poller
+    // and the foreground check use it; `None` disables both for this terminal.
     let child_pid = handle.child_pid();
 
-    // Hot path, off the actor: blocking reader thread → bounded mpsc(256) →
-    // coalescer → Channel. The `pump_ctrl` channel is how a later
-    // `terminal_reattach` swaps in a fresh Channel after a webview reload;
-    // depth 1 is enough (re-attach is rare and one-at-a-time per terminal).
-    // The Agent Logs tap. An agent terminal starts
-    // suppressed: its session is bound from birth (`spawn_agent` binds right after
-    // this returns), and suppressing only then would leak the runtime's first paint.
-    // The "opened" line is queued BEFORE the reader starts, so it always precedes the
-    // terminal's first output line in the log.
-    // The tap is registered first: it settles the terminal's source label (unique among open
-    // terminals — `LogHub::tap`), which the "opened" line must carry too. The hub also learns
-    // the PTY size (the Windows screen model needs it — `logstream::screen`).
+    // Hot path off the actor: reader → bounded mpsc(256) → coalescer → Channel; `pump_ctrl`
+    // (depth 1) lets `terminal_reattach` swap the Channel. Tap first (it settles the label), the
+    // "opened" line before the reader; agent terminals start suppressed so no first paint leaks.
     let tap = fleet.logs.as_ref().map(|hub| {
         let tap = hub.tap(
             &params.terminal_id,
@@ -1275,10 +1136,8 @@ fn open_terminal(
         let _ = exit_tx.blocking_send(SupervisorMsg::ChildExited { id: exit_id, code });
     });
 
-    // The cwd poller: as the user `cd`s the shell around, install the
-    // ad-hoc hook at each new repo's git root. Off the actor thread; it only reads
-    // the process cwd and routes changes back as `CwdChanged`. Aborted on child exit
-    // / close so it never polls a dead pid forever.
+    // Install the ad-hoc hook at each repo the shell `cd`s into; aborted on exit/close so it
+    // never polls a dead pid.
     let cwd_poll = spawn_cwd_poller(tx.clone(), child_pid);
 
     let meta = TerminalMeta {
@@ -1307,14 +1166,9 @@ fn open_terminal(
     Ok(meta)
 }
 
-/// Re-bind a live terminal to a fresh output `Channel` after a webview reload.
-/// Returns the terminal's meta:
-/// - **live** → swap the pump's sink, replay the scrollback ring, resize-nudge to
-///   force a TUI repaint; status is `live`.
-/// - **exited** → the pump is already gone (child exited); return the meta with
-///   status `exited` so the frontend shows "session ended" rather than a blank
-///   pane. No replay is possible.
-/// - **missing** → `Err` (unknown terminal), distinct from an exited one.
+/// Re-bind a live terminal to a fresh `Channel` after a webview reload: live → swap the sink,
+/// replay the ring, resize-nudge a repaint; exited → meta with status `exited`, no replay;
+/// unknown id → `Err`.
 fn reattach_terminal(
     fleet: &mut Fleet,
     id: &TerminalId,
@@ -1353,29 +1207,9 @@ fn reattach_terminal(
     Ok(fleet.terminals[id].meta.clone())
 }
 
-// ── The close confirmation: which terminals are busy? ────────────────────────
-//
-// Closing a terminal that is running `claude` first asks for confirmation.
-//
-// Two tiers, each blind exactly where the other sees — which is why it takes both:
-//
-//  1. **A bound session** (all platforms, exact). For a terminal the app spawned an
-//     agent into, `claude` **is** the PTY child — there is no shell — so a
-//     foreground-process check can never see it: the foreground group is always the
-//     child itself. [`Fleet::bindings`] is the authority here, and it is a recorded
-//     fact rather than an inference.
-//  2. **A foreground command** (Unix and Windows). For a terminal the user typed into,
-//     the shell is the child and a running command takes the tty's foreground process
-//     group — on Windows (no process groups) the shell has a console child instead —
-//     see [`PtyHandle::foreground_command_running`]. This catches a hand-typed
-//     `claude` that tier 1 never saw (ad-hoc detection is workspace-scoped, so a
-//     `claude` in a folder the app never opened is invisible to it), and it catches a
-//     long build or a dev server, which is the same hazard in different clothes.
-//
-// 🔴 Tier 1 is deliberately **not** gated on `status == Running`: a root
-// is born `Idle`, and a session parked at its prompt never emits `Stop` — so a
-// running-only test would wave through exactly the session most likely to be lost. The
-// question is "is a session bound and alive", not "is it mid-turn".
+// Close confirmation, two tiers: 1) a bound session ([`Fleet::bindings`]); in an agent
+// terminal `claude` IS the PTY child, so tier 2 can't see it; 2) a foreground command. Tier 1
+// is NOT gated on Running: a root idles at its prompt, the session most likely to be lost.
 
 /// Which of `ids` are busy. Absent = not busy; unknown and exited ids are absent
 /// too, never an error (the caller is about to close them either way).
@@ -1402,12 +1236,8 @@ fn terminal_busy(fleet: &Fleet, id: &TerminalId) -> Option<TerminalBusy> {
     )
 }
 
-/// Tier 1: `Some(label)` when a live runtime session is bound to `id`.
-///
-/// The binding table is the authority; the forest only supplies the *name*. A
-/// binding whose agent node has already been removed still counts as busy and
-/// borrows `fallback` (the terminal's title) — we would rather warn about a session
-/// we can no longer name than close one silently.
+/// Tier 1: `Some(label)` when a live session is bound to `id`. A binding whose node is gone
+/// still counts, labelled `fallback`: better to warn unnamed than close silently.
 fn bound_session_label(fleet: &Fleet, id: &TerminalId, fallback: &str) -> Option<String> {
     fleet.bindings.get(id)?;
     let named = fleet
@@ -1419,15 +1249,8 @@ fn bound_session_label(fleet: &Fleet, id: &TerminalId, fallback: &str) -> Option
     Some(named.unwrap_or(fallback).to_string())
 }
 
-/// The per-terminal decision, as a pure function of what the two tiers found — so
-/// the precedence rule is unit-testable without a live PTY.
-///
-/// `agent_label` is tier 1 (`Some` ⇒ a session is bound). `foreground_running` is
-/// tier 2 (`None` ⇒ unknown: `tcgetpgrp` or the Windows process snapshot had no answer).
-///
-/// Tier 2 is consulted **only** when tier 1 is silent. An agent terminal has no
-/// shell, so its foreground group is always the child itself — asking tier 2 there
-/// would produce a flat "idle" that contradicts a fact we already hold.
+/// The per-terminal decision, pure for tests. Tier 2 (`foreground_running`, `None` = unknown)
+/// is consulted only when tier 1 (`agent_label`) is silent: an agent terminal always looks idle.
 fn classify_busy(
     id: &TerminalId,
     agent_label: Option<String>,
@@ -1454,21 +1277,12 @@ fn classify_busy(
     None
 }
 
-/// Sentinel `exited.code` for "the outcome is genuinely unknown".
-///
-/// `AgentEvent::Exited.code` is a required `number` on the wire, but a failed
-/// `wait()` has no status to report. Rather than invent a plausible-looking number
-/// (`-1` reads to a user as "exited with code -1", which no process returns),
-/// unknown is spelled the same way every time and paired with a `status` that
-/// carries the real meaning.
+/// `exited.code` when a failed `wait()` left the outcome unknown (the wire needs a number);
+/// the paired `status` carries the meaning.
 const EXIT_CODE_UNKNOWN: i32 = -1;
 
-/// The child died **on its own** (finished or crashed): record it and tell the UI.
-///
-/// This is the *retain* path. Contrast [`remove_agent_for_terminal`], the *remove*
-/// path taken when the user closes the tab. The two are deliberately separate
-/// functions rather than one function branching on a cause — the actions they take
-/// (retain-as-`done`/`error` vs. delete-from-forest) share nothing.
+/// The child died on its own: the RETAIN path (as `done`/`error`). Closing the tab takes
+/// the separate remove path, [`remove_agent_for_terminal`].
 fn on_child_exited(fleet: &mut Fleet, id: &TerminalId, code: Option<i32>) {
     if let Some(rt) = fleet.terminals.get_mut(id) {
         rt.meta.status = TerminalStatus::Exited;
@@ -1477,10 +1291,8 @@ fn on_child_exited(fleet: &mut Fleet, id: &TerminalId, code: Option<i32>) {
         // closes → the coalescer does its final flush and ends. The meta stays
         // for the UI, and `fleet_snapshot` is what finally makes it readable.
         rt.pty = None;
-        // The shell child is gone, so its pid is stale. A natural exit RETAINS the
-        // runtime (unlike close, which removes it), so abort the cwd poller here or
-        // it would keep sampling a dead pid forever (a detached tokio handle does
-        // not cancel — same lesson as the fan-out tailer).
+        // A natural exit retains the runtime, so abort the cwd poller here: a detached tokio
+        // handle would sample the dead pid forever.
         rt.cwd_poll.abort();
     }
     // Unbind: the PTY child is gone, so any session it hosted is over. This is the
@@ -1506,31 +1318,15 @@ fn on_child_exited(fleet: &mut Fleet, id: &TerminalId, code: Option<i32>) {
         ));
     }
     finish_agent_for_terminal(fleet, id, code);
-    // The agent's OWN process ended (`/exit`, a crash): the user is done with it, so it
-    // does not come back next launch. An exit caused by the app quitting is not this —
-    // `Registry::remove` is a no-op once the shutting-down flag is up. A plain shell
-    // exiting was never recorded, so this is a read and no write.
+    // The agent's own process ended, so it does not return next launch; a quit-caused exit is a
+    // no-op (shutting-down flag). A plain shell was never recorded.
     fleet.restart.registry.remove(id);
     fleet.restart.restored.remove(id);
 }
 
-/// Move the agent owning `terminal_id` (if any) into a terminal state after a
-/// natural exit, and tell the UI.
-///
-/// M2's status model is deliberately minimal: `running` until the process ends,
-/// then `done`/`error`. `waiting_input` and `idle` require telemetry that only
-/// M3's tailer provides — guessing at them from byte traffic would be exactly the
-/// kind of heuristic this design avoids.
-///
-/// **`error` must mean something.** It is reserved for an agent that failed on its
-/// own. The user closing a tab is not a failure and never reaches this function —
-/// it takes the remove path — so `error` cannot fire on a normal close. If it
-/// could, the user would learn to ignore red, and a genuinely broken agent in
-/// an M3 tree would go unnoticed.
-///
-/// Only ever called with a child's own exit code, so there is no `CloseRequested`
-/// case to handle: a signal-derived code from *our* kill (143 = SIGTERM, 137 =
-/// SIGKILL) never gets here to be mistaken for the agent's outcome.
+/// Move the agent owning `terminal_id` to `done`/`error` after a natural exit. `error`
+/// means it failed on its own: a user close takes the remove path, so our kill's codes never
+/// land here.
 fn finish_agent_for_terminal(fleet: &mut Fleet, terminal_id: &TerminalId, code: Option<i32>) {
     let Some(agent) = fleet
         .agents
@@ -1574,11 +1370,8 @@ fn finish_agent_for_terminal(fleet: &mut Fleet, terminal_id: &TerminalId, code: 
 
     agent.node.status = status;
     agent.node.error = error;
-    // The root finished: its transcript is now static, so the fan-out tailer has
-    // nothing left to observe. Abort it — a dropped tokio `JoinHandle` detaches, not
-    // cancels, so a retained tailer would re-parse the static transcript every
-    // `FANOUT_POLL` forever. The node stays (retained for inspection); only its
-    // tailer dies.
+    // The root finished: abort its tailer (a dropped `JoinHandle` detaches and would re-parse
+    // the static transcript every `FANOUT_POLL` forever). The node stays.
     if let Some(t) = agent.tailer.take() {
         t.abort();
     }
@@ -1601,14 +1394,8 @@ fn finish_agent_for_terminal(fleet: &mut Fleet, terminal_id: &TerminalId, code: 
     stop_unfinished_descendants(fleet, &agent_id);
 }
 
-/// A root's process is gone, so every sub-agent it was still running is gone too —
-/// they run *inside* that `claude` process. Without this the tree kept showing
-/// "5 running" under a dead root forever, because the
-/// tailer that would have reported their end was just aborted.
-///
-/// Each still-unfinished descendant becomes `error` ("stopped: its root agent
-/// exited"), not `done`: it did not finish its work. Already-finished ones keep
-/// their own record. Natural exits only — the user's close takes the remove path.
+/// A root's process ended, so its unfinished sub-agents (which run inside it) become `error`
+/// ("stopped: its root agent exited"); finished ones keep their record. Natural exits only.
 fn stop_unfinished_descendants(fleet: &mut Fleet, root: &AgentId) {
     let mut ids = vec![root.clone()];
     let mut scanned = 0;
@@ -1640,23 +1427,8 @@ fn stop_unfinished_descendants(fleet: &mut Fleet, root: &AgentId) {
     }
 }
 
-/// Remove the agent whose terminal this is (and its whole sub-tree) from the
-/// forest. The **remove** path — taken only when the user closes the tab.
-///
-/// The model: a closed agent is gone and will not be opened again, so a later
-/// `fleet_snapshot` must not resurrect it. Contrast a *natural* exit, which retains
-/// the node as `done`/`error` for inspection ([`finish_agent_for_terminal`]).
-///
-/// **A plain terminal has no agent**, so `find` matches nothing and this is a
-/// no-op — correct, because `TerminalId == AgentId` holds for agent terminals
-/// only. Closing a shell must not delete an agent that happens to be nearby.
-///
-/// **The crash-then-close collision resolves in favour of remove.** If an agent
-/// crashed and the user *then* closes its tab, the node is removed, not kept as
-/// `error`. The crash was retained *until the user dismissed it*, and the close is
-/// that dismissal — the explicit user action wins over the retained record. (The
-/// frontend, which issued the close, drops the node from its store in lockstep, so
-/// no `removed` event is needed in M2; see the summary for the M3 caveat.)
+/// The REMOVE path (user closed the tab): drop the agent owning `terminal_id` and its sub-tree
+/// so no snapshot resurrects it. No-op for a plain terminal; after a crash, the close removes.
 fn remove_agent_for_terminal(fleet: &mut Fleet, terminal_id: &TerminalId) {
     let Some(root) = fleet
         .agents
@@ -1669,13 +1441,8 @@ fn remove_agent_for_terminal(fleet: &mut Fleet, terminal_id: &TerminalId) {
     remove_agent_subtree(&mut fleet.agents, &root);
 }
 
-/// Remove `root` and every descendant (by `parentId` edge) from the forest.
-///
-/// **The M3 cascade**: dismissing a root drops its
-/// whole sub-tree, which the client never opened. Sub-agents are pure forest
-/// records with no PTY, so removing them from the map is complete — but a *root*
-/// owns a fan-out tailer task, which must be aborted or it outlives its node and
-/// keeps re-emitting a resurrected tree.
+/// Remove `root` and every descendant (by `parentId`) from the forest; a root's fan-out
+/// tailer must be aborted or it outlives its node and re-emits the tree.
 fn remove_agent_subtree(agents: &mut HashMap<AgentId, AgentRuntime>, root: &AgentId) {
     // Breadth-first collect, then delete: mutating the map mid-walk would
     // invalidate the borrow, and the fleet is tiny (a handful of agents) so the
@@ -1701,18 +1468,8 @@ fn remove_agent_subtree(agents: &mut HashMap<AgentId, AgentRuntime>, root: &Agen
     }
 }
 
-/// Evict any agent already parked under `terminal_id`, aborting its fan-out tailer
-/// before a fresh root re-inserts there.
-///
-/// Sequential ad-hoc `claude`s in one shell land under the same `terminal_id`
-/// repeatedly. A dropped `tauri::async_runtime::JoinHandle` (tokio) *detaches* the
-/// task, it does **not** cancel it — so overwriting the map entry without this would
-/// leave the old tailer polling `~/.claude` forever.
-///
-/// Defense-in-depth: every unbind path (`on_session_end`, `on_child_exited`) already
-/// aborts the tailer before this runs, so in practice `prev.tailer` is `None` here.
-/// But this mirrors the guards in `spawn_agent` / `on_fanout_delta` and keeps the
-/// re-insert safe even if a future unbind path forgets to abort.
+/// Evict any agent parked under `terminal_id`, aborting its tailer before a new root
+/// re-inserts (a dropped tokio `JoinHandle` detaches, polling `~/.claude` forever).
 fn evict_prev_root(agents: &mut HashMap<AgentId, AgentRuntime>, terminal_id: &TerminalId) {
     if let Some(prev) = agents.remove(terminal_id) {
         if let Some(tailer) = prev.tailer {
@@ -1721,18 +1478,8 @@ fn evict_prev_root(agents: &mut HashMap<AgentId, AgentRuntime>, terminal_id: &Te
     }
 }
 
-/// Wall-clock milliseconds — the unit `types.ts` uses for `startedAt` etc.
-/// Gather the facts needed to pin `agent_id` from live state, or `None`
-/// if it is unknown or **not a pinnable root**.
-///
-/// ROOT-only is a hard constraint: a sub-agent
-/// has no PTY and no process of its own, so there is nothing to re-spawn — it
-/// re-materialises from the transcript when its root's `claude` resumes. We gate on
-/// `parent_id.is_none() && kind == Orchestrator`.
-///
-/// `custom_title` is `Some` only when the node has been renamed away from its
-/// adapter default (a user/telemetry rename worth preserving); an untouched
-/// default title persists as `None` so restore can re-derive it.
+/// Facts to pin `agent_id`, or `None` unless it is a ROOT orchestrator (a sub-agent has no
+/// process to re-spawn). `custom_title` is `Some` only when renamed from the adapter default.
 fn describe_pinnable(fleet: &Fleet, agent_id: &str) -> Option<PinnableAgent> {
     let rt = fleet.agents.get(agent_id)?;
     if rt.node.parent_id.is_some() || rt.node.kind != AgentKind::Orchestrator {
@@ -1758,12 +1505,9 @@ fn describe_pinnable(fleet: &Fleet, agent_id: &str) -> Option<PinnableAgent> {
     })
 }
 
-/// Every session id the IDE owns: each ROOT's `session_key` (spawned → the minted
-/// `--session-id`, ad-hoc → the hook's) — kept after its PTY exits, since the node is
-/// still in the rail — plus every live binding (a terminal re-bound to a newer session),
-/// plus every session the IDE has *ever* owned this run ([`Fleet::owned_sessions`]) so
-/// a closed, evicted or rebound session is still excluded from the external scan.
-/// A sub-agent's `session_key` is its own agent id, not a session, so it is left out.
+/// Every session id the IDE owns: each root's `session_key` (kept after exit), every live
+/// binding, and every session owned this run ([`Fleet::owned_sessions`]). Sub-agent keys are
+/// agent ids, so they are left out.
 fn owned_session_ids(fleet: &Fleet) -> std::collections::HashSet<String> {
     fleet
         .agents
@@ -1784,16 +1528,9 @@ fn remember_owned_sessions(fleet: &mut Fleet) {
 
 // ── Open agents come back after a restart (phase 1, `open_agents.rs`) ────────
 
-/// Re-open the last session's agents, each down the restore ladder (`choose_rung`):
-/// resume its conversation, else a fresh `claude` in the same folder, else a dormant
-/// row that says why. Every agent comes back under its OWN id — that id is the key the
-/// center layout persisted its view, pane, tab and name under.
-///
-/// The transcript lookup asks the agent's ADAPTER (the supervisor knows no
-/// Claude paths); an unknown runtime simply has none, takes the fresh rung, and its
-/// spawn's refusal turns it dormant with the reason. Each restored agent gets a
-/// detached output sink: the pump fills the scrollback ring until the frontend's
-/// `terminal_reattach` swaps in the real channel and replays it.
+/// Re-open the last session's agents down the ladder (`choose_rung`): resume, else a fresh
+/// `claude` in the folder, else dormant with the reason. Each keeps its OWN id (the layout's
+/// key) and a detached sink whose ring `terminal_reattach` replays.
 fn restore_agents(fleet: &mut Fleet, tx: &mpsc::Sender<SupervisorMsg>, agents: Vec<OpenAgent>) {
     for agent in agents {
         // Restore runs once, into the empty fleet of a fresh boot. An id that is already
@@ -1847,24 +1584,16 @@ fn restore_agents(fleet: &mut Fleet, tx: &mpsc::Sender<SupervisorMsg>, agents: V
     }
 }
 
-/// The ladder's last rung: an agent that could not be re-launched comes back as an
-/// ENDED root — an `error` row whose `error` says why, and an exited terminal so the
-/// layout restore still puts its tab back where it was. Never silently dropped: the
-/// user would lose track of an agent they did not close.
-///
-/// It stays in `open-agents.json` (the folder may be on a drive that is not mounted
-/// yet) until the user closes it — the close is the ordinary `terminal_close` of its
-/// tab or row, which `Registry::remove` turns into the removal.
+/// Last rung: an ENDED `error` root saying why, with an exited terminal so its tab is
+/// restored; never dropped silently. It stays in `open-agents.json` until the user closes it.
 fn restore_dormant(fleet: &mut Fleet, agent: &OpenAgent, reason: String) {
     let id = agent.agent_id.clone();
     let title = fleet
         .adapter(&agent.runtime)
         .map(|a| a.default_title().to_string())
         .unwrap_or_else(|_| agent.runtime.clone());
-    // A terminal with no process: `pty: None` is exactly how an exited terminal looks
-    // (`on_child_exited`), so re-attach answers `exited`, the close confirmation finds
-    // nothing running and dev-app discovery skips it. The pump and cwd poller are
-    // already-finished tasks, so the close path's `abort()`s have nothing to stop.
+    // `pty: None` is how an exited terminal looks, so re-attach answers `exited` and busy checks
+    // and dev-app discovery skip it; the pump and poller are already-finished tasks.
     let (pump_ctrl, _) = mpsc::channel::<PumpControl>(1);
     fleet.terminals.insert(
         id.clone(),
@@ -1952,6 +1681,7 @@ fn working_at_shutdown(fleet: &Fleet) -> HashMap<String, bool> {
         .collect()
 }
 
+/// Wall-clock milliseconds, the unit `types.ts` uses for `startedAt` etc.
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1961,11 +1691,8 @@ fn now_ms() -> i64 {
 
 // ── Ad-hoc agent detection ───────────────────────────────────────────────────
 
-/// Append the ad-hoc-detection env to a PTY's spawn spec, if a listener is running.
-///
-/// Every PTY gets these — a plain shell too — so whatever the user runs inherits
-/// them. `TERM`/`AGENTSTUDIO` are already set by `pty::spawn_pty`; these are the
-/// three the binding hook reads.
+/// Append the three env vars the binding hook reads to every PTY's spec (a plain shell too),
+/// when a listener is running.
 fn inject_hook_env(fleet: &Fleet, terminal_id: &TerminalId, spec: &mut SpawnSpec) {
     let Some(hook) = &fleet.hook else {
         return;
@@ -1978,24 +1705,9 @@ fn inject_hook_env(fleet: &Fleet, terminal_id: &TerminalId, spec: &mut SpawnSpec
         .push((ENV_HOOK_TOKEN.to_string(), hook.token.clone()));
 }
 
-/// Write each adapter's ad-hoc hook into `<git-root>/.claude/settings.local.json`,
-/// merging with anything already there. Best-effort: any failure is swallowed (the
-/// terminal must still open), so this returns nothing.
-///
-/// **Installs at the git ROOT, not the raw `cwd`**. `claude` walks up
-/// from the session's cwd to find `.claude/`, so a hook at the repo root covers
-/// every subdirectory the user might `cd` into before typing `claude`. Without
-/// this, a hook written only in the terminal's spawn cwd was invisible the moment
-/// the user changed directory. A non-repo cwd falls back to the cwd itself (the
-/// prior behavior).
-///
-/// **Guards the user's global config.** If the resolved target is the home
-/// directory, `<target>/.claude/` *is* `~/.claude/`, and writing there would touch
-/// the user's global Claude config — which is never done without explicit
-/// consent. So we skip the home dir entirely; a `claude` typed straight in `~`
-/// (or in a repo rooted at `~`) simply isn't auto-detected (a stated limitation),
-/// never a silent global write. The guard checks the **resolved** target,
-/// because a `git init` in the home directory would make the git root be `~`.
+/// Merge each adapter's ad-hoc hook into `<git-root>/.claude/settings.local.json` (`claude`
+/// walks up to it; non-repo → cwd). Never the home dir, checked on the RESOLVED target: there
+/// `.claude` is the user's global config. Best-effort: failures are swallowed.
 fn install_ad_hoc_hooks(fleet: &Fleet, cwd: &str) {
     let cwd_path = std::path::Path::new(cwd);
     let target = crate::git::git_root(cwd_path).unwrap_or_else(|| cwd_path.to_path_buf());
@@ -2013,22 +1725,12 @@ fn install_ad_hoc_hooks(fleet: &Fleet, cwd: &str) {
     }
 }
 
-// ── Terminal cwd tracking ────────────────────────────────────────────────────
-//
-// Ad-hoc detection stays **workspace-scoped**: we install the hook at a
-// repo's git root, never in `~/.claude`. On spawn we install at the terminal's
-// launch cwd; folder-open installs via `ensure_agent_hooks`. Both miss a `claude`
-// the user types after `cd`ing into a repo the app never opened. This closes that
-// gap **without** any new global write: each terminal's shell cwd is polled, and on
-// every change the SAME git-root/home-guarded/symlink-safe/idempotent installer runs
-// for the new cwd. Nothing here writes to `~/.claude`.
+// ── Terminal cwd tracking ──
+// Each terminal's cwd is polled and the same git-root, home-guarded, idempotent installer runs
+// on every change, so a `claude` typed after a `cd` is detected. Never writes `~/.claude`.
 
-/// How often the per-terminal cwd poller samples the shell's working directory.
-/// A `cd` is a human action, so ~1.2 s of latency before the hook lands is
-/// imperceptible, and reading one process's vnode-path info that often is trivially
-/// cheap (the same "polling is fine for cold-plane telemetry" reasoning as the
-/// fan-out tailer). Overridable via `AGENTSTUDIO_CWD_POLL_MS` — a test seam so the
-/// poller test runs in tens of milliseconds, never a user knob.
+/// Cwd poll interval: a `cd` is a human action, so ~1.2 s latency is fine and the read is
+/// cheap. `AGENTSTUDIO_CWD_POLL_MS` overrides it as a test seam only, not a user knob.
 const CWD_POLL_DEFAULT_MS: u64 = 1200;
 
 fn cwd_poll_interval() -> std::time::Duration {
@@ -2039,15 +1741,8 @@ fn cwd_poll_interval() -> std::time::Duration {
     std::time::Duration::from_millis(ms)
 }
 
-/// The per-poll decision, extracted as a **pure function** so it is
-/// unit-testable with injected cwds instead of a live process. Given the cwd we last
-/// asked the actor to install for (`last`) and the one just polled (`current`),
-/// return `Some(new)` — the cwd to install at and to remember as the new `last` —
-/// **only when the reading changed**; `None` otherwise.
-///
-/// A `None` reading (`current` is `None`: unreadable/dead pid, or an unsupported
-/// platform) is deliberately never treated as a change: a transient read failure
-/// must not fire a redundant install nor discard the last-known-good cwd.
+/// `Some(current)` only when the polled cwd differs from `last`; pure for tests. An unreadable
+/// reading (`None`) is never a change: no redundant install, no lost last-good cwd.
 fn cwd_moved(
     last: Option<&std::path::Path>,
     current: Option<&std::path::Path>,
@@ -2058,13 +1753,8 @@ fn cwd_moved(
     }
 }
 
-/// Spawn a terminal's cwd poller. Returns the task handle so the
-/// supervisor can `.abort()` it on child exit / close (a dropped tokio `JoinHandle`
-/// *detaches* — it keeps polling a dead pid — it does not cancel; the same trap the
-/// fan-out tailer documents).
-///
-/// A `None` `child_pid` (portable-pty could not report one) yields a task that ends
-/// immediately: there is nothing to poll, and the spawn-cwd install already ran.
+/// Spawn a terminal's cwd poller; abort the returned handle on exit/close (a dropped tokio
+/// `JoinHandle` detaches). A `None` pid yields a task that ends at once.
 fn spawn_cwd_poller(
     tx: mpsc::Sender<SupervisorMsg>,
     child_pid: Option<u32>,
@@ -2074,10 +1764,8 @@ fn spawn_cwd_poller(
             return;
         };
         let interval = cwd_poll_interval();
-        // The cwd we last routed for. `None` until the first successful read; we do
-        // NOT seed it with the spawn cwd, so the first reading confirms coverage of
-        // wherever the shell actually is (the install is idempotent, so re-affirming
-        // the spawn cwd is a cheap no-op).
+        // Not seeded with the spawn cwd: the first reading confirms wherever the shell is
+        // (re-installing is an idempotent no-op).
         let mut last: Option<std::path::PathBuf> = None;
         loop {
             tokio::time::sleep(interval).await;
@@ -2093,16 +1781,8 @@ fn spawn_cwd_poller(
     })
 }
 
-/// A terminal's shell `cd`'d somewhere new. Install the ad-hoc hook at
-/// the new cwd's git root, exactly as spawn and folder-open do — so a `claude` typed
-/// after the `cd`, in a repo the app never explicitly opened, is still detected.
-///
-/// **No new settings-writing path.** It reuses [`install_ad_hoc_hooks`], which
-/// installs at the git ROOT ([`git_root`]), refuses the home directory
-/// ([`is_home_dir`]), is symlink-safe ([`write_merged_settings`]) and idempotent (by
-/// marker) — so it **never touches `~/.claude`**. Gated on a live listener
-/// (the hook is inert without one), exactly like `EnsureAgentHooks`. Re-affirming a
-/// repo already installed is a cheap idempotent no-op.
+/// The shell `cd`'d somewhere new: reuse [`install_ad_hoc_hooks`] (git root, home refused,
+/// symlink-safe, idempotent), so `~/.claude` is never touched. Gated on a live listener.
 fn on_cwd_changed(fleet: &Fleet, cwd: &str) {
     if fleet.hook.is_some() {
         install_ad_hoc_hooks(fleet, cwd);
@@ -2117,10 +1797,8 @@ fn on_hook_received(
     terminal_id: &TerminalId,
     body: &[u8],
 ) {
-    // First adapter that recognises the payload wins. Capture WHICH adapter it was
-    // (its id is the ad-hoc agent's runtime, and what selects its fan-out tailer —
-    // never a hardcoded constant). Owned result, so the immutable borrow of
-    // `adapters` ends before we mutate the fleet.
+    // First adapter that recognises the payload wins; keep its id (the ad-hoc agent's runtime,
+    // which selects its tailer). Owned, so the `adapters` borrow ends before the fleet mutates.
     let parsed: Option<(String, SessionEvent)> = fleet
         .adapters
         .iter()
@@ -2147,20 +1825,9 @@ fn on_hook_received(
     }
 }
 
-/// A turn/activity hook reported the status of the root running in this
-/// terminal — emit a `Status` for its agent.
-///
-/// Two guards, both load-bearing:
-///   - **Session match** — the same phantom-root protection as `classify_session_start`:
-///     the status applies ONLY when the reporting `session_id` is the one currently
-///     bound to this terminal. A nested `claude -p`'s `Stop`/`UserPromptSubmit` carries
-///     a *different* session, so it can never flip the real root's pill.
-///   - **Finished is final** — a `done`/`error` agent is left alone, so a late turn
-///     hook arriving after the process exited cannot resurrect it to `idle`/`running`.
-///
-/// A no-op transition (already in `status`) emits nothing, keeping the event stream
-/// quiet. Sub-agents have no terminal and no hook of their own (they run in-process),
-/// so their transcript-derived status is untouched by this path.
+/// A turn hook's status for this terminal's root. Applies only when `session_id` is the bound
+/// one (a nested `claude -p` can't flip the root) and never to a `done`/`error` agent.
+/// No-op transitions emit nothing.
 fn on_activity(fleet: &mut Fleet, terminal_id: &TerminalId, session_id: &str, status: AgentStatus) {
     if fleet.bindings.get(terminal_id).map(String::as_str) != Some(session_id) {
         return;
@@ -2243,16 +1910,8 @@ fn on_session_start(
     }
 }
 
-/// Promote the plain terminal to an ad-hoc root agent.
-///
-/// **`AgentId == TerminalId`** — the terminal's id *is* the agent's identity,
-/// exactly as spawned agents work. The terminal already exists; we upgrade it
-/// (`kind → agent-terminal`, `agentId` set) and add a forest node beside it.
-///
-/// Upsert on purpose: a *sequential* `claude` in the same terminal (the previous
-/// one having ended and unbound) lands here again with the same id and replaces the
-/// prior — now finished — node with a fresh running one. One node per terminal,
-/// representing whatever `claude` is currently in it.
+/// Promote the plain terminal to an ad-hoc root (`AgentId == TerminalId`). Upsert on purpose:
+/// a later `claude` in the same terminal replaces the finished node; one node per terminal.
 fn create_adhoc_root(
     fleet: &mut Fleet,
     tx: &mpsc::Sender<SupervisorMsg>,
@@ -2266,20 +1925,15 @@ fn create_adhoc_root(
     fleet.owned_sessions.insert(event.session_id.clone());
     sync_log_suppression(fleet, terminal_id);
 
-    // Title the agent by its RUNTIME, not the promoted shell. Inheriting the
-    // terminal's title labelled ad-hoc agents "zsh" in the rail, which is wrong —
-    // it's a `claude` now. Use the adapter's display title (falling back to the
-    // runtime id). Read before the mutable borrow of `terminals` below.
+    // Title by the RUNTIME (adapter display title, else its id), not the shell's title; read
+    // before the mutable borrow of `terminals`.
     let title = fleet
         .adapter(runtime_id)
         .map(|a| a.default_title().to_string())
         .unwrap_or_else(|_| runtime_id.to_string());
 
-    // Anchor the agent to where `claude` is ACTUALLY running — the payload's `cwd`
-    // — not the terminal's spawn cwd: the user may have `cd`'d into another repo
-    // before typing `claude`. Fall back to the terminal's meta cwd when
-    // the payload omits it. Promote the terminal's metadata (kind/agent_id) and
-    // sync its cwd to the chosen one, so a re-attach snapshot is consistent.
+    // Anchor to the payload's `cwd` (the user may have `cd`'d first), else the terminal's;
+    // sync the terminal's meta to it so a re-attach snapshot is consistent.
     let cwd = match fleet.terminals.get_mut(terminal_id) {
         Some(rt) => {
             rt.meta.kind = TerminalKind::AgentTerminal;
@@ -2304,11 +1958,8 @@ fn create_adhoc_root(
         kind: AgentKind::Orchestrator,
         // Titled by the runtime (e.g. "claude"), not the promoted shell name.
         title,
-        // Born IDLE: `SessionStart` means `claude` just opened and is parked at its
-        // prompt, not processing a turn. The turn/activity hooks drive it from here
-        // (`UserPromptSubmit` → Running, `Stop` → Idle). Defaulting to Running
-        // latched the pill on forever for a session that never ran a turn (a fresh
-        // welcome screen never emits `Stop`): an idle agent shown as Running.
+        // Born Idle: `SessionStart` means parked at the prompt; turn hooks drive it from here
+        // (a Running default would stick on a session that never runs a turn).
         status: AgentStatus::Idle,
         branch: branch.clone(),
         cwd: cwd.clone(),
@@ -2352,16 +2003,9 @@ fn create_adhoc_root(
     log_agent_started(fleet, terminal_id);
 }
 
-/// A session ended. Acts **only on the session actually bound to this terminal** —
-/// a stale or duplicate `SessionEnd` for a session that was already superseded must
-/// touch nothing, or it would wrongly finish the newer `claude` that rebound the
-/// terminal (regression-tested).
-///
-/// For the bound session: unbind (so the next `claude` here is a fresh root). For
-/// an **ad-hoc** agent, this is also the only signal its `claude` is over — the
-/// shell lives on — so mark it `done`. A **spawned** agent is left to
-/// `on_child_exited`, which has the real exit code; `SessionEnd` must not pre-empt
-/// it into a code-less `done`.
+/// A session ended: act only if it is the one bound here (a stale `SessionEnd` must not
+/// finish a newer `claude`). Unbind; mark an ad-hoc agent `done`, but leave a spawned one
+/// to `on_child_exited`, which has the real exit code.
 fn on_session_end(fleet: &mut Fleet, terminal_id: &TerminalId, session_id: &str) {
     // The ended session must be the one we have bound here. Otherwise it is stale
     // (an End for a session that already ended and was replaced) — ignore it whole.
@@ -2406,13 +2050,8 @@ fn on_session_end(fleet: &mut Fleet, terminal_id: &TerminalId, session_id: &str)
 
 // ── Fan-out tailer (M3, ARCHITECTURE §5) ─────────────────────────────────────
 
-/// How often a tailer re-scans its session's transcript. **Polling, not `notify`,
-/// deliberately**: the fan-out is cold-plane telemetry,
-/// re-scanning is *inherently rewrite-safe* (no byte offset to corrupt when
-/// `claude` rewrites its transcript on interrupted exit), and stat-ing a
-/// dir + a file every second is trivially cheap. An offset-based incremental reader
-/// is the optimisation to add *if* fan-out volume ever demands it — and it would
-/// then have to add the rewrite detection we get here for free.
+/// Tailer re-scan interval. Polling, not `notify`: re-scanning is rewrite-safe (claude
+/// rewrites transcripts on interrupted exit) and cheap for cold-plane telemetry.
 const FANOUT_POLL_DEFAULT_MS: u64 = 1000;
 
 /// The poll interval, overridable via `AGENTSTUDIO_FANOUT_POLL_MS` so the tailer
@@ -2426,21 +2065,9 @@ fn fanout_poll() -> std::time::Duration {
     std::time::Duration::from_millis(ms)
 }
 
-/// Start the fan-out tailer task for one root. Returns the handle so the
-/// supervisor can abort it when the agent is removed.
-///
-/// **Selected by the RUNTIME id we spawned** (`runtime_id`), *not* by whether the
-/// transcript already exists. The tailer must start the instant the agent does —
-/// the process was just launched, so its `<session>.jsonl` does not exist yet; the
-/// poll loop waits for it to appear. The old selection keyed off
-/// `locate_transcript(...).is_some() || id == <hardcoded claude id>` and so started
-/// **no tailer at all** for any runtime whose id wasn't that constant, when the
-/// transcript didn't yet exist (reproduced by `fanout_production_order`). Claude
-/// worked only by the accident that the constant equalled `"claude-code"`; this
-/// fixes the general case for spawned AND ad-hoc agents alike.
-///
-/// `None` only if no registered adapter matches `runtime_id` — the same "unknown
-/// runtime" condition `agent_spawn` already rejects, so in practice always `Some`.
+/// Start one root's fan-out tailer, chosen by `runtime_id`, not by the transcript existing:
+/// it starts before `<session>.jsonl` appears and waits (`fanout_production_order`).
+/// `None` only for an unknown runtime, which `agent_spawn` already rejects.
 fn start_fanout_tailer(
     fleet: &Fleet,
     tx: &mpsc::Sender<SupervisorMsg>,
@@ -2462,10 +2089,8 @@ fn start_fanout_tailer(
         .logs
         .is_some()
         .then(|| crate::agent::tools::TranscriptToolTail::new(now_ms() - TOOL_HISTORY_SLACK_MS));
-    // Background tasks the agent starts are tailed by the same loop; the
-    // tails die with it, which is how a session ending stops them.
-    // A tail still open when the loop is aborted closes with `session ended`, sent from
-    // the drop (sync `try_send`: an abort cannot await).
+    // The agent's background tasks are tailed by this loop and die with it; an open tail closes
+    // with `session ended` from the drop (sync `try_send`: an abort cannot await).
     let drop_tx = tx.clone();
     let mut tasks = fleet.logs.as_ref().map(|hub| {
         crate::logstream::tasks::TaskTails::new(
@@ -2552,11 +2177,8 @@ fn on_fanout_delta(fleet: &mut Fleet, delta: crate::agent::fanout::FanoutDelta) 
             if fleet.agents.contains_key(&a.agent_id) {
                 return;
             }
-            // `cwd`/`branch` come from the sub-agent's own transcript, which may not
-            // exist yet (spawned sessions write `.meta.json` before —
-            // or without — the sub-agent `.jsonl`). A sub-agent runs in its parent's
-            // cwd, so inherit the parent's when ours is blank, rather than showing an
-            // empty `branch • cwd` in the rail.
+            // A sub-agent's transcript may not exist yet; it runs in its parent's cwd, so
+            // inherit the parent's `cwd`/`branch` when blank.
             if a.cwd.is_empty() || a.branch.is_empty() {
                 if let Some(parent) = fleet.agents.get(&a.parent_id) {
                     if a.cwd.is_empty() {
@@ -2608,14 +2230,8 @@ fn on_fanout_delta(fleet: &mut Fleet, delta: crate::agent::fanout::FanoutDelta) 
                 branch: a.branch,
                 runtime: crate::agent::claude::FANOUT_RUNTIME.to_string(),
             });
-            // First seen ALREADY ENDED — a resumed session's tailer re-reading sub-agents
-            // that finished long ago (exactly what a restart's `claude --resume` does),
-            // or one that started and ended inside one poll. `SubagentSpawned` carries
-            // no status and the UI creates the row `running`, so without this the row
-            // read "running" forever. The status follows on the event the
-            // UI already applies every status change through, right after the row
-            // exists — no wire change, one reducer for status, and a late subscriber
-            // still gets it from the snapshot (the node above is created finished).
+            // First seen already ended (e.g. on `claude --resume`): the UI creates the row
+            // `running`, so follow with its real status through the usual `Status` event.
             if status != AgentStatus::Running {
                 fleet.sink.emit(&AgentEvent::Status {
                     agent_id: child_id.clone(),
@@ -2865,14 +2481,9 @@ fn home_dir() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
-/// Directories the ad-hoc hook must never be written into, beyond `~` itself.
-/// The cwd poller re-runs the installer on every `cd`,
-/// and a non-repo cwd is its own target, so without this a `cd ~/.claude` (or into
-/// `~/.claude/projects/…`) wrote `~/.claude/.claude/settings.local.json` — a write
-/// inside the user's global Claude dir, which the app must never write. Refused:
-/// * anything equal to or under the canonical `~/.claude`;
-/// * (Unix) a directory other users can write to, or one we don't own — `/tmp`, a
-///   shared mount — where another user could pre-plant or swap the `.claude` entry.
+/// Refused hook targets beyond `~`: anything at or under canonical `~/.claude` (a `cd`
+/// there would write inside it), and on Unix a dir others can write to or we don't own, where
+/// another user could plant or swap `.claude`.
 fn forbidden_hook_target(target: &std::path::Path, home: Option<&std::path::Path>) -> bool {
     let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let t = canon(target);
@@ -2896,19 +2507,9 @@ fn forbidden_hook_target(target: &std::path::Path, home: Option<&std::path::Path
     false
 }
 
-/// Merge `additions` into `<cwd>/.claude/settings.local.json` and write it.
-///
-/// Idempotent (skips if `marker` is already present) and non-destructive (parses
-/// and preserves the user's existing settings; refuses to clobber a file it cannot
-/// parse). Errors are returned but callers treat installation as best-effort.
-///
-/// **Symlink guard (defense-in-depth).** `read`/`create_dir_all`/`write` all follow
-/// symlinks, and the `is_home_dir` guard only checks the *source* cwd. A malicious
-/// repo shipping `.claude -> ~/.claude` (or a symlinked `settings.local.json`) would
-/// otherwise redirect the write into the user's global config, bypassing the
-/// "never touch `~/.claude` without consent" rule. So if either `<cwd>/.claude` or the
-/// target file is a symlink, we skip the install (non-fatal, like the home-dir
-/// bail) rather than write through it.
+/// Merge `additions` into `<cwd>/.claude/settings.local.json`: idempotent by `marker`,
+/// preserving, never clobbering an unparseable file. Skips if `.claude` or the file is a
+/// symlink (a repo could point it at `~/.claude`). Callers treat errors as best-effort.
 fn write_merged_settings(
     cwd: &std::path::Path,
     additions: &serde_json::Value,
@@ -2934,10 +2535,8 @@ fn write_merged_settings(
         };
 
     std::fs::create_dir_all(&dir)?;
-    // Write a fresh sibling (`create_new` = O_EXCL, which refuses a pre-planted
-    // symlink or file) and `rename` it over the target. `rename` replaces the
-    // directory entry itself, so a symlink or hardlink swapped in after the check
-    // above is replaced, never written through.
+    // Write a fresh sibling with `create_new` (O_EXCL refuses a planted link) and `rename` it
+    // over the target, so a link swapped in after the check is replaced, never written through.
     let tmp = dir.join(".settings.local.json.agentstudio-tmp");
     let _ = std::fs::remove_file(&tmp);
     {
@@ -2971,13 +2570,8 @@ fn program_title(program: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    //! White-box tests for the forest-removal logic.
-    //!
-    //! `remove_agent_subtree`'s M3 cascade cannot be reached through the public
-    //! API in M2 — nothing creates sub-agents yet — so it is exercised here by
-    //! building the private `AgentRuntime` map directly. The integration tests in
-    //! `tests/agent_lifecycle.rs` cover the single-node case through the real
-    //! `agent_spawn`/`terminal_close` path.
+    //! White-box tests: `remove_agent_subtree`'s cascade is driven by building the private map;
+    //! `tests/agent_lifecycle.rs` covers the single-node path through the real commands.
 
     use super::*;
     use crate::agent::adapter::SessionKey;
@@ -3099,10 +2693,8 @@ mod tests {
         assert_eq!(ids, vec!["key-t1", "sess-bound"]);
     }
 
-    /// A session the IDE owned stays owned after the user closes its tab (binding
-    /// removed + agent taken out of the forest), after a second ad-hoc `claude`
-    /// evicts it, and after its terminal is re-bound — or the village would show it
-    /// as an "outside the IDE" character for the rest of its transcript window.
+    /// Or the village would show a closed, evicted or rebound session as an "outside the IDE"
+    /// character for the rest of its transcript window.
     #[test]
     fn owned_session_ids_survive_close_evict_and_rebind() {
         let mut fleet = fleet_with_bound_agent(AgentStatus::Running, "sess-bound");
@@ -3198,17 +2790,11 @@ mod tests {
         assert!(!fleet.agents.contains_key("ghost"));
     }
 
-    // ── The close confirmation (`terminals_busy`) ────────────────────────────
-    //
-    // Tier 2 needs a live PTY and is proved two-sided against a real shell in
-    // `tests/supervisor_terminal.rs`. What is unit-testable here — and worth
-    // pinning here — is the wire shape, tier 1's lookup, and the precedence rule
-    // between the tiers.
+    // ── Close confirmation (`terminals_busy`) ──
+    // Tier 2 needs a live PTY and is tested two-sided in `tests/supervisor_terminal.rs`.
 
-    /// The frontend is written against these exact literals
-    /// (`src/features/terminal/terminalBusyIpc.ts`): camelCase fields, and a
-    /// `reason` of `"agent"` / `"command"`. A rename on either side is a silently
-    /// broken dialog, so pin the JSON itself rather than the Rust struct.
+    /// Pins the JSON itself: `src/features/terminal/terminalBusyIpc.ts` relies on these exact
+    /// literals, and a rename on either side silently breaks the dialog.
     #[test]
     fn terminal_busy_matches_the_ts_wire_contract() {
         let agent = TerminalBusy {
@@ -3231,10 +2817,8 @@ mod tests {
         );
     }
 
-    /// 🔴 A root is born **Idle** and a session parked at its prompt
-    /// never emits `Stop`. Gating on `Running` would wave through exactly the
-    /// session most likely to be lost — so tier 1 asks "is a session bound", never "is it
-    /// mid-turn". Asserted across every status a live agent can wear.
+    /// A root is born Idle and a session at its prompt never emits `Stop`, so tier 1 asks "is a
+    /// session bound", never "is it mid-turn".
     #[test]
     fn a_bound_session_is_busy_in_every_live_status() {
         for status in [
@@ -3389,11 +2973,7 @@ mod tests {
         );
     }
 
-    // ── The binding discriminator: ad-hoc root vs phantom root ───────────────
-    //
-    // This pure function is the crux — the phantom-root trap lives or dies here —
-    // so its four cases are pinned directly, in addition to the end-to-end
-    // integration tests.
+    // ── Binding discriminator: ad-hoc root vs phantom root (the crux; four cases pinned) ──
 
     #[test]
     fn unbound_known_terminal_becomes_a_root() {
@@ -3438,10 +3018,8 @@ mod tests {
         );
     }
 
-    /// **Re-insert must abort the previous root's tailer.**
-    /// A dropped `JoinHandle` detaches, so `evict_prev_root` has to `.abort()` it. We
-    /// prove the abort *lands* by watching a real tailer task: it bumps a counter
-    /// each tick, and that must freeze once evicted.
+    /// A dropped `JoinHandle` detaches, so the abort must land: a live tailer's tick counter
+    /// must freeze once evicted.
     #[tokio::test]
     async fn evicting_a_prev_root_aborts_its_live_tailer() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3485,13 +3063,8 @@ mod tests {
         );
     }
 
-    // ── Symlink guard on the ad-hoc hook write ───────────────────────────────
-    //
-    // Unix-only: they build symlinks. `read`/`create_dir_all`/`write` all follow
-    // symlinks and `is_home_dir` only checks the *source* cwd, so a repo shipping
-    // `.claude -> ~/.claude` (or a symlinked settings file) could redirect our
-    // hook write into the user's global config. `write_merged_settings` must
-    // refuse to write through a symlink (skip, non-fatal — like the home guard).
+    // ── Symlink guard on the ad-hoc hook write (Unix: builds symlinks) ──
+    // A repo shipping `.claude -> ~/.claude` must not redirect our write; skip, non-fatal.
 
     /// Real settings under a temp cwd get written — the guard doesn't over-block.
     #[cfg(unix)]
@@ -3572,13 +3145,8 @@ mod tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
-    // ── Terminal cwd tracking: change detection + routed install ───────────────
-    //
-    // The poller reads a real process cwd (unit-tested in `pty::cwd`), then routes
-    // *changes* to the actor, which installs at the new git root via the EXISTING
-    // `install_ad_hoc_hooks` — never a new settings path, never `~/.claude`. The
-    // change decision is a pure function (`cwd_moved`), and the routed install
-    // (`on_cwd_changed`) is exercised against a temp repo below.
+    // ── Terminal cwd tracking: change detection (`cwd_moved`) + routed install ──
+    // Installs go through the EXISTING `install_ad_hoc_hooks` into a temp repo, never `~/.claude`.
 
     use crate::agent::adapter::AgentSpawn;
 
@@ -3717,10 +3285,8 @@ mod tests {
         assert_eq!(cwd_moved(None, None), None);
     }
 
-    /// **The cwd-tracking core:** a changed cwd installs the ad-hoc hook at the new
-    /// cwd's **git root** (not the subdir), and re-reading the same cwd is not a
-    /// change (so no redundant work). Everything lands in the temp repo — never
-    /// `~/.claude`.
+    /// Installs at the new cwd's git ROOT (not the subdir); re-reading the same cwd is no change.
+    /// Everything lands in the temp repo, never `~/.claude`.
     #[test]
     fn a_cwd_change_installs_the_hook_at_its_git_root() {
         // A temp repo (a bare `.git` dir is enough — `git_root` reads it directly),

@@ -1,10 +1,5 @@
-/**
- * responseFormat — the HTTP response display helpers, shared between the single
- * `ResponsePanel` (ApiRequestView) and the A/B `ComparePanel`.
- * Extracted verbatim from ApiRequestView so the two surfaces cannot drift on
- * what "is JSON" or how a status buckets (a shared seam gets one owner, not two copies).
- * Pure functions over the wire `HttpResponse` — no store, no React.
- */
+/** Response display helpers shared by ResponsePanel and ComparePanel, so they agree on "is JSON"
+ * and status buckets. */
 
 import type { HttpHeader, HttpResponse } from "./httpIpc";
 
@@ -24,11 +19,7 @@ export function responseContentType(headers: HttpHeader[]): string {
   return "";
 }
 
-/**
- * The body to display: pretty-printed (2-space) JSON when the content-type says
- * JSON and the body parses, else the raw text unchanged (a malformed JSON body
- * is shown as-is rather than swallowed).
- */
+/** Pretty JSON when the content-type says JSON and it parses; else the raw text as-is. */
 export function formatBody(response: HttpResponse): string {
   if (responseContentType(response.headers).includes("json")) {
     try {
@@ -40,12 +31,7 @@ export function formatBody(response: HttpResponse): string {
   return response.body;
 }
 
-/**
- * The response body parsed for the collapsible tree view. `isJson` is true only when
- * the content-type says JSON AND the body actually parses; `value` is the parsed JSON
- * then (any JS value, incl. `null`). A non-JSON or malformed body → `{isJson:false}`,
- * and the panel falls back to the raw/pretty `<pre>`.
- */
+/** `isJson` only when the content-type says JSON AND the body parses (`value` may be `null`). */
 export function parseJsonBody(response: HttpResponse): {
   isJson: boolean;
   value: unknown;

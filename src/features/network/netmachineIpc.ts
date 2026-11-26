@@ -1,12 +1,6 @@
-/**
- * Netmachine IPC — the whole-computer connections seam.
- *
- * Its own file rather than more exports on `netcapIpc.ts`: every test that replaces that
- * module with a `vi.mock` factory would silently lack the new exports.
- * Nothing here swallows — a rejection is information the panel shows.
- *
- * Command and event names are pinned literally by `netmachineIpc.test.ts`.
- */
+/** The whole-computer connections seam. Not in `netcapIpc.ts`: tests that `vi.mock` that module
+ * would silently lack these exports. Nothing swallows: a rejection is shown by the panel.
+ * Command and event names are pinned by `netmachineIpc.test.ts`. */
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";

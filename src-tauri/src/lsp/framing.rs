@@ -1,30 +1,15 @@
-//! Content-Length JSON-RPC framing — the pure, hard-tested core of the relay.
-//!
-//! LSP frames each message as `Content-Length: N\r\n\r\n<body>` over a byte stream
-//! (`docs/design/code-intelligence.md` §1). This module does exactly two things and
-//! knows nothing about LSP semantics:
-//!
-//! - [`encode`] frames a client→server body (`lsp_send`).
-//! - [`FrameDecoder`] reassembles server→client bodies from a stream that arbitrarily
-//!   **splits messages across reads** and **packs several messages into one read**.
-//!
-//! It is deliberately Tauri-free and side-effect-free so it is fixture- and
-//! property-testable in isolation, like the pane-tree canonicalizer.
+//! LSP Content-Length framing (`docs/design/code-intelligence.md` §1): [`encode`] frames
+//! outgoing bodies; [`FrameDecoder`] reassembles bodies split across or packed into reads.
+//! Pure, with no LSP semantics, so it is property-testable in isolation.
 
-/// Frame `body` for the wire: `Content-Length: <bytes>\r\n\r\n<body>`.
-///
-/// The length is the body's **byte** length (UTF-8), which is what the header must
-/// carry — not its character count.
+/// Frame `body` as `Content-Length: <bytes>\r\n\r\n<body>`; the length is UTF-8 bytes, not chars.
 pub fn encode(body: &str) -> Vec<u8> {
     let mut out = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
     out.extend_from_slice(body.as_bytes());
     out
 }
 
-/// Stateful reassembler: feed it stream chunks, it yields complete message bodies.
-///
-/// The whole point is tolerating a stream that does not respect message boundaries —
-/// a body may arrive over many `push`es, and one `push` may complete several bodies.
+/// Stateful reassembler: a body may span many `push`es, and one `push` may complete several.
 #[derive(Default)]
 pub struct FrameDecoder {
     buf: Vec<u8>,
@@ -60,10 +45,8 @@ impl FrameDecoder {
     }
 
     fn step(&mut self) -> Step {
-        // Headers end at the first blank line. Until we have it, we can't know how
-        // long the body is. (This is also why body bytes that happen to contain
-        // `\r\n\r\n` are safe: the *first* occurrence is always the header break, and
-        // once we've measured the body we index by length, not by re-scanning.)
+        // Headers end at the first blank line; once the body is measured we index by
+        // length, so a body containing `\r\n\r\n` is safe.
         let Some(sep) = find(&self.buf, b"\r\n\r\n") else {
             return Step::NeedMore;
         };

@@ -1,24 +1,6 @@
-//! `git_file::file_diff_scoped` / `file_restore_scoped` — Git ▸ Compare and
-//! Git ▸ Revert for one file.
-//!
-//! Built against **real repositories constructed with `git2` itself** (init,
-//! explicit signatures, commits) — never by shelling out to `git` (tests stay hermetic;
-//! the zero-install principle applies to tests too, and the one shelling test in
-//! this repo, `git_branch`, is a known flake we do not multiply).
-//!
-//! Hermetic in two further ways that matter here: every commit is made with an
-//! explicit `Signature`, so nothing depends on the developer's global
-//! `user.name`/`user.email`; and every fixture repo pins `core.autocrlf` and
-//! `core.safecrlf` **off** in its own config, so a developer with CRLF filters set
-//! globally cannot rewrite the bytes these tests commit, compare and restore.
-//!
-//! The scope guard is exercised through the same explicit-roots pattern as
-//! `git_blame`'s and `git_status`'s tests: `*_scoped(path, roots)` with a
-//! canonicalized temp root and no `AppHandle`.
-//!
-//! **Revert here is `git restore`, not `git revert`** — see the module header of
-//! `src/git_file.rs`. These tests assert `git checkout HEAD -- <path>` semantics
-//! for one file: worktree and index both back at HEAD, no commit created.
+//! `file_diff_scoped` / `file_restore_scoped` (Git ▸ Compare / Revert) against real repos built
+//! with `git2` (no shelling out), explicit signatures, `core.autocrlf`/`safecrlf` off per repo.
+//! Revert is `git restore` semantics (worktree and index back at HEAD), not `git revert`.
 
 use std::path::{Path, PathBuf};
 
@@ -385,15 +367,8 @@ fn a_dot_dot_escape_is_resolved_and_rejected() {
     assert_eq!(err, "path is outside the allowed workspace roots");
 }
 
-/// 17b. A **symlink that escapes the allowed root** is rejected, never followed.
-///
-/// This is the case that makes the "does it exist?" branch of the resolver
-/// load-bearing. The resolver tolerates a path that is gone from disk
-/// by falling back to resolving the *parent* — and a symlink is exactly the input
-/// that could abuse that: its parent (the repo) is perfectly in scope, so a fallback
-/// taken for the wrong reason would hand back `repo/link.txt` and then read straight
-/// through the link to a file outside the workspace. The fixture is built so a
-/// regression **returns the secret** rather than merely returning a different error.
+/// A symlink escaping the root is rejected, never followed: the resolver's parent fallback for a
+/// gone path must not apply. A regression returns the fixture's secret, not just another error.
 #[cfg(unix)]
 #[test]
 fn a_symlink_escaping_the_allowed_root_is_rejected_not_followed() {
@@ -454,10 +429,8 @@ fn restore_puts_back_the_committed_content() {
     assert_eq!(read_worktree(&d, "a.txt"), "committed\n");
 }
 
-/// 19. 🔴 **The two-sided assertion.** `checkout_head().force()`
-///     WITHOUT the `.path(rel)` restriction resets the entire working tree, and a
-///     test that only checked file A would pass while the whole repo was blown
-///     away. File B is the half that fails.
+/// Two-sided: an unrestricted `checkout_head().force()` resets the whole tree, so the unnamed
+/// file B must stay untouched.
 #[test]
 fn restore_touches_only_the_named_path() {
     let d = TempDir::new("restore-scope");

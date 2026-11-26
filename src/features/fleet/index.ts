@@ -1,9 +1,5 @@
-/**
- * Public surface of the fleet feature (ARCHITECTURE §4).
- *
- * React side: `<LeftRail/>` — mount it and it wires itself to the store.
- * Everything else here is for the bridge and for tests.
- */
+/** Fleet feature surface (ARCHITECTURE §4): `<LeftRail/>` wires itself; the rest is for the
+ * bridge and tests. */
 
 export { LeftRail } from "./LeftRail";
 export { AgentTree } from "./AgentTree";

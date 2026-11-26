@@ -1,51 +1,6 @@
-/**
- * Agent Village — the City's SUBWAY (a subway under the Seats area, with
- * an entrance somewhere on the map and a train that comes and goes about every 3 minutes).
- * Our own procedural pixel art — no real operator's logo, livery or name: the
- * line is ours (a teal stripe, `LINE`), the station is "HQ", the entrance sign an "M" of our own.
- *
- * The geometry is the World's (`CitySubway`, engine/city.ts): five rows of tunnel under the Seats
- * lounge, the station's platform under the street entrance, the entrance a `metro` prop on the far
- * sidewalk. The timetable is engine/subway.ts (`trainAt`, a pure function of the frame's clock).
- *
- *   paintSubway        BACKDROP pass (render/city.ts, after the ground under the street): the tunnel
- *                      — a cut-away tube in the soil, across the WHOLE view like the street band: its
- *                      concrete shell, a dark back wall with ring joints and a cable tray, a lamp every
- *                      `LAMP_PITCH` (each with its pool of light), the track bed with sleepers and two
- *                      rails — then the STATION (a tiled hall: fluorescent tubes, the line's stripe, a
- *                      name plate, a bench, the platform with its yellow edge), the STAIRWELL from the
- *                      entrance down through the soil beside the lounge to the platform (switchback
- *                      flights), and the TRAIN (`TRAIN_CARS` cars: lit windows with riders, sliding
- *                      doors, bogies, a head lamp leading and a red tail lamp trailing).
- *   paintSubwayLights  NIGHT pass (render/ambience.ts, with the street lamps, after the grade): the
- *                      lamps' and the station's light, the train's windows lit again over the grade with
- *                      a glow round them, its head lamp's beam and its tail lamp, the stairwell's light
- *                      and the entrance sign's glow.
- *   drawMetroEntrance  the `metro` prop (render/props.ts), in the scene's z order on the far sidewalk —
- *                      so people pass in front of it: a dark stairwell mouth going down, a green railing
- *                      round it, a sign on a pole with our "M", lit at night.
- *
- * WHY THE BACKDROP, not the draw list: everything underground stands behind nothing — the World has no
- * tile, prop or walker in the tunnel's rows (they are its open "sky" tiles, left to the renderer) — so
- * there is no depth to sort; the tunnel runs past the world's ends, which only the backdrop does (the
- * street band already lives there); and the train is a function of the FRAME's clock, which the renderer
- * has (`RenderView.timeMs`) and the draw list (built on the sim clock) does not. Nothing is allocated
- * per tile, lamp or car.
- *
- * WORLD-LOCKED: every joint, lamp and sleeper sits at a fixed world x, so a pan or a zoom
- * moves the tunnel exactly with the street. Zoomed out below `DETAIL_ZOOM` the 1-px details (joints,
- * sleepers, handrails) are left out — they would be specks — and so their cost.
- *
- * The train is DECORATION, on a timetable: not an agent, never hit-tested or counted.
- *
- * COST (subway.browser.test.tsx, Chromium; `paintSubway` + `paintSubwayLights` at night, the reference
- * city): Fit 1280×800 @2x (zoom 1) 0.21 ms by day, 0.25 ms at night; @1x (zoom 0.56) 0.12 /
- * 0.13 ms; zoomed to 1, 2 and 3 on the station 0.13–0.16 ms. Bounded by the view's width: ≤ one joint
- * per 32 px, one lamp per 128 px, one sleeper per 10 px of view (none of the joints and sleepers zoomed
- * out), plus the station, the stairwell and ≤ `TRAIN_CARS` (8) cars when on screen. Re-measured with
- * the eight-car train and its 34-tile platform: Fit @2x 0.29 ms by day, 0.33 ms at night;
- * @1x 0.16 / 0.25 ms; zoomed on the station 0.19–0.27 ms.
- */
+/** The City's subway: `paintSubway` (backdrop pass), `paintSubwayLights` (night pass) and
+ * `drawMetroEntrance` (the `metro` prop). Backdrop, not draw list: nothing stands in front, it runs
+ * past the world's ends, and the train follows the FRAME clock. World-locked; decoration only. */
 
 import { CAR_GAP, CAR_LEN, TRAIN_CARS, TRAIN_LEN, trainAt, type TrainState } from "../engine/subway";
 import { TILE, type CitySubway, type World } from "../villageTypes";
@@ -246,12 +201,8 @@ function fill(ctx: DrawTarget, cam: Camera, wx: number, wy: number, w: number, h
   ctx.fillRect(x, y, Math.max(1, sx(cam, wx + w) - x), Math.max(1, sy(cam, wy + h) - y));
 }
 
-/**
- * The subway's world-px geometry, worked out once per World (`subwayGeometry`): the tunnel's top (its
- * shell's outer edge), its rail line (the train's wheels on it) and its bottom; the station's span
- * [x0, x1); the stairwell's box — under the entrance's two tiles, from the sidewalk's bottom to the
- * platform; and the entrance's left edge and bottom.
- */
+/** World-px geometry, computed once per World: tunnel top/rail/bottom, station span [x0, x1),
+ * stairwell box (under the entrance, sidewalk to platform), entrance left edge and bottom. */
 export interface SubwayGeometry {
   sub: CitySubway;
   top: number;
@@ -300,12 +251,8 @@ export const LAMP_REACH = 16;
 /** Is the tunnel lamp at x clear of the station (which has its own lights)? The same rule by day and at night. */
 const lampClear = (x: number, st: { x0: number; x1: number }): boolean => x + LAMP_REACH <= st.x0 || x - LAMP_REACH >= st.x1;
 
-/**
- * The subway, painted under the world (`paintCityBackdrop`, after the ground under the street): the
- * tunnel across the view, the station, the stairwell, the track and — when one is running at `timeMs`
- * (the frame's clock) — the train. Nothing in a world without a subway (the Village, a city without a
- * capacity layout).
- */
+/** Tunnel, station, stairwell, track and the train running at `timeMs` (the frame's clock),
+ * under the world; nothing in a world without a subway. */
 export function paintSubway(ctx: DrawTarget, cam: Camera, world: World, view: { w: number; h: number }, timeMs: number): void {
   const g = subwayGeometry(world);
   if (!g) return;
@@ -324,11 +271,7 @@ export function paintSubway(ctx: DrawTarget, cam: Camera, world: World, view: { 
   if (train) paintTrain(ctx, cam, view, g.rail, train);
 }
 
-/**
- * The tube: dug soil along it, its shell, its dark back wall (ring joints, a cable tray, the low wall
- * along the track) and a lamp every `LAMP_PITCH` with its pool of light — none of the joints or lamps
- * inside the station, which has its own wall and lights.
- */
+/** The tube; no joints or lamps inside the station, which has its own wall and lights. */
 function paintTunnel(ctx: DrawTarget, cam: Camera, view: { w: number }, g: SubwayGeometry, x0: number, x1: number, fine: boolean): void {
   const { top, rail, bottom, station: st } = g;
   const wall = top + SHELL;
@@ -375,11 +318,7 @@ function paintTrack(ctx: DrawTarget, cam: Camera, view: { w: number }, rail: num
 const TUBE_IN = 8;
 const TUBE_PITCH = 32;
 
-/**
- * The station between `col0` and `col1`: a tiled hall (a pillar at each end, a flat ceiling with a
- * fluorescent tube every 32 px, the line's stripe at the train's roof line), its name plate on the
- * right of the stairs and a bench on their left, and the platform the train stops along.
- */
+/** The station from `col0` to `col1`: tiled hall, name plate right of the stairs, bench left. */
 function paintStation(ctx: DrawTarget, cam: Camera, g: SubwayGeometry, fine: boolean): void {
   const { x0, x1 } = g.station;
   const w = x1 - x0;
@@ -418,11 +357,8 @@ function bench(ctx: DrawTarget, cam: Camera, x: number, floor: number): void {
   rect(ctx, cam, x, floor - 7, 14, 2, STATION.bench);
 }
 
-/**
- * The station's name plate, 26 × 13 px from (x, p), under the ceiling and over the roof of a train in the
- * station (so it reads with one standing there): a frame, a white face, the line's number badge (a teal
- * disc with the line's letter on a white one) and the name.
- */
+/** The 26 × 13 name plate at (x, p), under the ceiling and over a stopped train's roof, so it
+ * reads with one standing there. */
 function namePlate(ctx: DrawTarget, cam: Camera, x: number, p: number): void {
   rect(ctx, cam, x, p, 26, 13, STATION.plateFrame);
   rect(ctx, cam, x + 1, p + 1, 24, 11, STATION.plate);
@@ -432,12 +368,8 @@ function namePlate(ctx: DrawTarget, cam: Camera, x: number, p: number): void {
   for (let i = 0; i < STATION_NAME.length; i++) glyph(ctx, cam, GLYPH[STATION_NAME[i]], x + 13 + 5 * i, p + 4, STATION.letter);
 }
 
-/**
- * The stairwell under the entrance: dug soil round it down to the tunnel, a concrete lining, a lit
- * tiled back wall, and switchback flights of four steps (`FLIGHT` px down each) from the platform up —
- * the lowest flight lands on the platform, the next comes down to its top, and so on up to the sidewalk.
- * A lamp on the wall every fourth flight.
- */
+/** The stairwell under the entrance: switchback flights of four steps (`FLIGHT` px down each)
+ * from the platform up to the sidewalk, a wall lamp every fourth flight. */
 function paintStairwell(ctx: DrawTarget, cam: Camera, g: SubwayGeometry, fine: boolean): void {
   const { x, y, w, h } = g.stairs;
   rect(ctx, cam, x - DUG, y, w + 2 * DUG, g.top - DUG - y, TUNNEL.dug);
@@ -461,11 +393,8 @@ function paintStairwell(ctx: DrawTarget, cam: Camera, g: SubwayGeometry, fine: b
   }
 }
 
-/**
- * A car's shape (world px), 62 long: its height from the rail to its roof — as tall as a door a
- * character fits through (the sprites are 32 px) and clear of the lamps under the tunnel's shell — its
- * windows' x offsets (each 7 px wide), its two doors' (each 8 px wide), its two bogies' and their wheels'.
- */
+/** A car's shape (world px, 62 long): its height clears a 32-px sprite in the door and the tunnel
+ * lamps; window x offsets (7 px wide), doors (8 px), bogies and wheels. */
 export const CAR_H = 38;
 export const CAR_WINDOWS = [3, 24, 33, 54] as const;
 export const CAR_DOORS = [13, 43] as const;
@@ -547,13 +476,8 @@ function rider(ctx: DrawTarget, cam: Camera, x: number, y: number): void {
 
 // ───────────────────────────── the night ─────────────────────────────
 
-/**
- * The subway's lights, in the night-lights pass after the outdoor grade (render/ambience.ts): the
- * entrance sign's glow on the sidewalk, the stairwell's light, every tunnel lamp's halo on screen, the
- * station's tubes and the wash they throw — and the train's windows lit again over the grade (nothing
- * ever passes in front of them: they are underground), a glow round them, its head lamp's beam ahead of
- * it and its tail lamp's red behind.
- */
+/** Night-pass lights after the grade: entrance glow, stairwell, lamp halos, station tubes, and the
+ * train's windows re-lit over the grade (nothing passes in front underground) and its lamps. */
 export function paintSubwayLights(ctx: DrawTarget, cam: Camera, world: World, view: { w: number; h: number }, timeMs: number): void {
   const g = subwayGeometry(world);
   if (!g) return;
@@ -623,12 +547,8 @@ export const BEAM = 40;
 
 // ───────────────────────────── the street entrance ─────────────────────────────
 
-/**
- * The subway's street entrance (the `metro` prop, 2 × 1 on the far sidewalk) at (x0, bottom): the mouth
- * of its stairwell, the nosings of its top steps going down, a green railing round the back and the
- * sides, and a sign on a pole at its right end — our "M" on the line's teal. `lit` (the night lights are
- * on) lights the sign. Paints inside its two tiles and up to `METRO_RISE` px over their bottom.
- */
+/** The `metro` prop (2 × 1, far sidewalk) at (x0, bottom); `lit` lights the sign. Paints inside
+ * its two tiles and up to `METRO_RISE` px over their bottom. */
 export function drawMetroEntrance(ctx: DrawTarget, cam: Camera, x0: number, bottom: number, lit: boolean): void {
   rect(ctx, cam, x0 + 2, bottom - 13, 25, 12, METRO.mouth);
   for (let i = 0; i < METRO.nosing.length; i++) rect(ctx, cam, x0 + 4, bottom - 12 + 3 * i, 21, 1, METRO.nosing[i]);

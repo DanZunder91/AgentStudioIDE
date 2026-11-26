@@ -1,8 +1,5 @@
-/**
- * The API-client tool events: `httpOpen` opens the agent's request in a new tab (and refuses one
- * that names a Vault variable), `apiHistory` brings the History rail into view and re-reads the
- * history Rust appended to. `historyIpc` is mocked at the module boundary (the read crosses Tauri).
- */
+/** API-client tool events: `httpOpen` opens the request in a new tab (refusing Vault variables),
+ * `apiHistory` shows History and re-reads it. `historyIpc` is mocked (the read crosses Tauri). */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const historyIpc = vi.hoisted(() => ({

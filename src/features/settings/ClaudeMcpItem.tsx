@@ -1,17 +1,6 @@
-/**
- * ClaudeMcpItem — "Add Agent Studio to Claude Code", in the Settings menu.
- *
- * One click adds Agent Studio's MCP server to Claude Code, so every Claude Code session in an
- * Agent Studio terminal can use the app's database and API tools; when it is added, the same item
- * removes it. The work is Claude Code's own `claude mcp add|remove` (`claudeMcpIpc.ts`).
- *
- * Mounted only while the popover is open, so Claude Code is asked for the status when the user
- * opens the menu and never at startup: a vendor CLI runs on the user's action, not on its own.
- * The run in flight and the last answer outlive the popover (`claudeMcpRuns.ts`): a reopen joins
- * a run still going, and a recent answer is shown without asking again.
- * Clicking does not close the popover, because the answer is shown right here, in the item's own
- * description line; nothing else opens.
- */
+/** Adds or removes Agent Studio's MCP server in Claude Code (`claudeMcpIpc.ts`). Mounted only while
+ * the popover is open, so the vendor CLI runs on the user's action, never at startup; runs outlive
+ * the popover (`claudeMcpRuns.ts`). Clicks keep the popover open: the answer shows in the item. */
 import { useEffect, useRef, useState } from "react";
 
 import {

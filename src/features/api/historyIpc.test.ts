@@ -1,11 +1,4 @@
-/**
- * `historyIpc` — the API client's request-history store, at the wire (M6 follow-on).
- *
- * A thin wrapper, so the command *name* and arg *shape* ARE the contract. Same two
- * failure contracts as `apiStoreIpc`: `loadApiHistory` NEVER throws (a dead backend
- * yields an empty log so the panel still opens), and `saveApiHistory` swallows its
- * failure (a dropped save must not break the request being composed).
- */
+/** loadApiHistory never throws (a dead backend yields an empty log); saveApiHistory swallows. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

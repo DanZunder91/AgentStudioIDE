@@ -1,28 +1,6 @@
-//! `{{VAR}}` references, Vault reads/writes, and redaction.
-//!
-//! ## The rule this module exists to enforce
-//!
-//! **`db-connections.json` never holds a secret.** It holds `""` or a `{{VAR}}` name; the
-//! value lives in exactly one place — the Vault, i.e. the `environments` list in
-//! `api-store.json`, the store the API client already uses and `<VaultPanel/>` already
-//! surfaces. The DB client invents **no second secret store**, because two stores means two
-//! things to encrypt later, two things to audit, and two chances to get file permissions
-//! wrong.
-//!
-//! The direct payoff: a connection record is safe to screenshot, paste into an issue, or
-//! sync. A shared screenshot is one of the commonest ways a live token leaks; this is that
-//! class of accident, pre-defused.
-//!
-//! ## What this module does NOT claim (stated so nobody "hardens" it wrongly)
-//!
-//! A local process running as the user can read `api-store.json`, because the app can. Mode
-//! `0600` stops other *users* on a shared machine, not the user's own processes. Encrypting
-//! the file with a key the app can retrieve unattended would be obfuscation, and calling it
-//! encryption would be worse than not doing it. At-rest encryption is a separate decision
-//! with a prompt cost. What *is* guaranteed: no secret
-//! in the repo, none in a screenshot-able connection file, none in the renderer, none in a
-//! log, and **no OS permission prompt** (an OS permission prompt is a design failure, which is
-//! exactly why the OS keychain is not used here).
+//! `{{VAR}}` references, Vault reads/writes and redaction. `db-connections.json` never holds a
+//! secret; values live only in the Vault (`api-store.json` environments). `0600` stops other users,
+//! not the user's own processes; no at-rest encryption and no OS keychain (no permission prompts).
 
 use crate::api_store::{ApiStore, EnvVar, Environment};
 use crate::db::error::{DbError, MASK};
@@ -35,12 +13,8 @@ const SUFFIX: &str = "_PASSWORD";
 /// would call a first environment, so the two features do not each invent a home.
 const DEFAULT_ENVIRONMENT: &str = "Default";
 
-/// `true` iff `s` is a `{{VAR}}` reference rather than a value.
-///
-/// Used everywhere a "password-shaped" string is handled, because a reference must be treated
-/// as **public** (it survives into the stored URL, it is safe to copy to a clipboard, and
-/// calling it "a password we took out and stored separately" would be a lie) while a value
-/// must be treated as radioactive.
+/// `true` iff `s` is a `{{VAR}}` reference: public (safe in a stored URL or clipboard), unlike a
+/// value.
 pub fn is_ref(s: &str) -> bool {
     let t = s.trim();
     t.len() > 4 && t.starts_with("{{") && t.ends_with("}}") && !t[2..t.len() - 2].contains("{{")
@@ -60,15 +34,8 @@ pub fn wrap_ref(name: &str) -> String {
     format!("{{{{{name}}}}}")
 }
 
-/// A Vault variable name derived from a connection name, guaranteed not to collide with
-/// anything in `taken`.
-///
-/// `"Mongo Maestro"` → `MONGO_MAESTRO_PASSWORD`; a second connection with the same name gets
-/// `MONGO_MAESTRO_PASSWORD_2`. Pure, so it is unit-testable without a Vault, and the name is
-/// **shown to the user** so the Vault entry is discoverable rather than magic.
-///
-/// A name that reduces to nothing (`"???"`, `""`, `"🎉"`) falls back to `DB`, because a
-/// variable called `_PASSWORD` is worse than one called `DB_PASSWORD`.
+/// A Vault variable name from a connection name, unique against `taken` (`Mongo Maestro` →
+/// `MONGO_MAESTRO_PASSWORD`, then `_2`); shown to the user. An empty stem falls back to `DB`.
 pub fn vault_var_name(connection_name: &str, taken: &[String]) -> String {
     let mut stem = String::new();
     let mut last_was_sep = true; // leading separators are dropped
@@ -106,10 +73,8 @@ pub fn vault_var_name(connection_name: &str, taken: &[String]) -> String {
     unreachable!("u32::MAX distinct names for one connection is not a reachable state")
 }
 
-/// Every variable name currently in the Vault, across **all** environments.
-///
-/// All of them, not just the active one, so switching environment can never make a
-/// previously-minted name collide with a different secret.
+/// Every variable name in the Vault across all environments, so a minted name never collides
+/// after an environment switch.
 pub fn taken_names(store: &ApiStore) -> Vec<String> {
     let mut names: Vec<String> = store
         .environments
@@ -121,16 +86,9 @@ pub fn taken_names(store: &ApiStore) -> Vec<String> {
     names
 }
 
-/// Resolve a `password_ref` against the Vault.
-///
-/// * `""` → `Ok("")`. No password is a legitimate configuration (trust auth, a Redis with no
-///   `requirepass`), so it is not an error.
-/// * `{{VAR}}` → the value, or `secret-missing` naming the variable. Naming it is the whole
-///   point: "a secret is missing" is unactionable, "`PG_PROD_PASSWORD` has no value in the
-///   Vault" tells the user exactly which row to fill in.
-/// * anything else → treated as a **literal** value. That case cannot arise from our own
-///   writes, but a hand-edited file could contain one and refusing to connect would be a
-///   worse outcome than connecting; it is never written back.
+/// Resolve a `password_ref`: `""` → `Ok("")` (no password is legitimate); `{{VAR}}` → its value or
+/// `secret-missing` naming the variable; anything else (only from a hand-edited file) is used as a
+/// literal and never written back.
 pub fn resolve(password_ref: &str, store: &ApiStore) -> Result<String, DbError> {
     if password_ref.is_empty() {
         return Ok(String::new());
@@ -147,11 +105,8 @@ pub fn resolve(password_ref: &str, store: &ApiStore) -> Result<String, DbError> 
     }
 }
 
-/// The value of `name`, searching the **active** environment first and then the others.
-///
-/// Falling through to the other environments is deliberate: a user who switches the API
-/// client's environment should not silently lose their database password, and a DB
-/// connection is not environment-scoped in this design.
+/// The value of `name`, active environment first, then the others: DB connections are not
+/// environment-scoped.
 fn lookup(store: &ApiStore, name: &str) -> Option<String> {
     let active = store
         .active_environment_id
@@ -170,11 +125,8 @@ fn lookup(store: &ApiStore, name: &str) -> Option<String> {
         .map(|v| v.value.clone())
 }
 
-/// Write `name = value` into the Vault's active environment, creating that environment if the
-/// Vault has none. Overwrites an existing entry with the same name.
-///
-/// Pure over `&mut ApiStore` so the whole write is unit-testable without touching a real
-/// config dir — the caller does the (atomic, `0600`) file write.
+/// Write `name = value` into the active environment (created if none), overwriting. Pure over
+/// `&mut ApiStore`; the caller does the atomic `0600` file write.
 pub fn put(store: &mut ApiStore, name: &str, value: &str) {
     let target_id = store
         .active_environment_id
@@ -209,17 +161,8 @@ pub fn put(store: &mut ApiStore, name: &str, value: &str) {
     }
 }
 
-/// `text` with every non-empty secret in `secrets` replaced by [`MASK`].
-///
-/// Two things make this more than a `replace` call, and both are the difference between a
-/// redactor and a comforting no-op:
-///
-/// 1. **Empty secrets are skipped.** `"".replace()` inserts the mask between every character,
-///    which both destroys the message and looks like the redactor worked.
-/// 2. **Percent-encoded forms are scrubbed too.** A driver echoing a DSN has already
-///    percent-encoded the password, so the literal bytes of the secret may simply not be
-///    present in the message — matching only the raw form is the classic way this check
-///    passes while the secret ships.
+/// `text` with every non-empty secret replaced by [`MASK`]. Empty secrets are skipped (they would
+/// mask between every character) and percent-encoded forms are scrubbed too (drivers echo DSNs).
 pub fn redact(text: &str, secrets: &[&str]) -> String {
     let mut out = text.to_string();
     for secret in secrets {
@@ -236,11 +179,8 @@ pub fn redact(text: &str, secrets: &[&str]) -> String {
 }
 
 #[cfg(test)]
-// `pub(crate)` because [`tests::hostile_secrets`] is the *shared* hostile alphabet: `url.rs`'s
-// property tests draw their passwords, users and databases from it too, so the two modules
-// cannot drift into testing different corners. Without this the module is private and the
-// cross-module use is `E0603` — which is exactly how it was found, the first time this tree was
-// ever type-checked.
+// `pub(crate)`: [`tests::hostile_secrets`] is the shared hostile alphabet `url.rs`'s property
+// tests draw from too.
 pub(crate) mod tests {
     use super::*;
 
@@ -311,10 +251,8 @@ pub(crate) mod tests {
             ("  padded  ", "PADDED_PASSWORD"),
             ("a", "A_PASSWORD"),
             ("Aurora (writer)", "AURORA_WRITER_PASSWORD"),
-            // Derived, not guessed: `ü` is a non-ASCII-alphanumeric at the *start*, so it is
-            // dropped as a leading separator; `n` survives; `ï` collapses to `_`; `code`
-            // survives; everything after it collapses and the trailing `_` is stripped. Hence
-            // `N_CODE`. (Easy to hand-compute wrongly as `CODE_PASSWORD` by dropping the `n`.)
+            // Leading `ü` dropped, `n` kept, `ï` → `_`, `code` kept, the rest collapsed and
+            // trimmed: `N_CODE`.
             ("ünïcode ✓ 中文", "N_CODE_PASSWORD"),
             ("", "DB_PASSWORD"),
             ("???", "DB_PASSWORD"),
@@ -539,13 +477,8 @@ pub(crate) mod tests {
         assert!(out.contains(MASK), "{out}");
     }
 
-    /// The redaction property, over a deliberately hostile alphabet: for **any** generated
-    /// password and any message containing it, the output does not contain it.
-    ///
-    /// Hand-rolled generation rather than `proptest` (no such dev-dependency in this tree, and
-    /// a deterministic cartesian sweep is reproducible in CI where a seeded random one is
-    /// only reproducible if you log the seed). Every case is a distinct hostile shape, not a
-    /// random draw, so a failure names the exact input.
+    /// A deterministic hand-rolled sweep (no `proptest` dev-dependency): every case is a distinct
+    /// hostile shape, so a failure names its exact input.
     #[test]
     fn redact_never_leaves_any_hostile_password_in_the_output() {
         for secret in hostile_secrets() {

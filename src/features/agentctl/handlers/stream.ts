@@ -1,10 +1,5 @@
-/**
- * WebSocket and gRPC tool events (Rust `agent_ctl::commands::stream`).
- *
- * A WebSocket exchange needs no handler: the engine records it in the Network view. A gRPC call
- * is recorded there too, and `grpcCall` also adds it to the API client's History in the shape the
- * gRPC console records, so the user sees what an agent sent and can open it again.
- */
+/** WebSocket and gRPC tool events (Rust `agent_ctl::commands::stream`). WS needs no handler (the
+ * engine records it in Network); `grpcCall` also adds the call to API History, console-shaped. */
 import { useAppStore } from "../../../app/store";
 import { loadApiHistory, type HistoryEntry } from "../../api/historyIpc";
 import type { AgentCtlEvent } from "../agentCtlIpc";
@@ -25,11 +20,8 @@ function headerRows(v: unknown): HistoryEntry["headers"] {
   });
 }
 
-/**
- * The History entry for an agent's gRPC call, as the gRPC console records its own: the endpoint
- * in `url`, the method name in `method`, the service in `grpcService`, the gRPC status in
- * `status` / `statusText` (a non-OK status is an answer), and a failure to get one in `error`.
- */
+/** History entry for an agent's gRPC call, shaped like the console's: endpoint in `url`, method,
+ * `grpcService`, gRPC status in `status`/`statusText` (non-OK is an answer), failure in `error`. */
 export function grpcHistoryEntry(
   e: AgentCtlEvent,
   at: number,
@@ -59,11 +51,8 @@ export function grpcHistoryEntry(
   };
 }
 
-/**
- * Append the call to History, loading History first if nothing has yet: `recordApiHistory`
- * saves the whole in-memory log, so appending to a log that was never loaded would save this one
- * entry over the user's history.
- */
+/** Append to History, loading it first if needed: `recordApiHistory` saves the whole in-memory
+ * log, so an unloaded log would overwrite the user's history with this one entry. */
 export async function recordGrpcCall(e: AgentCtlEvent): Promise<void> {
   const entry = grpcHistoryEntry(e, Date.now());
   if (!useAppStore.getState().apiHistoryLoaded) {
@@ -76,11 +65,8 @@ export async function recordGrpcCall(e: AgentCtlEvent): Promise<void> {
   useAppStore.getState().apiActions.recordApiHistory(entry);
 }
 
-/**
- * Does any text a WebSocket or gRPC tab would hold name a Vault variable? Rust refuses such a
- * request first; this is the second lock, because the consoles substitute `{{VAR}}`s from the
- * user's environment when the user presses Connect or Send.
- */
+/** Does any WS/gRPC tab text name a Vault variable? A second lock after Rust's: the consoles
+ * substitute the user's `{{VAR}}`s on Connect or Send. */
 function namesVaultVariable(
   e: AgentCtlEvent,
   fields: readonly string[],

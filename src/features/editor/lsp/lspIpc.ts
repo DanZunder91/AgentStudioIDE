@@ -1,19 +1,9 @@
-/**
- * LSP IPC — typed wrappers for the language-server relay (M5).
- *
- * Feature-local (like `workspaceIpc.ts`) so the wire types live next to their
- * feature. Rust is a thin framed-byte relay: it spawns the
- * server, does Content-Length framing, and streams server→client bodies over a
- * per-server `Channel<String>`; JS owns the JSON-RPC protocol.
- */
+/** Typed wrappers for the LSP relay. Rust spawns the server and does Content-Length framing;
+ * JS owns the JSON-RPC protocol. */
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 
-/**
- * The result of asking Rust to start a server for a language.
- * `status: "unavailable"` is the calm "not installed" case (mirrors `read_file`
- * degradation), NOT an error — the editor just runs without code intelligence.
- */
+/** `status: "unavailable"` means not installed, NOT an error: the editor runs without LSP. */
 export interface LspServerMeta {
   serverId: string;
   languageId: string;
@@ -24,10 +14,7 @@ export interface LspServerMeta {
   serverName?: string;
 }
 
-/**
- * `lsp_start` — resolve + spawn the server for `languageId`, cwd = `rootUri`'s
- * path. `onMessage` receives server→client JSON-RPC bodies (deframed strings).
- */
+/** cwd is `rootUri`'s path; `onMessage` receives deframed server→client JSON-RPC bodies. */
 export function lspStart(
   languageId: string,
   rootUri: string,
@@ -41,14 +28,8 @@ export function lspSend(serverId: string, message: string): Promise<void> {
   return invoke<void>("lsp_send", { serverId, message });
 }
 
-/**
- * `lsp_project_root` — the directory the server should be rooted at for this
- * FILE: the outermost ancestor holding the language's project marker
- * (rust → `Cargo.toml`, so a cargo workspace beats its member crate), bounded
- * by the file's own containing workspace root; that root when no marker
- * exists. Fixes rust-analyzer "Failed to discover workspace" for crates in
- * subfolders, and the multi-root wrong-project case for every language.
- */
+/** Root for this file: the outermost ancestor with the language's marker (a cargo workspace beats
+ * its member crate), bounded by the file's workspace root; that root when no marker exists. */
 export function lspProjectRoot(languageId: string, path: string): Promise<string> {
   return invoke<string>("lsp_project_root", { languageId, path });
 }

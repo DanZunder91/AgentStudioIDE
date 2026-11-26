@@ -1,43 +1,6 @@
-/**
- * WsConsole — the API client's live WebSocket console.
- *
- * Rendered by `ApiRequestView` when a request's `protocol` is `"ws"`. Connect to
- * a `ws://`/`wss://` URL, watch a streaming log of sent + received frames, send
- * messages, and disconnect. The whole connection lives in the store's `ws` slice
- * (not component state): the `onEvent` callback appends to the store, so the log
- * and status SURVIVE A TAB SWITCH — this view can unmount and re-mount over a live
- * socket and just read the accumulated state back.
- *
- * ── connectionId / open-event ordering ───────────────────────────────────────
- * Two signals establish a connection and they can land in EITHER order: the
- * `ws_connect` promise resolves with the `connectionId` (→ `wsConnected`), while
- * the socket's `open` event flips the status (→ `wsOpened`). Neither depends on
- * the other; send is gated on BOTH having landed (`status === "open"` AND a
- * non-null id), so a brief window where one precedes the other is simply
- * not-yet-ready rather than a crash.
- *
- * ── handshake headers ────────────────────────────────────────────────────────
- * A WebSocket handshake IS an HTTP request, so a server that authenticates the
- * upgrade needs headers on it — without them an authenticated `ws://…` endpoint
- * could only ever answer `HTTP error: 401 Unauthorized`. The rows are the SAME
- * `req.headers` model the HTTP surface and the gRPC console use (metadata IS
- * headers), through the same `addHeader`/`updateHeader`/`removeHeader` actions,
- * so a saved request keeps them for free.
- *
- * 🔴 The rows are sent as the LITERAL text typed, `{{VAR}}` and all —
- * `substituteVars` is deliberately NOT called here. The Vault lookup happens in
- * Rust; resolving first would put the real token on the IPC boundary.
- *
- * They apply ONLY to the opening handshake, so they are LOCKED (disabled, with a
- * note saying why) while a connection is in flight or open — exactly what the url
- * field beside them already does, and for the same reason: a row you can edit
- * mid-session that silently changes nothing is a bug waiting to be filed.
- *
- * ── v1 limitation ────────────────────────────────────────────────────────────
- * Disconnect is EXPLICIT. Unmounting the view (switching tabs, closing the panel)
- * does NOT close the socket — that is what lets the connection survive a tab
- * switch. A socket is only torn down when the user clicks Disconnect.
- */
+/** Connection state lives in the store's `ws` slice so it survives a tab switch; unmounting never
+ * closes the socket, only Disconnect does. Send needs BOTH the connectionId and the open event,
+ * which can land in either order. Handshake headers are sent LITERAL ({{VAR}} resolved in Rust). */
 
 import { useEffect, useRef } from "react";
 
@@ -109,10 +72,7 @@ export function WsConsole({
   const isOpen = ws.status === "open";
   const isConnecting = ws.status === "connecting";
   const sendReady = isOpen && ws.connectionId !== null;
-  // Everything that only feeds the HANDSHAKE is frozen once one is in flight or
-  // done: the url (already), the header rows, and the environment the `{{VAR}}`s
-  // resolve against. Editing any of them mid-session cannot affect the live
-  // socket, so the UI must not pretend otherwise.
+  // Handshake inputs (url, headers, env) freeze once connecting: edits can't reach the socket.
   const locked = isOpen || isConnecting;
 
   const appendSys = (data: string) =>
@@ -144,11 +104,8 @@ export function WsConsole({
   // connecting / open), so this only ever fires from a valid resting state.
   const connect = () => {
     const url = req.url.trim();
-    // Only enabled, NAMED rows travel — an empty-named row is scaffolding, the
-    // same rule `executeHttpRequest` applies to HTTP headers and gRPC metadata.
-    // 🔴 `h.value` is passed through UNTOUCHED: no `substituteVars`, so a
-    // `{{TOKEN}}` reaches Rust as the literal template and the secret never
-    // crosses IPC. Do not "helpfully" resolve it here.
+    // Only enabled, named rows travel. h.value stays LITERAL (no substituteVars) so a secret never
+    // crosses IPC; Rust resolves {{VAR}}.
     const headers: WsHeader[] = req.headers
       .filter((h) => h.enabled && h.name.trim() !== "")
       .map((h) => ({ name: h.name, value: h.value }));

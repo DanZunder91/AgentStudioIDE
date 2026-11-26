@@ -1,16 +1,6 @@
-//! Pinned-agent restore wiring — the supervisor half.
-//!
-//! The pure `pinned_agents.rs` store is unit-tested next to it (round-trip,
-//! missing/corrupt → empty, atomic write, upsert/remove/dedupe/order). This suite
-//! covers the two things the store can't reach on its own, both driven by a stub
-//! adapter so no real `claude` (auth + network) is involved:
-//!
-//! 1. **`describe_pinnable`** — the in-process lookup `pin_agent` uses so the session
-//!    id never crosses the JS wire: it returns a live ROOT's cwd / runtime / session
-//!    id, and returns `None` for an unknown id or a (transcript-derived) sub-agent.
-//! 2. **Resume threading** — `AgentSpawnSpec.resume_session_id` reaches the adapter's
-//!    `SpawnRequest`, which imposes that exact id and binds the agent + tailer on it
-//!    (the fresh path still mints a new one).
+//! Pinned-agent restore, supervisor half (the `pinned_agents.rs` store is unit-tested beside it),
+//! via a stub adapter: `describe_pinnable` keeps the session id off the JS wire (live roots only),
+//! and `AgentSpawnSpec.resume_session_id` reaches `SpawnRequest`, which binds agent + tailer on it.
 
 mod common;
 
@@ -24,10 +14,8 @@ use agent_studio_scaffold_lib::pty::SpawnSpec;
 use agent_studio_scaffold_lib::supervisor::AgentSpawnSpec;
 use common::{supervisor_with, temp_cwd, ChannelSink};
 
-/// An adapter that records the `resume_session_id` it was handed and, when one is
-/// present, **imposes it verbatim** as the session key (the real `ClaudeAdapter`
-/// does the same via `--resume`). With no resume it mints a fresh id. Runs a plain
-/// interactive shell so the agent stays alive for `describe_pinnable` to observe.
+/// Records each `resume_session_id` and imposes it verbatim as the session key, as `ClaudeAdapter`
+/// does via `--resume`; runs a plain interactive shell so the agent stays alive.
 struct ResumeRecordingAdapter {
     /// Every `resume_session_id` value seen, in spawn order (`None` = fresh spawn).
     seen: Mutex<Vec<Option<String>>>,

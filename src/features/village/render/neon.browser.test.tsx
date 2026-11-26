@@ -1,15 +1,6 @@
-/**
- * Layer 5 — the City's neon signs against a REAL 2D context in Chromium (a building's neon is in
- * the style of its language — gazelle is Rust, so its sign is Rust's).
- *
- * The jsdom suite (neon.test.ts) proves the rects, colours and order through a recording fake;
- * only real pixels can prove the light LANDS: that at night the tubes stay bright on a street the
- * grade has darkened, and that the sign's colour really tints the wall beside it and the sidewalk
- * under it — while the rooms stay exactly as lit. End to end through the seam: the agents'
- * `language` → `planCity` → `buildCityWorld` → the draw list → the frame.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/neon.browser.test.tsx`
- */
+/** Only real pixels prove the light lands: at night the tubes stay bright on a graded street and
+ * tint the wall and sidewalk while rooms stay as lit. Browser tier:
+ * `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 

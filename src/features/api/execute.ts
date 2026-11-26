@@ -1,16 +1,6 @@
-/**
- * execute — the shared HTTP send path for the built-in API client (M6).
- *
- * Both the request view's Send button and the History panel's "re-run" go through
- * `executeHttpRequest`, so the substitution + record-to-history behaviour lives in
- * exactly one place. It is imperative plumbing (like `app/bridge.ts`): it reads and
- * mutates via `useAppStore.getState()` and runs the network EFFECT — never inside a
- * store producer.
- *
- * Secret-safety: `{{VAR}}` is resolved from the active environment ONLY
- * to build the wire request, so a secret exists only on the wire; the history entry
- * we record keeps the LITERAL, pre-substitution request.
- */
+/** Shared HTTP send path (Send and History re-run). Imperative: uses getState() and runs the
+ * network effect, never inside a producer. {{VAR}} is resolved only for the wire request; history
+ * keeps the LITERAL, pre-substitution request. */
 
 import { useAppStore } from "../../app/store";
 import { activeVars, substituteVars } from "./substitute";
@@ -37,30 +27,18 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/**
- * Execute the request identified by `requestId`: resolve `{{VAR}}` from the active
- * environment, send it, set the response/error on the request, and RECORD it in the
- * history log (the literal request + outcome + a timestamp). A no-op when the
- * request is unknown, has an empty url, or is already sending — the same guard the
- * Send button applied inline.
- */
+/** Resolve, send, set the response/error, record in history. A no-op when the request is unknown,
+ * has an empty url, or is already sending. */
 export function executeHttpRequest(
   requestId: string,
-  /**
-   * Extra `{{VAR}}` values for THIS send only — a request sequence's captured
-   * values (`sequenceExecute.ts`). Optional, so every existing caller is
-   * unchanged.
-   */
+  /** Extra {{VAR}} values for this send only: a sequence's captures (sequenceExecute.ts). */
   extraVars?: Record<string, string>,
 ): void {
   const s = useAppStore.getState();
   const req = s.apiRequests[requestId];
   if (!req || req.url.trim() === "" || req.sending) return;
 
-  // Resolve `{{VAR}}` FIRST, so the secret is spliced in only on the wire.
-  // `extraVars` is spread LAST and therefore shadows the environment: a value a
-  // sequence captured a second ago is more current than a saved env var of the
-  // same name, and that precedence is the whole point of a chained run.
+  // extraVars spread LAST: a value a sequence just captured beats a saved env var of that name.
   const vars = {
     ...activeVars({
       apiEnvironments: s.apiEnvironments,
@@ -85,13 +63,8 @@ export function executeHttpRequest(
     body,
   };
 
-  // The LITERAL snapshot recorded in history — placeholders kept, never a resolved
-  // secret. Header values are the typed template, not substituted.
-  //
-  // 🔴 Built from `req.*`, and it must STAY that way: because it never reads
-  // `vars`, a bearer token a sequence captured a moment ago is kept out of the
-  // history file for free. "Improving" this to log what was actually sent would
-  // write live credentials to disk.
+  // LITERAL snapshot built from req.*, never from vars: logging what was actually sent would write
+  // live credentials (sequence captures included) to the history file.
   const literal = {
     method: req.method,
     url: req.url,
@@ -130,18 +103,9 @@ export function executeHttpRequest(
   );
 }
 
-/**
- * Execute the gRPC unary call for `requestId`: resolve
- * `{{VAR}}` in the endpoint (`req.url`), every enabled metadata value (`req.headers`),
- * and the message (`req.body`) from the active environment, send it, set the
- * response/error on the request's `grpc` sub-state, and RECORD it in history (the
- * LITERAL, pre-substitution request). A no-op when the request is unknown, a call
- * is already in flight, or the endpoint/service/method are incomplete.
- *
- * Secret-safety: `{{VAR}}` is resolved ONLY to build the wire request,
- * so a secret exists only on the wire; the history entry keeps the LITERAL request.
- * A non-OK gRPC status RESOLVES (recorded as the outcome), like HTTP's non-2xx.
- */
+/** gRPC twin of executeHttpRequest: {{VAR}} in url, enabled metadata and body is resolved for the
+ * wire only; history keeps the LITERAL request. A no-op when unknown, in flight, or the
+ * endpoint/service/method is incomplete. A non-OK status resolves and is recorded. */
 export function executeGrpcRequest(requestId: string): void {
   const s = useAppStore.getState();
   const req = s.apiRequests[requestId];

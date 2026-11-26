@@ -1,41 +1,6 @@
-//! System-app log source for the Agent Logs view — macOS unified log / Linux journald /
-//! Windows Event Log
-//! (with many apps running, the view must filter by app or show them all).
-//!
-//! # Shape
-//!
-//! ```text
-//!  syslog_set(filter) ──► Syslog: persist prefs, stop old stream(s), start new
-//!                              │
-//!        /usr/bin/log stream --style ndjson [--level] [--predicate]   (macOS)
-//!        journalctl --follow --output=json --lines=0 [_COMM=…]        (Linux)
-//!        xcrun simctl spawn booted log stream …   (macOS, ONLY when the user ticks it)
-//!                              │ stdout lines
-//!                              ▼ parse (pure: macos.rs / journal.rs)
-//!        EvtSubscribe(QueryList: Application + System [+ one channel])   (Windows,
-//!                              │ rendered event XML        no child process: winevt.rs)
-//!                              ▼ parse (pure: eventlog.rs) + EvtFormatMessage
-//!                        LogHub::push(LineDraft{kind: Machine})  ← rate cap 500/s lives there
-//! ```
-//!
-//! Everything that decides something — argv/predicate/XPath building, line and event-XML
-//! parsing, level mapping, process/provider grouping, journal-access reasoning — is a pure
-//! function compiled and tested on **every** OS (the Linux parser is tested on the Mac, the
-//! Windows one on both). Only the thin "which binary exists / list processes / call the
-//! Event Log" glue is `cfg`-gated. Every stream — child or subscription — shares one
-//! lifecycle (`stream.rs`): drop = stop, a death says why.
-//!
-//! # Rules this module keeps
-//!
-//! - **Zero-install, no OS permission**: only built-in tools at
-//!   absolute paths, spawned directly — never a shell, never a login shell.
-//!   On Windows, the Event Log API in-process: no child, and only channels a standard user
-//!   can read (`Application`, `System`) unless the user names another.
-//!   A missing tool is `available: false` with a reason, never a crash.
-//! - **Never `simctl` to detect** (a vendor-tool probe can install things): a simulator
-//!   is "booted" iff a `launchd_sim` process exists. `xcrun simctl` runs only after the
-//!   user enables it.
-//! - **Never block the hub**: lines go in through `LogHub::push` (a `try_send`).
+//! System-app log source for Agent Logs: macOS `log stream`, Linux journald, Windows Event Log.
+//! Decisions are pure and tested on every OS; only binary/process/API glue is `cfg`-gated.
+//! Zero-install: absolute-path tools, never a shell; never `simctl` to probe; never block the hub.
 
 pub mod child;
 pub mod eventlog;
@@ -414,10 +379,8 @@ impl Syslog {
         Running::failed(&self.hub, eventlog::OFF_WINDOWS.to_string())
     }
 
-    /// The Event Log channels `syslog_apps` lists providers from: `Application`, `System` and
-    /// the extra channel the user typed in the subsystem box — the same channels the stream
-    /// reads ([`eventlog::channels`]), so the picker offers what the stream can show. (Off
-    /// Windows the subsystem is not a channel and [`list_apps`] ignores this.)
+    /// The channels `syslog_apps` lists providers from: the ones the stream reads
+    /// ([`eventlog::channels`]), so the picker offers what the stream shows. Ignored off Windows.
     pub fn apps_channels(&self) -> Vec<String> {
         eventlog::channels(lock(&self.state).filter.subsystem.as_deref())
     }
@@ -438,10 +401,8 @@ impl Syslog {
     }
 }
 
-/// Assemble a status (pure over its inputs). Public so the contract goldens
-/// (`tests/contract_goldens/machine.rs`) can build every wire state OS-independently:
-/// [`Syslog::status`] reads the simulator passively from THIS machine's process list,
-/// which a golden must not depend on.
+/// Assemble a status, pure over its inputs, so contract goldens can build every wire state
+/// without [`Syslog::status`]'s read of this machine's process list.
 pub fn status_of(
     backend: &Backend,
     filter: &SyslogFilter,
@@ -505,10 +466,8 @@ pub fn syslog_set(syslog: tauri::State<'_, Syslog>, filter: SyslogFilter) -> Sys
     syslog.set(filter)
 }
 
-/// `syslog_apps` → running processes grouped by name, apps first (Windows: the Event Log
-/// providers that recently wrote to Application, System and the extra channel in the filter —
-/// [`Syslog::apps_channels`]). Off the main thread. The wire is unchanged: the channel comes
-/// from the managed state, never from the webview.
+/// `syslog_apps`: running processes grouped by name, apps first (Windows: recent Event Log
+/// providers of [`Syslog::apps_channels`]). The channel comes from managed state, not the webview.
 #[tauri::command]
 pub async fn syslog_apps(syslog: tauri::State<'_, Syslog>) -> Result<Vec<RunningApp>, String> {
     let channels = syslog.apps_channels();

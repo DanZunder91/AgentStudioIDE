@@ -1,28 +1,6 @@
-/**
- * Agent Village — a passer-by's UMBRELLA (when it rains some people carry
- * an umbrella and some do not; on a sunny day nobody does). Our own pixel art, drawn round a
- * walker's sprite (render/streetLife.ts) in two parts at two depths:
- *
- *   - `drawShaft` BEFORE the sprite: the stick, from the hand up to the canopy, behind the body — so only
- *     its stretch between the head and the canopy shows (held in the far hand);
- *   - `drawCanopy` AFTER it: a dome of cloth over the head, its rim scalloped by the rib tips, a shine on
- *     its upper left and a ferrule on top — leaning into the wind (the rain slants with it,
- *     engine/weatherFx.ts), a pixel at |wind| ≥ ¼ and two at ≥ ¾. 19 px across: a head and a half.
- *
- * `open` (0..1) narrows the dome as it opens or closes; 0 draws nothing. Six canopies: red, navy, yellow,
- * green, black, and the clear convenience-store umbrella of a rainy Tokyo street (its cloth translucent).
- *
- *            ▪               ferrule   y − 36
- *          ▓▓▓▓▓             top       y − 35   (half-width 2)
- *       ▓▒▒▓▓▓▓▓▓▓▓          shine     y − 34   (5)
- *     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓                  y − 33   (7)
- *    ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓                 y − 32   (8)
- *   ╹▓▓▓▓╹▓▓▓▓▓▓▓▓╹▓▓▓▓╹  rim          y − 31   (9), ribs at its ends and halfway
- *            │               shaft     y − 30 .. y − 12 (hand), behind the body
- *
- * (x, y) is the holder's feet (bottom-centre), world px; the art sits over a 32-px character, whose head
- * top is 27–29 px above its feet.
- */
+/** A passer-by's umbrella at two depths: `drawShaft` before the walker's sprite, `drawCanopy`
+ * after, leaning into the wind (engine/weatherFx.ts). `open` (0..1) narrows the dome; 0 draws
+ * nothing. (x, y) is the holder's feet, world px; its head top is 27–29 px above. */
 
 import type { Camera } from "./camera";
 import { rect } from "./paint";

@@ -1,18 +1,6 @@
-/**
- * Layer 5 — the City's backdrop canyon in Tokyo (render/backdropCanyon.ts: big lit buildings
- * with neon signs for ramen and soba in katakana and sushi in hiragana,
- * and karaoke), against a REAL 2D context in Chromium.
- *
- * The jsdom suite (backdropCanyon.test.ts) proves the rects and the calls; only real pixels can prove
- * what the canvas makes of them: that `faceAt` is the top of what the day pass paints and the face under
- * it is opaque; that a pan and a zoom leave every building on its world pixels; that the night's light
- * rasters, filled as patterns, land crisp — a lit glyph pixel is exactly its tube's colour — through the
- * real `fillLit`, which leaves a passer-by and the temples untouched; and, end to end through the real
- * frame from Fit, that the four featured words glow legible in the open street past both ends of the
- * city, by night and by day.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/backdropCanyon.browser.test.tsx`
- */
+/** Real pixels for the canyon layer (the jsdom suite proves rects and calls): faces, pan and zoom,
+ * crisp night lights through the real `fillLit`, and the featured words legible end to end.
+ * Run with `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -188,10 +176,8 @@ describe("the canyon in real pixels", () => {
 });
 
 describe("the reference city at Fit, the real frame", () => {
-  /**
-   * The frame at 1280×800 @2x, the HUD 117 px tall (a Tokyo sky: the canyon behind its street), Fit and
-   * then zoomed `steps` steps in about the view's centre (as "+" does) — its camera, and Fit's zoom.
-   */
+  /** The frame at 1280×800 @2x (HUD 117 px), Fit then `steps` "+" steps about the view's centre;
+   * returns its camera and Fit's zoom. */
   function frame(amb: Ambience, steps = 0): { data: Uint8ClampedArray; cam: Camera; w: number; fit: number } {
     const v = new VillageView(1, () => null, "city");
     v.setWorld(reference);
@@ -231,19 +217,9 @@ describe("the reference city at Fit, the real frame", () => {
     return Math.abs(on / onN - off / offN);
   }
 
-  /*
-   * Since Tokyo Tower and the Skytree grew to the tallest roof (landmarks.ts, `towerReference`), Fit
-   * frames their tips at 15/16. There one world px in 16 has no device px of its own — the day's rects and
-   * the night's patterns drop different ones — so `contrast`, one device px per world px, often samples a
-   * 1-px stroke's neighbour: it read 42–58 for the words left of the city at night where zoom 1 reads
-   * 94–105. So the words are read one "+" in from Fit, at zoom 1, every glyph pixel a device pixel —
-   * still the open street past both ends of the city — at the same bar. At Fit itself the glyphs are still
-   * drawn as glyphs (not the bars below PANE_ZOOM, ¾), each at least 6½ device px tall: since the
-   * Seats hall (the context window) was dug in under the lounge, 12 rows deeper, Fit went
-   * 15/16 → 13/16 (7½ → 6½ px). That is an accepted trade-off: at Fit everything is drawn one zoom step
-   * smaller and the neon kana signs are no longer legible there without zooming in; one "+" still brings
-   * zoom 1, where the words are read below.
-   */
+  /* Fit is below zoom 1, where some world px own no device px, so `contrast` would sample a
+   * stroke's neighbour: the words are read one "+" in from Fit, at zoom 1. Kana illegible at Fit
+   * is an accepted trade-off. */
   it("shows ラーメン, ソバ, すし and カラオケ legible on blades in the open street past both ends of the city, one step in from Fit — at night glowing, at noon in plastic and glass", () => {
     const walls = reference.city!.buildings.map((b) => [b.col * TILE, (b.col + b.w) * TILE]);
     const first = Math.min(...walls.map((w) => w[0]));

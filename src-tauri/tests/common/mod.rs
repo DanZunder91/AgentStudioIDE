@@ -1,13 +1,5 @@
-//! Shared helpers for the integration tests.
-//!
-//! Two rules everything here follows:
-//! - **No mocking the OS.** The PTY tests drive `portable-pty` against a real
-//!   shell. The only thing stubbed is the *webview*, because there isn't one in a
-//!   `cargo test` process — [`ChannelSink`] is a real `tauri::ipc::Channel` whose
-//!   handler records instead of `eval`ing JS.
-//! - **Poll with a timeout, never `sleep(n)` and hope.** A fixed sleep is either
-//!   flaky on a loaded CI box or slow on a fast one. [`wait_until`] returns the
-//!   instant the condition holds and only fails at [`TIMEOUT`].
+//! Shared integration-test helpers. No mocking the OS: real PTYs and shells; only the webview
+//! is stubbed ([`ChannelSink`] records). Poll with [`wait_until`], never a fixed `sleep`.
 
 // Each `tests/*.rs` is its own crate and uses a different subset of this module;
 // the unused remainder is not dead code, it is another binary's helper.
@@ -58,11 +50,8 @@ impl ChannelSink {
         Channel::new(|_| Err(tauri::Error::Io(std::io::Error::other("webview is gone"))))
     }
 
-    /// One `Vec<u8>` per flush, in send order.
-    ///
-    /// Panics if the hot plane ever sent JSON: terminal bytes are arbitrary
-    /// (UTF-8 mid-sequence, control codes) and must cross as `Raw`
-    /// (ARCHITECTURE §1). That invariant is worth failing loudly on.
+    /// One `Vec<u8>` per flush, in send order. Panics if the hot plane ever sent JSON: terminal
+    /// bytes must cross as `Raw` (ARCHITECTURE §1).
     pub fn batches(&self) -> Vec<Vec<u8>> {
         self.batches
             .lock()
@@ -94,13 +83,8 @@ impl ChannelSink {
     }
 }
 
-// ── Agent test doubles (M2) ──────────────────────────────────────────────────
-//
-// Deliberately **not** a real `claude`: that needs auth and a network, and would
-// make the suite slow, flaky and dependent on someone's login. The `AgentAdapter`
-// trait exists precisely so the supervisor can be driven by a stub — testing the
-// lifecycle (spawn → node → exit → status → events) rather than Anthropic's API.
-// `claude.rs`'s own logic is pure and unit-tested next to it.
+// ── Agent test doubles ──
+// A stub `AgentAdapter`, never a real `claude` (auth, network, flakiness): tests the lifecycle.
 
 /// Records every `AgentEvent` the supervisor emits, standing in for the webview's
 /// `agent://event` listener.
@@ -139,11 +123,8 @@ impl EventSink for RecordingSink {
     }
 }
 
-/// An `AgentAdapter` that launches a plain shell instead of a real runtime.
-///
-/// It still does the two things that matter for M2: it **mints a session identity
-/// and imposes it on the process** (here as an env var the child can echo back,
-/// proving the binding is real rather than asserted), and it resolves a program.
+/// An `AgentAdapter` running a plain shell; it still mints a session identity and imposes it
+/// as an env var the child echoes back, proving the binding is real.
 pub struct StubAdapter {
     /// What the "agent" runs: `(program, args)`. Default: sit and read, like a REPL.
     argv: (String, Vec<String>),
@@ -151,11 +132,8 @@ pub struct StubAdapter {
 }
 
 impl StubAdapter {
-    /// An agent that stays alive reading its tty, like a real agent REPL.
-    ///
-    /// Windows: an interactive `cmd /Q` — there is no `while read` in cmd, and `cmd /C`
-    /// with that script exits at once with "'while' is not recognized", so every
-    /// "live agent" test would see a dead one.
+    /// Stays alive reading its tty like a REPL. Windows: interactive `cmd /Q`, since `cmd /C`
+    /// has no `while read` and would exit at once.
     pub fn interactive() -> Self {
         #[cfg(windows)]
         let argv = ("cmd.exe".to_string(), vec!["/Q".to_string()]);
@@ -308,15 +286,9 @@ pub fn hook_payload_cwd(
     serde_json::to_vec(&obj).unwrap()
 }
 
-/// A **production-faithful** adapter for the fan-out tailer: it declares
-/// `id() == "claude-code"` (so it takes the exact adapter-selection path the real
-/// `ClaudeAdapter` takes in `start_fanout_tailer`), records its minted session keys
-/// so a test can place the transcript at the right path *after* spawn, and tails
-/// via the real Claude parser. Its `spawn` runs a plain shell — no real `claude`.
-///
-/// This exists to reproduce production ordering: spawn → tailer starts → transcript
-/// appears seconds later. The `StubAdapter` (id `"stub-runtime"`) can't, because it
-/// is only selected when the transcript already exists.
+/// Production-faithful fan-out adapter: `id() == "claude-code"` (the real selection path),
+/// records minted keys so tests place the transcript AFTER spawn, tails with the real parser.
+/// Runs a plain shell; reproduces spawn → tailer → transcript appearing later.
 pub struct ClaudeishAdapter {
     minted: Arc<Mutex<Vec<String>>>,
 }
@@ -409,10 +381,8 @@ pub fn supervisor_with(adapter: Arc<dyn AgentAdapter>) -> (SupervisorHandle, Rec
     (sup, sink)
 }
 
-/// A supervisor wired to `adapter` with the ad-hoc hook pipeline enabled (env
-/// injection + settings install run). `hook` is a config pointing at a URL nothing
-/// listens on — the binding logic is driven directly via `deliver_hook`, so no real
-/// listener is needed.
+/// A supervisor with the ad-hoc hook pipeline on; `hook` points at a URL nothing listens on,
+/// since tests drive bindings via `deliver_hook`.
 pub fn supervisor_with_hook(
     adapter: Arc<dyn AgentAdapter>,
     hook: agent_studio_scaffold_lib::hook_listener::HookConfig,
@@ -465,12 +435,8 @@ pub async fn wait_for_output(sink: &ChannelSink, needle: &str) {
     }
 }
 
-/// Wait until no new bytes have arrived for `quiet_for` — i.e. the stream has
-/// actually stopped.
-///
-/// Panics at [`TIMEOUT`] if output never stops, which is the assertion in the
-/// "close really killed the child" tests. Preferred over `sleep(n); assert_eq!(len, len)`:
-/// that pattern passes on a machine slow enough that nothing had arrived yet.
+/// Wait until no bytes arrive for `quiet_for`; panics at [`TIMEOUT`]. Unlike `sleep` +
+/// compare, it can't pass on a machine too slow to have produced anything yet.
 pub async fn wait_for_quiet(sink: &ChannelSink, quiet_for: Duration) {
     let start = Instant::now();
     let mut last_len = sink.bytes().len();
@@ -493,10 +459,8 @@ pub async fn wait_for_quiet(sink: &ChannelSink, quiet_for: Duration) {
     }
 }
 
-/// `(program, args)` that runs `script` through the platform's shell and exits.
-///
-/// The Windows arm uses `cmd.exe` rather than PowerShell: the scripts here are
-/// one-liners, and `cmd` starts in milliseconds where PowerShell takes seconds.
+/// `(program, args)` running `script` via the platform shell; Windows uses `cmd.exe`, which
+/// starts in milliseconds where PowerShell takes seconds.
 pub fn sh(script: &str) -> (String, Vec<String>) {
     #[cfg(windows)]
     {
@@ -574,13 +538,8 @@ pub fn temp_cwd() -> String {
 /// The platform's line terminator for input typed at a tty.
 pub const EOL: &str = if cfg!(windows) { "\r\n" } else { "\n" };
 
-/// Lines to "type" at an interactive shell, and the needle that only appears if
-/// the **child actually evaluated them**.
-///
-/// The needle deliberately is not present in the typed text: the tty line
-/// discipline echoes input back, so asserting on a literal we sent would pass
-/// without the child ever running. `6*7` is computed by the shell, so `rt-42-ok`
-/// can only come from the child.
+/// Lines to type at a shell, and a needle only the child's evaluation produces (`6*7` →
+/// `rt-42-ok`): the tty echoes input, so a literal we sent would prove nothing.
 pub fn round_trip_probe() -> (Vec<String>, &'static str) {
     #[cfg(windows)]
     {

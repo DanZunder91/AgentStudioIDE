@@ -1,16 +1,5 @@
-/**
- * L1 — Agent Logs shows every IDE terminal's output as log lines (a Sources sidebar, raw
- * `time LEVEL text` rows for a terminal's stream).
- *
- * The real chain, no mocks: keystrokes → xterm → pty_write → a real bash in a real PTY →
- * the pump's non-blocking tap (stream/coalesce.rs) → the logstream hub (line split, ANSI
- * strip, level heuristic) → `logstream://lines` / `logstream_snapshot` over real Tauri IPC →
- * the Agent logs tab in the DOM.
- *
- * Assertions read the OUTPUT line, never the echoed command line: the typed text contains
- * `$RANDOM` / `printf '%s: %s\n' error boom`, while the output is the expanded marker and the
- * exact text `error: boom`, which no echoed input can produce.
- */
+/** L1: a real PTY's output through the logstream hub to the Agent logs tab, no mocks. Assert on
+ * OUTPUT only (expanded `$RANDOM`, `error: boom`), which no echoed command line can produce. */
 
 import { $, browser, expect } from "@wdio/globals";
 
@@ -148,10 +137,8 @@ describe("agent logs: a real terminal's output becomes log lines", () => {
 
     const row = await waitForRow((r) => /^AGENTSTUDIO_E2E_MARKER_\d+$/.test(r.text), "with the expanded marker");
     marker = row.text;
-    // The Logs source label is "<pty title> · <cwd basename>" (logstream::source_label), e.g.
-    // "bash · workspace" — NOT the tab title ("Terminal 1") the Network view shows. So prove
-    // attribution by behaviour: the row's source is a "Focus …" link, and following it brings
-    // exactly this terminal's tab to the front.
+    // The source label is "<pty title> · <cwd basename>", not the tab title. Prove attribution by
+    // behaviour: the row's "Focus …" link brings exactly this terminal's tab to the front.
     expect(row.source).toMatch(/ · workspace$/);
     await clickSourceOf(marker);
     await browser.waitUntil(

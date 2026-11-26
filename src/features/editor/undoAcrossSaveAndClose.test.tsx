@@ -1,35 +1,6 @@
-/**
- * Undo across a SAVE and across a CLOSE — the bug, pinned end to end.
- *
- * The bug: undo stopped working after a save, and sometimes only
- * two undo steps were available. Undo must keep working after a save or a
- * close, and reach back through nearly all, or all, of the edits made.
- *
- * Cause: the file editor was built with **no CodeMirror history at all**, so
- * Cmd/Ctrl+Z fell through the `contenteditable` to WebKit's own native undo —
- * shallow, and truncated every time CM6 rewrote decorations (the 50 ms Shiki
- * re-highlight does that on every keystroke). Hence "just 2".
- *
- * Deliberately NOT a mocked-registry test. `CodeEditor.test.tsx` replaces
- * `./EditorRegistry` wholesale, which is right for the header/menu wiring but
- * would mock away everything this file is about. So, like `editorTabClose.test.tsx`,
- * this drives the REAL registry, the REAL store and a REAL `EditorView` (CM6
- * constructs fine under jsdom), with only the Tauri IPC boundary mocked.
- *
- * Three seams are exercised on purpose (two 100 %-covered halves do
- * not add up to a working feature):
- *   • registry `save()` → the buffer, which `save` must never touch;
- *   • `<CodeEditor>`'s `savedAt` effect → `blameCompartment.reconfigure()`, which
- *     fires on EVERY successful save and would wipe a history living inside that
- *     compartment (the same bug rebuilt, and only after a save);
- *   • `dispose()` → `undoHistory` → the next `createView`, the close→reopen carry.
- *
- * Keystrokes are real keydown events on the view's `contentDOM`, not direct
- * `undo()` calls: the whole defect was that the KEY never reached CodeMirror,
- * so a test that bypasses the keymap would have stayed green
- * throughout the bug. Real Chromium keystrokes are in the browser tier
- * (`undoAcrossSaveAndClose.browser.test.tsx`).
- */
+/** Undo across save and close with the real registry, store and `EditorView` (only IPC mocked).
+ * Real keydown events: CM6's keymap must see the key, not WebKit's native undo. Covers save, the
+ * `savedAt` blame reconfigure, and the dispose→reopen history carry. */
 
 import { render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -52,11 +23,7 @@ import { undoCacheSize } from "./undoHistory";
 const PATH = "/w/notes.txt"; // .txt → plaintext → no Shiki timer in the way
 const ORIGINAL = "hello\n";
 
-/**
- * The modifier CodeMirror will resolve `Mod-` to, computed the way CM6 itself
- * computes it (`/Mac/.test(navigator.platform)`). Under jsdom `platform` is `""`,
- * so this is Ctrl here — but deriving it keeps the file honest if that changes.
- */
+/** The `Mod-` modifier, computed as CM6 does (`/Mac/.test(navigator.platform)`). */
 const MAC = /Mac/.test(navigator.platform);
 const UNDO_MODS = MAC ? { meta: true } : { ctrl: true };
 
@@ -88,21 +55,13 @@ function press(
 /** The real Cmd/Ctrl+Z, through the real keymap. Returns the event (for preventDefault). */
 const pressUndo = (view: EditorView) => press(view.contentDOM, "z", UNDO_MODS);
 
-/**
- * The real redo chord. `historyKeymap` binds `Mod-y`, overridden to `Mod-Shift-z`
- * on macOS — so this is Cmd+Shift+Z there and Ctrl+Y everywhere else.
- */
+/** The redo chord: `Mod-y`, overridden to `Mod-Shift-z` on macOS. */
 const pressRedo = (view: EditorView) =>
   MAC
     ? press(view.contentDOM, "z", { meta: true, shift: true })
     : press(view.contentDOM, "y", { ctrl: true });
 
-/**
- * One separately-undoable edit. `isolateHistory` is what stops CM6 coalescing
- * them: its `newGroupDelay` is 500 ms, and a test types 20 edits in under one, so
- * without this they would collapse into a single history event and the
- * "how many Ctrl+Z do I get" assertion would be measuring the wrong thing.
- */
+/** One separately undoable edit: `isolateHistory` stops CM6's 500 ms grouping from merging them. */
 const edit = (view: EditorView, insert: string) =>
   act(() =>
     view.dispatch({
@@ -112,11 +71,8 @@ const edit = (view: EditorView, insert: string) =>
     }),
   );
 
-/**
- * Count the RECONFIGURE transactions this view sees from now on — which is what
- * `blameCompartment.reconfigure()` dispatches. Appending the listener is itself a
- * reconfigure, so the counter is zeroed once it has landed.
- */
+/** Counts reconfigure transactions (what `blameCompartment.reconfigure()` dispatches); zeroed
+ * after the listener's own reconfigure lands. */
 function watchReconfigures(view: EditorView): { count: number } {
   const seen = { count: 0 };
   act(() =>
@@ -249,12 +205,8 @@ describe("undo across save and close", () => {
 
   // ── The OTHER delivery path for the same keystroke ─────────────────────────
   describe("a native Edit-menu undo (beforeinput)", () => {
-    /**
-     * What WebKit fires when the macOS Edit menu's Undo runs against a focused
-     * `contenteditable` — the path a CM6 keymap never sees. Left alone, WebKit
-     * mutates the DOM itself and CodeMirror's observer reads the result back as
-     * if the user had typed it.
-     */
+    /** WebKit's Edit-menu Undo on a focused contenteditable, which no CM6 keymap sees; left alone,
+     * WebKit mutates the DOM and CodeMirror reads it back as typing. */
     const nativeInput = (view: EditorView, inputType: string) => {
       const event = new InputEvent("beforeinput", {
         inputType,
@@ -309,11 +261,8 @@ describe("undo across save and close", () => {
 
   // ── The seam the mocked-registry suite cannot see ────────────
   it("survives the blame RECONFIGURE that every save triggers in <CodeEditor>", async () => {
-    // `CodeEditor`'s blame effect lists `savedAt` in its deps, so a successful
-    // save re-runs it and dispatches `blameCompartment.reconfigure([])`. A
-    // history living inside that compartment would be wiped right there — which
-    // is exactly the original symptom, so this seam gets its own test rather
-    // than a comment claiming the base extension list is "obviously" safe.
+    // The `savedAt` blame effect reconfigures `blameCompartment` on every save; a history inside
+    // that compartment would be wiped there.
     const { view, rendered } = await openAndLoad();
     edit(view, "EDIT");
     const reconfigures = watchReconfigures(view);

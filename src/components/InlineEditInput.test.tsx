@@ -1,11 +1,5 @@
-/**
- * InlineEditInput — the shared rename field (tabs + agent rows).
- *
- * Driven directly here so the commit/cancel single-resolution guard is testable:
- * the Enter/Esc→unmount→blur race is exactly what the `resolved` flag exists to
- * absorb, and the component's real hosts (TabBar, AgentRow) unmount it on save,
- * hiding that path.
- */
+/** Driven directly: its real hosts unmount it on save, hiding the Enter/Esc→unmount→blur race
+ * the `resolved` flag absorbs. */
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";

@@ -1,13 +1,5 @@
-/**
- * curlExport — the "Copy as cURL" builder. Shell quoting is the risky logic
- * (the whole job), so the tests bite hardest there; and the output is verified
- * against the REAL `parseCurl` from `curlParse.ts` — the two modules must
- * round-trip, not merely agree in spirit.
- *
- * 🔴 Secret-safety reminder these tests document: `buildCurl` output can carry
- * RESOLVED secrets. It is for the clipboard only — no persistence path may
- * ever call it; saved collections keep `{{VAR}}` literal.
- */
+/** "Copy as cURL" builder: quoting is the risky part, verified by round-trip through the REAL
+ * `parseCurl`. Output can carry RESOLVED secrets: clipboard only, never a persistence path. */
 
 import { describe, expect, it } from "vitest";
 
@@ -244,13 +236,8 @@ describe("degenerate inputs", () => {
 
 /* ─────────────── Windows: cmd and PowerShell forms ─────────────── */
 
-/**
- * Every exact string below was also RUN — real cmd.exe and Windows PowerShell
- * 5.1 driving System32 curl.exe 8.22 at a loopback echo server — and the server
- * received the request byte for byte (body, URL with `[x]={y}`, `"`/`&`/`%`
- * headers, trailing backslashes, tabs, newlines). These tests pin the shape and
- * the round-trip; that run is what says the shape is right.
- */
+/** Every exact string here was also run via real cmd.exe and Windows PowerShell 5.1 to curl.exe
+ * against a loopback echo server, arriving byte for byte; these pin shape and round-trip. */
 describe("buildCurl — cmd", () => {
   const post = req({
     method: "POST",

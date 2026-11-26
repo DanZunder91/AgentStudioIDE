@@ -1,26 +1,6 @@
-//! The connection tree's wire types — what `db_children` returns.
-//!
-//! Deliberately shaped like `read_dir`/`FsEntry`: one level per call, each node saying
-//! whether it can be expanded further. The Files tree already works this way, so the frontend's
-//! lazy-expand, cache and error-note behaviour is a pattern that exists rather than one invented
-//! here.
-//!
-//! ## Why there is no `hierarchy` table on `EngineSpec`
-//!
-//! A `hierarchy: &[NodeLevel]` field was considered so a descriptor could declare
-//! "database → schema → tables". It is **not** implemented, on purpose: the levels an engine has
-//! are decided by the code that walks them ([`crate::db::engine::DbSession::children`]), and a
-//! data table beside that code is a second source of truth that can disagree with it. The tree is
-//! driven entirely by what `children` returns plus each node's `expandable` flag, so an engine
-//! whose shape differs — and they all differ — cannot get out of step with its own descriptor.
-//!
-//! ## The engines genuinely differ, and Postgres is the odd one
-//!
-//! * **MySQL / ClickHouse** — one connection can see every database on the server, so the root
-//!   lists databases and each expands into its tables.
-//! * **PostgreSQL** — a connection is bound to ONE database and cannot read another's catalog.
-//!   Listing every database from `pg_database` would produce nodes that fail when expanded, so
-//!   the root shows the connected database only, and says so in its sub-label.
+//! Connection-tree wire types for `db_children`, one level per call like `read_dir`. No
+//! `hierarchy` table on `EngineSpec`: levels come only from `DbSession::children`. A PostgreSQL
+//! root shows only the connected database (it cannot read another's catalog).
 
 use serde::{Deserialize, Serialize};
 
@@ -172,10 +152,7 @@ impl DbNode {
     }
 }
 
-/// `"12 tables"` / `"1 table"` / `"empty"` — the sub-label for a group or schema.
-///
-/// Its own function because "1 tables" is the kind of thing that ships, and because `"empty"`
-/// reads better than `"0 tables"` on a schema someone is about to create in.
+/// `12 tables` / `1 table` / `empty`: the sub-label for a group or schema.
 pub fn count_label(n: usize, singular: &str) -> String {
     match n {
         0 => "empty".to_string(),

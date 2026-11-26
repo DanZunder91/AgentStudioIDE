@@ -1,39 +1,11 @@
-//! **The gate on the TLS policy: one crypto provider, one trust story.**
-//!
-//! `reqwest`'s plain `rustls` feature — an alias for `__rustls-aws-lc-rs` — compiles and
-//! links **`aws-lc-sys` (a BoringSSL fork, C + asm) alongside the `ring`** that
-//! `tokio-tungstenite` and `tonic/tls-ring` pull: two C crypto stacks in one binary, while
-//! `Cargo.toml`'s own comments assert one. The same feature makes `reqwest` verify against
-//! the OS trust store while WS and gRPC use bundled Mozilla roots —
-//! three network clients, two accidental trust stories.
-//!
-//! Both were fixed by *feature flags and one `install_default()` call*, which means the
-//! whole change is **invisible to every ordinary unit test**: swap `rustls-no-provider`
-//! back to `rustls` and nothing fails, nothing warns, and a whole BoringSSL fork silently
-//! returns. That is exactly the regression this file exists to trip.
-//!
-//! It asserts on **`Cargo.lock`**, not on a `cargo tree` sub-process, because the lockfile
-//! is the resolution's ground truth, is committed, and makes the test hermetic and instant
-//! (no network, no nested cargo). `aws-lc-*` is absent from the lock
-//! *entirely*, not merely from the macOS graph: under this policy nothing anywhere in the
-//! tree, on any target, asks for it — so its mere presence as a `[[package]]` is proof a
-//! provider feature came back.
-//!
-//! The same result from `cargo tree` on the macOS target:
-//! ```text
-//! cargo tree --locked -i aws-lc-sys -e all --target aarch64-apple-darwin
-//! → error: package ID specification `aws-lc-sys` did not match any packages
-//! cargo tree --locked -i ring       -e all --target aarch64-apple-darwin
-//! → ring v0.17.14 ← rustls v0.23.42 ← {agent-studio-scaffold, hyper-rustls/reqwest,
-//!                                     rustls-platform-verifier, tokio-rustls/tonic}
-//! ```
+//! Gate on the TLS policy: one crypto provider (`ring`; reqwest on `rustls-no-provider`, so no
+//! `aws-lc-sys`) and one trust story. No unit test sees feature flags, so this asserts on the
+//! committed `Cargo.lock`: any `aws-lc-*` package, on any target, means a provider came back.
 
 use std::collections::BTreeSet;
 
-/// Every `name = "…"` in the committed `src-tauri/Cargo.lock`.
-///
-/// `CARGO_MANIFEST_DIR` is the crate root at *compile* time, so this finds the lockfile
-/// regardless of the cwd `cargo test` was invoked from.
+/// Every `name = "…"` in the committed `src-tauri/Cargo.lock`; `CARGO_MANIFEST_DIR` is fixed at
+/// compile time, so any cwd works.
 fn locked_packages() -> BTreeSet<String> {
     let lock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock");
     let text = std::fs::read_to_string(&lock)
@@ -95,19 +67,9 @@ fn declared_features(crate_name: &str) -> String {
 
 #[test]
 fn every_client_still_declares_the_os_trust_store_features() {
-    // The trust axis of the policy: all three clients trust what the OS trusts, unioned with the
-    // bundled Mozilla set. This is asserted against the **manifest**, not the lockfile,
-    // on purpose — `rustls-native-certs` and `webpki-roots` are *also* target-gated deps
-    // of `rustls-platform-verifier`, so they sit in `Cargo.lock` whether or not `tonic`
-    // and `tokio-tungstenite` ask for them. A lockfile assertion here would have passed
-    // before the fix as well, i.e. proved nothing (don't let a test read its expectation
-    // from something that agrees by construction).
-    //
-    // What regresses in practice is somebody "tidying" a feature list. Drop
-    // `tls-native-roots` and gRPC silently reverts to webpki-roots-only: an internal
-    // `grpcs://` behind a corporate CA, or any host behind a TLS-inspecting proxy, stops
-    // verifying — while HTTP and WS keep working. That divergence is the exact bug
-    // the policy exists to prevent, and nothing else in the suite would notice it.
+    // Trust axis: all three clients trust OS roots plus bundled Mozilla. Asserted on the manifest,
+    // not the lockfile, which has those crates via `rustls-platform-verifier` anyway. Dropping
+    // tonic's `tls-native-roots` breaks gRPC behind a corporate CA while HTTP and WS still work.
     for (crate_name, required) in [
         ("tonic", ["tls-native-roots", "tls-webpki-roots"]),
         (
@@ -126,10 +88,8 @@ fn every_client_still_declares_the_os_trust_store_features() {
         }
     }
 
-    // `reqwest` gets the OS store from `rustls-platform-verifier`, which BOTH `rustls` and
-    // `rustls-no-provider` pull unconditionally — so the check that matters for reqwest is
-    // that it is on the provider-less feature (asserted above by aws-lc's absence) and that
-    // the verifier crate is genuinely in the graph.
+    // reqwest gets the OS store from `rustls-platform-verifier`, which both `rustls` features pull,
+    // so what matters is the provider-less feature (aws-lc absent above) and the verifier present.
     assert!(
         locked_packages().contains("rustls-platform-verifier"),
         "`rustls-platform-verifier` left the graph, so `http_send` no longer verifies \
@@ -139,10 +99,8 @@ fn every_client_still_declares_the_os_trust_store_features() {
 
 #[test]
 fn no_native_tls_or_openssl_crept_in() {
-    // Standing invariant from dependency hygiene and the zero-install
-    // principle: rustls only. `openssl-sys` would mean a system OpenSSL the user has to
-    // have; `native-tls` would mean a per-platform backend we don't control. Cheap to
-    // assert here while we are already holding the lockfile.
+    // rustls only: `openssl-sys` needs a system OpenSSL; `native-tls` is a per-platform backend we
+    // don't control.
     let pkgs = locked_packages();
     for banned in ["openssl-sys", "openssl", "native-tls"] {
         assert!(

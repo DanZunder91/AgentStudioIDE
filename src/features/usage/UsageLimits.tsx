@@ -1,41 +1,6 @@
-/**
- * UsageLimits — the signed-in account's live usage limits, as a status strip at
- * the top of the left (Agents) rail.
- *
- * A distillation of Claude Code's own "Your usage limits" dialog: one row per
- * window, the label from the data on the left, a colour-coded `N% used` chip on
- * the right, the reset time on hover/focus. **No progress bars** — the number
- * is the signal. Colour comes from `usageTone()` and is
- * painted in `usage.css` off `data-tone` (see that file for the colourblind
- * lightness ramp).
- *
- * ── Honesty rules this component obeys ──────────────────────────────────────
- * It never renders a number it does not have. There is no `?? 0`, no placeholder
- * zero, no invented reset time:
- *   - no snapshot, no error  → a breathing "Reading usage…" placeholder;
- *   - no snapshot, an error  → the one true sentence from `describeUsageError`;
- *   - a snapshot + an error  → the last good numbers, marked **stale** (a failed
- *     refresh must not be able to pass old numbers off as live);
- *   - `resetsAtMs === null`  → the chip renders with no tooltip at all.
- *
- * ── Windows are data, not a schema ──────────────────────────────────────────
- * The rows are `snapshot.windows.map(...)` in the order Rust emitted, keyed by
- * the raw api key. Nothing here hard-codes three rows or a known key set — the
- * day the plan meters another model, the row simply appears (see the note on
- * `UsageWindow.key` in `usageTypes.ts`).
- *
- * ── Two clocks, both owned elsewhere in spirit ──────────────────────────────
- * `startUsagePolling()` owns the DATA cadence; this component only starts it on
- * mount and returns its stop function as the effect cleanup.
- *
- * The second clock is the panel's own "now", which the relative strings
- * ("Resets in 4 hr 34 min", "Updated 3 min ago") are measured against. It lives
- * in state and is advanced by a slow interval rather than read during render:
- * `Date.now()` in a render body is an impure read (`react-hooks/purity`), and it
- * would also mean the countdown only moved when some *other* state changed —
- * a panel whose "Updated just now" is 20 minutes old is exactly the dishonesty
- * this component is built to avoid.
- */
+/** Live usage-limits strip. Never renders a number it lacks: no snapshot → placeholder or the error
+ * sentence; snapshot + error → last numbers marked stale. Rows are the data's windows, not a
+ * schema. "Now" is state ticked by an interval, never read during render (`react-hooks/purity`). */
 
 import { useEffect, useState } from "react";
 
@@ -49,11 +14,7 @@ import {
 import { startUsagePolling, useUsageStore } from "./usageStore";
 import "./usage.css";
 
-/**
- * A circular-arrow refresh glyph. Defined locally rather than in
- * `src/components/icons.tsx`: that file has no refresh glyph, and the feature
- * keeps its own.
- */
+/** A circular-arrow refresh glyph; `src/components/icons.tsx` has none. */
 function RefreshIcon(): React.JSX.Element {
   return (
     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -77,16 +38,8 @@ function RefreshIcon(): React.JSX.Element {
 /** The accessible sentence behind the stale marker — asserted verbatim in tests. */
 const STALE_LABEL = "Last refresh failed — showing the last good reading";
 
-/**
- * How often the panel re-reads the wall clock, ms.
- *
- * Every string this drives has minute granularity at its finest, so 30s is the
- * coarsest tick that can never leave a stale minute on screen — and it is two
- * orders of magnitude cheaper than a per-second countdown nobody is watching.
- * Independent of `USAGE_POLL_MS`: this ticks the *display* of numbers we already
- * have, and must keep working at the same rate even while fetches are failing
- * and the store has backed off.
- */
+/** 30s: the coarsest tick that never leaves a stale minute on screen. Independent of
+ * `USAGE_POLL_MS`, so the display keeps ticking while fetches fail and the store backs off. */
 const CLOCK_TICK_MS = 30_000;
 
 export function UsageLimits(): React.JSX.Element {
@@ -95,18 +48,10 @@ export function UsageLimits(): React.JSX.Element {
   const loading = useUsageStore((s) => s.loading);
   const refresh = useUsageStore((s) => s.refresh);
 
-  /**
-   * Which chip's reset tooltip is open — at most one at a time. Hover or focus
-   * opens it, leave/blur/Esc closes it. Kept as the window key (not a boolean per
-   * row) so moving the pointer between chips can never leave two open.
-   */
+  /** The chip whose reset tooltip is open: a key, not a per-row boolean, so two can't be open. */
   const [openKey, setOpenKey] = useState<string | null>(null);
 
-  /**
-   * "Now", as one value shared by every relative-time string on screen, so the
-   * rows can never disagree about it. Seeded by the lazy initializer (which runs
-   * once, at mount) and advanced by the tick below — never read during render.
-   */
+  /** One shared "now" so rows never disagree: set at mount and by the tick, never in render. */
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   // Mount starts the data poll, unmount stops it. The arrow returns the store's

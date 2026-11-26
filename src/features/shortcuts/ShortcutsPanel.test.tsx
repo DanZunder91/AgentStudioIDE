@@ -1,10 +1,4 @@
-/**
- * ShortcutsPanel + ShortcutsButton — the keyboard-shortcuts reference overlay.
- *
- * Open state is the store's `shortcutsOpen`, so the button and the Cmd/Ctrl+/
- * hotkey drive the same overlay; both are exercised here, plus the close paths
- * (Esc, the close button, the backdrop) and that an inside click does NOT close.
- */
+/** Open state is the store's `shortcutsOpen`, so the button and Cmd/Ctrl+/ drive one overlay. */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -71,11 +65,8 @@ describe("ShortcutsPanel", () => {
     expect(screen.getByText("Code intelligence")).toBeInTheDocument();
     expect(screen.getByText(/Find in files/)).toBeInTheDocument();
     expect(screen.getAllByText("F12").length).toBeGreaterThan(0); // key chips
-    // ⌘S is ONE keystroke over three surfaces (file save, the API client's
-    // `saveActiveApiRequest`, and a DB console's query), so the row no
-    // longer claims to be about files. It used to read "Save the current file", which was
-    // already incomplete before the console existed. Both halves are asserted: the general
-    // row here, and the console-specific semantics under "Database console".
+    // ⌘S spans three surfaces: the general row is asserted here, the console-specific
+    // semantics under "Database console".
     expect(
       screen.getByText(
         "Save whatever has focus — the current file, the active API request, or a database console's query",

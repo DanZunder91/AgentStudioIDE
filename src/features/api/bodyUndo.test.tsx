@@ -1,12 +1,5 @@
-/**
- * Undo for the request BODY. The bug: a change to the request
- * body could not be undone with Command+Z after switching to another window or
- * executing the request.
- *
- * The two halves are tested separately because they fail for different reasons:
- * the STORE half is what survives a tab switch (the browser's undo cannot, since
- * `Pane` unmounts the textarea), and the KEY half is what makes Cmd+Z reach it.
- */
+/** Undo for the request BODY, tested in halves: the STORE half survives a tab switch (`Pane`
+ * unmounts the textarea, so browser undo cannot) and the KEY half makes Cmd+Z reach it. */
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -37,10 +30,7 @@ describe("body undo — the store half", () => {
   beforeEach(() => {
     resetStore();
     apiStoreIpc.saveApiStore.mockResolvedValue(undefined);
-    // A fixed clock from t=0, so `seeded()` and the edits below sit in the
-    // grouping window we intend rather than wherever the real clock happens to
-    // be. Set BEFORE seeding — moving the clock backwards mid-test would make
-    // every later edit look simultaneous with the seed.
+    // Fixed clock from t=0, set BEFORE seeding, so the edits land in the intended grouping window.
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
   });
@@ -228,12 +218,7 @@ describe("body undo — the key half", () => {
   });
 });
 
-/**
- * The seam: the store half and the key half are each covered
- * above, and neither proves the two are WIRED to each other. This drives the
- * real `<ApiRequestView/>` with a real Cmd+Z and asserts the body actually
- * moved — which is what a user will do.
- */
+/** The seam: the real `<ApiRequestView/>` with a real Cmd+Z proves the two halves are wired. */
 describe("body undo — end to end in the real request view", () => {
   beforeEach(() => {
     resetStore();

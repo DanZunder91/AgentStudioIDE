@@ -1,20 +1,6 @@
-/**
- * Layer 5 (testing-strategy §1) — the usage strip's FOOTER geometry, in real pixels.
- *
- * These are the claims jsdom cannot check: the strip belongs in the rail's FOOTER,
- * not at its TOP, and that placement is easy to get wrong. Document order is
- * pinned in `LeftRail.test.tsx`; being pinned to the BOTTOM is a layout fact —
- * `margin-top:auto` inside a flex column — and under jsdom every box here would
- * be 0×0, which makes the assertion vacuous rather than wrong.
- *
- * Three things are measured:
- *  1. The strip sits at the bottom of the rail, not directly under the last agent
- *     row (i.e. the flex column + `margin-top:auto` actually took effect).
- *  2. It does not overflow the ~260px rail horizontally — the rail-clipping regression, and
- *     the reason `.rail` carries `overflow-x: hidden`. A percentage chip plus a
- *     label is exactly the kind of two-column row that broke Vault.
- *  3. It renders real numbers from the (mocked) command, coloured per band.
- */
+/** Usage strip FOOTER geometry in real pixels (testing-strategy §1): pinned to the rail bottom
+ * (`margin-top:auto`), no horizontal overflow of the ~260px rail (`.rail` is `overflow-x: hidden`),
+ * real numbers coloured per band. Document order is pinned in `LeftRail.test.tsx`. */
 
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

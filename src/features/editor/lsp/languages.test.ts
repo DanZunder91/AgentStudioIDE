@@ -1,8 +1,3 @@
-/**
- * The LSP language set — which languages have a code-intelligence server. Must
- * stay in step with the Rust `spec_for` table (`src-tauri/src/lsp/registry.rs`).
- */
-
 import { describe, expect, it } from "vitest";
 
 import { hasLspServer, LSP_LANGUAGES, LSP_SERVER_NAMES } from "./languages";

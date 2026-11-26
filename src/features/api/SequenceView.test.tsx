@@ -1,12 +1,4 @@
-/**
- * `<SequenceView/>` — the accordion layout.
- *
- * The runner is mocked at the module boundary: this file is about what the user
- * sees and clicks, and `sequenceExecute.test.ts` already drives the real send
- * path. `ApiRequestView` is mocked too — it is a 600-line component with its own
- * suite, and rendering it here would test it a second time rather than testing
- * the accordion.
- */
+/** Runner and ApiRequestView are mocked: sequenceExecute.test.ts and its own suite cover them. */
 
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

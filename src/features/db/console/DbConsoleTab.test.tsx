@@ -1,27 +1,13 @@
-/**
- * The console SEAM: store ⇄ `<DbConsole/>`, driven for real.
- *
- * This file exists for the reason `metricsNoSelectionSeam.test.tsx` exists. The halves of this
- * feature were built separately and each half is at 100% coverage — and neither suite could
- * have caught the defect that once shipped in the metrics feature, which was that a
- * fully-tested caller met a fully-tested command across a join nobody exercised. The join
- * here is `DbConsoleTab`. So: the real store, the real console component, the real reducers,
- * with **only the IPC edge mocked**.
- *
- * Every expectation is literal.
- */
+/** The console seam (DbConsoleTab): real store, console and reducers, only the IPC edge mocked,
+ * since fully covered halves can still break at an unexercised join. Expectations are literal. */
 
 import { EditorView } from "@codemirror/view";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The one mocked boundary — and only the INVOKING half of it. `connectionInput` /
-// `connectionAsInput` are pure record-shaping functions in the same module, and the store
-// calls them on the connect path; replacing them with `undefined` (which a whole-module
-// factory does) made `openDbSession` fail with "an unrecognized reason" before it ever
-// reached the wire. A partial mock keeps the real ones, which is also the more honest test:
-// the shape that goes over the wire is then the shape the app really builds.
+// Partial mock: only the invoking half. connectionInput / connectionAsInput stay real, so the
+// connect path works and the wire shape is the one the app really builds.
 const ipc = vi.hoisted(() => ({
   dbQuery: vi.fn(),
   dbOpen: vi.fn(),
@@ -121,13 +107,8 @@ function connected(): void {
   });
 }
 
-// FOCUSING the real CM6 surface (which the ⌘S tests below do) starts its async measure
-// cycle, and jsdom implements none of the geometry it calls — the failure lands in a
-// `requestAnimationFrame` where no assertion can see it, as an UNHANDLED error that makes
-// the tier exit 1 with every test reported green (a green test count is not a green
-// tier). Measured: without this the file printed `Tests 37 passed` and `exit=1`. The
-// repo already owns the stubs — `cmTestKit.stubGeometry` — so this reuses them rather than
-// inventing a second set.
+// Focusing CM6 starts its measure cycle; jsdom lacks the geometry, and the error escapes in a rAF
+// as an unhandled error that exits 1 with every test green. cmTestKit's stubs prevent it.
 beforeAll(stubGeometry);
 
 beforeEach(() => {
@@ -158,20 +139,12 @@ describe("DbConsoleTab — the store↔console seam", () => {
     await waitFor(() => expect(ipc.dbQuery).toHaveBeenCalledTimes(1));
     expect(ipc.dbQuery).toHaveBeenCalledWith(SID, "select code, tag from tracks", "statement", 500);
 
-    // And the user can read the result — the store's rows reaching the grid, which is the
-    // join neither half's suite touched. (That `Pane` mounts this container at all is a
-    // different claim and is NOT tested here; it is pinned in `Pane.test.tsx`, which was
-    // verified to go red with the `db-console` case removed.)
+    // The store's rows reach the grid. That Pane mounts this container is pinned in Pane.test.tsx.
     await waitFor(() => expect(screen.getByText("BLU")).toBeInTheDocument());
   });
 
   it("🔴 renders rows as a TABLE and keeps prose for errors", async () => {
-    // Query output must be a table, not console text. Only the error path had ever been seen,
-    // so this asks the question that had not been: what does a SUCCESSFUL query look like?
-    //
-    // The existing test above proves a cell's text reaches the screen; it would also pass if that
-    // text were printed as a paragraph. This one pins the SHAPE: a real `<table>` with headers, and
-    // no prose element anywhere near it.
+    // Pins the SHAPE of a successful result: a real <table> with headers, no prose nearby.
     const user = userEvent.setup();
     connected();
     ipc.dbQuery.mockResolvedValue(ROWS);
@@ -261,13 +234,8 @@ describe("DbConsoleTab — the store↔console seam", () => {
   });
 
   it("🔴 blames the STATEMENT, not the connection, and shows the sentence Rust wrote", async () => {
-    // The original bug, driven through the whole seam. SQL typed into a MongoDB console on a
-    // connection that had just connected to Atlas successfully made the screen say *"check the
-    // host, the port, and the settings this engine requires"* — because Rust's message was
-    // reduced to `invalid-config` and re-described from the code.
-    //
-    // This test is the reason the fix is two-sided: the code is now `invalid-statement`, and the
-    // detail survives the store. Reverting either half turns it red.
+    // SQL in a MongoDB console must show Rust's statement detail, not connection advice: the
+    // code is invalid-statement and the detail survives the store. Reverting either half fails.
     const user = userEvent.setup();
     connected();
     ipc.dbQuery.mockRejectedValue(
@@ -316,10 +284,7 @@ describe("stopping a query — honest about what it can and cannot do", () => {
       .mockResolvedValueOnce(ROWS);
 
     useAppStore.setState((s) => {
-      // `blankDbConsole()` + the buffer, rather than a hand-written record: the literal
-      // version went stale the moment `savedQuery`/`saveError` were added, and typecheck
-      // caught it — which is the good outcome, but the factory means there is nothing to
-      // catch next time.
+      // blankDbConsole() rather than a literal record, so new console fields need no edit here.
       s.dbConsoles[CID] = { ...blankDbConsole(), text: "select 1" };
     });
     const slow = state().dbActions.runDbQuery(CID, "statement");
@@ -360,10 +325,7 @@ describe("stopping a query — honest about what it can and cannot do", () => {
 /* ═══════ 🔴 what reaches the wire: the selection / the statement ═══════ */
 
 describe("DbConsoleTab — the text that reaches db_query", () => {
-  /**
-   * A sample buffer. Lines 3 and 4 are commented out, and they are the two selected when
-   * Run is pressed.
-   */
+  /** Lines 3 and 4 are commented out; they are the two selected when Run is pressed. */
   const BUFFER = [
     "SELECT * FROM widgets;",
     "SELECT * FRom booking;",
@@ -378,34 +340,16 @@ describe("DbConsoleTab — the text that reaches db_query", () => {
     return found;
   }
 
-  /**
-   * THE seam test. Four modules have to agree for this to pass — `statements.ts`
-   * decides, `QueryEditor` reads the CM6 selection, `DbConsole`'s button asks it, `DbConsoleTab`
-   * forwards, and `runDbQuery` sends — and every one of them is separately at 100% coverage.
-   * The shipped bug was precisely that they did not agree: ⌘⏎ said `"statement"` and the store
-   * sent all four lines, so Rust's `multi_statement_refusal` answered *"That statement was
-   * blocked before it ran…"*.
-   *
-   * **Falsified before being trusted.** Reverting `runDbQuery`'s `text ?? console_.text` to
-   * `console_.text` — the exact shape of the original defect — makes this fail with:
-   *
-   * ```
-   * AssertionError: expected "spy" to be called with arguments:
-   *   [ 'sess-9', '--SELECT * from op_history;…', 'statement', 500 ]
-   * Received: 'SELECT * FROM widgets;\nSELECT * FRom booking;\n--SELECT…'
-   * ```
-   */
+  /** Seam: statements.ts, QueryEditor, DbConsole, DbConsoleTab and runDbQuery must agree on the
+   * text. Reverting runDbQuery's "text ?? console_.text" to "console_.text" makes this fail. */
   it("🔴 sends EXACTLY the selection — the two highlighted lines", async () => {
     const user = userEvent.setup();
     connected();
     ipc.dbQuery.mockResolvedValue([]);
 
     render(<DbConsoleTab connectionId={CID} />);
-    // Typed AND selected in one transaction, through CodeMirror itself: the store's text and
-    // the view's selection have to come from one consistent state, and driving the buffer in
-    // through the store instead would leave the selection pointing outside a document React
-    // has not re-rendered yet. (Synthetic typing is avoided for the measure-cycle reason the
-    // editor test below explains.)
+    // Typed and selected in one CM6 transaction, so text and selection come from one consistent
+    // state (synthetic typing triggers CM6's measure cycle, which jsdom can't run).
     view().dispatch({
       changes: { from: 0, insert: BUFFER },
       // Lines 3–4, the highlighted pair.
@@ -423,10 +367,8 @@ describe("DbConsoleTab — the text that reaches db_query", () => {
   });
 
   it("🔴 sends ONLY the statement under the cursor when nothing is selected", async () => {
-    // The other half of the same report: it should be possible to select one statement and run
-    // it with Command+Enter. With the caret on line 1, line 1 is what runs — not the buffer,
-    // which is two statements and would come back blocked on a connection that (like this
-    // one) has `allowMultiStatement: false`.
+    // With the caret on line 1, line 1 runs, not the two-statement buffer that
+    // allowMultiStatement: false would block.
     const user = userEvent.setup();
     connected();
     ipc.dbQuery.mockResolvedValue([]);
@@ -469,10 +411,8 @@ describe("the callbacks the component actually invokes", () => {
     connected();
     render(<DbConsoleTab connectionId={CID} />);
 
-    // Driven through CodeMirror's own `dispatch`, the way `QueryEditor.test.tsx` does it:
-    // synthetic typing makes CM6 measure, and jsdom has no layout, so it throws
-    // `textRange(...).getClientRects is not a function` out of a requestAnimationFrame
-    // where no assertion can see it. A dispatch is the same code path minus the measure.
+    // Via CM6's dispatch: synthetic typing makes CM6 measure, which throws in jsdom from a rAF
+    // no assertion can see. A dispatch is the same path minus the measure.
     const host = screen.getByTestId("db-query-editor");
     const view = EditorView.findFromDOM(host);
     if (view === null) throw new Error("the editor did not mount a CodeMirror view");
@@ -488,10 +428,8 @@ describe("the callbacks the component actually invokes", () => {
     connected();
     render(<DbConsoleTab connectionId={CID} />);
 
-    // Arrow keys resize in 2% steps and need no layout, which is why they are the
-    // assertable half of the divider under jsdom (the pointer drag has a browser-tier test).
-    // Up/Down, not Left/Right: the editor sits ABOVE the output, so this is a horizontal
-    // separator moved vertically (pressing ArrowRight moves nothing).
+    // Arrow keys resize in 2% steps without layout (the drag has a browser-tier test). Up/Down:
+    // the divider is a horizontal separator, so ArrowRight moves nothing.
     const divider = screen.getByTestId("db-console-divider");
     divider.focus();
     await user.keyboard("{ArrowDown}");
@@ -558,10 +496,7 @@ describe("the guards on paths a user can reach but a happy path never does", () 
   /* ── Stop is now two halves: the local one, and the request ── */
 
   it("🔴 asks the SERVER to cancel, not just the UI to stop waiting", () => {
-    // Stop used to only orphan the reply — the statement kept running, sometimes for
-    // minutes, on a production database. `db_cancel` could not exist then because the
-    // cancel path went through the session mutex the running query holds; the handle now lives
-    // beside it. This is the frontend half of that.
+    // The frontend half of real cancellation: db_cancel stops the statement server-side.
     connected();
     ipc.dbCancel.mockResolvedValue(undefined);
     ipc.dbQuery.mockReturnValue(new Promise<DbResultSet[]>(() => {}));
@@ -663,10 +598,8 @@ describe("the guards on paths a user can reach but a happy path never does", () 
   });
 
   it("refuses to run when the CONNECTION is gone, rather than guessing a row limit", async () => {
-    // A session can outlive its record for one tick (delete drops the record, then Rust
-    // closes the sessions). The row limit is the connection's promise about how much data
-    // this query may return, and the engine default is a DIFFERENT number — so there is no
-    // safe guess, and the honest move is to refuse.
+    // A session can outlive its record for a tick. The row limit is the connection's promise and
+    // the engine default differs, so there is no safe guess: refuse.
     useAppStore.setState((s) => {
       s.dbEngines = [ENGINE];
       s.dbSessions[CID] = {
@@ -713,16 +646,8 @@ const SAVED = {
 };
 
 
-/**
- * Focus the real CodeMirror surface, then press the chord.
- *
- * Not `click the wrapper` — a `<div>` is not focusable, so `user.keyboard` would dispatch at
- * `document.body`, OUTSIDE the tab's subtree, and the handler would never see it (an earlier
- * version did exactly that and five tests failed with "Unable to find … db-save-query-dialog").
- * Focusing the editor's `contenteditable` is also the honest scenario: it is where the user's
- * cursor is when they press ⌘S, and it is the element known to swallow a native chord —
- * so this is the assertion that it does not swallow this one.
- */
+/** Focus the real CM6 contenteditable: a <div> isn't focusable, so keys would land on body,
+ * outside the tab. It is also where the cursor is on ⌘S, and the element that may swallow it. */
 async function pressChord(
   user: ReturnType<typeof userEvent.setup>,
   chord = "{Meta>}s{/Meta}",

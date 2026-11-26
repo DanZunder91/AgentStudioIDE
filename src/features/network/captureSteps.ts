@@ -1,13 +1,6 @@
-/**
- * "Capture this app": the words that tell a
- * user how to point ANOTHER app at the IDE's capture proxy — Postman, Insomnia, a Chrome,
- * or anything that honours `HTTPS_PROXY`. Pure: every line is a function of the app's name,
- * the proxy's port, the CA file's path and the platform, so a test pins one app at a time.
- *
- * Zero OS permission, on purpose: nothing here installs a system proxy or touches a
- * keychain (no OS permission may be required). The user does the pointing, inside the
- * other app.
- */
+/** Guide text for pointing another app (Postman, Chrome, anything honouring `HTTPS_PROXY`) at the
+ * capture proxy. Pure over app name, port, CA path and platform. Zero OS permission: nothing here
+ * installs a system proxy or touches a keychain. */
 
 import { dirname, joinPath } from "../../lib/paths";
 import { os } from "../../lib/platform";
@@ -28,11 +21,8 @@ export function guideKind(appName: string): GuideKind {
   return "generic";
 }
 
-/**
- * The guide's platform: the Whole-computer backend when there is one, else the webview's own OS
- * (`lib/platform`) — before, a Windows machine whose backend had not reported yet (or failed)
- * was handed the macOS steps (`open -na "Google Chrome"`, a POSIX env prefix).
- */
+/** The Whole-computer backend's platform, else the webview's own OS (`lib/platform`), so Windows
+ * never gets macOS steps while the backend is unknown. */
 export function guidePlatform(backend: MachineBackend | null | undefined): GuidePlatform {
   if (backend === "linux-proc") return "linux";
   if (backend === "windows-iphlpapi") return "windows";
@@ -59,10 +49,7 @@ const CHROME_TRUST: Record<GuidePlatform, string> = {
   windows: "Chrome trusts the Windows certificate store, not a CA file — and the IDE never writes there.",
 };
 
-/**
- * Environment variables for one command, per platform. A POSIX shell takes them as a prefix
- * on the command line; PowerShell (the IDE's shell on Windows) sets them for the session.
- */
+/** Env vars for one command: a POSIX prefix, or session assignments in PowerShell (Windows). */
 function envAssignments(platform: GuidePlatform, pairs: readonly (readonly [string, string])[]): string {
   return platform === "windows"
     ? pairs.map(([k, v]) => `$env:${k}="${v}"`).join("; ")
@@ -87,12 +74,8 @@ export interface GuideStep {
 export interface GuideSection {
   title: string;
   steps: GuideStep[];
-  /**
-   * The per-app "decrypt its HTTPS" switch belongs under this section. Only
-   * on a Certificate section of an app that CAN trust a CA file — never Chrome's, which
-   * reads the Keychain / NSS store the IDE never writes: opting Chrome in would only break
-   * every HTTPS request it makes.
-   */
+  /** Hosts the per-app decrypt switch; only for apps that can trust a CA file, never Chrome (it
+   * reads the OS store the IDE never writes, so opting it in breaks its HTTPS). */
   decryptSwitch?: true;
 }
 
@@ -107,23 +90,16 @@ const ca = (path: string | null): string => path ?? "<the IDE's CA file>";
  *  bundled Mozilla set, then the IDE's CA — the same file `pty_env` gives the IDE's terminals. */
 const BUNDLE_FILE = "ca-bundle.pem";
 
-/**
- * The CA BUNDLE's path, next to `ca.pem`. `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` REPLACE a
- * program's trust store rather than adding to it, so pointing them at `ca.pem` alone would
- * make every connection the proxy does not decrypt (a tunnel, a passthrough host) fail
- * verification. `NODE_EXTRA_CA_CERTS` is the one that adds, so `ca.pem` is right for it.
- */
+/** The CA bundle next to `ca.pem`. `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` replace the trust store,
+ * so `ca.pem` alone fails every undecrypted connection; `NODE_EXTRA_CA_CERTS` adds, so it takes
+ * `ca.pem`. */
 export function caBundlePath(caPath: string | null): string {
   return caPath === null ? "<the IDE's CA bundle>" : joinPath(dirname(caPath), BUNDLE_FILE);
 }
 
-/**
- * The CA step in one sentence — reused by the detail pane when an external source's
- * connection is an undecrypted tunnel (the guide's "CA step"). With the per-app switch the
- * last step is the guide's per-app switch: trusting the CA inside the app is not enough on
- * its own, the proxy must also be told the app now trusts it. The view is named as the Network
- * toggle names it ({@link modeLabel}) — "Whole computer" on Windows and Linux.
- */
+/** The CA step in one sentence, reused by the detail pane for an undecrypted external tunnel. It
+ * ends with the per-app switch: the proxy must also learn the app trusts the CA. The view is
+ * named as {@link modeLabel} names it. */
 export function caStepHint(appName: string): string {
   return (
     `To see ${appName}'s HTTPS contents: turn on Decrypt HTTPS, add the IDE's CA in ${appName}, then switch on ` +
@@ -158,33 +134,22 @@ export function portChangedText(moved: NonNullable<NetcapStatus["portChanged"]>)
   );
 }
 
-/**
- * A `decryptApps` entry that can match safely — the mirror of Rust's `valid_app_entry`
- * (`netcap/client.rs`): non-empty, not all whitespace, no `/` (which would turn
- * `/<entry>.app/` into "any bundle" or a path fragment).
- */
+/** Mirrors Rust's `valid_app_entry` (`netcap/client.rs`): non-blank and no `/`, which would turn
+ * `/<entry>.app/` into any bundle or a path fragment. */
 export function validAppEntry(app: string): boolean {
   return app.trim() !== "" && !app.includes("/");
 }
 
-/**
- * Whether a flow's client IS this app — the ONE copy of Rust's `user_opted_in` rule
- * (`netcap/client.rs`), so the guide's "Receiving …" and the proxy's decrypt decision can
- * never disagree about who Postman is: the executable NAME equals `app`, or the executable
- * PATH contains `/<app>.app/` — every helper inside the bundle counts
- * (`…/Postman.app/Contents/Frameworks/Postman Helper.app/…` is Postman), a different bundle
- * that merely starts with it (`PostmanCanary.app`) does not. Case-sensitive, as in Rust.
- */
+/** The one copy of Rust's `user_opted_in` (`netcap/client.rs`): the exe name equals `app`, or the
+ * path contains `/<app>.app/` (helpers inside count; `PostmanCanary.app` does not).
+ * Case-sensitive, as in Rust. */
 export function clientInApp(client: Pick<FlowClient, "name" | "path"> | null, app: string): boolean {
   if (client === null || !validAppEntry(app)) return false;
   return client.name === app || (client.path !== null && client.path.includes(`/${app}.app/`));
 }
 
-/**
- * The name an app goes by in `decryptApps`: the OUTERMOST `.app` bundle on the client's path
- * (a helper's flows belong to the app the user installed), else the executable name. Rust
- * expects the entry to be built from a flow's own `client.path`, so this reads it verbatim.
- */
+/** The app's `decryptApps` name: the outermost `.app` bundle on the path (helpers belong to the
+ * installed app), else the exe name. Read verbatim from `client.path`, as Rust expects. */
 export function appOfClient(client: Pick<FlowClient, "name" | "path">): string {
   const m = client.path === null ? null : /\/([^/]+)\.app\//.exec(client.path);
   return m ? m[1] : client.name;
@@ -201,12 +166,8 @@ function toProxy(remote: string, port: number | null): boolean {
   return port !== null && (remote === `127.0.0.1:${port}` || remote === `[::1]:${port}`);
 }
 
-/**
- * The guide's live routing line, derived — never stored:
- * "receiving" as soon as ANY flow's client is inside the app ({@link clientInApp}), else
- * "direct" with the app's connected sockets that do not go to the proxy (listeners and
- * peer-less UDP are not connections to anyone).
- */
+/** Derived, never stored: "receiving" once any flow's client is in the app, else "direct" with its
+ * connected sockets not going to the proxy (listeners and peer-less UDP excluded). */
 export function routingState(
   flows: readonly Pick<FlowSummary, "client">[],
   app: { name: string; connections: readonly Pick<MachineConn, "remote">[] },
@@ -226,11 +187,8 @@ export function routingState(
   };
 }
 
-/**
- * Which `decryptApps` entry the guide's switch writes: the bundle of the first routed flow
- * from this app ({@link appOfClient} — so a "Postman Helper" row opts in all of Postman, the
- * way Rust matches it), else the row's own name when nothing has been routed yet.
- */
+/** The bundle of this app's first routed flow (so a helper opts in the whole app, as Rust
+ * matches), else the row's own name. */
 export function decryptTarget(
   flows: readonly Pick<FlowSummary, "client">[],
   appName: string,
@@ -239,12 +197,8 @@ export function decryptTarget(
   return hit ? appOfClient(hit.client as FlowClient) : appName;
 }
 
-/** The closing line of every guide: where the traffic shows up. */
-/**
- * Where an external app's requests show once it is pointed at the proxy — named exactly (a
- * vague pointer left no way to tell where to look): the Source picker's `external · <app>` row
- * and the Process picker's executable name, which is the Whole Mac row's name.
- */
+/** Every guide's closing line, naming exactly where requests show: the Source picker's
+ * `external · <app>` row and the Process picker's executable name. */
 export function guideOutcome(appName: string, exe: string = appName): string {
   return `Its requests then appear under IDE traffic, Source external · ${appName}, Process ${exe}.`;
 }

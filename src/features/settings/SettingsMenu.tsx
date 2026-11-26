@@ -1,20 +1,6 @@
-/**
- * SettingsMenu — the titlebar gear that opens a small settings popover.
- *
- * Self-contained, like `<ShortcutsButton/>` but with LOCAL open/closed state (this
- * is a lightweight menu, not a global overlay, so it does not live in the store):
- * a gear button toggles a popover that closes on outside-click or Esc. Inside is
- * an accessible switch ("Focus follows agent") bound straight to the store's
- * `focusFollowsAgent` / `setFocusFollowsAgent`, the config export/import items,
- * and "Add Agent Studio to Claude Code" (`<ClaudeMcpItem/>`).
- *
- * "Interface…" opens a second page of the same popover, for how the app looks. It is
- * a page rather than more rows on the first one so the menu stays short as appearance
- * options are added; the first is how the agent rail draws projects.
- *
- * App only imports `{ SettingsMenu }` and mounts it in the titlebar; everything
- * else (open state, keyboard, click-away) is owned here.
- */
+/** Titlebar gear popover with local open state (a lightweight menu, not a store overlay); owns its
+ * keyboard and click-away. "Interface…" is a second page, so the menu stays short as appearance
+ * options are added. */
 
 import { useEffect, useRef, useState } from "react";
 
@@ -30,10 +16,7 @@ import "./settings.css";
 
 type Page = "main" | "interface";
 
-/**
- * A small drawing of each project style, so the choice can be made by eye. `currentColor`
- * strokes, so it follows the menu's text color.
- */
+/** A drawing of each project style, so the choice is made by eye; `currentColor` strokes. */
 function RailGroupPreview({ style }: { style: RailGroupStyle }): React.JSX.Element {
   const line = (y: number, x = 9) => (
     <rect x={x} y={y} width={30 - x} height="2" rx="1" fill="currentColor" opacity="0.45" />
@@ -267,13 +250,8 @@ export function SettingsMenu(): React.JSX.Element {
             </button>
           </div>
 
-          {/* ── share-a-config ─────────────────────────────────────────────────
-              Here rather than in a new titlebar button because the titlebar already
-              carries five, and rather than in the macOS app menu because `menu.rs` is
-              macOS-only — a feature reachable on one platform is not a finished feature.
-              Closing the popover on click is deliberate: both of these open a modal
-              dialog, and leaving a menu open behind a modal is how you end up with two
-              things claiming focus. */}
+          {/* Share-a-config: the titlebar is full and `menu.rs` is macOS-only. A click closes the
+              popover on purpose: both open a modal, and a menu behind one fights for focus. */}
           <div className="settings-menu__separator" role="separator" />
           <button
             type="button"

@@ -1,14 +1,6 @@
-/**
- * Layer 5 — the whole village tab in Chromium: real ResizeObserver, real
- * devicePixelRatio, real requestAnimationFrame, real sprite decoding, real 2D
- * context. The jsdom suite pins the wiring through fakes; only this tier can prove
- * the panel actually puts the village on screen at the stage's size.
- *
- * Only the data hooks are mocked (they would need a Tauri backend): the agents, and the
- * sky (live weather + clock), pinned to a fixed local time so frames are reproducible.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/VillagePanel.browser.test.tsx`
- */
+/** Only the data hooks are mocked (they need Tauri); the sky is pinned to a fixed local time so
+ * frames reproduce. Browser tier:
+ * `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";

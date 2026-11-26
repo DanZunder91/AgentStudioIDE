@@ -1,23 +1,6 @@
-//! The `agent-studio` command on every Agent Studio terminal's `PATH`.
-//!
-//! A two-line POSIX script, `<app config dir>/agent-tools/bin/agent-studio`, that `exec`s the
-//! running app's own binary ([`super::cli`]) with the same arguments. The binary's path travels
-//! per terminal in [`EXE_VAR`], so a debug build and an installed app running side by side each
-//! answer for their own terminals.
-//!
-//! # How it gets on `PATH`
-//!
-//! * **macOS / Linux:** prepended to the PTY's `PATH` ([`apply_env`]), after the capture env so
-//!   it composes with the `curl` shim's own prepend instead of being overwritten by it.
-//! * **Claude Code's Bash tool** runs commands from a login-shell snapshot that re-orders `PATH`
-//!   (LESSONS §85), so the SessionStart hook also appends a `PATH` line to `$CLAUDE_ENV_FILE`
-//!   (`agent::claude::env_file_tools_path_for`).
-//! * **Windows:** never on a terminal's `PATH` — PowerShell would try to open an extensionless
-//!   file as a document (see `netcap::shim`). Only [`TOOLS_DIR_VAR`] is exported, and agents'
-//!   Git Bash gets the directory through `$CLAUDE_ENV_FILE`, converted with `cygpath`.
-//!
-//! Written under the app config dir, never `~/.claude` (LESSONS §1), and only on real boot
-//! ([`install`] is called from `lib.rs`); tests write into temp dirs.
+//! The `agent-studio` script on every terminal's PATH, exec'ing the binary in [`EXE_VAR`]; written
+//! under the app config dir, never `~/.claude` (LESSONS §1). Claude's Bash tool reorders PATH
+//! (LESSONS §85). Windows gets only [`TOOLS_DIR_VAR`]: PowerShell opens extensionless files.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

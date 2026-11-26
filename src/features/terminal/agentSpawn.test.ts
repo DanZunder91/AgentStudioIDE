@@ -1,28 +1,6 @@
-/**
- * The agent seam — which command a terminal's PTY is born from (ARCHITECTURE §2.4).
- *
- * `TerminalRegistry` owns exactly one decision here: `agent_spawn` when the
- * terminal carries an `agentId`, `terminal_open` otherwise. Everything else —
- * the xterm instance, the Channel, write/resize/close, disposal — is
- * deliberately identical, because an agent terminal *is* a terminal, just one
- * whose argv an adapter chose. Rust made the same choice; neither side forks
- * the PTY path.
- *
- * ## Why these live in jsdom
- *
- * `ensureTerminal()` never calls `term.open()` — that happens in `attach()` —
- * so the spawn path needs no layout and xterm constructs happily here. The
- * parts that *do* need real geometry (attach → fit → resize) are asserted in
- * `agentTerminal.browser.test.tsx`, where pixels exist.
- *
- * ## What is really being protected
- *
- * `fleetIpc.spawnAgent` is the wrapper that marshals agentId/runtime/cwd/size
- * and the Channel across to Rust. Wrappers that "obviously work" are exactly
- * where this codebase has been bitten before (`toBytes` silently returning zero
- * bytes for an unrecognised frame), so the assertions below are on the actual
- * wire args, not on "it got called".
- */
+/** The registry's one decision: `agent_spawn` with an `agentId`, else `terminal_open`
+ * (ARCHITECTURE §2.4). jsdom suffices: `ensureTerminal()` never calls `term.open()`. Assertions
+ * are on the wire args, not "it got called": wrappers that "obviously work" have bitten before. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -30,11 +8,7 @@ import { asAgentId, asTerminalId } from "../../app/types";
 import { channelIdOf, installTauriMock, type TauriMock } from "../../test/tauri-mock";
 import { configureTerminal, disposeAll, ensureTerminal, getTerminalMeta } from "./TerminalRegistry";
 
-/**
- * An agent terminal's TerminalId **is** its AgentId — Rust keys the PTY that
- * way and `agent_spawn` takes no terminalId (`supervisor/mod.rs`:
- * `let terminal_id = spec.agent_id.clone()`).
- */
+/** An agent's TerminalId is its AgentId: Rust keys the PTY that way (`supervisor/mod.rs`). */
 const AGENT_ID = asAgentId("01J0AGENT0000000000000000");
 const AGENT_TERMINAL_ID = asTerminalId(AGENT_ID);
 const SHELL_TERMINAL_ID = asTerminalId("01J0SHELL0000000000000000");
@@ -116,10 +90,8 @@ describe("TerminalRegistry — agent_spawn routing", () => {
     // paint out against it.
     expect(args.rows).toBeGreaterThan(0);
     expect(args.cols).toBeGreaterThan(0);
-    // Same hot plane as any terminal — one Channel, handed straight to Rust.
-    // `channelIdOf` rather than a string match: mockIPC replaces invoke() and
-    // hands the handler the raw args, so Tauri's serializer never runs and the
-    // Channel arrives as an instance rather than "__CHANNEL__:<id>".
+    // `channelIdOf`, not a string match: mockIPC skips Tauri's serializer, so the Channel
+    // arrives as an instance, not "__CHANNEL__:<id>".
     expect(channelIdOf(args.onOutput)).toBeTypeOf("number");
     // `agent_spawn` deliberately carries NO terminalId: Rust derives it from
     // the agentId. Sending one would imply the frontend gets to choose.

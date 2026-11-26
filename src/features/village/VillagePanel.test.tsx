@@ -1,17 +1,6 @@
-/**
- * VillagePanel — the wiring: data hook → VillageView → canvas, plus HUD, hover card,
- * click-to-select, pan/zoom/fit, and the loop's pause/teardown.
- *
- * Seams: `useVillageAgents` is mocked (its own tests live in villageModel.test.tsx), the
- * sprite loader is mocked (jsdom cannot decode PNGs), `getContext` returns the renderer's
- * recording fake (or null, the jsdom default), rAF is a manual queue, and the
- * ResizeObserver captures its callback so a test can "resize" the stage. The engine,
- * the renderer and `VillageView` are real; `VillageView.prototype.pick` is spied where a
- * test needs a character under the pointer (its geometry is pinned in villageView.test).
- * The Seats hall's `/context` read (both pictures: the Village's Seats house and the City's hall
- * under the lounge) is mocked at the IPC call (`contextUsage`); the app store's selection and the
- * context store are real (the hook's own tests: useHallAgent.test.tsx).
- */
+/** Mocked: `useVillageAgents`, the sprite loader (jsdom cannot decode PNGs), rAF (a manual queue),
+ * ResizeObserver and `contextUsage`; `getContext` gives the recording fake. The engine, renderer,
+ * `VillageView` and the stores are real. */
 
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

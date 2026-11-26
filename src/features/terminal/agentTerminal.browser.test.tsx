@@ -1,22 +1,6 @@
-/**
- * Layer 5 — an agent terminal is just a terminal (ARCHITECTURE §2.4).
- *
- * The seam's whole claim is that routing to `agent_spawn` changes *only which
- * command spawns the PTY*, and that everything hardened around the terminal —
- * the 2-column fit guards, attach/fit/resize, detach-keeps-instance, dispose —
- * behaves identically. A test that only asserted "agent_spawn fired" would
- * prove none of that, and the interesting failures all live after the spawn.
- *
- * So this walks the whole journey in real pixels: create → attach → fit →
- * resize → dispose, asserting at each step that the agent terminal is addressed
- * by the id Rust actually keyed it under.
- *
- * Driven through `TerminalView` + `configureTerminal` rather than the store,
- * deliberately: `store.openTerminalTab` still mints its own TerminalId and does
- * not forward `agentId` to the registry, so the store cannot yet produce an
- * agent terminal. That is a known one-line gap — this suite pins the registry
- * contract the store needs to meet.
- */
+/** The whole journey in real pixels (create → attach → fit → resize → dispose), addressed by the
+ * id Rust keyed it under. Driven via `TerminalView` + `configureTerminal`, not the store:
+ * `store.openTerminalTab` does not yet forward `agentId` to the registry. */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -167,10 +151,8 @@ describe("agent terminal — the full journey, in real pixels", () => {
     expect(getTerminal(TERMINAL_ID), "unmount must not dispose").toBe(before);
     expect(ipc.calls("terminal_close"), "unmount must not kill the agent").toHaveLength(0);
 
-    // Re-attach into a *different* host — which is what a pane remount actually
-    // does, and what the detached-holder machinery exists to survive. (A fresh
-    // container is also required: RTL caches one React root per container, and
-    // the old one is dead after unmount.)
+    // A different host, as a pane remount does; also required because RTL caches one React
+    // root per container and the old one is dead after unmount.
     const host2 = document.createElement("div");
     host2.style.width = "640px";
     host2.style.height = "320px";

@@ -1,14 +1,4 @@
-/**
- * App — the shell's own wiring: the CSP reporter mount, and the right rail's
- * tab → panel routing.
- *
- * Same shape as the usage panel's polling test (`features/usage/UsageLimits.test.tsx`):
- * mock the module that owns the side effect, render the component, assert it was
- * started exactly once and that the returned unsubscribe runs on unmount. What is
- * being guarded is the WIRING — `startCspReporter` living in a module is useless
- * if nothing mounts it, and a leaked listener would double every violation line
- * after a remount.
- */
+/** App's wiring: CSP reporter mounted once and unsubscribed on unmount; right-rail routing. */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,13 +14,8 @@ vi.mock("./features/logs/cspReporter", () => ({
   startCspReporter: mocks.startCspReporter,
 }));
 
-// A component that subscribes on mount needs its event plumbing mocked:
-// `<App/>` mounts `<CloseTabShortcut>`, which calls
-// `listen("menu://close-tab")` on mount. A REAL `listen()` here reaches into
-// `window.__TAURI_INTERNALS__` (absent under jsdom) and rejects fire-and-forget
-// *after* the test finishes — which vitest reports as `Errors 1` and exits 1 even
-// though every test passed. The jsdom tier does not stub this globally (only
-// `setup.browser.ts` does), so a file that renders the full App must stub it itself.
+// `<CloseTabShortcut>` calls `listen()` on mount; the real one needs `__TAURI_INTERNALS__` (absent
+// in jsdom) and rejects after the test, failing the run. Only `setup.browser.ts` stubs it globally.
 vi.mock("@tauri-apps/api/event", () => ({
   listen: () => Promise.resolve(() => {}),
   once: () => Promise.resolve(() => {}),
@@ -48,11 +33,8 @@ beforeEach(() => {
 
 describe("App — CSP violation reporter", () => {
   it("renders NO project label in the titlebar", () => {
-    // It used to render `basename(workspaceRoot)` — a single value in a deliberately
-    // multi-root app, so with two projects open it named one arbitrarily
-    // and implied a "current project" that scopes nothing.
-    // This asserts the titlebar is now an ACTIONS-only strip: with a workspace root
-    // set, its folder name must appear nowhere in it.
+    // Actions-only titlebar: one `workspaceRoot` name in a multi-root app implies a "current
+    // project" that scopes nothing, so the folder name must appear nowhere in it.
     useAppStore.setState((s) => {
       s.workspaceRoot = "/Users/me/projects/orders-api";
     });
@@ -90,21 +72,8 @@ describe("App — CSP violation reporter", () => {
   });
 });
 
-/**
- * The right rail's tab → panel routing lives in `<App/>` and NOWHERE else: `<RailTabs/>`
- * is a strip of buttons that writes `rightRailTab`, and the ternary chain in App.tsx is
- * what turns that string into a mounted component. Testing the strip therefore proves
- * nothing about which panel appears — the seam has to be asserted on its own
- * (two 100%-covered halves do not add up to a working feature).
- *
- * The concrete bug this guards: the chain's final
- * `else` was an UNLABELLED `<DbPanel/>`. Appending a tab to `RightRailTab` without
- * giving it an arm is not a type error and does not crash — the new tab quietly renders
- * the *previous* fallback's panel, which looks like a working feature until someone
- * clicks it. Both arms are asserted two-sidedly: the right panel is
- * present AND the other one is gone, because "renders the DB panel for everything" also
- * satisfies a one-sided check on `db`.
- */
+/** Routing lives only in App.tsx's chain; asserted two-sided (right panel present, other gone)
+ * because a new `RightRailTab` with no arm silently renders the fallback's panel. */
 describe("App — right rail tab routing", () => {
   beforeEach(() => {
     // This file does not use the shared store harness (it asserts on the real shell),

@@ -1,17 +1,6 @@
-/**
- * Editor "chrome" theme (M4) — caret, selection, gutter, active line, surface.
- *
- * Shiki colors the TOKENS via CM6 decorations, but the editor's chrome is a
- * separate CM6 concern. Without theming, the native caret sits dark-on-dark
- * against the Tokyo Night background and is invisible (the cursor could not be
- * seen). This themes the chrome to match the Tokyo Night token palette so
- * the whole editor reads as one dark surface — in the default editable state AND
- * for read-only files.
- *
- * We do NOT use `drawSelection()`, so the caret is the browser-native one
- * (`caret-color` on `.cm-content`); the `.cm-cursor` rules are a belt-and-braces
- * fallback should a drawn cursor ever be added.
- */
+/** Editor chrome (caret, selection, gutter, active line) matched to the Tokyo Night tokens; the
+ * native caret is otherwise invisible dark-on-dark. No `drawSelection()`, so `caret-color`
+ * drives the caret; the `.cm-cursor` rules are a fallback. */
 
 import { EditorView } from "@codemirror/view";
 

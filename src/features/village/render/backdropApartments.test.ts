@@ -1,21 +1,6 @@
-/**
- * The City's apartments (render/backdropApartments.ts) — buildings behind the open stretches of sky
- * between the neon clusters, with randomly lit windows like occupied and vacant apartments, because
- * otherwise the city looks unfinished.
- *
- * The layout — every quiet stretch filled edge to edge, nothing outside one, world-locked, as tall as the
- * haze's top and no taller than a share of the sky, never two danchi side by side, never over a crown, no
- * taller than the haze in front of a tower's foot (a sweep of cities); the day pass — hazed DAY colours,
- * veiled at night, a raster a building at a whole zoom and rects below, the face `faceAt` reports exactly
- * what is painted and opaque under it; and the night pass — every light through `fillLit`, none at noon,
- * a quarter of the homes vacant and never lit, each window at its own fixed threshold, TVs flickering by
- * the clock, nothing lit in a temple's box or off the view.
- *
- * A recording fake stands in for the canvas (jsdom has none), and a fake OffscreenCanvas for the rasters:
- * fills are rastered here into world pixels at zoom 1. Expectations are written by hand:
- * sizes from the design, never read back off the painter under test. Real pixels are
- * backdropApartments.browser.test.tsx's.
- */
+/** A recording fake stands in for the canvas (jsdom has none), a fake OffscreenCanvas for rasters.
+ * Expectations are hand-written from the design, never read back off the painter under test;
+ * real pixels are backdropApartments.browser.test.tsx's. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -96,10 +81,8 @@ const plan = (i: number, floors: number, team = 2): CityPlan => ({
 const city = (floors: number[], team = 2, seats?: number): World => buildCityWorld(floors.map((f, i) => plan(i, f, i === 0 ? team : 2)), seats ? { seats } : undefined);
 /** The lowest city there is: the HQ and two one-floor projects. */
 const low = city([1, 1]);
-/**
- * Cities of 1–12 floors, narrow and wide, with the lounge and without — among them low ones where a tower's
- * crown comes down to an older block's roof, leaving no room for its tank (found by a search of cities).
- */
+/** Cities of 1–12 floors, narrow and wide, with and without the lounge, incl. low ones where a
+ * tower's crown comes down to an older block's roof, leaving no room for its tank. */
 const SWEEP: World[] = [reference, low, city([1, 1], 26, 64), city([1, 1], 9, 64), city([10, 1]), city([1], 26, 16), city([1, 1], 4, 16), city([1, 1], 6, 16), city([1, 1], 18, 16), city([1], 13), city([1, 1, 1, 1], 9, 16)];
 for (const floors of [[1], [3], [6], [12], [2, 5], [9, 1], [4, 4, 4], [12, 1, 7], [1, 1, 1, 1]])
   for (const team of [2, 26]) SWEEP.push(city(floors, team, 64), city(floors, team));
@@ -163,10 +146,8 @@ function lightScene(world: World, amb: Ambience, lit: number, cam: Camera = FIT,
   };
 }
 
-/**
- * The quiet stretches of [x0, x1) chained as the apartments lay them out: two less than 48 px apart are one
- * (no canyon building fits between them).
- */
+/** The quiet stretches of [x0, x1) chained as the layout does: two under 48 px apart are one (no
+ * canyon building fits between). */
 function chained(world: World, x0: number, x1: number): [number, number][] {
   const out: [number, number][] = [];
   for (const [a, b] of quietSpans(world, x0, x1)) {

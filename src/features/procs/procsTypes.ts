@@ -1,37 +1,17 @@
-/**
- * Dev apps on this machine — the wire contract.
- *
- * Mirrors `procscan::DevApp` / `procscan::ProcsList` in `src-tauri/src/procscan/` (serde
- * camelCase). The shapes below mirror that contract exactly; where it leaves a return type
- * open, the choice made is written next to it (search "DECIDED") so the Rust and TypeScript
- * sides can be compared line by line.
- *
- * Not types-only on purpose: the runtime labels and the poll cadence live here too, so v8
- * measures this file instead of reporting it as 0-of-0 (vitest.config.ts excludes types-only
- * files by name).
- */
+/** Wire contract mirroring `procscan::DevApp` / `ProcsList` (serde camelCase); choices it leaves
+ * open are marked DECIDED. Not types-only on purpose, so v8 measures it (vitest.config.ts
+ * excludes types-only files by name). */
 
-/**
- * `shell` = a `sh -c …` / shell script whose stdout or stderr goes to a FILE (Rust's
- * `procscan::Runtime::Shell`): plain interactive shells are never listed, but a script writing
- * a log is something you may want to Stream.
- */
+/** `shell` = a shell script whose stdout/stderr goes to a file (`procscan::Runtime::Shell`);
+ * plain interactive shells are never listed. */
 export type DevRuntime = "jvm" | "node" | "rust" | "python" | "go" | "docker" | "shell";
 
-/**
- * Where the process's stdout/stderr go:
- * - `terminal` / `pipe` — a tty or pipe owned by another program: unreadable from here.
- * - `file` — redirected to a regular file, which is also listed in `logFiles`.
- * - `none` — `/dev/null` (`NUL` on Windows) or closed.
- * - `ide-terminal` — the PTY of an IDE terminal (`DevApp.terminalId`): its output IS that
- *   terminal's stream already, so the card offers "Open terminal", never a Restart.
- */
+/** `terminal`/`pipe`: owned by another program, unreadable here; `file`: also in `logFiles`;
+ * `none`: `/dev/null`/`NUL` or closed; `ide-terminal`: an IDE terminal's PTY (`terminalId`),
+ * already that terminal's stream, so the card offers "Open terminal", never a Restart. */
 export type ConsoleKind = "terminal" | "pipe" | "file" | "none" | "ide-terminal";
 
-/**
- * `ide` = a descendant of the IDE's process tree (an IDE terminal's shell, or an
- * agent running in one, started it — `cargo run` → `gazelle`); `external` = everything else.
- */
+/** `ide` = a descendant of the IDE's process tree (an IDE terminal or its agent started it). */
 export type AppOrigin = "ide" | "external";
 
 export interface DevLogFile {
@@ -66,38 +46,22 @@ export interface DevApp {
   agentId: string | null;
   /** Display label of who started it — the agent's or the terminal's title (`claude · gazelle`). */
   launchedBy: string | null;
-  /**
-   * The capture guard (an agent can run a program with every proxy variable
-   * stripped, so none of its calls reach Network, silently). `origin: "ide"` only: `true` =
-   * its environment points at the IDE's capture proxy; `false` = it does not (stripped, another
-   * port, `NO_PROXY=*`) — its HTTP cannot show in Network, and the UI says so with a "Restart
-   * with capture"; `null` = unknown (the OS hides its env, the IDE injects no proxy) or an
-   * external app. Rust reads the env and sends only this boolean — the env itself never
-   * crosses the wire.
-   */
+  /** `origin: "ide"` only: `true` = its env points at the IDE's capture proxy; `false` = it does
+   * not (offer Restart with capture); `null` = unknown or external. Rust sends only this boolean:
+   * the env never crosses the wire. */
   captured: boolean | null;
 }
 
-/**
- * `procs_list`. Discovery runs on macOS, Linux and Windows — on Windows too,
- * consoles report `file` / `pipe` and `logFiles` lists the files an app has open — so
- * `available: false` (with the reason) only comes from an OS with no discovery at all
- * (`procscan::unavailable_list`).
- */
+/** Discovery runs on macOS, Linux and Windows; `available: false` (with the reason) only comes
+ * from an OS with none (`procscan::unavailable_list`). */
 export interface ProcsList {
   available: boolean;
   reason: string | null;
   apps: DevApp[];
 }
 
-/**
- * What `logstream_tail_app` / `logstream_tail_docker` resolve to.
- *
- * DECIDED (the contract named the commands, not their return): the tail's hub `key` — the only
- * handle `logstream_untail({ key })` accepts, so the UI never has to reconstruct Rust's key —
- * and the `source` label its `LogLine`s will carry (`<name> · <file>` / `<name> · docker`), so
- * the Logs view can solo the new stream the moment it starts instead of guessing the label.
- */
+/** DECIDED: the hub `key` (the only handle `logstream_untail` accepts) and the `source` label its
+ * lines will carry, so the Logs view can solo the new stream at once instead of guessing. */
 export interface TailStarted {
   key: string;
   source: string;

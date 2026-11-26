@@ -1,31 +1,6 @@
-//! Keep `NODE_USE_ENV_PROXY=1` (capture of Node's built-in `fetch`) without Node 22's
-//! experimental warning in every process.
-//!
-//! **What Node does (measured on 22.23.5).** With `NODE_USE_ENV_PROXY=1` and a
-//! proxy variable set, Node 22.21+ builds undici's `EnvHttpProxyAgent` during bootstrap
-//! (`setupHttpProxy` in `internal/process/pre_execution`) and undici prints
-//! `[UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any
-//! time.` — in every `node` an IDE terminal or agent runs, even `node -e 1`. Older Nodes ignore
-//! the variable (no capture, no warning); Node ≥ 24.5 honours it too.
-//!
-//! **Why not `--disable-warning=UNDICI-EHPA`.** It is the obvious flag, but `NODE_OPTIONS` is
-//! read by every Node the terminal ever runs, and a Node that does not know a flag in
-//! `NODE_OPTIONS` refuses to start at all (`--disable-warning` exists from 20.11 / 21.3). An
-//! nvm user on an older Node would lose every `node`, `npm` and `npx` in IDE terminals to hide
-//! one line. A `--require` preload is understood by every Node, so the variable stays safe for
-//! all of them.
-//!
-//! **What the preload does.** It wraps `process.emitWarning` and drops exactly the warnings
-//! whose code is `UNDICI-EHPA`; every other warning (deprecations, the user's own) passes
-//! through unchanged. Measured: a `--require` module runs BEFORE the bootstrap emits the
-//! warning, so the wrapper sees it. Written to `<netcap dir>/node/` like the curl shim
-//! (never `~/.claude`), and `pty_env` names it only when the file exists — a `--require` of a
-//! missing file would stop Node.
-//!
-//! **Quoting.** `NODE_OPTIONS` splits on spaces; inside double quotes a backslash escapes the
-//! next character (Node's `ParseNodeOptionsEnvVar`). So the path is double-quoted with `\` and
-//! `"` escaped — a Windows path (`C:\Users\…`) unescaped inside quotes loses its backslashes
-//! (measured: `Cannot find module`), and macOS's `Application Support` needs the quotes.
+//! Drops Node 22.21+'s `UNDICI-EHPA` warning (from `NODE_USE_ENV_PROXY=1`) via a `--require`
+//! preload; `--disable-warning` would stop older Nodes starting, as would a missing preload file.
+//! The path is double-quoted with `\` and `"` escaped (`NODE_OPTIONS` parsing; Windows, spaces).
 
 use std::path::{Path, PathBuf};
 
@@ -153,11 +128,8 @@ mod tests {
         Some((major, minor))
     }
 
-    /// The real Node: with the env a terminal gets (proxy variables, `NODE_USE_ENV_PROXY=1`,
-    /// the user's own `NODE_OPTIONS` plus our preload, from a directory with a space in its
-    /// name), the EHPA warning is gone while every other warning still prints and the user's
-    /// own option still applies. Without the preload the same Node prints the warning — the
-    /// preload is the cause (skipped where Node is too old to warn).
+    /// Real Node with a terminal's env (space in the dir name): EHPA gone, other warnings and the
+    /// user's option intact; without the preload it warns. Skipped where Node is too old to warn.
     #[test]
     fn a_real_node_runs_quietly_with_the_preload_and_keeps_other_warnings() {
         let Some((major, minor)) = node_version() else {

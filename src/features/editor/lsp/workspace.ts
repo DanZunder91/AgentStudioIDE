@@ -1,14 +1,5 @@
-/**
- * The `@codemirror/lsp-client` Workspace host (M5).
- *
- * Maps the client's cross-file seam onto our editor:
- *   • `openFile`/`closeFile` → track the file + `didOpen`/`didClose`.
- *   • `syncFiles` → forward the plugin's accumulated edits as `didChange`.
- *   • `displayFile(uri)` → `openEditorTab(path)` + resolve the target view (the
- *     go-to-definition landing point for a symbol in another file).
- *   • `requestFile(uri)` → the scoped `read_file` (used by reference previews;
- *     kept behind the security scope so a server can't escape it).
- */
+/** `@codemirror/lsp-client` Workspace host. `requestFile` goes through the scoped `read_file`
+ * so a language server cannot read outside the security scope. */
 
 import { type ChangeSet, Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";

@@ -1,9 +1,5 @@
-/**
- * Test-only helper: a hand-drawn World from ASCII, for the edge cases the
- * real `buildWorld` never produces (sealed rooms, seats without a pc, …).
- *
- *   . grass   = path   _ floor   # wall   ~ water   o plaza
- */
+/** Test-only World from ASCII, for edge cases `buildWorld` never produces (sealed rooms, …).
+ *   . grass   = path   _ floor   # wall   ~ water   o plaza */
 
 import type { House, Prop, Seat, TileKind, World } from "../villageTypes";
 

@@ -1,14 +1,6 @@
-/**
- * Agent Village — the sprite bank: loads the vendored pixel-agents PNGs
- * (src/assets/pixel-agents, MIT — see its README) as Vite asset URLs, decodes
- * them, and lazily pre-renders recoloured variants (character hue shifts,
- * colourised floors/walls), cached by key.
- *
- * It must degrade, never throw: if any PNG fails to load the bank comes back
- * flagged `fallback` and the renderer paints coloured rectangles instead. If a
- * recolour needs a canvas the host does not have, that one getter falls back
- * (characters to the un-shifted sheet, floors/walls to `null`).
- */
+/** Sprite bank: the vendored pixel-agents PNGs (MIT, src/assets/pixel-agents) plus lazily cached
+ * recoloured variants. Degrades, never throws: a failed PNG flags the bank `fallback` (coloured
+ * rects); a recolour without a canvas falls back to the unshifted sheet or `null`. */
 
 import char0 from "../../../assets/pixel-agents/characters/char_0.png";
 import char1 from "../../../assets/pixel-agents/characters/char_1.png";
@@ -240,10 +232,7 @@ export function createBank(
   };
 }
 
-/**
- * Load and decode every vendored PNG. Resolves to a working bank, or — if any
- * image fails to load — to a `fallback` bank. Never rejects.
- */
+/** Never rejects: resolves to a working bank, or a `fallback` bank if any image fails to load. */
 export async function loadSprites(
   deps: Partial<SpriteDeps> = {},
 ): Promise<SpriteBank> {

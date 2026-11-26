@@ -1,8 +1,5 @@
-/**
- * The dev-apps IPC seam: command names AND argument shapes are the contract with the Rust side,
- * pinned as literals — never read back from `procsTypes.ts` (an expectation derived from the
- * code under test cannot fail).
- */
+/** Command names and argument shapes are the Rust contract, pinned as literals, never read back
+ * from `procsTypes.ts` (an expectation derived from the code under test cannot fail). */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

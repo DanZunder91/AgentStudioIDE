@@ -1,90 +1,5 @@
-/**
- * Markdown-preview zoom — layer 5, the real-browser tier (testing-strategy §1).
- *
- * Every claim here is a geometry claim, so this tier is the only place any of
- * them can live: under jsdom
- * `getBoundingClientRect()` is 0×0 and a scroll box is inert, so "scale turns
- * into scrollable overflow", "the pan clamps to real bounds" and "the cursor
- * anchor lands where the math says" would all be vacuously green there. The
- * jsdom suites pin the arithmetic and the wiring; this file is where the
- * pixels are.
- *
- *   1. **Prose RE-WRAPS, it does not run off the edge** — the discriminator
- *      between the CSS `zoom` the component uses and the `transform: scale` it
- *      used to use. `transform` leaves layout alone, so magnified
- *      prose overflows to the right and must be panned to be read; `zoom`
- *      shrinks the body's CSS width to `pane / zoom`, so lines re-flow to the
- *      pane and only the height grows. Asserted two-sided — height must grow
- *      roughly with the zoom, width must NOT overflow — which is a claim that
- *      goes red under `transform` and is therefore worth making.
- *   2. **A wide diagram fits the pane at 100% and is exactly 2x that at 200%**
- *      — the contract in one claim, and two-sided on purpose:
- *      natural-size-everywhere passes the second half, `max-width: 100%`
- *      passes the first, and only `calc(100% * var(--mdp-zoom))` passes both.
- *   3. **Real pan** — ctrl+drag scrolls by real pixels, a huge drag pins to
- *      the box's actual scroll bound (Chromium clamps the assignment — proof
- *      the overflow exists), and after pointerup further moves change nothing.
- *   4. **Anchored wheel zoom** — through a stateful controlled harness (the
- *      CodeEditor usage shape), a native ctrl+wheel at a known cursor point
- *      moves scrollLeft/scrollTop by exactly `anchorScrollDelta` of the
- *      pre-wheel body rect. Real rects, real scroll clamping, sub-pixel
- *      tolerance only.
- *   5. **Fit ZOOMS OUT a diagram taller than the pane** — the 50%
- *      case. A 400x600 schema at 200% is 1200px tall in a 400px
- *      pane; after one click it must be no taller than the pane and still fill
- *      it. Two-sided on both counts: the zoom has to have CHANGED and gone
- *      DOWN, and the diagram has to end up filling the constraining axis rather
- *      than merely being small. `fitPreviewZoom`'s whole claim is that the
- *      on-screen size is exactly linear in the zoom — a claim about used
- *      widths under `max-width: calc(100% * var(--mdp-zoom))`, which only a
- *      layout engine can settle.
- *   6. **Fit ZOOMS IN a diagram smaller than the pane** — the 200%
- *      case, the same rule read in the other direction. A 200x100 schema at
- *      100% grows until the CONSTRAINING axis (here the width) is the pane, and
- *      the zoom went UP. A one-directional implementation — `Math.min(1, ratio)`,
- *      the obvious "fit" — passes claim 5 and reds this one.
- *   7. **The Fit control is the SAME SIZE ON SCREEN at every zoom.** Nested
- *      `zoom` MULTIPLIES, so `.markdown-preview__fit` carries
- *      `zoom: calc(1 / var(--mdp-zoom, 1))` to cancel the body's exactly. This
- *      earns its own claim because the failure is not subtle and has no other
- *      detector: without that one line the button is 4x its design size at
- *      400%, a control the size of a table cell sitting on top of the diagram
- *      the user zoomed in to read. Measured at zoom 1 and zoom 4, matched to a
- *      pixel — and jsdom, which applies no CSS at all, cannot see it.
- *   8. **The fitted diagram is SCROLLED INTO VIEW.** Fitting a diagram that is
- *      40 paragraphs below the fold is only half a feature if the user is left
- *      looking at the top of the document. The component defers the
- *      `scrollIntoView` to the layout effect for the same reason the wheel
- *      anchor is deferred — scrolling before the new zoom is laid out clamps
- *      against the OLD bounds — and "the old bounds" is precisely the sort of
- *      thing a stubbed scroll box cannot have.
- *
- * What this tier CANNOT prove is the thing the change is for: that the pixels
- * are sharp. Blur has no DOM observable. What it can pin is the mechanism that
- * produces sharpness — that zooming changes LAYOUT (claim 1) rather than
- * scaling a finished raster — and that is exactly what claim 1 asserts.
- *
- * The fixture is plain markdown ON PURPOSE: mermaid renders async and
- * nondeterministically (its pipeline has its own suites), and images would
- * reach for the un-stubbed image-read IPC. Short lines keep the body narrower
- * than the 600px box at zoom 1. The wide element is a raw-HTML `<div>` with an
- * explicit width — DOMPurify keeps `style`, and it is a faithful stand-in for a
- * diagram pinned to its natural size (pinDiagramToNaturalSize), without dragging
- * mermaid's async pipeline into a geometry test.
- *
- * The Fit fixtures (claims 5-8) extend that precedent one step: they hand-write
- * the whole post-hydration block, `--rendered` class and Fit `<button>` and all,
- * i.e. byte-for-byte what `sizeDiagramForZoom` + `addFitControl` leave behind.
- * DOMPurify keeps every part of it — `<button>` and `type` are in the default
- * tag/attribute allow-lists and `data-*` is allowed by default — which was
- * checked against the real sanitiser before these fixtures were written, since
- * a silently-stripped button would make `getByTestId` the failing line and hide
- * the geometry entirely. The `--rendered` class is also what keeps the mermaid
- * effect off the block: it is that effect's "already hydrated" guard.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts \
- *        src/features/editor/markdownPreviewZoom.browser.test.tsx`
- */
+/** Preview zoom geometry needs a real layout engine: jsdom has 0x0 rects and inert scroll boxes.
+ * Fixtures hand-write post-hydration markup DOMPurify keeps; `--rendered` keeps mermaid off it. */
 
 import { useState } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
@@ -107,12 +22,8 @@ const DOC = [
   F,
 ].join("\n");
 
-/** A rendered diagram, post-hydration, written by hand: the exact markup
- *  `sizeDiagramForZoom` produces (natural `width`, NO inline `max-width`, the
- *  `--rendered` class) for a 2400px-wide schema — far past the 600px pane. Raw
- *  HTML, because markdown-it runs with html:true and DOMPurify keeps `class`,
- *  `style` and `<svg>`; mermaid's async pipeline has no business in a geometry
- *  test, and this is byte-for-byte what it hands us. */
+/** Hand-written `sizeDiagramForZoom` output (natural width, no inline max-width, `--rendered`)
+ * for a 2400px-wide schema, far past the 600px pane. */
 const WIDE_ID = "wide-diagram";
 const NATURAL_W = 2400;
 const WIDE_DOC =
@@ -120,15 +31,8 @@ const WIDE_DOC =
   `<svg id="${WIDE_ID}" style="width: ${NATURAL_W}px; height: auto;" ` +
   `viewBox="0 0 ${NATURAL_W} 900"></svg></pre>\n`;
 
-/**
- * A wide README IMAGE — the same geometry claim as the diagram above, on the
- * other element that carries a fit-the-pane ceiling. The `src` is a `data:` URL
- * on purpose: `MarkdownPreview`'s inlining pass skips any src already carrying a
- * scheme, so this fixture never reaches the un-stubbed image-read IPC (the same
- * constraint this file's header records for the diagram fixture). The explicit
- * `width`/`height` attributes give it layout before any decode completes, so the
- * measurement is deterministic rather than load-order dependent.
- */
+/** A wide README image: a `data:` src skips the inlining pass (no image-read IPC), and explicit
+ * width/height give it layout before decode. */
 const WIDE_IMG_ID = "wide-img";
 const WIDE_IMG_DOC =
   `${DOC}\n\n<img id="${WIDE_IMG_ID}" width="${NATURAL_W}" height="900" ` +
@@ -142,10 +46,8 @@ const view = (zoom: number, text: string = DOC): React.JSX.Element => (
   </div>
 );
 
-/** The real usage shape: a parent owns the zoom and round-trips onZoomChange
- *  (CodeEditor does exactly this via the store). Claim 3 needs the round trip,
- *  because the anchor scroll is applied only AFTER the new zoom has been laid
- *  out. It uses the WIDE fixture so horizontal scroll is real and unclamped. */
+/** The parent owns the zoom (the CodeEditor shape): the anchor scroll applies only after the new
+ * zoom is laid out. Uses the wide fixture so horizontal scroll is real. */
 function ZoomHarness(): React.JSX.Element {
   const [zoom, setZoom] = useState(2);
   return (
@@ -155,24 +57,16 @@ function ZoomHarness(): React.JSX.Element {
   );
 }
 
-/** A rendered diagram block WITH its Fit control — what the component leaves in
- *  the DOM after `sizeDiagramForZoom` + `addFitControl`, written by hand for the
- *  reason above. The natural `width` inline, no inline `max-width` (the
- *  stylesheet's `calc(100% * var(--mdp-zoom))` owns the ceiling) and `height:
- *  auto` + a viewBox, so the height follows the aspect ratio exactly as a real
- *  diagram's does — which is what makes a HEIGHT-constrained fit testable. */
+/** A diagram block plus its Fit control as the component leaves them. `height: auto` + viewBox
+ * keep the aspect ratio, which makes a height-constrained fit testable. */
 const diagramBlock = (id: string, width: number, height: number): string =>
   `<pre class="markdown-preview__mermaid markdown-preview__mermaid--rendered">` +
   `<svg id="${id}" style="width: ${width}px; height: auto;" viewBox="0 0 ${width} ${height}"></svg>` +
   `<button class="markdown-preview__fit" data-mdp-fit data-testid="diagram-fit" type="button">Fit</button>` +
   `</pre>`;
 
-/** Claim 5/8: 400x600 — at zoom 2 that is 1200 device px tall in a 400px-tall
- *  pane, so HEIGHT is the constraining axis and the fit lands at ~67%,
- *  comfortably above the 25% clamp floor. Dimensioned that way on purpose: a fit
- *  that bottomed out on the floor would be testing `clampPreviewZoom`, not the
- *  fit. It sits after the 40 paragraphs of DOC, which is also what puts it far
- *  below the fold for claim 8. */
+/** 400x600 at zoom 2 is height-constrained and fits at ~67%, above the 25% clamp floor. After the
+ * 40 paragraphs of DOC, so it starts below the fold. */
 const TALL_ID = "tall-diagram";
 const TALL_DOC = `${DOC}\n\n${diagramBlock(TALL_ID, 400, 600)}\n`;
 
@@ -182,10 +76,8 @@ const TALL_DOC = `${DOC}\n\n${diagramBlock(TALL_ID, 400, 600)}\n`;
 const SMALL_ID = "small-diagram";
 const SMALL_DOC = `${DOC}\n\n${diagramBlock(SMALL_ID, 200, 100)}\n`;
 
-/** The Fit usage shape, and the same stateful round trip ZoomHarness makes for
- *  the wheel — Fit needs it twice over: the control is only rendered/handled
- *  when the zoom is CONTROLLED, and the deferred `scrollIntoView` can only land
- *  on the right pixels once the new zoom has been laid out. */
+/** Fit renders only under a controlled zoom, and the deferred `scrollIntoView` lands only after the
+ * new zoom is laid out, so this harness round-trips the zoom. */
 function FitHarness({
   text,
   initial,
@@ -220,19 +112,8 @@ const body = () => container().querySelector<HTMLElement>(".markdown-preview__bo
 const zoomNow = (): number => Number(body().style.zoom);
 const rectOf = (id: string): DOMRect => document.getElementById(id)!.getBoundingClientRect();
 
-/**
- * The pane's CONTENT box in device px, measured exactly the way `onFitClick`
- * measures it: `clientWidth`/`clientHeight` already exclude a scrollbar, and the
- * 20/26/40 padding has to come off by hand or the diagram is fitted to a box
- * 52px wider than the space it can actually occupy.
- *
- * Re-measured at every assertion rather than captured once, because the pane is
- * not a constant across a fit: zooming out retires the horizontal scrollbar the
- * un-fitted diagram was causing, and on a platform with classic (space-taking)
- * scrollbars that hands the pane back ~15px of height *after* the fit was
- * computed. Headless Chromium here uses overlay scrollbars and the box does not
- * move — re-measuring is what keeps the assertions true on both.
- */
+/** The pane's content box as `onFitClick` measures it (client size minus 20/26/40 padding).
+ * Re-measured per assertion: a fit can retire a classic scrollbar and resize the pane. */
 function paneBox(): { width: number; height: number } {
   const el = container();
   const style = getComputedStyle(el);
@@ -276,11 +157,7 @@ describe("markdown preview zoom — real geometry (Chromium)", () => {
 
     rerender(view(2));
 
-    // THE claim, and the one that separates `zoom` from `transform: scale`.
-    // Under `transform` the body keeps its 1× layout width and the magnified
-    // lines run off the right edge, so this would be a horizontal overflow.
-    // Under `zoom` the body's CSS width is pane/2, the lines re-flow, and only
-    // the height grows — you read by scrolling DOWN, not by panning sideways.
+    // Under `transform: scale` lines would overflow to the right; `zoom` re-flows them to the pane.
     expect(el.scrollWidth).toBeLessThanOrEqual(el.clientWidth);
     // Two-sided: the zoom must actually have done something. Re-wrapped prose
     // is taller than 2× (narrower column ⇒ more lines), never shorter.
@@ -289,10 +166,7 @@ describe("markdown preview zoom — real geometry (Chromium)", () => {
   });
 
   it("a wide diagram FITS the pane at 100% and is exactly 2x that at 200%", () => {
-    // The contract, in one test: the diagram keeps its
-    // normal size, and zooming it does not distort it. Both halves are claims,
-    // and each one alone is satisfiable by a broken implementation — natural
-    // size everywhere passes the second, `max-width: 100%` passes the first.
+    // Two-sided: natural size everywhere passes half 2, `max-width: 100%` passes half 1.
     const { rerender } = render(view(1, WIDE_DOC));
     const el = container();
     const diagram = () => document.getElementById(WIDE_ID)!.getBoundingClientRect();
@@ -308,23 +182,12 @@ describe("markdown preview zoom — real geometry (Chromium)", () => {
 
     rerender(view(2, WIDE_DOC));
 
-    // Half 2 — "i zoom": exactly twice as big on screen, and now overflowing,
-    // which is what ctrl/cmd+drag is for. `getBoundingClientRect` reports
-    // zoomed pixels. A plain `max-width: 100%` reds this line: the cap would
-    // shrink with the pane's zoomed CSS width and pin the diagram at widthAt1.
+    // A plain `max-width: 100%` fails here: the cap shrinks with the zoomed CSS width.
     expect(diagram().width).toBeCloseTo(widthAt1 * 2, -1);
     expect(el.scrollWidth).toBeGreaterThan(el.clientWidth);
   });
 
-  /**
-   * 🔴 A REGRESSION test for a bug that was shipped, not a guard for a new one.
-   * `.markdown-preview__body img` used to carry a plain `max-width: 100%` —
-   * the same trap the image viewer has to avoid. Under `zoom: Z` the body measures `W / Z` CSS
-   * px, so `100%` resolves back to exactly `W` device px at every Z: a wide README image stayed
-   * the SAME on-screen size at 100% and at 400% while every paragraph around it grew.
-   * Two-sided for the same reason as the diagram claim above — natural-size
-   * everywhere passes half 2, `max-width: 100%` passes half 1.
-   */
+  /** Under `zoom: Z` a `max-width: 100%` image stays W device px at every Z while prose grows. */
   it("a wide README IMAGE fits the pane at 100% and is exactly 2x that at 200%", () => {
     const { rerender } = render(view(1, WIDE_IMG_DOC));
     const el = container();
@@ -451,10 +314,7 @@ describe("markdown preview zoom — real geometry (Chromium)", () => {
     // Two-sided: the zoom must actually have MOVED, and downward. A component
     // that ignores the click, or one that only ever zooms in, reds here.
     expect(zoomNow()).toBeLessThan(2);
-    // …and it must have landed on the fit, not on the rail. The fixture is
-    // dimensioned to fit at ~67%, so a zoom sitting exactly on 25% would mean
-    // the clamp floor produced this number and everything below is
-    // `clampPreviewZoom`'s doing rather than `fitPreviewZoom`'s.
+    // The fixture fits at ~67%: a zoom on the 25% floor would mean the clamp, not the fit, decided.
     expect(zoomNow()).toBeGreaterThan(PREVIEW_ZOOM_MIN);
 
     // THE claim: the whole diagram is on screen. Measured against the pane as it
@@ -463,11 +323,7 @@ describe("markdown preview zoom — real geometry (Chromium)", () => {
     const fitted = rectOf(TALL_ID);
     expect(fitted.height).toBeLessThanOrEqual(pane.height + 1);
     expect(fitted.width).toBeLessThanOrEqual(pane.width + 1);
-    // Two-sided again, and this is the half that hurts: "fits" is satisfied by
-    // any zoom small enough, including a useless one — `ratio * 0.5` passes
-    // every line above it. The constraining axis has to FILL the pane, and
-    // because `fitPreviewZoom` scales by the exact ratio it lands ON the pane
-    // it was measured against, never at half of it.
+    // Any small zoom "fits"; the constraining axis must also fill the pane.
     expect(fitted.height).toBeGreaterThan(pane.height * 0.9);
   });
 
@@ -502,11 +358,8 @@ describe("markdown preview zoom — real geometry (Chromium)", () => {
   });
 
   it("keeps the Fit control the SAME SIZE ON SCREEN at 100% and at 400%", () => {
-    // `.markdown-preview__fit` carries `zoom: calc(1 / var(--mdp-zoom, 1))`, and
-    // nested `zoom` MULTIPLIES, so that cancels the body's zoom exactly. Delete
-    // that one line and the button is 4x its design size at 400% — a control the
-    // size of a table cell, planted on top of the diagram the user zoomed in to
-    // read. No CSS runs under jsdom, so this claim can only live here.
+    // `.markdown-preview__fit` cancels the body zoom (`zoom: calc(1 / var(--mdp-zoom, 1))`; nested
+    // zoom multiplies). jsdom applies no CSS, so only this tier can see it.
     const { rerender } = render(controlled(1, SMALL_DOC));
     const button = () => screen.getByTestId("diagram-fit").getBoundingClientRect();
 
@@ -531,12 +384,8 @@ describe("markdown preview zoom — real geometry (Chromium)", () => {
   });
 
   it("scrolls the fitted diagram into view when it was below the fold", () => {
-    // Fitting a diagram 40 paragraphs down is half a feature if the user is left
-    // staring at the top of the document. The component defers the
-    // `scrollIntoView` into the layout effect for the same reason the wheel
-    // anchor is deferred: scroll before the new zoom is laid out and the browser
-    // clamps against the OLD bounds, landing the diagram you just fitted
-    // off-screen. Old bounds are a thing only a real scroll box has.
+    // The scroll is deferred to the layout effect: before the new zoom is laid out it would clamp
+    // against the old bounds.
     render(<FitHarness text={TALL_DOC} initial={2} />);
     const el = container();
     const block = () => document.getElementById(TALL_ID)!.parentElement!.getBoundingClientRect();

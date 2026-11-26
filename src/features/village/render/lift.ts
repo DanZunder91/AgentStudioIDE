@@ -1,21 +1,6 @@
-/**
- * Agent Village — the City's lifts (busy agents take a lift up to the
- * street and walk to the building they belong in). Our own procedural pixel art, three pieces:
- *
- *   drawShaft   a lift SHAFT (`DrawItem` "shaft", engine/drawList.ts `liftShafts`): a dark steel
- *               strip one tile wide between two light guide rails, a tie across them every tile, and
- *               a landing door at each stop — two closed leaves in a frame, a call lamp over them.
- *               Drawn after the scene, so it runs OVER the back walls and slabs it crosses.
- *   drawCar     a lift CAR round a rider (`DrawItem` "car"): its lit back wall right before the rider,
- *               its frame — lintel, sill and side posts — right after, so the rider stands inside.
- *   drawKiosk   the lounge lift's kiosk on the far sidewalk (prop kind `lift`): a small glass booth
- *               under a blue canopy with an up/down sign, about two tiles tall — the station entrance
- *               a rider comes up into. Its glass and sign are lit at night.
- *   kioskGlow   the kiosk's light spilling onto the street, for the night-lights pass
- *               (render/ambience.ts), with `kioskGlowBox` to cull it.
- *
- * Every piece is a handful of fills; nothing is allocated per frame.
- */
+/** The City's lifts: `drawShaft` (drawn after the scene, OVER the walls and slabs it crosses),
+ * `drawCar` (back before the rider, frame after), `drawKiosk` and `kioskGlow` (night-lights pass).
+ * A handful of fills each; nothing is allocated per frame. */
 
 import { TILE, type DrawItem } from "../villageTypes";
 import type { Camera } from "./camera";
@@ -41,11 +26,8 @@ export const SHAFT = {
 /** World px of a landing door's height, from its stop row's floor line up. */
 export const DOOR_H = 26;
 
-/**
- * A shaft over tile rows `top..bottom` of column `col`: the strip with its rails and ties, and a
- * landing door standing on the floor line of each stop row. Paints inside its column, x0 + 1 to
- * x0 + 15, and its rows.
- */
+/** A shaft over rows `top..bottom` of column `col`, a landing door on each stop's floor line;
+ * paints within x0 + 1 to x0 + 15 and its rows. */
 export function drawShaft(ctx: DrawTarget, cam: Camera, item: Extract<DrawItem, { t: "shaft" }>): void {
   const x0 = item.col * TILE;
   const y0 = item.top * TILE;
@@ -78,11 +60,8 @@ export const CAR = {
 export const CAR_W = 14;
 export const CAR_H = 31;
 
-/**
- * One part of a car round the rider whose feet are at (x, y). `back`: the cab's back wall and ceiling
- * light, behind the rider. `front`: the frame — the lintel over its head, the sill under its feet
- * and a post either side — in front of it.
- */
+/** One part of a car round the rider whose feet are at (x, y): `back` (wall, ceiling light) goes
+ * behind the rider, `front` (lintel, sill, posts) in front of it. */
 export function drawCar(ctx: DrawTarget, cam: Camera, item: Extract<DrawItem, { t: "car" }>): void {
   const x = Math.round(item.x) - CAR_W / 2;
   const top = Math.round(item.y) - CAR_H;
@@ -117,10 +96,7 @@ export const KIOSK = {
 /** How far the kiosk's art rises above its 1-tile footprint's top, world px: one tile (the frame's prop cull reaches that far). */
 export const KIOSK_RISE = TILE;
 
-/**
- * The kiosk at (x0, bottom): a plinth, two posts, glass between them with the doors' seam, a canopy
- * with an up and a down arrow. `lit` (the night lights are on) lights its glass and its sign.
- */
+/** The kiosk at (x0, bottom); `lit` (night lights on) lights its glass and sign. */
 export function drawKiosk(ctx: DrawTarget, cam: Camera, x0: number, bottom: number, lit: boolean): void {
   const top = bottom - TILE - KIOSK_RISE;
   rect(ctx, cam, x0 + 3, top + 5, 10, bottom - top - 7, lit ? KIOSK.glassLit : KIOSK.glass);
@@ -153,11 +129,8 @@ export function shaftGlowBox(item: Extract<DrawItem, { t: "shaft" }>): [number, 
   return [item.col * TILE - 1, item.top * TILE, TILE + 2, (item.bottom - item.top + 1) * TILE];
 }
 
-/**
- * A shaft lit at night (render/ambience.ts's lights pass): its glow over the stretches the outdoor
- * grade darkens — the slabs between floors, the soil over the lounge — so the lift reads as one lit
- * column through the dark facade, not a ladder of lit rooms.
- */
+/** A shaft's night glow over the stretches the grade darkens (slabs, the soil over the lounge), so
+ * the lift reads as one lit column, not a ladder of lit rooms. */
 export function shaftGlow(ctx: DrawTarget, cam: Camera, item: Extract<DrawItem, { t: "shaft" }>): void {
   rect(ctx, cam, ...shaftGlowBox(item), SHAFT_GLOW);
 }

@@ -1,27 +1,6 @@
-/**
- * The LAN primitives every room's network is drawn with (engine/teamLan.ts: a project room's team
- * cabled to its router, its boss on Wi-Fi). Pure: the wiring is a function of the World, the traffic
- * a function of who sits where, what was said, and the clock.
- *
- * PACKETS: one per REAL communication, never a rhythm (packets move
- * only when agents communicate with each other). In Claude Code a parent and its sub-agent talk
- * exactly twice — the TASK when it is spawned and the RESULT when it finishes — and every TOOL call
- * is one round-trip to the model. The view observes those as `LanEvent`s; a packet exists only while
- * its trip is under way.
- *
- * Every LAN here is one shape (`starWiring`): a BUS per desk row, joined to the hub by a vertical
- * trunk. A city floor's first desk row hangs from a tray at its router's own height, its later rows
- * from buses `BRANCH_LIFT` px above them — so a one-row floor's trunk has zero length and is dropped.
- * Zero-length runs and repeated route points are always dropped: no run and no route leg has zero
- * length.
- *
- * (The Village's Seats room had a LAN of its own — a switch cabled to a desk per agent — until
- * the Village's Seats became the selected agent's context window: a hall
- * of `/context`'s 200 seats, nobody at a desk, so nothing on a cable.)
- *
- * Shared pieces: `starWiring` (the star shape), `pcPort`, `teamRoot` / `teamHue`, `routeLength` /
- * `pointAt` (a leg may also be diagonal: the Wi-Fi air hop) and `inFlight` (the trip maths).
- */
+/** LAN primitives for every room's network (engine/teamLan.ts). Pure. A packet exists only while a
+ * REAL communication's trip is under way (a task/result between parent and sub-agent, or a tool
+ * call's round-trip), never a rhythm. Zero-length runs and route legs are always dropped. */
 
 import { TILE, type Prop } from "../villageTypes";
 import { hashString } from "./rng";
@@ -39,10 +18,8 @@ export interface LanPoint {
   y: number;
 }
 
-/**
- * `team`: a task or a result between an agent and the agent that started it, in the team's hue;
- * `uplink`: a tool call's round-trip between an agent and the hub (its model API traffic).
- */
+/** `team`: a task or result between an agent and its starter, in the team's hue; `uplink`: a tool
+ * call's round-trip between an agent and the hub (its model API traffic). */
 export type LanPacketKind = "team" | "uplink";
 
 /** A packet's position this frame, world px. */
@@ -56,16 +33,11 @@ export interface LanPacket {
 
 /** How fast a packet runs along its way at least, world px per second. */
 export const PACKET_SPEED = 48;
-/**
- * The longest a trip may take, seconds: a longer way (a wide city floor, a tool call's round-trip)
- * runs faster. So an event's packet is gone at most MAX_TRIP s after the event.
- */
+/** Longest trip, s (longer ways run faster), so a packet is gone ≤ MAX_TRIP s after its event. */
 export const MAX_TRIP = 2;
 
-/**
- * World px above a desk row's top edge where its bus runs: inside the walkway / aisle row above it —
- * a city floor's every desk row but its first (engine/teamLan.ts).
- */
+/** World px above a desk row's top where its bus runs (in the aisle above); used for every city
+ * floor desk row but the first. */
 export const BRANCH_LIFT = 4;
 /** World px below a PC tile's top edge where its cable plugs in. */
 const PORT_DEPTH = 2;
@@ -83,13 +55,9 @@ export interface StarTap {
   busY: number;
 }
 
-/**
- * A star of cable around `hub` — the shape of every LAN here: from each tap's port a vertical drop
- * to its bus, the bus out to the hub's column, a vertical trunk along that column to the hub. Taps
- * on one bus y share it. `runs`: the trunk, the buses top to bottom, then one drop per tap in tap
- * order. `routes[k]`: tap k's path `[port, (port x, bus y), (hub x, bus y), hub]`, repeated points
- * dropped. `taps` must not be empty.
- */
+/** Cable star around `hub`: tap drop → its bus → the hub's column → trunk to the hub. `runs`: the
+ * trunk, buses top-down, then drops in tap order; `routes[k]`: tap k's port → bus → hub column →
+ * hub, repeated points dropped. `taps` must not be empty. */
 export function starWiring(hub: LanPoint, taps: readonly StarTap[]): { runs: CableRun[]; routes: LanPoint[][] } {
   /** Bus y → the x of every port hanging from it. */
   const buses = new Map<number, number[]>();
@@ -127,12 +95,8 @@ function withoutRepeats(points: LanPoint[]): LanPoint[] {
 
 // ───────────────────────────── teams ─────────────────────────────
 
-/**
- * The key a team is coloured by: `start`'s topmost ancestor reachable through `seated` (the agents
- * that are there to draw — an ancestor that is not breaks the chain, and the last one reached is the
- * top). Parents that loop (a corrupt tree) have no top: the loop's smallest key stands in, the same
- * for every member.
- */
+/** The key a team is coloured by: `start`'s topmost ancestor reachable through `seated`. A parent
+ * loop (corrupt tree) has no top: the loop's smallest key stands in, the same for every member. */
 export function teamRoot<T extends { key: string; parentKey: string | null }>(start: T, seated: ReadonlyMap<string, T>): string {
   const chain: string[] = [];
   let h = start;
@@ -163,14 +127,9 @@ export interface InFlight extends LanPoint {
   lh: number;
 }
 
-/**
- * The trip maths of every LAN here (the project rooms' — engine/teamLan.ts): where
- * the packet that left `age` s ago is. Its way is `head` walked from its first point, then `tail`
- * walked from its LAST point back to its first — so a way through the hub is never concatenated;
- * `back` runs that way in reverse (tail's first point → head's first point). It runs at
- * `PACKET_SPEED`, or faster so the trip takes no longer than `MAX_TRIP`. null while the packet is
- * not under way: not sent yet (age < 0), or arrived (a way of no length has no trip at all).
- */
+/** Where the packet sent `age` s ago is: along `head` from its first point, then `tail` from its
+ * LAST point back (never concatenated through the hub); `back` reverses it. At `PACKET_SPEED`, or
+ * faster to fit `MAX_TRIP`. null when not under way (age < 0, arrived, or a zero-length way). */
 export function inFlight(head: readonly LanPoint[], tail: readonly LanPoint[], back: boolean, age: number): InFlight | null {
   const lh = routeLength(head);
   const length = lh + routeLength(tail);
@@ -194,10 +153,8 @@ export function routeLength(route: readonly LanPoint[]): number {
   return len;
 }
 
-/**
- * The point `s` px along a polyline from its first point (past its end: its last point). An
- * axis-aligned leg moves exactly `s` px along its axis; a diagonal one along its direction.
- */
+/** The point `s` px along a polyline (past its end: its last point); a diagonal leg moves along
+ * its direction. */
 export function pointAt(route: readonly LanPoint[], s: number): LanPoint {
   let rest = s;
   for (let k = 1; k < route.length; k++) {

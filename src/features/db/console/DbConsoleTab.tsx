@@ -1,56 +1,13 @@
-/**
- * DbConsoleTab — the container that makes `<DbConsole/>` a real, working tab.
- *
- * `DbConsole` is deliberately presentational: every one of its props is data or a callback,
- * which is why it could be built and tested in parallel with the IPC layer. This file is the
- * seam between the two, and the seam is where the interesting mistakes live — the metrics
- * dashboard shipped a broken screen because a fully-tested button met a fully-tested command
- * across an untested join (`metricsNoSelectionSeam.test.tsx`). So this file is small,
- * and `DbConsoleTab.test.tsx` drives it end to end over a mocked IPC edge only.
- *
- * ── Where the state lives, and why not here ──────────────────────────────────
- * All of it is in the store (`dbConsoles[connectionId]`), none of it in `useState`, because
- * `Pane`'s `TabView` renders **only the active tab**. A console holding its buffer locally
- * loses everything you typed the moment you click the terminal next to it. Keyed by
- * connection id to match `openDbConsoleTab`'s dedupe: one connection → one console → one
- * session → one draft.
- *
- * ── What it refuses to invent ────────────────────────────────────────────────
- * A console for a connection that is not open renders the reason and a Connect button —
- * it does **not** silently dial. Connecting is a gesture with a cost (a real round trip,
- * a credential read from the Vault) and the panel is where the user makes it.
- *
- * Nothing about a not-yet-loaded connection is guessed: with no record, there is no engine,
- * no row limit and no read-only flag, and the honest render is "still loading", not a
- * console configured from defaults that may be wrong about read-only.
- *
- * ── ⌘/Ctrl+S: save the query ─────────────────────────────────────────
- * The keystroke is handled by a `onKeyDown` on the wrapper element, NOT by a window-level
- * listener like `<SaveRequestShortcut/>`, and the difference is load-bearing in two ways:
- *
- * 1. **Scope.** Two consoles can be mounted at once (one per pane in a split). A window
- *    listener would have to guess which one the user meant; a DOM-scoped handler fires only
- *    for the subtree that actually contains focus, so the answer is not a guess.
- * 2. **It reaches the editor.** ⌘S is not a native-menu accelerator (`src-tauri/src/menu.rs`
- *    binds only Cmd+W), and `QueryEditor`'s CM6 keymap does not claim `Mod-s`, so the keydown
- *    bubbles out of the `contenteditable` and through React's root listener to here. That is
- *    the native-menu trap read in the other direction: a `contenteditable` swallows a native
- *    *key equivalent*, not an ordinary keydown nobody has bound.
- *
- * `preventDefault` runs before the store is asked, so the webview's "save page" is suppressed
- * and `<SaveRequestShortcut/>`'s `defaultPrevented` guard yields cleanly — one keystroke
- * cannot save both an API request and a query.
- */
+/** Wires <DbConsole/>; DbConsoleTab.test.tsx drives this seam over mocked IPC. State lives in
+ * dbConsoles[connectionId] (Pane renders only the active tab). Never dials or guesses config.
+ * ⌘S: a focus-scoped wrapper onKeyDown; its preventDefault makes other save handlers yield. */
 
 import { useState } from "react";
 
 import { blankDbConsole, useAppStore } from "../../../app/store";
 import { modChord } from "../../shortcuts/shortcuts";
 import { DbConsole } from "./DbConsole";
-// The wrapper's and the name dialog's rules live in the feature's stylesheet, and this file
-// imports it EXPLICITLY rather than relying on `<DbPanel/>` having pulled it in: a console tab
-// restored on boot can render before the DB rail tab has ever been opened, and a tab whose
-// layout depends on another component having mounted first is a bug waiting for a fresh profile.
+// Imported explicitly: a console restored on boot can render before <DbPanel/> loads db.css.
 import "../db.css";
 
 export function DbConsoleTab({ connectionId }: { connectionId: string }): React.JSX.Element {
@@ -131,10 +88,7 @@ export function DbConsoleTab({ connectionId }: { connectionId: string }): React.
           {c.saveError}
         </p>
       )}
-      {/* Why Stop could not be delivered. Above the console for the same reason a save error is:
-          it must not clear or cover the results, and it is not a query failure — the query is fine
-          and may still be running. The commonest value is not a failure at all: three engines have
-          no server-side cancel, and saying so beats a button that appears to work. */}
+      {/* Why Stop failed, above the console: not a query failure, and must not cover results. */}
       {c.cancelError !== null && (
         <p className="db-console__error" role="status" data-testid="db-console-cancel-error">
           {c.cancelError}
@@ -153,10 +107,8 @@ export function DbConsoleTab({ connectionId }: { connectionId: string }): React.
         queryLanguage={engine.queryLanguage}
         text={c.text}
         onTextChange={(text) => setDbConsoleText(connectionId, text)}
-        // `text` is what the editor decided to run — the selection, the statement under the
-        // cursor, or the whole buffer. Forwarded rather than re-derived here: this
-        // container cannot see the caret, and re-reading `c.text` is exactly the bug that
-        // made ⌘⏎ send the whole buffer and be refused as multi-statement.
+        // The editor's chosen text, forwarded: this container can't see the caret, and
+        // re-reading c.text would send the whole buffer.
         onRun={(mode, text) => void runDbQuery(connectionId, mode, text)}
         onCancel={() => stopWaiting(connectionId)}
         running={c.running}
@@ -177,17 +129,8 @@ export function DbConsoleTab({ connectionId }: { connectionId: string }): React.
   );
 }
 
-/**
- * The "name this query" dialog — the create half of ⌘S.
- *
- * Rendered by the console tab rather than by a host in `App.tsx`, which keeps the feature in
- * its own files — and that is also the better place for it: a dialog owned by the tab
- * cannot be left on screen over a console that has been closed.
- *
- * The typed name lives in `useState` here, not in the store, for the same reason
- * `<ExportDialog/>`'s draft does: a modal is a gesture, not a surface `Pane` unmounts, and the
- * store should not accumulate a key per in-flight text field.
- */
+/** Owned by the tab, so it never outlives its console. The name stays in useState: a modal is a
+ * gesture, not something Pane unmounts. */
 function SaveQueryDialog(): React.JSX.Element {
   const [name, setName] = useState("");
   const confirm = useAppStore((s) => s.dbActions.confirmDbSaveQueryName);

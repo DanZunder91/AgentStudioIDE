@@ -1,12 +1,5 @@
-/**
- * Go-to-definition (M5) — Cmd/Ctrl+Click + F12.
- *
- * We do NOT reuse the library's `jumpToDefinition` command: it does not retry on
- * rust-analyzer's `-32801` "content modified" (returned until indexing finishes,
- * ~5–9 s cold), which would surface as a false "no definition." This wraps the
- * same `textDocument/definition` request with a retry loop that reflects the
- * indexing state, then navigates via the Workspace seam (`displayFile`).
- */
+/** Go-to-definition (Cmd/Ctrl+Click, F12). Not the library's `jumpToDefinition`: it does not retry
+ * rust-analyzer's -32801 while indexing (~5–9 s cold) and would report "no definition". */
 
 import { Prec, type Extension } from "@codemirror/state";
 import { EditorView, keymap, type Command } from "@codemirror/view";
@@ -86,13 +79,8 @@ function navigate(plugin: LSPPlugin, result: LspLocation | LspLocation[] | null)
   });
 }
 
-/**
- * Cmd/Ctrl+Click on a symbol at `pos` — the IntelliJ gesture:
- *   • on a USE → jump to the declaration;
- *   • on the DECLARATION itself (the definition resolves to where you clicked),
- *     or when there is no definition → list every usage (find-usages panel).
- * That is why clicking `fn search` shows "who calls it" rather than sitting still.
- */
+/** On a use, jump to the declaration; on the declaration itself (or with no definition), list
+ * every usage. */
 export function goToDefinitionAt(view: EditorView, languageId: string, pos: number): boolean {
   const plugin = LSPPlugin.get(view);
   if (!plugin) return false;

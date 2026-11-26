@@ -1,21 +1,10 @@
-//! **The single most important safety test in the product**
-//! (testing-strategy.md §7): no committed transcript fixture may contain a
-//! real-world identifier. Raw transcripts are full of home paths, tokens and
-//! secret exports — the allowlist projection is what keeps them out, and *this*
-//! test is what makes that provable on every push and catches a careless
-//! hand-added fixture.
-//!
-//! It is a belt-and-braces denylist over the *output*; the allowlist projection
-//! (`project_transcripts.py`) is the actual mechanism. Both, deliberately.
+//! No committed transcript fixture may contain a real-world identifier (testing-strategy.md §7):
+//! a denylist over the output, backing the allowlist projection (`project_transcripts.py`).
 
 use std::path::{Path, PathBuf};
 
-/// `(label, regex, hard)`. **Hard** patterns are real-world secrets and apply to
-/// EVERY fixture. The two non-hard ones are *prose heuristics* — `"prompt"` and a
-/// long `"text"` body are proxies for "the fan-out allowlist should have dropped
-/// this". They do not apply to fixtures that legitimately carry text (the sub-agent
-/// **activity** feed, whose whole purpose is to surface text) — see the scan's
-/// exemption. The hard secret checks still apply to those fixtures.
+/// `(label, regex, hard)`. Hard patterns (real secrets) apply to EVERY fixture; the two prose
+/// heuristics (`"prompt"`, long `"text"`) skip fixtures meant to carry text (the activity feed).
 fn forbidden() -> Vec<(&'static str, regex::Regex, bool)> {
     let pats: &[(&str, &str, bool)] = &[
         ("home path (/Users)", r"/Users/[a-zA-Z0-9._-]+", true),

@@ -1,8 +1,5 @@
-/**
- * The Sources control: rendered for real over the real store; only the
- * Tauri seam is mocked, so every assertion about `syslog_set` is about the exact command
- * and argument shape Rust receives.
- */
+/** The Sources control over the real store; only the Tauri seam is mocked, so `syslog_set`
+ * assertions are about the exact command and argument shape Rust receives. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

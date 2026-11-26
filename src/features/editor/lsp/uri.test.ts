@@ -1,8 +1,3 @@
-/**
- * `file://` URI ↔ OS path (M5). The seam LSP navigation crosses, so the gotchas
- * — Windows drive letters and spaces — are pinned here.
- */
-
 import { describe, expect, it } from "vitest";
 
 import { pathFromUri, uriFromPath } from "./uri";

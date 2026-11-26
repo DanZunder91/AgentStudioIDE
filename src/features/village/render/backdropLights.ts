@@ -1,31 +1,6 @@
-/**
- * Agent Village — where a backdrop layer's LIGHT may land (render/backdrop.ts `fillLit`).
- *
- * A layer's lights are painted after the outdoor grade, over everything already in the frame, so a
- * light must leave out whatever stands in front of its layer — or a lit shop front would shine
- * through the passer-by walking past it, and a tower's lit floor through the haze in front of its
- * foot. Three kinds of things stand in front, each cut its own way:
- *
- *   - BOXES: the street's trees and lamps (`skylineOccluders`) and this frame's street sprites —
- *     the agents on the street, the passers-by, the vehicles. A rect of light is split around each
- *     (≤ 4 pieces a box).
- *   - a FACE: the haze, and any nearer layer, in front of a HIGH layer — a world y per column below
- *     which nothing behind it shows. Each piece is cut column by column, a run of equal faces one rect.
- *   - SHAPES: the landmarks in front, only where a piece overlaps one's box (everywhere else a piece
- *     is one fill): Fuji and a tower a ROW at a time — their silhouette is one run of columns per row
- *     (`landmarkRow`), so a piece is split round it and rows cut alike merge back into one rect — and a
- *     temple, whose art has holes, a pixel at a time.
- *
- * COST — measured on a reference city at Fit (1280×800 @2x, Chromium, night, ~540 lights a frame):
- * 4.4 ms with the first cut of this file, nearly all of it here — every
- * column of every light walked the haze's chunk (`skylineFaceAt`), a light behind Tokyo Tower or the
- * Skytree went pixel by pixel over their feet' whole width, and every box split every piece. Now the
- * face is looked up once per column a frame (the cutter is built per frame), the towers are cut by row,
- * and a box that misses the light is never split against.
- *
- * Whole world pixels, edges snapped like `rect` (render/paint.ts), in the CURRENT `fillStyle` and
- * `globalAlpha`: the layer sets them once per batch.
- */
+/** Lights paint after the grade, so each is cut around what stands in front: BOXES (street sprites,
+ * trees, lamps) split it, a FACE cuts it per column, landmark SHAPES per row (temples per pixel).
+ * Whole world px, in the current `fillStyle` and `globalAlpha` (set once per batch). */
 
 import type { Camera } from "./camera";
 import { sx, sy } from "./paint";
@@ -110,10 +85,7 @@ function underFace(r: Box, face: (x: number) => number, out: Box[]): void {
   }
 }
 
-/**
- * The `fillLit` and `hidden` of a layer with `front` in front of it (render/backdrop.ts
- * `BackdropLightScene`).
- */
+/** `fillLit` and `hidden` for a layer with `front` before it (backdrop.ts `BackdropLightScene`). */
 export function lightCutter(
   ctx: DrawTarget,
   cam: Camera,

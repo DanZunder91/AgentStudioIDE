@@ -1,11 +1,6 @@
-//! The database tools the way an agent reaches them: the real app binary run as
-//! `agent-studio db …` in a terminal, talking to the real listener's `/ctl` route, which runs the
-//! real dispatcher over stores in a temp dir — the webview replaced by a recorder.
-//!
-//! The hermetic tests need no database: they cover the arguments, the exit codes, the saved
-//! queries and the console, against a connection saved at a port nothing listens on. The
-//! `#[ignore]`d ones run the same commands against the Docker fixture's PostgreSQL
-//! (`npm run db:fixtures:up`, then `cargo test --test agent_db_tools -- --ignored`).
+//! DB tools as an agent reaches them: the real binary as `agent-studio db …` → `/ctl` → the
+//! real dispatcher over temp stores. Hermetic tests use a dead port; `#[ignore]`d ones need
+//! the Docker Postgres (`npm run db:fixtures:up`, then `-- --ignored`).
 
 use std::sync::{Arc, Mutex};
 

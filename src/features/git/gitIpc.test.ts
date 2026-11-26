@@ -1,17 +1,6 @@
-/**
- * `gitIpc` — the git-panel wire. Thin wrappers, so the command *names*, the arg
- * *shapes*, and the **rejection passthrough** are the whole contract.
- *
- * The passthrough is the part worth pinning: none of these swallow, because a
- * failed status read or PR fetch is information the user needs ("not a repo",
- * "gh not signed in"), and the store can only classify Rust's stable
- * `"<code>[: detail]"` string if it arrives untouched.
- *
- * `git_file_diff` / `git_file_restore` (the tree's Git submenu) answer with a
- * human sentence rather than a code, and the UI renders it verbatim — so the
- * passthrough matters even more there. A revert is destructive: swallowing its
- * rejection would tell the user their edits are gone when they are not.
- */
+/** Command names, arg shapes and untouched rejection passthrough are the contract: the store
+ * classifies Rust's `"<code>[: detail]"`, and diff/restore sentences render verbatim (a
+ * swallowed revert failure would claim the edits were gone). */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

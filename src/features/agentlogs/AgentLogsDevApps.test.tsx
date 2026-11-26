@@ -1,13 +1,6 @@
-/**
- * Dev apps on this machine, MOUNTED in the Logs view: the Apps group at the top of the Sources
- * sidebar, the app card above the stream, and `kind: "app"` lines. Rendered for real —
- * AgentLogsPanel over the real agent-
- * logs, procs, network and app stores; only the Tauri seam (`invoke` + `listen`) and the
- * xterm-owning terminal module are mocked. Log lines arrive through the captured `listen`
- * handler, exactly as Rust sends them; every callback is asserted by the STORE change it makes
- * (the solo, the focused tab, Network's mode and selection) — a store-level test cannot see
- * which action a button calls.
- */
+/** Dev apps mounted in Logs (Apps group, app card, `kind: "app"` lines) over the real stores;
+ * only the Tauri seam and terminal module are mocked. Callbacks are asserted by the STORE change
+ * they make, since a store-level test cannot see which action a button calls. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,37 +1,6 @@
-/**
- * sequenceExecute — run a sequence of requests, carrying captured values forward
- * (a sequence of requests to test a flow with, whose steps can be run manually
- * one at a time, not only automatically).
- *
- * Imperative plumbing in the shape of `execute.ts` / `compareExecute.ts`: reads
- * the store through `getState()`, applies results through actions, and is mocked
- * at the module boundary in tests.
- *
- * ## Run-all is a LOOP OVER run-one
- *
- * `executeSequenceStep` is the only place a step is ever sent; `executeSequence`
- * calls it in order. Two code paths for "run a request" would drift, and the one
- * that drifts is always the one with fewer tests — here that would be the manual
- * path, which is the one the user drives by hand.
- *
- * ## Two deliberate inversions of the A/B Compare rules
- *
- * `compareExecute.ts` fires both sends *before* attaching handlers so B never
- * waits on A, and resolves `{{VAR}}` **once** up front so "an environment edit
- * mid-flight can never make A and B see different secrets". A sequence must do
- * the opposite on both counts: steps are awaited in order, and variables are
- * re-resolved per step **because step N's variables include step N-1's
- * captures**. Same feature area, opposite rules — do not "make them consistent".
- *
- * ## Why a failed capture fails the step
- *
- * `substituteVars` resolves an unknown `{{VAR}}` to the empty string, silently
- * (`substitute.test.ts:21`). Left alone, a capture that found nothing would send
- * `Authorization: Bearer ` and the user would debug a 401 in their own API
- * instead of our silence. So a capture miss is a step failure carrying
- * `extractPath`'s reason, and the run stops or continues by the user's own
- * `stopOnFailure` setting — never by guessing.
- */
+/** Run-all loops over executeSequenceStep, the only send path. Unlike compareExecute, steps are
+ * awaited in order and {{VAR}} is re-resolved per step (captures feed later steps): keep it so.
+ * A capture miss fails the step, since substituteVars would silently send an empty value. */
 
 import { useAppStore } from "../../app/store";
 import { extractPath } from "./extractPath";
@@ -48,14 +17,8 @@ function state() {
   return useAppStore.getState();
 }
 
-/**
- * Wait for `requestId` to stop sending, then hand back what landed.
- *
- * `executeHttpRequest` is fire-and-forget by design (it is wired to a button),
- * so the sequence observes its result through the store rather than by awaiting
- * it. Polling rather than subscribing keeps this module free of a subscription
- * lifecycle it would have to tear down on every step.
- */
+/** executeHttpRequest is fire-and-forget, so poll the store for the result (no subscription
+ * lifecycle to tear down per step). */
 async function awaitSend(requestId: string): Promise<{ timedOut: boolean }> {
   const started = Date.now();
   for (;;) {
@@ -74,14 +37,8 @@ function statusFailure(status: number, expect: number | null): string | null {
   return status === expect ? null : `Expected ${expect}, got ${status}`;
 }
 
-/**
- * Run ONE step, using whatever the sequence has captured so far.
- *
- * Returns whether it passed, so `executeSequence` can honour `stopOnFailure`.
- * Safe to call on its own — that is manual stepping: a manually run
- * step sees the captures of steps run earlier, in separate invocations, because
- * the bag lives on the sequence rather than in this function.
- */
+/** Returns pass/fail for stopOnFailure. Manual steps see earlier captures: the bag lives on the
+ * sequence. */
 export async function executeSequenceStep(sequenceId: string, stepId: string): Promise<boolean> {
   const seq = state().sequences[sequenceId];
   const step = seq?.steps.find((t) => t.id === stepId);
@@ -122,13 +79,8 @@ export async function executeSequenceStep(sequenceId: string, stepId: string): P
   }
   const response = req.response;
   if (!response) {
-    // Reachable only through the poll timeout: a request still in flight after
-    // STEP_TIMEOUT_MS. Say that, rather than "no response" — the difference is
-    // whether the user should look at their server or at their patience.
-    // Only the poll timeout can land here: the pre-send checks guarantee a url,
-    // and a send always settles into either a response or an error (both clear
-    // `sending`). So there is no second arm to write — a `did not run` branch
-    // would be unreachable, which the coverage gate proved.
+    // Only the poll timeout lands here (a send always settles into a response or an error), so say
+    // it timed out rather than "no response".
     void timedOut;
     actions.setStepOutcome(
       sequenceId,
@@ -188,14 +140,8 @@ export async function executeSequenceStep(sequenceId: string, stepId: string): P
   return true;
 }
 
-/**
- * Run every step in order.
- *
- * Resets first, so a run never inherits the previous run's captures. On a
- * failure with `stopOnFailure`, the remaining steps are marked **`skipped`**
- * rather than left `idle`: the user must be able to tell "we stopped before
- * this" from "this never ran at all".
- */
+/** Resets captures first. On failure with stopOnFailure the rest are marked skipped, not idle, so
+ * "stopped before this" reads differently from "never ran". */
 export async function executeSequence(sequenceId: string): Promise<void> {
   const seq = state().sequences[sequenceId];
   if (!seq || seq.running) return;

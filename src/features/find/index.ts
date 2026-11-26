@@ -1,11 +1,5 @@
-/**
- * Public surface of the find feature.
- *
- * `<FindInFiles/>` (Cmd/Ctrl+Shift+F, content search) and `<FindFiles/>`
- * (Cmd/Ctrl+Shift+O, filename finder) are each self-contained: mount them once
- * (App.tsx) and they install their own toggle. The IPC wrappers + wire types are
- * exported for the bridge and for tests.
- */
+/** Find feature surface. Both overlays are self-contained: mount once (App.tsx) and they install
+ * their own toggles. */
 
 export { FindInFiles } from "./FindInFiles";
 export { FindFiles, OPEN_FIND_FILES_EVENT } from "./FindFiles";

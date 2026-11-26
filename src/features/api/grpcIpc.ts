@@ -1,16 +1,5 @@
-/**
- * gRPC IPC — typed wrapper for the API client's gRPC lane.
- *
- * gRPC is a NATIVE, in-process `tonic` call (dynamic protobuf via `prost-reflect`
- * + server reflection) — no external tool, always available (zero-install). These
- * wrappers are the EXACT wire contract the Rust `grpc_*` commands implement, mirrored
- * by their serde structs (`rename_all = "camelCase"`).
- *
- * Kept feature-local so the wire types live next to their feature.
- *
- * Secret-safety: every call crosses the boundary in memory only —
- * nothing here writes an endpoint, message, or metadata value to disk.
- */
+/** Wrappers for the Rust grpc_* commands (native tonic + prost-reflect): the exact wire contract,
+ * mirrored by camelCase serde structs. Nothing here writes to disk. */
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -25,32 +14,19 @@ export interface GrpcServiceInfo {
   methods: GrpcMethodInfo[];
 }
 
-/**
- * The result of a reflection call: the services the server exposes, each with its
- * methods. The picker renders services grouped and their methods dependent. Empty
- * until a reflect succeeds.
- */
+/** Services and their methods from reflection; empty until a reflect succeeds. */
 export interface GrpcSchema {
   services: GrpcServiceInfo[];
 }
 
-/**
- * One request metadata pair (gRPC's equivalent of an HTTP header). Order-
- * preserving; duplicates allowed. Values are the RESOLVED wire metadata
- * (post-substitution; `{{VAR}}` already spliced in by the send path).
- */
+/** gRPC's header: ordered, duplicates allowed. Values are RESOLVED (post-substitution). */
 export interface GrpcMetadata {
   name: string;
   value: string;
 }
 
-/**
- * A unary call to perform. `endpoint` is `host:port` (no scheme — gRPC is HTTP/2;
- * `plaintext` chooses h2c vs TLS, mirroring grpcurl's `-plaintext`). `service` is
- * the dotted FQN, `method` the bare method name. `message` is the request body as
- * a JSON string (Rust maps JSON → protobuf via reflection). `metadata` is the
- * resolved wire metadata.
- */
+/** endpoint is host:port, no scheme; plaintext picks h2c vs TLS (grpcurl's -plaintext). service
+ * is the dotted FQN; message is JSON, mapped to protobuf by Rust via reflection. */
 export interface GrpcRequest {
   endpoint: string;
   service: string;
@@ -60,17 +36,8 @@ export interface GrpcRequest {
   plaintext: boolean;
 }
 
-/**
- * The response Rust returns. `message` is the response protobuf rendered back to a
- * JSON string (the UI pretty-prints it). `statusCode` is the numeric gRPC status
- * (0 = OK … 16), `statusName` its canonical name (`OK`, `NOT_FOUND`, …). `error`
- * is the server-supplied `grpc-message` accompanying a non-OK status (null on OK).
- *
- * IMPORTANT: a non-OK gRPC status is a RESOLVED call, not a rejection — Rust
- * RESOLVES `GrpcResponse` with `statusCode != 0`. Rust only REJECTS (string) on a
- * TRANSPORT failure (DNS/TLS/connect/HTTP-2), which the panel shows in the error
- * block. This split mirrors HTTP (a 404 resolves; a dead host rejects).
- */
+/** message is the response as JSON; error is grpc-message (null on OK). A non-OK status RESOLVES;
+ * Rust rejects only on transport failure (DNS/TLS/connect/HTTP-2), as HTTP's 404 vs a dead host. */
 export interface GrpcResponse {
   message: string;
   statusCode: number;
@@ -78,13 +45,8 @@ export interface GrpcResponse {
   error: string | null;
 }
 
-/**
- * `grpc_reflect` — reflect the server at `endpoint` and resolve its services +
- * methods, or REJECT with a string (reflection disabled, or a DNS/TLS/connect
- * failure). `plaintext` chooses h2c vs TLS for the reflection channel (the same
- * toggle the unary call uses). Reflection is an ASSIST — a failure falls back to
- * manual service/method entry, never a gate on sending.
- */
+/** Rejects with a string when reflection is off or the transport fails. Reflection is an assist:
+ * a failure falls back to manual service/method entry, never blocks sending. */
 export async function grpcReflect(
   endpoint: string,
   plaintext: boolean,
@@ -92,12 +54,7 @@ export async function grpcReflect(
   return invoke<GrpcSchema>("grpc_reflect", { endpoint, plaintext });
 }
 
-/**
- * `grpc_send` — perform `request` and resolve its `GrpcResponse` (INCLUDING a
- * non-OK gRPC status — that is a resolved call), or REJECT with a string on a
- * transport failure. Rust owns the native `tonic` call + the JSON⇄protobuf mapping.
- * This is the whole marshalling contract.
- */
+/** Resolves on any gRPC status, non-OK included; rejects (a string) only on transport failure. */
 export async function grpcSend(request: GrpcRequest): Promise<GrpcResponse> {
   return invoke<GrpcResponse>("grpc_send", { request });
 }

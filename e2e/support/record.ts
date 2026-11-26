@@ -1,22 +1,6 @@
-/**
- * Opt-in VIDEO + whole-display STILLS for the Docker E2E (`node scripts/e2e-linux.mjs --record`,
- * which sets `E2E_RECORD=1`): pictures and videos of a feature working, recorded in Docker.
- *
- * What it captures, and why the whole display: WebDriver's `saveScreenshot` sees ONE webview. A
- * torn-off tab is a second OS window, so the evidence has to be the X display itself — ffmpeg
- * `x11grab` of the xvfb screen, pointer included:
- *   - one H.264 mp4 per spec file (~15 fps, CRF 32, yuv420p — small, plays in a browser), started
- *     in wdio's `beforeSession` and finished in `afterSession` (wdio.conf.ts), plus a GIF of it
- *     (palettegen, ~800 px wide, kept under {@link GIF_BUDGET_BYTES}) for inline display in a PR;
- *   - {@link moment}: a named PNG of the whole display at a key point of a spec.
- *
- * Recording OFF (the default, and what `npm run verify` runs) changes nothing: no ffmpeg is
- * spawned, and {@link moment} falls back to the existing WebDriver screenshot convention
- * (`snap`, only when E2E_SCREENSHOT_DIR is set). A recording failure never fails a test — a missing
- * video is reported on stderr, never turned into a red spec.
- *
- * Everything lands in `$E2E_SCREENSHOT_DIR/media` (the host's E2E_ARTIFACTS/media).
- */
+/** Opt-in (`--record`, E2E_RECORD=1) whole-display video, GIF and stills: WebDriver sees one
+ * webview, but torn-off tabs are separate OS windows. Off by default; a recording failure never
+ * fails a test. Output: `$E2E_SCREENSHOT_DIR/media`. */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -81,10 +65,7 @@ export function startRecording(name: string): void {
   active = { proc, file, exited };
 }
 
-/**
- * Stop the recording (ffmpeg's own `q`, so the mp4 is finalised — a SIGKILL leaves no moov atom)
- * and render its GIF. Never throws.
- */
+/** Stops via ffmpeg's `q` so the mp4 is finalised (a SIGKILL leaves no moov atom); never throws. */
 export async function stopRecording(): Promise<void> {
   const rec = active;
   active = undefined;
@@ -107,10 +88,8 @@ export async function stopRecording(): Promise<void> {
   else console.error(`[record] no video was written for ${rec.file}`);
 }
 
-/**
- * GIF attempts, best first: each tracks frame rate, width and playback speed for size until one
- * fits the budget. A long spec plays faster rather than being cut.
- */
+/** Best first, trading fps, width and speed until one fits the budget: a long spec plays faster
+ * rather than being cut. */
 const GIF_ATTEMPTS: readonly { fps: number; width: number; speed: number }[] = [
   { fps: 8, width: 800, speed: 1 },
   { fps: 6, width: 800, speed: 1.5 },
@@ -141,12 +120,8 @@ let momentN = 0;
 /** How long the video lingers on each named moment (recording only). */
 const MOMENT_HOLD_MS = 1_500;
 
-/**
- * A named still of a key moment. Recording: a PNG of the WHOLE display (every OS window),
- * taken `opts.settleMs` (default 400) after the call,
- * `<media>/<spec>__NN-<name>.png`. Otherwise: the existing WebDriver screenshot (`snap`), which
- * itself only writes when E2E_SCREENSHOT_DIR is set.
- */
+/** Recording: a whole-display PNG `<media>/<spec>__NN-<name>.png` after `opts.settleMs` (400).
+ * Otherwise WebDriver's `snap`, which writes only when E2E_SCREENSHOT_DIR is set. */
 export async function moment(name: string, opts: { settleMs?: number } = {}): Promise<void> {
   if (!recording()) {
     // Imported lazily: wdio.conf.ts loads this module in the launcher too, where no browser exists.
@@ -157,12 +132,8 @@ export async function moment(name: string, opts: { settleMs?: number } = {}): Pr
   momentN += 1;
   const spec = process.env.E2E_SPEC_NAME ?? "spec";
   const file = path.join(mediaDir(), `${safe(spec)}__${String(momentN).padStart(2, "0")}-${safe(name)}.png`);
-  // Let the last paint land (the canvas village animates; a terminal echo may be one frame behind).
-  // `settleMs` is for a still whose content a spec has proven by OTHER means than the screen: a
-  // terminal's output is read from the Rust log stream (real-service.ts `terminalText` — the WebGL
-  // renderer has no DOM text), and the software-GL screen in Docker can paint it ~1 s later (a
-  // still can show a typed command without its output; the output does paint, with no input, just
-  // later). Recording only — the plain run never waits.
+  // Let the last paint land. Docker's software GL can paint terminal output ~1 s after a spec
+  // proved it via the log stream, hence `settleMs`. Recording only: the plain run never waits.
   await new Promise((r) => setTimeout(r, opts.settleMs ?? 400));
   const r = spawnSync(
     "ffmpeg",

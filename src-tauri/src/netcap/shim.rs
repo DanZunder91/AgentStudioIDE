@@ -1,75 +1,6 @@
-//! The `curl` shim on every IDE terminal's `PATH` (requirement: every `curl` an agent
-//! runs in the IDE must be logged in Network).
-//!
-//! # Why a shim, and not more advice
-//!
-//! An agent's project memory can say "curl must get `--noproxy '*'`" (true of an early proxy,
-//! which broke TLS). Our SessionStart `additionalContext` says the opposite, but advisory text
-//! does not reliably win: an agent that keeps running `curl -s --noproxy '*'
-//! http://127.0.0.1:3000/…` sends none of it to Network. Memory is the user's (the app never
-//! writes `~/.claude`), so the fix is mechanical: a POSIX `sh` script named `curl`,
-//! first on the PTY's `PATH`, that drops curl's bypass arguments and `exec`s the real curl.
-//!
-//! # What it rewrites — only while strict capture is on AND the proxy is ours
-//!
-//! Active when `AGENTSTUDIO_PROXY_STRICT` is not `0` and one of `HTTP(S)_PROXY` / `http(s)_proxy`
-//! equals `AGENTSTUDIO_PROXY_URL` — this terminal's own capture URL. (Stricter than "a proxy is
-//! set": a user who points curl at a corporate proxy in their `.zshrc` keeps every argument.)
-//! Then:
-//!
-//! * `--noproxy <list>` / `--noproxy=<list>` with a NON-empty list are dropped. An empty one
-//!   (`--noproxy ''`) is kept: it means "bypass nothing" and only helps capture.
-//! * `-x ''` / `--proxy ''` / `--proxy=` (an empty proxy = "no proxy") are dropped.
-//! * an inherited `NO_PROXY` / `no_proxy` of exactly `*` is reset to `AGENTSTUDIO_NO_PROXY` —
-//!   the IDE's own value (the user's entries, never loopback).
-//! * everything after a literal `--` is passed through untouched.
-//!
-//! Every other argument goes through byte-exact (the list is rebuilt with `set --`, never
-//! re-split), and the real curl is `exec`ed, so stdin, stdout and the exit code are its own.
-//!
-//! # Which curl is "the real one"
-//!
-//! The first executable `curl` on `PATH` after the shim's own entry (compared with `-ef`,
-//! so another spelling of the same directory still counts as the shim); if the shim was not
-//! found on `PATH` (run by absolute path), the first `curl` that is not the shim; else the
-//! first of `/usr/bin/curl` (macOS and every mainstream Linux) and Git for Windows' own
-//! `/clangarm64/bin/curl` (ARM64), `/mingw64/bin/curl` (x64), `/ucrt64/bin/curl` that exists.
-//! A depth counter in the environment (`AGENTSTUDIO_CURL_SHIM_DEPTH`) ends any chain of shims (a
-//! second IDE's shim dir on `PATH`) at that same fallback — it can never recurse.
-//!
-//! # Where it lives, and what it cannot cover
-//!
-//! `<app config dir>/netcap/bin/curl`, rewritten (only when its content differs) at every
-//! start — never `~/.claude`.
-//!
-//! A login shell re-orders `PATH` (macOS `/etc/zprofile` runs `path_helper`, which puts
-//! `/usr/bin` first), and Claude Code's Bash tool runs every command from a login-shell
-//! snapshot. So for agents the `PATH` prepend alone is not enough: the SessionStart hook also
-//! appends `export PATH="$AGENTSTUDIO_SHIM_DIR:$PATH"` to `$CLAUDE_ENV_FILE`, which Claude Code
-//! applies to every later Bash command (`agent::claude::session_start_hook_command`).
-//!
-//! # Windows (platform-native: the same feature, the Windows way)
-//!
-//! The same script is written, for the one POSIX shell an agent has there: Claude Code on
-//! Windows runs its Bash tool through **Git Bash** (MSYS), which runs an extensionless file
-//! that starts with `#!` and finds `curl.exe` as `curl` (`-f`, `-x` and `-ef` see through the
-//! `.exe`, and `-ef` matches `/c/…`, `C:/…` and `C:\…` spellings of one file — measured).
-//! What differs is only how the shim gets in front:
-//!
-//! * **Never on a terminal's `PATH`.** Windows PowerShell resolves an extensionless `curl` on
-//!   `PATH` as an application and tries to open it as a document (measured: "Cannot run a
-//!   document in the middle of a pipeline"); cmd ignores it. So [`super::env::compute`] leaves
-//!   `PATH` alone on Windows and only exports `AGENTSTUDIO_SHIM_DIR` — the IDE's PowerShell
-//!   terminals keep `curl` = `curl.exe` (`pty::POWERSHELL_UNALIAS_CURL`).
-//! * **Through `$CLAUDE_ENV_FILE` only**, with a Windows line: `AGENTSTUDIO_SHIM_DIR` is `C:\…`,
-//!   and bash would split `PATH` at that colon, so the line converts it with `cygpath -u`
-//!   (guarded) and puts it ahead of Git Bash's `/clangarm64/bin` (`/mingw64/bin` on x64).
-//!
-//! Windows PowerShell's own web cmdlets cannot be shimmed at all; an agent's PowerShell tool
-//! call that uses them is reported instead ([`crate::logstream::bypass::detect_powershell`]).
-//!
-//! Python / Node are not shimmed: `NO_PROXY='*' python3 x.py` cannot be undone from outside
-//! the process. Those are reported instead (`logstream::bypass` → a `bypass` row in Network).
+//! A POSIX `curl` shim first on agents' `PATH` (Windows: via `$CLAUDE_ENV_FILE`, Git Bash only)
+//! that, with strict capture on and our proxy set, drops curl's bypass args and `exec`s the real
+//! curl. Written to the app config dir (never `~/.claude`); a depth counter stops recursion.
 
 use std::path::{Path, PathBuf};
 
@@ -165,10 +96,8 @@ if [ -z "$real" ]; then real=$last; fi
 exec "$real" "$@"
 "#;
 
-/// Write `<netcap dir>/bin/curl` (0755) when it is missing or differs; returns the `bin` dir.
-/// Idempotent and atomic (temp + rename), so a terminal spawning mid-write never runs half a
-/// script. On every OS — on Windows it is for agents' Git Bash only (module doc). `None` on
-/// any I/O error (logged: capture still works, only the bypass-proofing is lost).
+/// Write `<netcap dir>/bin/curl` (0755) atomically when missing or different; returns `bin`.
+/// On Windows it serves Git Bash only. `None` on I/O error: capture works, bypass-proofing is lost.
 pub fn ensure(netcap_dir: &Path) -> Option<PathBuf> {
     match write(netcap_dir) {
         Ok(dir) => Some(dir),
@@ -226,10 +155,8 @@ mod tests {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
 
-    /// A scratch dir with the real shim in `<root>/ide bin/bin/curl` (a space on purpose —
-    /// the macOS app dir is `Application Support`) and a fake `curl` in `<root>/real` that
-    /// prints its argv one per line as `[arg]`, echoes the proxy-bypass env, copies stdin,
-    /// and exits with `$FAKE_EXIT`.
+    /// Real shim in `<root>/ide bin/bin/curl` (a space, like `Application Support`) plus a fake
+    /// curl printing its argv, the proxy-bypass env and stdin, exiting with `$FAKE_EXIT`.
     struct Rig {
         root: PathBuf,
         shim_dir: PathBuf,

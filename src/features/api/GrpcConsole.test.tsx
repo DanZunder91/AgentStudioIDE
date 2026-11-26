@@ -1,13 +1,4 @@
-/**
- * GrpcConsole — the API client's gRPC console (native tonic).
- *
- * `grpcIpc` is mocked at the module boundary: the real `grpc_*` commands cross
- * Tauri (pinned in `grpcIpc.test.ts`). What is under test here is the console —
- * reflect-populates-the-picker (+ the manual fallback), the one-shot Send through
- * `executeGrpcRequest`, the status pill / body / error rendering, and the
- * metadata-substitution secret-safety (resolved on the wire, LITERAL in history).
- * `historyIpc`/`apiStoreIpc` are mocked so a record/env mutation never touches Tauri.
- */
+/** Metadata substitution: resolved on the wire, LITERAL in history, so a secret is never logged. */
 
 import {
   act,

@@ -156,11 +156,8 @@ pub fn to_flow_body(c: &Captured, encoding: Option<&str>) -> FlowBody {
     } else {
         match std::str::from_utf8(bytes) {
             Ok(s) => (Some(s.to_string()), None),
-            // The cap cut valid text inside a character (`error_len() == None`: the only
-            // fault is an unfinished char at the very end). That is our cut, not the
-            // body's, so the UI gets the text up to it — not a base64 blob of a JSON reply
-            // (found by `tests/netcap_robustness.rs`). An untruncated body that ends
-            // mid-char really is malformed and stays base64.
+            // Our cap cut a valid char at the very end (`error_len() == None`): keep the text
+            // up to it. An untruncated body ending mid-char is malformed and stays base64.
             Err(e) if c.truncated && e.error_len().is_none() => (
                 Some(String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned()),
                 None,

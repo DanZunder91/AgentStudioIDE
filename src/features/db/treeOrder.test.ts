@@ -1,13 +1,5 @@
-/**
- * Tests for the db tree's user-defined ordering.
- *
- * The thing under test is not "does an array get sorted" — it is what happens to an order a
- * user saved LAST WEEK when the schema has moved underneath it since. Every interesting case
- * here is a mismatch between the saved order and what the refresh actually returned: a table
- * created, a table dropped, a file on disk that is not well-formed. Those are the branches a
- * database cannot conveniently produce on demand, which is exactly why the logic is pure and
- * lives in its own module.
- */
+/** The cases that matter are mismatches between a saved order and the current schema: tables
+ * created or dropped, or a malformed file on disk. */
 
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
@@ -47,10 +39,7 @@ describe("applyOrder — a saved order meeting a schema that has moved on", () =
   });
 
   it("lands a NEWLY created table at the bottom, not in its alphabetical slot", () => {
-    // The design decision, asserted rather than merely documented: once a level is
-    // hand-ordered, "alphabetical slot" is meaningless — position no longer says anything
-    // about the name. `aardvark` sorting to the top would silently rearrange what the user
-    // arranged. The bottom is the one predictable place for it.
+    // Once a level is hand-ordered there is no alphabetical slot; the bottom is predictable.
     const items = [t("aardvark"), t("customers"), t("blocks")];
     expect(namesOf(applyOrder(items, nameOf, ["customers", "blocks"]))).toEqual([
       "customers",
@@ -105,11 +94,8 @@ describe("applyOrder — a saved order meeting a schema that has moved on", () =
   });
 
   it("matches orderFolders' rule for unnamed items, on plain strings", () => {
-    // `applyOrder(paths, identity, order)` must be the same function as `orderFolders` in
-    // app/folderOrder.ts. They are kept separate for type and lifecycle reasons (see the
-    // module doc), but the ORDERING RULE is one rule, and this pins them together: if the
-    // two ever start disagreeing about where an unnamed item goes, the two rails and the db
-    // tree would sort differently and this fails.
+    // Pins this to `orderFolders` (app/folderOrder.ts): one ordering rule, or the rails and the db
+    // tree sort unnamed items differently.
     const paths = ["/x", "/a", "/y"];
     expect(applyOrder(paths, (p) => p, ["/a"])).toEqual(["/a", "/x", "/y"]);
   });
@@ -164,10 +150,8 @@ describe("moveBefore — the drop gesture", () => {
   });
 
   it("is a NO-OP when a row is dropped onto itself", () => {
-    // This is the one place the wrapper differs from folderOrder's primitive, which treats
-    // `before === item` as "to the end". Picking a table up and putting it back down must
-    // not fling it to the bottom of the schema — and it must not report a change, or every
-    // aborted drag writes a file.
+    // Unlike folderOrder's primitive: a drop on itself must not move to the end or report a
+    // change, or every aborted drag writes a file.
     const current = ["a", "b", "c"];
     const out = moveBefore(current, "b", "b");
     expect(out).toEqual(["a", "b", "c"]);
@@ -211,12 +195,8 @@ describe("moveBefore — the drop gesture", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The invariant that actually matters. Losing a table is the worst failure mode
-// this module has: a user drags a row, the tree comes back one row shorter, and
-// nothing in the app says why. A permutation check is the one assertion that
-// catches every shape of that bug at once — dropped, duplicated, or invented.
-// ---------------------------------------------------------------------------
+// The invariant: reordering never drops, duplicates or invents a row; a permutation check
+// catches every shape of that bug.
 describe("property: reordering never loses, duplicates, or invents a row", () => {
   /** Distinct sibling keys — table names at one level are unique by construction. */
   const keysArb = fc.uniqueArray(fc.string({ minLength: 1, maxLength: 6 }), {
@@ -276,11 +256,8 @@ describe("property: reordering never loses, duplicates, or invents a row", () =>
   });
 
   it("applyOrder renders every item exactly once, for ANY saved order", () => {
-    // The order is drawn from the LIVE keys as well as junk, and with repeats allowed,
-    // because a freely-generated array of random strings almost never collides with a
-    // generated key — it would exercise rule 3 (skip the unknown) over and over and never
-    // once reach the duplicate branch. Biasing it this way is what makes the property a
-    // real test of "renders every item exactly once" rather than of "ignores noise".
+    // Draw the order from the live keys plus junk, with repeats: random strings almost never
+    // collide with a key, so the duplicate branch would never run.
     const orderArb = keysArb.chain((keys) =>
       fc.record({
         keys: fc.constant(keys),

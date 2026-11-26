@@ -1,7 +1,4 @@
-/**
- * ApiRequestButton — the titlebar affordance that opens a new API request tab.
- * Drives one store action; the tab it creates is the thing under test.
- */
+/** The titlebar button drives one store action; the tab it creates is what is under test. */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

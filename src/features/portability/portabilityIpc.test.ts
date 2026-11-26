@@ -1,22 +1,6 @@
-/**
- * `portabilityIpc` — the bundle wire. Thin wrappers, so the command **name**, the
- * **argument shape** and the **rejection passthrough** are the whole contract — and all three
- * fail as silence rather than as an error.
- *
- * Why every argument is asserted BY NAME: Tauri deserialises a command's arguments by key
- * (`src_path` in Rust ⇄ `srcPath` in JS). A renamed or misspelled key does not throw — serde
- * fills the field from its default, or the command rejects about a field the caller never
- * mentioned. `passphrase` is the one that matters most here: if that key went missing, a
- * sealed bundle would inspect as "still sealed" forever and look like a wrong passphrase.
- *
- * Every expectation is written LITERALLY rather than derived from the wrapper's own input:
- * an assertion computed from the value under test can only catch plumbing, never a wrong
- * name.
- *
- * The picker is mocked at the module boundary, the way `WorkspaceTree.test.tsx` mocks the
- * folder picker — it is the one part of this feature jsdom cannot drive, which is exactly why
- * it lives in this module and nowhere else.
- */
+/** Arguments are asserted by name, literally: Tauri deserialises by key, so a bad key fails
+ * silently (a missing `passphrase` would look like a wrong passphrase forever). The picker is
+ * mocked at the module boundary, as `WorkspaceTree.test.tsx` does. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

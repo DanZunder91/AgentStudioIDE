@@ -1,11 +1,6 @@
-//! Integration tests for the whole hot plane, driven through the **public
-//! supervisor API** — the same path a `#[tauri::command]` takes.
-//!
-//! Each test exercises: `SupervisorHandle` → actor → real `openpty`/ConPTY →
-//! real child → blocking reader thread → bounded mpsc → coalescer → real
-//! `ipc::Channel`. The only substitution is the `Channel`'s handler, which
-//! records bytes instead of `eval`ing JS into a webview that does not exist in a
-//! test process (see `common::ChannelSink`).
+//! Integration tests of the hot plane through the public supervisor API (the `#[tauri::command]`
+//! path): actor, real PTY, child, reader thread, mpsc, coalescer, real `ipc::Channel`. Only the
+//! Channel's handler is swapped, to record bytes (`common::ChannelSink`).
 
 mod common;
 
@@ -106,16 +101,9 @@ async fn open_returns_meta_describing_the_terminal() {
     assert_eq!(meta.title, expected_title);
 }
 
-/// `program: None` must resolve to the user's default shell (`$SHELL`, see
-/// [`pty::default_shell`]) — the default path for a plain terminal tab. We assert
-/// the **resolution** (the tab title is the default shell's name) rather than
-/// round-tripping typed input through it: the developer's real login shell may be
-/// an interactive zsh whose rc files (an oh-my-zsh update prompt, zle line
-/// editing) hijack the tty and mangle typed bytes, making a scripted round trip
-/// non-deterministic across machines. Liveness of a spawned shell is covered
-/// hermetically by `write_round_trips_through_a_real_shell` (`/bin/sh`). Pinning
-/// `$SHELL` to a hermetic value is deliberately NOT done here — `cargo test` runs
-/// these in parallel threads and a global `set_var` races.
+/// Asserts the resolution (the tab title is the default shell's name), not typed input: a real
+/// login zsh's rc files can mangle typed bytes. `$SHELL` is not pinned because tests run in
+/// parallel threads and a global `set_var` races.
 #[tokio::test]
 async fn open_without_a_program_uses_the_default_shell() {
     let sup = spawn_supervisor(std::sync::Arc::new(NullSink), Vec::new(), None);
@@ -168,13 +156,8 @@ async fn write_round_trips_through_a_real_shell() {
     wait_for_output(&sink, needle).await;
 }
 
-/// **The resize test: the child must observe it.** `stty size` asks the tty
-/// driver, so this proves the ioctl/SIGWINCH actually reached the child — not
-/// merely that `resize()` returned `Ok`.
-///
-/// Unix-only because `stty` is a POSIX tool with no ConPTY equivalent that
-/// reports rows/cols in a stable, non-localized format. ConPTY resize is covered
-/// (weakly) by `resize_is_accepted_on_a_live_terminal` below.
+/// `stty size` asks the tty driver, so this proves the resize reached the child, not just `Ok`.
+/// Unix-only (no stable ConPTY equivalent); `resize_is_accepted_on_a_live_terminal` covers ConPTY.
 #[cfg(unix)]
 #[tokio::test]
 async fn resize_is_observed_by_the_child() {
@@ -255,14 +238,8 @@ async fn resize_does_not_kill_the_child() {
     wait_for_output(&sink, needle).await;
 }
 
-/// A child that exits on its own must take the whole chain down with it: PTY EOF
-/// (`EIO` on Linux) → reader thread exits → mpsc closes → coalescer does its
-/// **final flush** and ends.
-///
-/// The final flush is the load-bearing part: `echo` writes and the process exits
-/// in the same breath, so those bytes are in the coalescer's pending buffer when
-/// the channel closes. Losing them would mean a terminal that never shows its
-/// last line of output.
+/// The final flush is load-bearing: `echo` writes and exits at once, so its bytes are still pending
+/// in the coalescer when the channel closes; losing them hides a terminal's last line.
 #[tokio::test]
 async fn child_exit_flushes_pending_output_and_closes_the_stream() {
     let (program, args) = sh(&then("echo last-line-before-exit", "exit 0"));
@@ -275,14 +252,9 @@ async fn child_exit_flushes_pending_output_and_closes_the_stream() {
     wait_for_quiet(&sink, Duration::from_millis(300)).await;
 }
 
-/// After the child exits, the supervisor keeps the terminal's metadata (so the
-/// UI can still render the dead tab) but drops the PTY. Writes/resizes to it then
-/// become no-ops rather than errors — a keystroke can legitimately race the exit.
-///
-/// This is also the only externally observable proof that `ChildExited` was
-/// processed at all: an *unknown* terminal errors, whereas an *exited* one
-/// succeeds. There is no `fleet_snapshot` in M1, so `status`/`exitCode` themselves
-/// cannot be read back through any public API.
+/// The exited terminal's meta is kept for the UI, so a keystroke racing the exit is a no-op. The
+/// only public proof `ChildExited` was processed: an unknown terminal errors, an exited one does
+/// not (`status`/`exitCode` cannot be read back).
 #[tokio::test]
 async fn writes_to_an_exited_terminal_are_no_ops_not_errors() {
     let (program, args) = sh(&then("echo done-now", "exit 7"));
@@ -295,10 +267,7 @@ async fn writes_to_an_exited_terminal_are_no_ops_not_errors() {
     // same mpsc our next call queues behind).
     wait_for_quiet(&sink, Duration::from_millis(300)).await;
 
-    // The terminal is still *known* — its meta survives for the UI — so a
-    // keystroke that raced the exit is swallowed, not surfaced as an error.
-    // If `ChildExited` had not cleared the PTY, this write would hit a dead
-    // master and fail with EIO.
+    // Had `ChildExited` not cleared the PTY, this write would hit a dead master and fail with EIO.
     sup.write(id.clone(), b"ignored\n".to_vec())
         .await
         .expect("write to an exited terminal should be a no-op, not an error");
@@ -319,13 +288,9 @@ async fn writes_to_an_exited_terminal_are_no_ops_not_errors() {
     assert!(err.contains("unknown terminal"), "unhelpful error: {err}");
 }
 
-/// Closing stops the byte stream to the UI.
-///
-/// Note what this does **not** prove: `close` both drops the PTY *and* aborts the
-/// pump, so a quiet stream is equally consistent with a child that is still very
-/// much alive. `close_actually_kills_the_child` below is the test that pins the
-/// kill; this one only pins the stream. (Verified by mutation: replacing
-/// `drop(rt.pty)` with `mem::forget` leaves this test green.)
+/// Pins only the stream: `close` also aborts the pump, so a quiet stream is consistent with a live
+/// child (mutating `drop(rt.pty)` to `mem::forget` stays green). `close_actually_kills_the_child`
+/// pins the kill.
 #[tokio::test]
 async fn close_stops_the_stream_to_the_ui() {
     #[cfg(not(windows))]
@@ -341,17 +306,9 @@ async fn close_stops_the_stream_to_the_ui() {
     wait_for_quiet(&sink, Duration::from_millis(500)).await;
 }
 
-/// **Closing really kills the child.** A "closed" tab whose process keeps running
-/// is an invisible CPU leak, and across a fleet of agents it is the difference
-/// between closing a tab and orphaning a `claude`.
-///
-/// Liveness is observed through the **filesystem**, deliberately not through the
-/// byte stream: `close` aborts the pump, so the stream goes quiet whether or not
-/// the child died. The child's ticks have to land somewhere the supervisor does
-/// not control for the assertion to mean anything.
-///
-/// Unix-only: it needs a shell loop with a sub-second sleep writing to a file.
-/// `cmd.exe` has no `sleep`, and busy-looping would be a poor CI citizen.
+/// A closed tab whose process lives on is an invisible leak (an orphaned `claude`). Liveness is
+/// read from the filesystem because `close` aborts the pump, so the stream goes quiet either way.
+/// Unix-only: needs a sub-second sleep loop; `cmd.exe` has no `sleep`.
 #[cfg(unix)]
 #[tokio::test]
 async fn close_actually_kills_the_child() {
@@ -697,13 +654,8 @@ async fn opening_with_a_dot_cwd_substitutes_the_default_workspace() {
 }
 
 // ── The close confirmation: `terminals_busy` ─────────────────────────────────
-//
-// A confirmation prompt comes before closing a terminal that is
-// running claude. Two tiers, each blind exactly where the other
-// sees (see `supervisor::TerminalBusy`): a **bound session** (all platforms,
-// exact) and a **foreground command** (Unix). Both are driven here through the
-// real public API against real PTYs — the mechanism is the OS's, so a mock would
-// be testing our idea of `tcgetpgrp` rather than `tcgetpgrp`.
+// Two tiers, each blind where the other sees (`supervisor::TerminalBusy`): a bound session (exact,
+// all platforms) and a foreground command (Unix), on real PTYs since the mechanism is the OS's.
 
 /// This terminal's entry in a `terminals_busy` answer, or `None` if it is absent.
 #[cfg(unix)]
@@ -715,10 +667,7 @@ async fn busy_of(sup: &SupervisorHandle, id: &str) -> Option<TerminalBusy> {
         .find(|b| b.id == id)
 }
 
-/// Poll `terminals_busy` until `id`'s presence matches `want`, then return the
-/// entry. Polled rather than slept on: a fork + `tcsetpgrp` takes microseconds on
-/// an idle machine and rather longer on a loaded one, and a fixed sleep is either
-/// flaky or slow.
+/// Polled, not slept on: fork + `tcsetpgrp` takes microseconds idle and longer under load.
 #[cfg(unix)]
 async fn wait_for_busy(
     sup: &SupervisorHandle,
@@ -742,35 +691,17 @@ async fn wait_for_busy(
     }
 }
 
-/// **Tier 2, two-sided, on one terminal.** A shell at its prompt is not busy; the
-/// same shell with a foreground `sleep` running is; and when the sleep finishes it
-/// is not busy again.
-///
-/// All three halves matter. "Busy while sleeping" alone passes against a build
-/// that says busy about everything, and "idle at the prompt" alone passes against
-/// one that says busy about nothing — which is the failure mode that teaches
-/// people to click straight through the dialog. The third half proves the answer
-/// is read live rather than latched.
-///
-/// The mechanism under test is the OS's own: `portable-pty` puts the child in its
-/// own session (`setsid`), so its pgid == its pid, and an interactive shell
-/// `tcsetpgrp`s a foreground job's group onto the tty. `tcgetpgrp(master) != child
-/// pid` is therefore exactly "something is running in front of the shell".
-///
-/// Unix-only: `MasterPty::process_group_leader` is `#[cfg(unix)]` because ConPTY
-/// has no process groups at all. On Windows the check answers "unknown", which the
-/// gate treats as not busy — see `an_agent_session_is_busy_and_a_bare_shell_is_not`
-/// below, which is the tier that does work there.
+/// Prompt idle, foreground `sleep` busy, idle again: each half alone passes a build that is always
+/// or never busy, and the third proves the answer is live. The child leads its own session, so
+/// `tcgetpgrp(master) != child pid` means a job is in front. Unix-only: ConPTY has no groups.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_foreground_command_makes_a_shell_busy_and_finishing_it_makes_it_idle() {
     let (program, args) = interactive_sh();
     let (sup, id, sink) = open_terminal(program, args, 24, 80).await;
 
-    // Prove the shell is up and back at its prompt before asserting it is idle:
-    // `echo` is a builtin, so no job was ever forked and the tty's foreground group
-    // is still the shell itself. Without this the "idle" half could pass merely
-    // because the shell had not finished starting.
+    // Wait for the prompt first (`echo` is a builtin, so no job is forked), or the idle half could
+    // pass only because the shell had not finished starting.
     sup.write(id.clone(), format!("echo prompt-ready{EOL}").into_bytes())
         .await
         .expect("write failed");
@@ -806,19 +737,9 @@ async fn a_foreground_command_makes_a_shell_busy_and_finishing_it_makes_it_idle(
     .await;
 }
 
-/// **Tier 1, two-sided, in one batch.** A terminal with a live session bound to it
-/// is busy; a plain shell opened beside it in the same supervisor is not — and one
-/// call answers for both, because `closePane` kills a whole pane in one click.
-///
-/// 🔴 The agent here is at its prompt and has never run a turn, so its node is
-/// `Idle` (a session parked at its prompt never emits `Stop`). That
-/// is deliberately the case under test: it is precisely the session most likely
-/// to be lost, and a check gated on `status == Running` would wave it through.
-///
-/// This tier is why the feature is not Unix-only: it reads the supervisor's own
-/// binding table, so it is exact on every platform. It is also the only tier that
-/// can see a spawned agent at all — `claude` *is* the PTY child there, with no
-/// shell in front of it, so the foreground group is always the child itself.
+/// One call answers for both because `closePane` kills a whole pane. The agent is `Idle` at its
+/// prompt (no `Stop` ever fires), the session most likely lost; a `Running` gate would miss it.
+/// This tier reads the binding table, so it is exact everywhere and sees `claude` as the PTY child.
 #[tokio::test]
 async fn an_agent_session_is_busy_and_a_bare_shell_is_not() {
     let (sup, _events) = supervisor_with(std::sync::Arc::new(StubAdapter::interactive()));
@@ -865,13 +786,8 @@ async fn an_agent_session_is_busy_and_a_bare_shell_is_not() {
     );
 }
 
-/// A terminal whose child has already exited, and an id the supervisor has never
-/// heard of, are both simply **absent** from the answer — not an error.
-///
-/// This sits in front of a close the user explicitly asked for, so an `Err` here
-/// would strand them in a tab they cannot close. The `write` below is what makes
-/// the first half meaningful: it proves the exited terminal is still *known*, so
-/// its absence is the exited branch rather than the unknown one.
+/// This guards a close the user asked for, so an `Err` would strand them in an unclosable tab. The
+/// `write` proves the exited terminal is still known, so its absence is the exited branch.
 #[tokio::test]
 async fn an_exited_or_unknown_terminal_is_absent_rather_than_an_error() {
     let (program, args) = sh(&then("echo bye-now", "exit 0"));

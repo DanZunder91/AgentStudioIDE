@@ -1,13 +1,5 @@
-/**
- * ActivityView — a sub-agent's read-only transcript in the center (M3).
- *
- * A sub-agent owns no PTY, so selecting one opens this instead of a terminal. It
- * fetches `subagent_activity(agentId)` and polls while mounted, because the agent
- * may still be producing output. The IPC wrapper is mocked at the module
- * boundary: the real one crosses Tauri, which does not belong in a jsdom unit
- * test, and the *cadence* (poll while mounted, stop on unmount) is the behaviour
- * under test here, not the wire.
- */
+/** The IPC wrapper is mocked: the poll-while-mounted, stop-on-unmount cadence is under test, not
+ * the wire. */
 
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

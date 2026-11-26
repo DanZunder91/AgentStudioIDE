@@ -1,7 +1,4 @@
-/**
- * "Capture this app" — the words, one app at a time. Every expected string
- * is written out by hand: a guide that quoted its own template would pin nothing.
- */
+/** Expected strings are written by hand: a guide quoting its own template would pin nothing. */
 
 import { describe, expect, it, vi } from "vitest";
 

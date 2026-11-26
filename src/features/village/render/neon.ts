@@ -1,48 +1,6 @@
-/**
- * Agent Village — the City's NEON signs: every project building wears its language in light.
- *
- * After Tokyo neon-street references — pink, blue and cyan glowing signs, a pixel-art shop with a
- * red neon sign and a vertical "SHOP" blade sign — each building wears a neon sign naming its
- * language, in that language's style: gazelle is Rust, so it shows Rust-style neon. Our own
- * procedural pixel art; the references were inspiration only (no third-party art, so no licence to
- * track).
- *
- * The look — a vertical BLADE sign, the reference's "SHOP" sign:
- *
- *        wall │╶┐┌───────────┐     two dark brackets reach out of the right wall's face to the plate;
- *             │ ││┌─────────┐│     the plate is dark glass with a 1-px neon tube round its edge
- *             │  ││  R R R  ││     (the language's FRAME colour) and the short name stacked letter
- *             │  ││  U   U  ││     over letter in 5×7 pixel tubes (its LETTER colour) — RUST in Rust
- *             │  ││  S S S  ││     orange, TS in TypeScript blue, PY in Python yellow on a blue
- *             │ ││  T T T  ││     frame, GO in gopher cyan…
- *             │╶┘└───────────┘
- *
- * Where it hangs is the engine's call (engine/drawList.ts `neonAnchor`: the right wall, high up,
- * out over the gap after the building); this module owns the size, the art and the light.
- *
- * Two passes, the vending machines' pattern (render/tokyoProps.ts + render/ambience.ts):
- *   - `drawNeonSign` — in the scene, graded like everything outdoors: by day a sign of coloured
- *     tubes on dark glass;
- *   - `paintNeonLights` — after the outdoor grade (render/ambience.ts), scaled by how dark it is
- *     (`neonStrength`: nothing at noon, rising through the evening, full at night and in a storm's
- *     gloom): the tubes re-lit at full brightness so they SHINE on a dark street, a coloured halo
- *     round the sign that lands on the facade and the gap's air, and a pool of the same colour on
- *     the sidewalk below. Clipped (by the caller) to the outdoors, so no light leaks into a room.
- *
- * Now and then a letter stutters — the tube drops out for a few blinks and catches again
- * (`neonFlicker`): one window in three of `FLICKER_PERIOD_MS` per building, at a moment and on a
- * letter chosen by a hash of the building's key and the window. Deterministic, never random: the
- * same frame time always draws the same sign.
- *
- * An unknown language id draws NO sign (`neonLayout` → null). Every id either detector can send
- * comes from `projectLanguages.json`, and `neon.test.ts` pins that each one has a style here — so an
- * id without one is contract drift, and a sign that guessed its name would present a guess as a
- * fact; the building simply stays as it is without a language.
- *
- * Cost per frame: layouts are memoised per draw item (the engine's are the same objects every frame
- * of a World) and the light pass's signs per World; glyphs are pre-merged rectangles (RUST is 18
- * rects); everything is culled to the view first.
- */
+/** City neon: each building's language as a blade sign; `neonAnchor` picks the spot, this module
+ * owns size, art and light. `drawNeonSign` in the scene, `paintNeonLights` after the grade. Flicker
+ * is deterministic; an unknown language draws NO sign (a guessed name would pose as fact). */
 
 import { hashString } from "../engine/rng";
 import { neonAnchor } from "../engine/drawList";
@@ -63,11 +21,8 @@ export interface NeonStyle {
   frame: string;
 }
 
-/**
- * Each language's sign, in its own colours — the language's logo / community colour pushed to a
- * neon brightness. Keyed by the ids of `src/features/village/projectLanguages.json` (every one of
- * them has a row: `neon.test.ts`).
- */
+/** Each language's sign colours, keyed by `projectLanguages.json` ids (each has a row:
+ * `neon.test.ts`). */
 export const NEON: Readonly<Record<string, NeonStyle>> = {
   rust: { label: "RUST", letter: "#ff8a3d", frame: "#e8471f" }, // Rust orange, a rust-red frame
   typescript: { label: "TS", letter: "#7cc4ff", frame: "#3d8eff" }, // TypeScript blue
@@ -149,10 +104,7 @@ const FONT: Readonly<Record<string, readonly string[]>> = {
 /** One filled rectangle of a glyph, world px from the cell's top-left. */
 type Run = readonly [dx: number, dy: number, w: number, h: number];
 
-/**
- * A glyph as few rectangles as it takes: each row's runs, then a run merged down into the next
- * row's identical one (a stem is one tall rect, not seven).
- */
+/** A glyph's runs, each merged into the next row's identical run (a stem is one rect). */
 function glyphRects(rows: readonly string[]): Run[] {
   const out: [number, number, number, number][] = [];
   let above: [number, number, number, number][] = [];
@@ -265,10 +217,7 @@ function layoutAt(x: number, y: number, language: string, building: string): Neo
 
 const LAYOUTS = new WeakMap<object, NeonLayout | null>();
 
-/**
- * The layout of a "neon" draw item, memoised per item (the engine hands the same item every frame
- * of a World). null = no style for its language: nothing is drawn.
- */
+/** Memoised per item (the engine reuses items across a World's frames); null: no style, no sign. */
 export function neonLayout(item: { x: number; y: number; language: string; building: string }): NeonLayout | null {
   if (LAYOUTS.has(item)) return LAYOUTS.get(item) as NeonLayout | null;
   const out = layoutAt(item.x, item.y, item.language, item.building);
@@ -283,11 +232,8 @@ export const FLICKER_PERIOD_MS = 8000;
 export const FLICKER_MS = 600;
 const FLICKER_STEP_MS = 75;
 
-/**
- * Which letter's tube has dropped out at `timeMs`, or -1 for none. One window in three flickers, at
- * a moment and on a letter of its own (a hash of `seed` and the window); within the flicker the
- * tube cuts out on some 75-ms steps and catches on others — a stutter, not a blink. Pure.
- */
+/** The letter whose tube is out at `timeMs`, or -1. One window in three flickers, at a moment and
+ * letter hashed from `seed` and the window, cutting out on some 75-ms steps. Pure. */
 export function neonFlicker(seed: number, timeMs: number, letters: number): number {
   const w = Math.floor(timeMs / FLICKER_PERIOD_MS);
   const h = hash(seed, w, 211);
@@ -328,11 +274,8 @@ export function drawNeonSign(ctx: DrawTarget, cam: Camera, s: NeonLayout, timeMs
 const NEON_DAY = 0.85;
 const NEON_RAMP = 0.7;
 
-/**
- * How strongly the signs light their surroundings, 0..1: 0 in full daylight (noon, a bright
- * afternoon), rising through the evening and dusk, 1 at night (daylight 0.15) — and part-way in a
- * storm's daytime gloom, when a lit sign would show too.
- */
+/** Signs' light strength 0..1: 0 in full daylight, 1 at night (daylight 0.15), part-way in a
+ * storm's daytime gloom. */
 export function neonStrength(amb: Pick<Ambience, "daylight">): number {
   return Math.min(1, Math.max(0, (NEON_DAY - amb.daylight) / NEON_RAMP));
 }
@@ -368,12 +311,8 @@ export function neonSignsOf(world: World): readonly LitSign[] {
   return out;
 }
 
-/**
- * The signs' light, after the outdoor grade (render/ambience.ts `paintAmbience`, inside its
- * outdoors clip): per sign on screen, a coloured halo (crossed bands, brightest at the plate) that
- * falls on the facade and the air of the gap, a pool on the sidewalk under it, and the tubes re-lit
- * at full brightness — all scaled by `neonStrength`. A stuttering letter stays dark. A no-op by day.
- */
+/** Signs' light after the outdoor grade (inside `paintAmbience`'s outdoors clip): halo, sidewalk
+ * pool and re-lit tubes, scaled by `neonStrength`; a stuttering letter stays dark. */
 export function paintNeonLights(
   ctx: DrawTarget,
   amb: Ambience,

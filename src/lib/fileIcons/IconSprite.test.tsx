@@ -1,11 +1,5 @@
-/**
- * IconSprite — the once-per-app inline sprite injection (file-icons.md §4).
- *
- * The symbol-presence checks iterate SPRITE_ICON_IDS — that is ROUTING, not
- * values: it pins "the sprite string reaches the DOM intact and
- * addressable", while pinning the sprite's CONTENT is the generator's drift
- * test against the generated artifact (scripts/icons/generate.test.mjs).
- */
+/** Iterating SPRITE_ICON_IDS pins routing (the sprite reaches the DOM addressable); its content is
+ * pinned by the generator's drift test (scripts/icons/generate.test.mjs). */
 
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -46,10 +40,8 @@ describe("IconSprite", () => {
   it("React 19 innerHTML regression: a re-render with a fresh element neither wipes nor duplicates the sprite", () => {
     const { container, rerender } = render(<IconSprite />);
 
-    // Simulate post-mount DOM state the way the React 19 bug erased it: mark the
-    // injected subtree, then force a re-render with a NEW React element. If
-    // the `{ __html }` prop object were rebuilt per render, React 19 would
-    // re-assign innerHTML and the probe would vanish with the old subtree.
+    // Mark the injected subtree, then re-render with a NEW element: were `{ __html }` rebuilt per
+    // render, React 19 would re-assign innerHTML and the probe would vanish.
     container.querySelector('[data-testid="file-icon-sprite"] > svg')!
       .setAttribute("data-probe", "survived");
     rerender(<IconSprite />);

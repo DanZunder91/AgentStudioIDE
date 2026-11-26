@@ -1,13 +1,5 @@
-/**
- * Drive a real IDE terminal (a real PTY running $SHELL) from WebDriver.
- *
- * Hooks used are ones the app already renders — nothing invented for the test:
- *   - `empty-pane-new-terminal` (the empty center pane's "New terminal" button),
- *   - `.terminal-view[data-terminal-id]` (TerminalView's host div),
- *   - the active `role="tab"` in the pane and its `.pane-tab__title` (TabBar).
- * Keystrokes go to xterm's focused helper textarea via WebDriver key actions, i.e. the
- * same path a user's typing takes (xterm onData → pty_write → the shell).
- */
+/** Drive a real IDE terminal from WebDriver using only hooks the app already renders. Keys go to
+ * xterm's helper textarea, the same path a user's typing takes (onData → pty_write → shell). */
 
 import { $, browser } from "@wdio/globals";
 
@@ -57,11 +49,7 @@ export async function showTerminalTab(title: string): Promise<void> {
   await $(".terminal-view .xterm-helper-textarea").waitForExist({ timeout: 10_000 });
 }
 
-/**
- * Type a command line into the terminal and press Enter. The click focuses xterm; the
- * keys then flow exactly as a user's would. The shell may not have printed its prompt
- * yet — that is fine, the PTY's line discipline buffers the input until bash reads it.
- */
+/** Typing before the prompt is fine: the PTY's line discipline buffers input until bash reads. */
 export async function typeInTerminal(terminalId: string, line: string): Promise<void> {
   const view = await $(`.terminal-view[data-terminal-id="${terminalId}"]`);
   await view.waitForDisplayed({ timeout: 10_000 });

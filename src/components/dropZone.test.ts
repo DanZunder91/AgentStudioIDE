@@ -1,12 +1,5 @@
-/**
- * Drop-zone geometry — the pure half of drag-a-tab-to-an-edge.
- *
- * No DOM here on purpose: `zoneFor` takes a plain rect, which is what lets the
- * hit-testing be tested at all. jsdom has no layout engine (every real
- * `getBoundingClientRect()` there is 0×0), so a component test can only assert
- * this logic through a *mocked* rect — testing the maths directly is both
- * sharper and honest about what is real.
- */
+/** Drop-zone geometry, the pure half of drag-to-edge: `zoneFor` takes a plain rect, since jsdom
+ * measures 0×0 and only a mocked rect would reach it through a component. */
 
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
@@ -91,20 +84,8 @@ describe("zoneFor — degenerate input", () => {
     expect(zoneFor({ left: 0, top: 0, width: 0, height: 300 }, 0, 150)).toBe("center");
   });
 
-  /**
-   * The test above probes a flat rect only at its horizontal MIDPOINT, which is
-   * the one x where the guard cannot be observed: dx = 0.5 there, so the nearest
-   * edge is 0.5 away and the `<= EDGE_RATIO` test fails anyway. Mutation testing
-   * caught that — four separate mutations of the guard survived
-   * the whole suite. Probing OFF-centre is what makes the guard's absence visible.
-   *
-   * Without the guard, a zero-HEIGHT rect does not read as center at all:
-   * `dy = 0 / 0` is NaN, NaN loses every `<` comparison in the nearest-edge scan,
-   * so the two horizontal edges compete uncontested and an off-centre x lands in
-   * a band — a spurious SPLIT on a pane with no measurable height. That is a real
-   * user-visible bug (a stray split from a drop onto an unlaid-out pane), not a
-   * theoretical one, and these four assertions are what stand between us and it.
-   */
+  /** Off-centre probes: at the midpoint the zero-size guard is unobservable. Without it a 0-height
+   * rect gets dy = NaN and an off-centre x lands in a band (a spurious split on an unlaid pane). */
   it("a zero-height rect reads as center OFF-centre too — no spurious edge split", () => {
     const flat: Rect = { left: 0, top: 0, width: 400, height: 0 };
     // x = 10 is 2.5% across: deep inside the left band if the guard is skipped.
@@ -117,17 +98,8 @@ describe("zoneFor — degenerate input", () => {
     expect(zoneFor({ left: 1000, top: 500, width: 400, height: 0 }, 1010, 500)).toBe("center");
   });
 
-  /**
-   * The zero-WIDTH twin. Stated for symmetry of contract, and honest about what
-   * it does and does not prove: unlike the height case above, no input can
-   * distinguish the width half of the guard from its absence. `dx` seeds the
-   * nearest-edge scan (`edges[0]` is the dx-derived "left"), and once `nearest`
-   * holds NaN nothing can beat it — every later `edge[1] < NaN` is false — so a
-   * zero-width rect falls out as "center" with or without the guard. Those two
-   * mutants are therefore EQUIVALENT, not gaps.
-   * The assertions still belong here: they pin the observable contract, which is
-   * what callers depend on regardless of which internal path delivers it.
-   */
+  /** Contract only: with or without the width guard a 0-width rect reads "center" (a NaN `dx`
+   * seeds the nearest-edge scan and nothing beats it), so those mutants are equivalent. */
   it("a zero-width rect reads as center off-centre (contract; guard-equivalent)", () => {
     const thin: Rect = { left: 0, top: 0, width: 0, height: 300 };
     expect(zoneFor(thin, 0, 10)).toBe("center");
@@ -142,10 +114,8 @@ describe("zoneFor — degenerate input", () => {
   });
 
   it("a missing rect reads as center", () => {
-    // The caller hands over `ref.current?.getBoundingClientRect()`, so nullish
-    // arrives here whenever the element is not mounted/laid out yet. Same
-    // question as a 0×0 rect, same answer — and handled here so the component
-    // has no branch of its own to leave untested.
+    // The caller passes `ref.current?.getBoundingClientRect()`, nullish before layout; handled
+    // here so the component has no untested branch.
     expect(zoneFor(null, 200, 150)).toBe("center");
     expect(zoneFor(undefined, 200, 150)).toBe("center");
   });
@@ -200,20 +170,8 @@ describe("zoneFor — properties", () => {
     );
   });
 
-  /**
-   * Sampling by *fraction* rather than raw pixels, and probing along the pane's
-   * mid-line, is what makes symmetry a well-posed question:
-   *   - a fraction in [0,1] is always inside the rect, so the "outside reads as
-   *     center" rule cannot fire on one side of the mirror but not the other;
-   *   - at mid-height the two vertical edges are equidistant (0.5 each), so a
-   *     horizontal edge or center always wins — no cross-axis tie to flip.
-   * Points within 1e-6 of the band boundary are skipped: reflecting a float
-   * across a threshold cannot be exact, and the boundary itself is pinned by
-   * the example-based test above. (An earlier version of this property asserted
-   * exact mirroring of arbitrary pixel coords and fast-check duly found
-   * x = -5e-324 on a 1×1 rect — infinitesimally outside, mirroring to exactly
-   * on the far edge. Both readings were correct; the property was wrong.)
-   */
+  /** Sample fractions along the mid-line, so mirrored points stay inside the rect and no cross-axis
+   * tie flips. Points within 1e-6 of a band boundary are skipped (float reflection isn't exact). */
   const fractionArb = fc
     .double({ min: 0, max: 1, noNaN: true })
     .filter(

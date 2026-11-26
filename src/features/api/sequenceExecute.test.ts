@@ -1,11 +1,5 @@
-/**
- * The sequence runner — the real store, the real `executeHttpRequest`, only the
- * IPC boundary mocked (the `execute.test.ts` harness).
- *
- * Driving the real send path is the point: the property under test is that a
- * value captured from step 1's response reaches step 2's **wire**, and a test
- * that mocked `executeHttpRequest` would assert its own stub instead.
- */
+/** Real store and real executeHttpRequest, only IPC mocked: a value captured from step 1 must
+ * reach step 2's wire, which a stubbed send cannot show. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

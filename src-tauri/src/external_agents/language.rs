@@ -1,35 +1,6 @@
-//! **The project's language, for the City's neon signs** (every
-//! building carries a neon sign naming its project's language, styled for that language — a Rust
-//! project such as gazelle gets Rust-style neon).
-//!
-//! ## Where it comes from — zero permission prompts
-//!
-//! NOT from the project folder. A marker file (`Cargo.toml`, `package.json`) would mean reading
-//! the agent's cwd, and an outside agent's cwd can sit in `~/Documents` or `~/Desktop`, where
-//! touching anything raises a macOS TCC prompt. The transcript the scan ALREADY reads under
-//! `~/.claude/projects` says it instead: every file the agent touched is named in a `tool_use`
-//! input — `Read` / `Edit` / `Write` / `MultiEdit` `file_path`, `NotebookEdit` `notebook_path`, and
-//! a `Grep` / `Glob` `path`. A directory has no source extension, so only a FILE path can vote:
-//! no `stat` is needed to tell the two apart, and none is made. Each path's extension votes
-//! through the shared table `src/features/village/projectLanguages.json` — the very table the
-//! Village tallies the IDE's own agents with, so both sides name a language the same way. The
-//! most votes win; a tie goes to the first id in code-unit order (`planCity`'s rule).
-//!
-//! ## What crosses the wire (the privacy rules)
-//!
-//! Only the winning id (`"rust"`). The paths are read inside Rust and dropped here: no path, no
-//! file name, no extension and no vote count ever leaves this module.
-//!
-//! ## Cost — it runs every ~3 s for every live session
-//!
-//! Incremental, `agent::tools`'s discipline: a byte offset per transcript, and a scan reads only
-//! what was APPENDED since the last one — usually nothing (one `stat`) or a few KiB. A file seen
-//! for the first time, or one that grew by more than [`LANGUAGE_BOUND`] between two scans, is read
-//! only its last [`LANGUAGE_BOUND`] bytes. Lines are pre-filtered by substring before any JSON
-//! parse. A file that got SHORTER was rewritten (`claude` does that on an interrupted exit): its
-//! votes are dropped and it is read again. The cache is in memory for the app run, holds only the
-//! sessions of the last scan ([`LanguageCache::retain`]), and nothing is written anywhere —
-//! least of all under `~/.claude`.
+//! A project's language for the City's neon signs: file extensions named in transcript `tool_use`
+//! inputs vote via `src/features/village/projectLanguages.json` (never the cwd: TCC prompts). Only
+//! the winning id leaves Rust. Reads are incremental per file, capped at [`LANGUAGE_BOUND`].
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -130,7 +101,8 @@ impl Tally {
         }
     }
 
-    /// The most-voted language; a tie goes to the first id in code-unit order. `None` = no vote.
+    /// The most-voted language; a tie goes to the first id in code-unit order (`planCity`'s rule,
+    /// keep in sync). `None` = no vote.
     pub fn winner(&self) -> Option<&'static str> {
         self.0
             .iter()
@@ -167,10 +139,8 @@ fn catch_up(path: &Path, votes: &mut FileVotes) {
     {
         return;
     }
-    // Whole lines only: a torn last line (mid-write) waits for its newline. A first line cut by
-    // the bound (a first look, a big append) needs no special case: the tail of a JSON line is
-    // never JSON, so it fails to parse and votes for nothing — and a bound that lands exactly on
-    // a line's start keeps that whole line.
+    // Whole lines only: a torn last line waits for its newline; a line cut by the bound fails to
+    // parse and votes for nothing.
     let to = buf.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
     for line in buf[..to].split(|&b| b == b'\n') {
         if !line.is_empty() {

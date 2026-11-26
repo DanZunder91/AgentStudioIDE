@@ -1,11 +1,4 @@
-/**
- * The City's lounge against a REAL 2D context in Chromium: the benches read
- * against the hall, a waiter sits on every free seat and none on a held one, the hall keeps its own
- * light at night, and the ground it is dug into — turf, soil, the street's copies beside the world
- * carrying the street only. Assertions read pixels back with getImageData.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/lounge.browser.test.tsx`
- */
+/** Browser tier: `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -45,10 +38,8 @@ function frameOf(held: readonly number[]): CapacityFrame {
   };
 }
 
-/**
- * The lounge's region painted at zoom Z: the whole draw list of `world` for a frame where `held`
- * seats are held, under `amb`. `at(wx, wy)` = the RGB under a world px; `data` = the region's pixels.
- */
+/** Paints the lounge's region at zoom Z with `held` seats held, under `amb`. `at(wx, wy)` is the
+ * RGB under a world px; `data` is the region's pixels. */
 async function paint(held: readonly number[], amb: Ambience) {
   // The lift's own art is render/lift.ts's (tested in lift.browser.test.tsx): left out, so this block tests only the lounge.
   const items = buildDrawList(world, [], () => false, 3, null, { frame: frameOf(held), seatOf: () => null }).filter(

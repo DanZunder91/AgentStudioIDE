@@ -1,56 +1,6 @@
-//! Background-task output as a log source.
-//!
-//! An agent that starts its service with Claude's `run_in_background` Bash would
-//! otherwise have its logs appear nowhere: Claude writes a background task's stdout/stderr to
-//! `<temp>/claude-<uid>/<project>/<session>/tasks/<id>.output`, never to the PTY. The
-//! transcript tail ([`crate::agent::tools`]) recognises the launch and its result; this
-//! module tails the file and turns it into [`LogKind::Task`] lines.
-//!
-//! # Redirects are followed
-//!
-//! A typical launch redirects: `python3 …/run_server.py KEY=… > …/gazelle.log 2>&1` —
-//! so the `.output` file stays **empty** and the real log is `gazelle.log`, which nothing
-//! would tail. A task therefore tails, besides its `.output` file, **every file its command
-//! redirects to** ([`redirect_targets`]: `>`, `>>`, `>|`, `N>`, `&>`, `&>>`, `>& file`,
-//! `| tee [-a] file…`; a `2>&1`-style dup, an input redirection and `/dev/*` name no file).
-//! A relative target is placed against the agent's cwd (the transcript line's). Every
-//! target goes through the path guard below; one outside the root is not tailed and says
-//! so once (`not tailing gazelle.log: outside the IDE's temp root`); one named twice is
-//! tailed once. All of a task's files count as **one** against the cap, and the task's
-//! `source` is named after the redirect ([`source_name`]: `gazelle.log` → `gazelle · bg`)
-//! unless that name is generic (`out.log`, `nohup.out`, a hex id…), in which case the
-//! program's name stays.
-//!
-//! # Only Claude's own temp root, read-only
-//!
-//! A path comes from a transcript, i.e. from text a model wrote. So before anything is
-//! opened it must be absolute, free of `..`, and — **with every symlink resolved** — a
-//! regular file strictly under `claude-<uid>` in one of the temp roots
-//! ([`claude_temp_roots`]). A task file that is a symlink out of the root (Claude's own
-//! sub-agent `.output` files are symlinks into `~/.claude`, for one) is refused, not
-//! followed; the file is then opened with `O_NOFOLLOW` and re-checked on the open handle,
-//! so a swap between check and open cannot redirect the read. A file that does not exist
-//! yet is waited for only when it lies under a root lexically — a redirect to
-//! `/work/server.log` is refused now, not watched forever. Nothing is ever written.
-//!
-//! # Bounded
-//!
-//! At most [`MAX_TASK_TAILS`] tasks at once across the whole app ([`TaskSlots`], shared
-//! through the hub), each with at most [`MAX_TASK_FILES`] files. A file is read from the
-//! start — a service's startup lines are the ones that matter — but only its last
-//! [`TASK_BACKFILL_LINES`] lines (within the last [`TASK_BACKFILL_BYTES`]) are backfilled.
-//! After that, lines are admitted at most [`TASK_LINES_PER_SEC`] a second per file by the
-//! same fixed-window [`RateLimiter`] the machine lines use, with the drops reported. A
-//! task's tail stops when none of its files has grown for [`TASK_IDLE_STOP`], when a
-//! `TaskStop` names it, when its last file is gone, or when its session ends (the owning
-//! tailer task is aborted and drops it).
-//!
-//! # Testability
-//!
-//! The clock is a parameter (`now`) and the roots are injected, so every rule above is
-//! tested against real files under a fake root with made-up instants; the command
-//! grammar ([`redirect_targets`], [`program_of`], [`source_name`]) is pure and
-//! table-tested.
+//! Tails `run_in_background` output (`…/tasks/<id>.output`, never the PTY) and every file the
+//! command redirects to, as [`LogKind::Task`] lines. Paths are model-written text: only regular
+//! files under Claude's temp root are opened (symlinks resolved, `O_NOFOLLOW`), never written.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -89,10 +39,8 @@ pub const BG_SUFFIX: &str = " · bg";
 /// of the ring, and a `Monitor` script can be kilobytes long.
 pub const TASK_DETAIL_BYTES: usize = 2 * 1024;
 
-/// Where Claude may put task output for this user: `claude-<uid>` under the process temp
-/// dir, `/tmp` and `/private/tmp` (macOS's `/tmp` is a symlink to it). On Windows it is
-/// `%TEMP%\claude` ([`windows_temp_roots`]). Candidates only — [`validate_task_path`]
-/// resolves them, and a root that does not exist contains nothing.
+/// Candidate roots for task output: `claude-<uid>` under the temp dir, `/tmp` and `/private/tmp`
+/// (Windows: [`windows_temp_roots`]). [`validate_task_path`] resolves them.
 pub fn claude_temp_roots() -> Vec<PathBuf> {
     #[cfg(unix)]
     {
@@ -117,13 +65,8 @@ pub fn claude_temp_roots() -> Vec<PathBuf> {
     }
 }
 
-/// Claude Code on Windows writes `%TEMP%\claude\<project hash>\<session>\tasks\<id>.output`
-/// (measured on CLI 2.1.x — no uid in the name, and the project level is a hash,
-/// not the transcript's project-dir name). It takes the dir from Node's `os.tmpdir()`, which
-/// reads `TEMP` before `TMP`; ours ([`std::env::temp_dir`], `GetTempPath2W`) reads `TMP`
-/// first. They are normally the same folder, but both are candidates so a machine where
-/// they differ still finds the files. Pure (the environment is passed in) so every OS tests
-/// the Windows answer.
+/// Windows: `%TEMP%\claude\<project hash>\<session>\tasks\` (CLI 2.1.x). Node reads `TEMP`
+/// before `TMP`, std reads `TMP` first, so both are candidates. Pure, so every OS tests it.
 pub fn windows_temp_roots(
     temp: Option<std::ffi::OsString>,
     tmp: Option<std::ffi::OsString>,
@@ -230,14 +173,9 @@ pub fn validate_task_path(path: &Path, roots: &[PathBuf]) -> Result<PathBuf, Pat
     Ok(canon)
 }
 
-/// Open a validated path without following a (newly planted) symlink, and re-check that
-/// the handle is a regular file.
-///
-/// Windows: `FILE_FLAG_OPEN_REPARSE_POINT` opens a symlink or junction ITSELF instead of
-/// its target (the `O_NOFOLLOW` of `CreateFileW`), and a handle whose attributes say
-/// reparse point is refused — so a link swapped in between [`validate_task_path`] and here
-/// is never read through. The canonical path is a verbatim `\\?\C:\…` one there; opening it
-/// is ordinary. std's default share mode (read | write | delete) lets Claude keep appending.
+/// Open without following a newly planted link (`O_NOFOLLOW`; on Windows
+/// `FILE_FLAG_OPEN_REPARSE_POINT`, refusing reparse points) and re-check it is a regular file.
+/// std's default share mode lets Claude keep appending.
 pub(super) fn open_checked(canon: &Path) -> Result<File, PathRefusal> {
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true);
@@ -541,11 +479,9 @@ fn program_index(words: &[&str]) -> Option<usize> {
     None
 }
 
-/// The program a background command actually runs, by basename: env assignments,
-/// wrappers (`exec`, `nohup`, `env …`), redirections and setup commands (`cd … &&`,
-/// `export`, `source`) are skipped, and in a pipeline the producer wins
-/// (`cargo run 2>&1 | tee log` → `cargo`). When every command is setup, the first one
-/// is the answer; an empty command is `task`.
+/// The program a background command runs, by basename: env assignments, wrappers, redirects
+/// and setup (`cd … &&`, `export`, `source`) are skipped; a pipeline's producer wins.
+/// All setup → the first command; empty → `task`.
 pub fn program_of(command: &str) -> String {
     let toks = lex(command);
     let mut first_any: Option<String> = None;
@@ -583,13 +519,9 @@ pub(crate) fn simple_command_words(command: &str) -> Vec<(Vec<String>, Option<us
         .collect()
 }
 
-/// Every file the command redirects output to, in command order, each once, as written
-/// (quotes removed; a `$VAR` stays — it cannot be expanded here). The grammar: `> f`,
-/// `>f`, `>> f`, `>| f`, `N> f`, `N>> f`, `&> f`, `&>> f`, `>& f` (a file when `f` is not
-/// a descriptor), and `| tee [-a|-i|-p|--append|…] f…`. A dup (`2>&1`, `>&2`, `>&-`), an
-/// input redirection (`< f`, `<< EOF`, `<<< s`) and `/dev/*` name no file to tail. Every
-/// simple command of the line is looked at — a filter's `> out` counts, a setup step's
-/// `echo x > f` too (it is what the agent wrote) — but not inside `$(…)` or backticks.
+/// Every file the command redirects output to, in order, once, as written (`$VAR` unexpanded):
+/// `>`, `>>`, `>|`, `N>`, `&>`, `>& f`, `| tee … f`. Dups, input redirections and `/dev/*` name
+/// no file. Every simple command counts, but not inside `$(…)` or backticks.
 pub fn redirect_targets(command: &str) -> Vec<String> {
     let toks = lex(command);
     let mut out: Vec<String> = Vec::new();
@@ -657,10 +589,8 @@ const GENERIC_STEMS: &[&str] = &[
     "out", "output", "log", "logs", "stdout", "stderr", "nohup", "tmp", "temp", "null",
 ];
 
-/// Whether a redirect target's name is too generic to name the task after (see
-/// [`source_name`]): one of [`GENERIC_STEMS`] (any case), Claude's own `<id>.output`, an
-/// unexpanded `$VAR`, an id (all digits, or all hex digits with at least one digit — a
-/// hex-looking word with no digit, `beef`, is more likely a name), or empty.
+/// Too generic to name a task after: a [`GENERIC_STEMS`] name (any case), `<id>.output`,
+/// `$VAR`, an id (all digits, or hex with a digit: `beef` is a name), or empty.
 pub fn is_generic_target(target: &str) -> bool {
     let name = basename(target);
     let stem = target_stem(target);
@@ -672,10 +602,8 @@ pub fn is_generic_target(target: &str) -> bool {
         || (stem.chars().all(|c| c.is_ascii_hexdigit()) && stem.chars().any(|c| c.is_ascii_digit()))
 }
 
-/// What a task's `source` is named after: the first redirect target whose name is not
-/// generic — the agent named the log after the service (`> gazelle.log` → `gazelle`) —
-/// else the program ([`program_of`]). A pure function of the command: it names the
-/// intent, whether or not that target ends up tailed.
+/// A task's `source` name: the first non-generic redirect target (`> gazelle.log` → `gazelle`),
+/// else [`program_of`]. Pure: it names the intent whether or not the target gets tailed.
 pub fn source_name(command: &str) -> String {
     redirect_targets(command)
         .iter()
@@ -715,12 +643,9 @@ fn place(raw: &str, cwd: Option<&Path>) -> Placed {
     place_for(raw, cwd, cfg!(windows))
 }
 
-/// [`place`] with the platform as a parameter, so every OS tests the Windows answer.
-///
-/// On Windows Claude's Bash tool is Git Bash, so a command names files the MSYS way:
-/// `/c/Users/me/out.log` is `C:\Users\me\out.log` ([`msys_drive_path`]). Any other path that
-/// starts at a root without a drive (`/tmp/x.log`, `\x.log`) means something only that
-/// shell knows (its mount table) — unplaceable, never silently `C:\tmp\x.log`.
+/// [`place`] with the platform as a parameter. Windows' Bash tool is Git Bash: `/c/Users/…`
+/// maps via [`msys_drive_path`]; any other driveless root (`/tmp/x.log`) is unplaceable,
+/// never silently `C:\tmp\x.log`.
 fn place_for(raw: &str, cwd: Option<&Path>, windows: bool) -> Placed {
     if raw.contains(['$', '`']) || raw.starts_with('~') {
         return Placed::Unplaceable(raw.to_string());
@@ -1524,10 +1449,8 @@ mod tests {
         assert!(out.status.success(), "mklink /J failed: {out:?}");
     }
 
-    /// The guard on real Windows files: canonical paths are verbatim (`\\?\C:\…`) on both
-    /// sides, a junction out of the root is refused, a junction that stays inside is fine,
-    /// `..` and a sibling are refused, a missing file under the root is waited for — also
-    /// when the transcript spells the root in another case.
+    /// Verbatim `\\?\C:\…` paths both sides: junction out, `..` and a sibling refused; junction in
+    /// is fine; a missing file under the root is waited for, even with the root in another case.
     #[cfg(windows)]
     #[test]
     fn on_windows_only_a_regular_file_under_the_claude_root_is_accepted() {
@@ -1637,10 +1560,8 @@ mod tests {
             "its target, a directory"
         );
 
-        // A FILE symlink to a regular file — the swap the flag exists for: opened as the link
-        // itself, whose attributes say reparse point, so `NotRegularFile`, never the target's
-        // bytes. Creating one needs Developer Mode or elevation (`SeCreateSymbolicLink`);
-        // without it this part cannot be built and says so.
+        // A file symlink opens as the link itself (reparse point) → `NotRegularFile`.
+        // Creating one needs Developer Mode or elevation; without it this part says so.
         let file_link = r.tasks.join("swapped.output");
         match std::os::windows::fs::symlink_file(&ok, &file_link) {
             Ok(()) => assert_eq!(
@@ -1655,13 +1576,9 @@ mod tests {
         }
     }
 
-    /// The whole task-tail engine on Windows, as a session drives it: a `Bash` task whose
-    /// command is `npm run dev > dev.log 2>&1` (cwd = the session's tasks dir, so the target is
-    /// under the root) and whose `.output` does not exist yet; ANOTHER process then creates
-    /// the files and keeps appending, holding them open the way Claude and a shell do. Every
-    /// file's lines arrive as `task` lines — including a target written the Git Bash way
-    /// (`/c/Users/…`, what Claude's Bash tool on Windows writes); a target outside the root is
-    /// refused up front with the reason; `TaskStop` ends it with the closing line.
+    /// Windows end to end: `npm run dev > dev.log 2>&1`, files created and appended by ANOTHER
+    /// process. A Git Bash `/c/Users/…` target is tailed, one outside the root is refused up
+    /// front, and `TaskStop` ends it with the closing line.
     #[cfg(windows)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn on_windows_a_tasks_output_and_redirect_target_stream_while_another_process_writes() {
@@ -1774,10 +1691,8 @@ mod tests {
         assert!(tails.task_ids().is_empty());
     }
 
-    /// Real data (read-only): the `.output` files of the Claude sessions on this machine
-    /// that the validator accepts under the real roots. Prints what it found; asserts only
-    /// that every accepted path is a regular file under a canonical root, and that every
-    /// session's task file is accepted (none of them is a link on Windows).
+    /// Real data, read-only: this machine's session `.output` files must be accepted under the
+    /// real roots, each a regular file under a canonical root (none is a link on Windows).
     #[cfg(windows)]
     #[test]
     fn on_windows_this_machines_task_files_pass_the_guard() {

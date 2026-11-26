@@ -1,20 +1,6 @@
-/**
- * `reloadFromDisk` — pulling an OUTSIDE rewrite of a file into its open buffer.
- *
- * The first caller is a confirmed `Git ▸ Revert changes…`: git puts the
- * committed content back on disk, and without this the tab would keep showing the
- * edits the user just discarded — the classic "my IDE is lying to me" state.
- *
- * The load-bearing claim, and the reason this is a `dispatch` and not a fresh
- * `EditorState`: **the replacement is undoable.** After a revert, Cmd/Ctrl+Z takes
- * the user's work back in the buffer (they can then Save to put it on disk again).
- * That is what makes a rollback safe to click, and it only works because the reload
- * rides the same CM6 history the undo-across-save fix installed.
- *
- * Drives the REAL registry, the REAL store and a REAL `EditorView` with only the
- * Tauri IPC mocked — the same harness `undoAcrossSaveAndClose.test.tsx` uses, and
- * for the same reason: a mocked registry would mock away everything under test.
- */
+/** Load-bearing: an outside rewrite (e.g. a confirmed Git revert) is dispatched into CM6 history,
+ * so Cmd/Ctrl+Z takes the user's work back. Real registry, store and `EditorView`; only IPC is
+ * mocked. */
 
 import { render, waitFor } from "@testing-library/react";
 import { act } from "react";
@@ -116,11 +102,8 @@ describe("reloadFromDisk", () => {
   it("pulls an outside rewrite into the buffer and leaves the tab CLEAN", async () => {
     const { view } = await openAndLoad();
     edit(view, "my work");
-    // The SAVE matters and is not decoration: it is what moves `entry.baseline`
-    // off the committed text, and it is also the only way git ends up seeing the
-    // file as modified — i.e. the only state in which Revert is offered at all.
-    // Without it this test cannot tell a correct reload from one that updates the
-    // baseline too late and leaves the tab falsely dirty.
+    // The save moves `entry.baseline` off the committed text, so a late baseline update would show
+    // as a falsely dirty tab.
     await act(async () => {
       await save(PATH);
     });
@@ -199,10 +182,8 @@ describe("reloadFromDisk", () => {
     await settle();
 
     expect(getView(PATH)).toBeNull();
-    // The torn-down view was never written into. CM6 tolerates a dispatch on a
-    // destroyed view silently, so "it didn't throw" proves nothing — assert the
-    // buffer's CONTENT instead. Without the entry-identity guard the late resolve
-    // reaches straight past the close and rewrites a doc nobody owns any more.
+    // CM6 ignores a dispatch on a destroyed view silently, so assert content: the entry-identity
+    // guard must stop the late resolve from rewriting a doc nobody owns.
     expect(docOf(view)).toBe(doomed);
   });
 });

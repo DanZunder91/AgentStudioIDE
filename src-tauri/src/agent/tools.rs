@@ -1,60 +1,6 @@
-//! Agent tool calls for the Agent Logs view — the
-//! runtime-agnostic half.
-//!
-//! The adapter says **which files** hold a root's transcripts (root + every sub-agent)
-//! and **how to read one line** ([`AgentAdapter::tool_transcripts`] /
-//! [`AgentAdapter::parse_tool_line`]); this module tails those files and turns the
-//! blocks into [`ToolEvent`]s. It rides on the fan-out tailer's existing poll loop and
-//! `locate_transcript` — there is no second locator.
-//!
-//! # Why this tail is incremental when the fan-out's is not
-//!
-//! The fan-out parser re-reads every transcript each poll, which is rewrite-safe for
-//! free (it has no state to corrupt). Tool events are a *stream*: re-reading from
-//! byte 0 each second would be both quadratic and a flood of repeats. So this keeps a
-//! byte offset per file and reads only what was appended, consuming complete lines
-//! only (a torn last line waits for its newline). The rewrite case (`claude`
-//! rewrites its transcript on an interrupted exit) shows up as the file getting
-//! **shorter** than our offset; we then start over from byte 0, and the id dedupe
-//! below makes the re-read silent.
-//!
-//! # Dedupe
-//!
-//! By `tool_use.id` for calls and by `tool_use_id` for results. The CLI does not repeat
-//! content blocks today (see `metrics.rs`'s module doc — only `usage` repeats), but a
-//! rewrite re-read would, and this stays correct either way.
-//!
-//! # History is not replayed
-//!
-//! A resumed session's transcript already holds every call it ever made. Events older
-//! than `since_ms` (the tailer's start, minus slack) are recorded as seen but not
-//! emitted — the log is "what my fleet is doing", not an archive dump.
-//!
-//! # Background tasks
-//!
-//! A service Claude starts with `run_in_background` (or a `Monitor`) writes its output to
-//! a file under Claude's temp dir, never to the PTY — so a service like `gazelle` would
-//! log nowhere. The adapter marks the three blocks that matter ([`ToolBlock::BgLaunch`] on the
-//! call, [`ToolBlock::BgStarted`] on its result, [`ToolBlock::BgStop`] on a `TaskStop`),
-//! and this tail correlates them by tool-use id into [`TaskEvent`]s. A `BgStarted` whose
-//! call was not a launch is ignored: any tool's output can *contain* the marker text (a
-//! `Read` of a transcript, say), and only the launch's own result is a task starting.
-//! The file tailing itself is [`crate::logstream::tasks`].
-//!
-//! # A result says which call produced it
-//!
-//! A row `Bash → {"status":"ok"} HTTP 200` whose drawer held the service's own log
-//! lines read as a Bash call that returned 200 yet contained a MongoDB log — the
-//! agent had run `curl …/health && tail -20 gazelle.log` in one call, and nothing on the
-//! result said so. So a result's `detail` now **opens with the invocation**: `$ <the full
-//! command>` for a shell tool, `<Tool>: <the same summary its call line used>` for the
-//! rest, then a blank line, then the output. The two halves are capped separately
-//! ([`RESULT_COMMAND_BYTES`] / [`RESULT_DETAIL_LINES`] + `MAX_DETAIL_BYTES`), and both
-//! lines carry the transcript's tool-use id ([`ToolEvent::tool_use_id`]) so the UI can
-//! pair them without guessing.
-//!
-//! [`AgentAdapter::tool_transcripts`]: crate::agent::adapter::AgentAdapter::tool_transcripts
-//! [`AgentAdapter::parse_tool_line`]: crate::agent::adapter::AgentAdapter::parse_tool_line
+//! Agent Logs tool events: tails the adapter's transcripts by byte offset (complete lines only; a
+//! shorter file is a rewrite, re-read from 0 and silenced by id dedupe). Events before `since_ms`
+//! aren't replayed. `BgStarted` counts only on a launch's own result (any output can quote it).
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -110,10 +56,7 @@ pub enum ToolBlock {
     BgStarted {
         tool_use_id: String,
         task_id: String,
-        /// Where its output goes, when the result says (`Output is being written to:`).
-        /// `None` = the adapter derives it ([`AgentAdapter::task_output_path`]).
-        ///
-        /// [`AgentAdapter::task_output_path`]: crate::agent::adapter::AgentAdapter::task_output_path
+        /// From the result's `Output is being written to:`; `None` = the adapter derives it.
         output_path: Option<PathBuf>,
         ts_ms: Option<i64>,
     },
@@ -136,10 +79,8 @@ pub enum TaskEvent {
     },
 }
 
-/// A Bash call whose command routes around the capture proxy (`--noproxy`, `NO_PROXY=…`,
-/// `unset *_proxy`, …) — [`crate::logstream::bypass::detect`] on the call's command. The
-/// supervisor turns it into a `bypass` row in Network (nothing an agent runs goes missing
-/// from Network silently).
+/// A Bash call routing around the capture proxy ([`crate::logstream::bypass::detect`]); it becomes
+/// a `bypass` row in Network, so nothing an agent runs goes missing silently.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BypassEvent {
     pub agent_id: String,
@@ -394,10 +335,8 @@ impl TranscriptToolTail {
     }
 }
 
-/// `text` = `<Tool> → <first non-blank line>`; `detail` = the call's invocation line, a
-/// blank line, then the first [`RESULT_DETAIL_LINES`] lines of output (module doc). With
-/// no known call (a result whose call predates the tail), `text` is the bare first line
-/// and `detail` is the output alone — and only when there is more than one line of it.
+/// `text` = `<Tool> → <first non-blank line>`; `detail` = invocation, blank line, output head.
+/// With no known call: `text` is the bare first line, `detail` only for multi-line output.
 pub fn summarize_result(call: Option<&CallInfo>, output: &str) -> (String, Option<String>) {
     let first = output
         .lines()
@@ -712,10 +651,8 @@ mod tests {
         v.to_string()
     }
 
-    /// Through the REAL Claude line parser: a Windows PowerShell 5.1 tool call that uses
-    /// `Invoke-WebRequest` is a bypass row (its cmdlets ignore `HTTP(S)_PROXY`); under
-    /// PowerShell 7 the same call is captured, so it is not. A Bash call reading the same
-    /// text is judged by the POSIX rules (`iwr` means nothing to bash).
+    /// PowerShell 5.1's web cmdlets ignore `HTTP(S)_PROXY` (7's honour it); bash judges the same
+    /// text by POSIX rules.
     #[test]
     fn a_powershell_51_web_cmdlet_call_is_a_bypass_and_pwsh_7_is_not() {
         let iwr = "Invoke-WebRequest -Uri http://127.0.0.1:3000/api/v1/health -UseBasicParsing \

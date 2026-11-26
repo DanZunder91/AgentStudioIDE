@@ -1,18 +1,6 @@
-/**
- * TerminalView × find-in-terminal — the interception seam.
- *
- * What is pinned here: the CAPTURE-phase keydown on the terminal host is the
- * ONLY key the view touches. Cmd+F (mac) / Ctrl+F (elsewhere) opens the
- * overlay, preventDefault()s and stops the event before xterm's textarea can
- * swallow it; EVERY other key — including Ctrl+F on macOS, which is
- * forward-char in the shell — passes through untouched, open or closed.
- *
- * The registry is mocked at the module boundary (the established altitude —
- * see `vitest.config.ts`'s note on `features/terminal` in jsdom): `useTerminal`
- * then runs for real but ensure/attach/detach are inert, so no xterm instance
- * is needed. `isMac` is mocked per-test to pin both platforms hermetically
- * (jsdom's UA depends on the host OS).
- */
+/** Only the capture-phase Mod+F is intercepted; every other key, macOS Ctrl+F included, passes.
+ * The registry is mocked (ensure/attach/detach inert); `isMac` is mocked per test, as jsdom's
+ * UA follows the host OS. */
 
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -172,19 +160,8 @@ describe("TerminalView — Cmd/Ctrl+F interception", () => {
 
 /* ════════════════ Cmd/Ctrl+F seeds from the selection ════════════════ */
 
-/**
- * Pressing Cmd+F with text selected must search for that selection.
- *
- * The editor's bar has done this since #67a; these pin that the terminal's now
- * does too, by the SAME rule (`editor/find/selectionSeed`). The selection is
- * read from the REGISTRY, not from an xterm instance the view holds — so the
- * mock below is `getTerminalSelection`, and the terminal stub stays the
- * `{ focus }` it has always been.
- *
- * The assertion that matters is `addon.findNext`: the bar must SEARCH for the
- * selection, not merely display it. Fake timers make the overlay's 100 ms
- * debounce deterministic, as in the remount suite below.
- */
+/** Same rule as the editor (`editor/find/selectionSeed`); the selection comes from the
+ * registry's `getTerminalSelection`. The bar must search (`addon.findNext`), not just show it. */
 describe("TerminalView — Cmd/Ctrl+F seeds the overlay from the terminal selection", () => {
   let addon: MockSearchAddon;
 
@@ -319,14 +296,8 @@ describe("TerminalView — Cmd/Ctrl+F seeds the overlay from the terminal select
 
 /* ════════════════ the overlay survives a tab move ════════════════ */
 
-/**
- * `Pane` renders only the active tab and a cross-pane drag re-parents the
- * subtree — both unmount `<TerminalView>`. The bar's OPEN state lives in
- * `findBars["terminal:<id>"]` so it comes back on the remount; the QUERY and
- * toggles come back from the registry (`searchUi`), exactly as before — these
- * tests drive the unmount/remount cycle the way `Pane` does and pin both
- * halves meeting again: bar open, query restored, highlights re-run.
- */
+/** `Pane` unmounts `<TerminalView>` on tab switch and cross-pane drag. Open state returns from
+ * `findBars["terminal:<id>"]`, query and toggles from the registry's `searchUi`. */
 describe("TerminalView — the overlay survives unmount/remount", () => {
   const KEY = `terminal:${TERMINAL_ID}`;
 

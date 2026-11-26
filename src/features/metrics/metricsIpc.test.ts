@@ -1,13 +1,5 @@
-/**
- * `metricsIpc` — the metrics wire. A thin wrapper, so the command *name*, the
- * exact arg shape, and the **rejection passthrough** are the whole contract.
- *
- * The arg shape is worth pinning by name: Rust's `claude_metrics(window, scope, cwd)`
- * reads three keys, and a renamed or missing one would fail as *silence* — a report
- * for the wrong window, or a `scan-failed` nobody can explain — rather than as a type
- * error. The passthrough matters for the same reason it does in `usageIpc`: the store
- * classifies the raw `"<code>[: detail]"` string, which only works untouched.
- */
+/** Command name, arg names (a renamed key fails silently in serde) and untouched rejection
+ * passthrough (the store classifies the raw `"<code>[: detail]"`) are the contract. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -15,12 +7,7 @@ import { installTauriMock, type TauriMock } from "../../test/tauri-mock";
 import { claudeMetrics } from "./metricsIpc";
 import type { MetricsReport } from "./metricsTypes";
 
-/**
- * The smallest well-formed report. Inlined rather than shared from a helper module:
- * a non-test file under `src/features/metrics/**` would join the measured coverage set
- * and then need its own exclusion, and this wrapper's contract is the arg shape, not
- * the payload's richness.
- */
+/** Inlined: a non-test helper under `src/features/metrics/` would join the coverage set. */
 const EMPTY_REPORT: MetricsReport = {
   window: { kind: "last_24h", fromMs: 0, toMs: 86_400_000 },
   scope: { kind: "all", cwd: null },
@@ -84,12 +71,8 @@ describe("metricsIpc", () => {
   it("🔴 sends the DEFAULT pair — scope 'all' with a null cwd — as exactly that", async () => {
     ipc.handle("claude_metrics", () => EMPTY_REPORT);
 
-    // This is the argument triple the dashboard sends on the most common open:
-    // the metrics tab with no agent selected. `"all"` must reach the wire spelled that
-    // way (Rust's serde is `rename_all = "snake_case"` over `MetricsScopeKind::All`), and
-    // the cwd must be an explicit `null`: `undefined` would drop the key, and Rust's
-    // `Option<String>` would still deserialize — so "no project" and "key misspelled"
-    // would become the same wire message, which is exactly the silence this pins.
+    // The most common open (no agent selected): `"all"` in snake_case and an explicit `null` cwd;
+    // `undefined` would drop the key and look like a misspelled one.
     await expect(claudeMetrics("last_24h", "all", null)).resolves.toEqual(EMPTY_REPORT);
     expect(ipc.lastCall("claude_metrics")).toEqual({
       window: "last_24h",

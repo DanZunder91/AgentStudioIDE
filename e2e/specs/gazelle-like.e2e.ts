@@ -1,22 +1,5 @@
-/**
- * The gazelle-like scenario — a realistic workflow, re-run on every `npm run verify`
- * (docs/design/testing-strategy.md "gazelle-like scenario": unit green ≠ real workflow green).
- * Unit tests can pass while this is broken in real use, so this spec IS the gate.
- *
- * What runs, all inside the real app, all local (BLOCKING in verify's local-integration class):
- *   - terminal `gazelle`: the Rust fixture e2e/fixtures/gazelle-like (reqwest + rustls + webpki-roots,
- *     HTTP on 127.0.0.1:3000, a tracing-style log to stdout AND ./gazelle-like.log). Its outbound
- *     HTTPS goes to a LOCAL TLS server (support/gazelle-like.ts) whose test CA it is handed through
- *     GAZELLE_EXTRA_ROOT — it still does NOT trust the IDE's CA, so a MITM would break it
- *     (UnknownIssuer). The IDE must tunnel it, and it must keep working.
- *   - terminal B: an IDE agent (⚡ quick-launch) whose stub `claude` runs the fake agent
- *     (e2e/fixtures/fake-agent.sh — no real Claude, no account): a real agent's own calls,
- *     `curl --noproxy '*'` ×2, `NO_PROXY='*' python3 urllib` and a real `env -u …_PROXY python3` bypass, written to a Claude-format
- *     transcript (inside the container only) and run with `sh -c` in the agent's PTY.
- *
- * The public-internet half (example.com as the fixture's upstream, the agent's plain `curl https://`)
- * is gazelle-like-external.e2e.ts — reported, not blocking.
- */
+/** Gazelle-like scenario, local and blocking (docs/design/testing-strategy.md). A rustls service
+ * that doesn't trust the IDE's CA must be tunnelled and keep working. */
 
 import { $, browser, expect } from "@wdio/globals";
 import { execFile } from "node:child_process";

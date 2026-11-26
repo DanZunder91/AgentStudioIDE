@@ -1,13 +1,6 @@
-/**
- * The Seats hall against a REAL 2D context in Chromium: a realistic `/context`
- * reading (claude-opus-5-5, 11 % of a 1m window) seated in the real world's Seats house —
- * a character in its category's colour on every taken seat, the velvet cushion on a free one, the
- * white card on a reserved one, and grey chairs (no category colour anywhere) with no reading. Read
- * back with getImageData at zoom 4, and at zoom 1 to prove the audience still reads at Fit. Then the
- * same hall in the City (it is in both), under the lounge's benches.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/hall.browser.test.tsx`
- */
+/** The Seats hall against a real 2D context, read back at zoom 4 and at zoom 1 (the audience must
+ * still read at Fit), in the Village and the City.
+ * Run with `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -49,11 +42,8 @@ const reading: ContextUsage = {
   ],
 };
 
-/**
- * Seat by seat, by hand from the reading (one seat = 5,000 tokens, any use at least one seat): the
- * system prompt 1, system tools 4, MCP server instructions 1, memory files 1, skills 1, messages 15
- * — 23 taken — then 170 free and the buffer's 7 reserved at the back.
- */
+/** By hand from the reading (one seat = 5,000 tokens, any use ≥ one seat): 23 taken, 170 free,
+ * then the buffer's 7 reserved at the back. */
 const SHIRTS = [
   "#a1a1aa",
   "#71717a", "#71717a", "#71717a", "#71717a",
@@ -89,11 +79,8 @@ function inputs(withReading: boolean): CapacityInputs {
   };
 }
 
-/**
- * The world's whole draw list painted round the hall at zoom `z`, at `timeMs`. `at(wx, wy)` = the
- * RGB under a world px (the middle of its z × z block); `seat(i)` = seat i's shirt spot — the middle
- * of its sitter's back, the middle of an empty chair's cushion, the card on a reserved one.
- */
+/** The draw list painted round the hall at zoom `z`. `at(wx, wy)` = RGB mid world px; `seat(i)` =
+ * seat i's shirt spot (the sitter's back, an empty cushion, or a reserved card). */
 async function paint(withReading: boolean, z: number, timeMs = 0) {
   const frame = capacityFrame(inputs(withReading), null);
   const items = buildDrawList(world, [], () => false, timeMs / 1000, null, { frame, seatOf: () => null });

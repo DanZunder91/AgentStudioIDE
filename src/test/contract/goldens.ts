@@ -1,20 +1,6 @@
-/**
- * The contract goldens, typed — the TS half of the seam test.
- *
- * The JSON files in `./goldens/` are WRITTEN BY RUST (`src-tauri/tests/contract_goldens.rs`;
- * the whole-computer ones — `syslog-*`, `netmachine-*` — by its `contract_goldens/machine.rs` module)
- * from values produced by the real production code — a real capture proxy on loopback, the
- * real supervisor over real PTYs, the real transcript parser — and serialised exactly as
- * Tauri serialises them. The Rust test fails on any drift from these files; the tests next
- * to this one feed the very same files through the real TS stores and panels. So a value
- * only one side agrees on turns one side red.
- *
- * Never hand-edit a golden. Regenerate from Rust and read the diff:
- *   UPDATE_GOLDENS=1 cargo test --manifest-path src-tauri/Cargo.toml --test contract_goldens
- *
- * The casts below are checked, not trusted: `wireShape.test.ts` asserts every key and
- * every value's JSON type against the TS interfaces, both directions.
- */
+/** Typed goldens, written by Rust (`src-tauri/tests/contract_goldens.rs`); casts are checked by
+ * `wireShape.test.ts`. Never hand-edit; regenerate and read the diff:
+ * `UPDATE_GOLDENS=1 cargo test --manifest-path src-tauri/Cargo.toml --test contract_goldens` */
 
 import type { LogLine, RunningApp, SyslogStatus } from "../../features/agentlogs/agentLogsTypes";
 import type {
@@ -116,13 +102,9 @@ export function flowById(id: number): FlowDetail {
   return d;
 }
 
-/**
- * The API-client scenario (`netcap::record`, terminalId `ide-api-client`) — found by that
- * reserved id rather than by a key, because the Rust side picks the key. Undefined if the golden
- * lacks it; the contract test that needs it then skips BY NAME, never silently. Once it has a
- * fixed key: add it to `FlowScenario` and to wireShape's key list. Its values are hand-pinned
- * in network.contract.test.tsx.
- */
+/** Found by the reserved terminalId `ide-api-client`: Rust picks the key. Undefined if absent, and
+ * the test that needs it skips BY NAME. Once the key is fixed, add it to `FlowScenario` and
+ * wireShape's key list. */
 export function apiClientScenario(): FlowDetail | undefined {
   return Object.values(FLOWS).find((d) => d.summary.terminalId === "ide-api-client");
 }

@@ -1,101 +1,6 @@
-/**
- * Agent Village — the City's BACKDROP in Tokyo: the neon canyon.
- * A CANYON of mid-rise buildings behind the street — Kabukichō, Dōtonbori, the east side of Shinjuku — in
- * clusters with quiet stretches between them; the towers stand behind it (render/backdropTowers.ts), the
- * apartments in its quiet stretches (render/backdropApartments.ts), the food shops in front
- * (render/backdropShops.ts).
- *
- * At Fit, a strip of haze next to a seven-floor gazelle leaves the sky behind the street almost empty.
- * The backdrop gives the city big lit buildings by night and by day, with neon signs for ramen, soba and
- * the like in katakana and for sushi in hiragana. Between the towers behind and the shops in front stands
- * this canyon: a few buildings side by side, with empty space left between them, and karaoke among its
- * signs. Zoomed ×2 at night, a canyon building with a plate on every floor, and
- * signs behind the shrine in a narrow gap between the city's buildings, would read as overloaded — while
- * some neon-lit buildings, a night district with more behind it, still make sense. So THE CALM
- * PASS: a hierarchy, not wallpaper. The four featured words and the karaoke box carry the neon; everything
- * else recedes into quiet buildings with scattered windows. It is a MID layer (render/backdrop.ts): in
- * front of the haze, behind the temples and the shops; the world's own buildings stand in front of it.
- *
- * CLUSTERS AND QUIET: the canyon stands in clusters between the backdrop's QUIET stretches (`quietSpans`,
- * render/backdrop.ts): the open sky between the clusters (`airSpans`) and the city's own span, wall to
- * wall — so no canyon stands in the city's narrow street gaps, where the temples and Tokyo Tower stand in
- * front of calm apartments. Nothing stands, is painted or is lit in a quiet stretch. Each cluster runs from
- * the end of one stretch of air to the start of the next, less the city's span, and is laid out as one
- * (`spanOf`), so its buildings stand shoulder to shoulder and a pan or a zoom never re-rolls them.
- *
- * THE BUILDINGS are "zakkyo" buildings: 3–6 tiles wide, 5–9 storeys of 1¼ tiles (`STOREY`), every other
- * one SIGNED. Each one, our own art:
- *
- *         ┌─┐
- *     ┌───┤ ├──────────────┐   a signed building hangs one vertical BLADE sign up one side, standing up
- *     │   │ラ│ ▓▓ ラーメン ▓▓ │   past the parapet: two plates hung one under the other (`PLATE_GAP` of
- *     │   │｜│ ▫ ▫ ▫ ▫ ▫ ▫  │   bare wall between, each in colours of its own — two signs, never one
- *     │   │メ│ ▫ ▫ ▫ ▫ ▫ ▫  │   word), a word of kana on each top to bottom (`kanaText(…, true)`): neon
- *     │   │ン│ ▫ ▫ ▫ ▫ ▫ ▫  │   tubes on dark glass, or plastic boxes; and SIGNBOARDS on a third of its
- *     │   └┬┘ ▓▓▓▓▓ ◡ ▓▓▓▓ │   storeys at most, never two in a row — a word of kana (`kanaText(…,
- *     │   ┌┴┐ ▫ ▫ ▫ ▫ ▫ ▫  │   false)`), a pictogram (a bowl, a cup, a mic…) or plain coloured plastic;
- *     │ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒ │   every other storey — and every storey of an unsigned building — a row of
- *     └────────────────────┘   single windows; a shop front on the ground floor, lit or shuttered (a
- * signed building's under a coloured fascia); on some roofs a billboard (an abstract graphic, never a
- * brand), a water tank or a stair house; and in one cluster in four a VIDEO SCREEN over two storeys,
- * cycling colour scenes by the frame clock (`screenScene`).
- *
- * THE FEATURED WORDS (`FEATURED`): ラーメン, ソバ, すし and カラオケ. Every signed blade of a cluster wears
- * two of them, in turn — so any two signed neighbours show all four, however the quiet falls, and the
- * four are on every stretch of open street at Fit. And each cluster of four buildings or more
- * has a KARAOKE BOX, its tallest 56 px wide or more: a giant pink neon カラオケ, its glyphs twice the font's
- * size, over signboards of mics (a smaller cluster keeps all its signed blades for the four words).
- *
- * DAY (`paint`): DAY colours seen through a little of the air (`haze`) — concrete and tile facades a
- * touch lighter and bluer than the world's own buildings, which stand in front; the signboards in their
- * coloured plastic, unlit — and the shared outdoor grade turns them to golden hour, dusk and night like
- * the haze and the landmarks. Fine detail (glyphs, mullions, slab lines) is skipped below `PANE_ZOOM`,
- * where a word is a bar of ink, as the haze's panes become bands.
- *
- * NIGHT (`paintLights`), after the grade, scaled by `neonStrength` (render/neon.ts: nothing at noon, rising
- * through the evening, full at night): the facades sink back behind their signs (a veil); the blades'
- * tubes and plates are lit, each in one soft halo (alpha `HALO_ALPHA`, the only halos the canyon throws);
- * the signboards are lit from behind with none; a share of the single windows is lit, a dim warm or now and
- * then a cool white (`WINDOW_SHARE` of the City's `s.lit`, each window its own threshold, so the lit set
- * only grows through the evening — and the rest, at the brightest, are vacant flats, never lit); the
- * billboards half lit; the screens play, dimmer than the neon (`SCREEN_GLOW`) — and now and then a blade's letter stutters
- * out (`neonFlicker`, render/neon.ts's idiom).
- *
- * EVERY LIGHT goes through `s.fillLit`, which cuts out whatever stands in front (a passer-by, a car, a
- * street tree or lamp, a temple, the shops). A `fillLit` costs ≈ 4.5 µs in Chromium with a busy street in
- * front (render/backdropLights.ts splits each rect round every box), so a canyon of a thousand lit rects
- * could not afford one each. So each cluster's lights are painted ONCE into a small raster in world px
- * (`lightRaster`, painted again only when the windows' lit share steps up, `LIT_STEPS`) and lit through
- * `fillLit` as a pattern: one fill a cluster, kept to its ground (no light in the quiet) and split only
- * round a temple's box — whose cut tests every pixel of a fill that touches it, so nothing is lit inside
- * it: what peeks round a temple's eaves stays dark — and round a stuttering letter. Only the screens'
- * scenes, which change by the frame, are lit rect by rect. Nearest-neighbour sampling of the raster is
- * the rects' own pixels at a whole zoom; below PANE_ZOOM it holds the coarse stand-ins (bars), as the
- * day does.
- *
- * THE LANDMARKS are never hidden: no roof, billboard, tank or blade rises above
- * `roofLimit(…, ["far", "tower"])` over its building — Fuji's snow and the towers' crowns stay clear: a
- * building under one loses its roof object, then storeys (down to one: a crown never sinks into the
- * haze, render/landmarks.ts, so one storey is always below it), then its blade's giant size, its second
- * plate, its blade. In a low city the canyon also stays under `SKY_SHARE` of the sky.
- *
- * WORLD-LOCKED, DETERMINISTIC, BOUNDED: every building, sign, window threshold and scene is a hash of
- * its place in the world (or of the frame clock), never `Math.random`. A cluster is laid out once per
- * World and compiled into colour batches (`Cluster`) — none behind a world building, all of which stand in
- * the city's span, which is quiet.
- * A frame walks only the clusters in view. At a whole zoom (Fit on a @2x screen, and every zoom in) a
- * cluster's day art is a raster too (`dayRaster`, the ground layer's idiom, render/ground.ts): its few
- * hundred rects painted once and blitted in one `drawImage` — with smoothing off, pixel for pixel the
- * rects — because the rects themselves, thousands at Fit, cost the frame ≈ 4.6 ms of rasterising in
- * Chromium though only ≈ 0.3 ms of script. Below zoom 1 (k/16 zooms, where a sampled raster would drop a
- * 1-px line here and there) the batches are painted rect by rect, one `fillStyle` each, every rect
- * snapped like `rect` — the coarse art below PANE_ZOOM, a few hundred rects.
- * COST — Chromium, the reference city at Fit 1280×800 (HUD 117 px), with the towers, the apartments and
- * the shops, each pass timed in the real frame after the calm pass: @2x (zoom 1) ≈ 0.02 ms by day (a blit
- * a cluster and the screens), the lights ≈ 0.09 ms at night (≈ 5 `fillLit`s, cut by render/city.ts at the
- * shops' face); @1x (zoom 9/16, coarse rects) ≈ 0.06 ms by day, the lights ≈ 0.08 ms. A raster is
- * ≈ 250 KB at most; rasters are kept for `MAX_RASTERS` clusters, or every cluster of a wider view.
- */
+/** The neon canyon, a MID layer: zakkyo clusters between quiet stretches, laid out per cluster so
+ * pans never re-roll them; the featured words and karaoke box carry the neon, the rest stays calm.
+ * Lights go through `fillLit` as one cached raster per cluster (one per rect costs too much). */
 
 import { TILE, type Ambience, type World } from "../villageTypes";
 import { AIR_CHUNK, airSpans, quietSpans, roofLimit, SIGN_WORDS, type BackdropLayer, type BackdropLightScene, type BackdropScene } from "./backdrop";
@@ -125,11 +30,8 @@ export const bladeWidth = (k: number): number => KANA_W * k + 6;
 /** World px from a blade's ends to its text, and how far it stands up past its building's parapet. */
 const BLADE_PAD = 3;
 export const BLADE_RISE = 6;
-/**
- * World px of bare wall between two plates hung one under the other on a blade, two steel hangers across
- * it: two signs (with less air between them, "すし" over "ラーメン" reads as one made-up word,
- * "すしラーメン").
- */
+/** World px of bare wall between two stacked blade plates: with less, "すし" over "ラーメン" reads
+ * as one made-up word. */
 export const PLATE_GAP = 5;
 /** A signboard: a glyph and 2 px of plastic over and under it. */
 export const PANEL_H = KANA_H + 4;
@@ -147,28 +49,19 @@ const SCREEN_EVERY = 4;
 export const SCREEN_GLOW = 0.6;
 /** The windows' lit share is stepped this finely: a raster is painted again per step, not per frame. */
 const LIT_STEPS = 32;
-/**
- * The share of the City's lit share (`s.lit`) of the canyon's windows that are lit: ≈ 30 % at full night;
- * and even when the City is at its brightest, the rest are vacant flats, never lit (the calm pass: 20–35 %
- * of windows lit, vacant units never lit).
- */
+/** Share of the City's `s.lit` that lights canyon windows (≈ 30 % at full night); the rest are
+ * vacant flats, never lit. */
 const WINDOW_SHARE = 0.6;
-/**
- * World px of a blade's halo (the giant's twice that), and its alpha: the only halos the canyon throws, all
- * round the featured words (the calm pass: only the featured and big signs have a halo, alpha ≤ about 0.15).
- */
+/** A blade's halo in world px (the giant's twice that) and alpha: the canyon's only halos, all
+ * round the featured words. */
 const HALO = 3;
 const HALO_ALPHA = 0.14;
-/**
- * Rasters are kept for at most this many clusters (≈ 250 KB a raster at most) — or, in a view showing more
- * (a huge city at Fit), for every cluster in it and a few more: the least recently painted's go first.
- */
+/** Rasters kept for at most this many clusters (≤ ≈ 250 KB each), or every cluster in a bigger
+ * view plus a few; the least recently painted go first. */
 export const MAX_RASTERS = 40;
 
-/**
- * The featured words, two a blade in turn along every cluster: ramen, soba and sushi (in hiragana) — and
- * karaoke, each cluster's karaoke box spelling it on its own.
- */
+/** The featured words, two a blade in turn along every cluster; each karaoke box spells カラオケ
+ * on its own. */
 export const FEATURED: readonly string[] = ["ラーメン", "ソバ", "すし", "カラオケ"];
 const KARAOKE = "カラオケ";
 const WORDS = SIGN_WORDS.map((w) => w.text);
@@ -215,12 +108,8 @@ function rgba(color: string, a: number): string {
 const AIR = "#a9c0d8";
 const haze = (color: string, t = 0.16): string => mix(color, AIR, t);
 
-/**
- * The canyon's palette, exported for the tests. By day everything is seen through a little of the air
- * (`haze`): facades of concrete and tile, a touch lighter and bluer than the world's own buildings, which
- * stand in front; the signboards' plastic, saturated but unlit. At night the plastics' and tubes' `lit`
- * colours are the light itself — painted after the grade, never graded.
- */
+/** The palette, exported for tests. Day colours are seen through a little air (`haze`); at night
+ * the `lit` colours are the light itself, painted after the grade, never graded. */
 export const CANYON_ART = {
   facades: [
     { wall: "#adb2bb", shade: "#91979f", cap: "#c6cad1", glass: "#6c7c92" }, // concrete
@@ -342,10 +231,8 @@ interface Plate {
   t: ReturnType<typeof kanaText>;
 }
 
-/**
- * `words` on plates hung top to bottom, `PLATE_GAP` apart, each its word at `k` times the font's size
- * `BLADE_PAD` in from its ends: the plates, and the blade's whole height.
- */
+/** `words` on plates hung top to bottom `PLATE_GAP` apart, each at `k` × the font size,
+ * `BLADE_PAD` in from its ends: the plates and the blade's height. */
 function hung(words: readonly string[], k: number): { plates: Plate[]; h: number; k: number } {
   const plates: Plate[] = [];
   let y = 0;
@@ -473,10 +360,8 @@ function clusterOf(m: Canyon, c: number): Cluster {
   return ch;
 }
 
-/**
- * Collects a cluster's art: rects by depth, detail and colour. (Nothing of it is ever behind one of the
- * world's buildings: they all stand in the city's span, a quiet stretch.)
- */
+/** Collects a cluster's art by depth, detail and colour; none is ever behind a world building
+ * (those all stand in the city's quiet span). */
 class Compiler {
   private readonly day: Map<string, Batch>[] = [];
   private readonly light: Map<string, Batch>[] = [];
@@ -514,11 +399,8 @@ class Compiler {
     this.put(this.panes, 0, ALL, color, [x, y, w, h, hash(x, y, 557) % 1000]);
   }
 
-  /**
-   * Something opaque stands up to world y `top` over columns [x, x + w) (always inside the cluster). Each
-   * call stands higher than any before it over those columns — a building's walls, then what stands on
-   * its roof, its blade beside them — so it is simply the face there.
-   */
+  /** Opaque up to world y `top` over [x, x + w): each call stands higher than the ones before
+   * there (walls, roof objects, blade), so it is simply the face. */
   stand(x: number, w: number, top: number): void {
     this.face.fill(top, x - this.x0, x + w - this.x0);
   }
@@ -565,10 +447,8 @@ function airOf(m: Canyon, a: number): [number, number] {
   return span;
 }
 
-/**
- * Cluster `c`'s span of the world, [x0, x1): its ground, from the end of air span `c` (`airSpans`,
- * render/backdrop.ts) to the start of the next, and that next stretch of air, left open.
- */
+/** Cluster `c`'s span [x0, x1): its ground from the end of air span `c` (`airSpans`), plus the
+ * next stretch of air, left open. */
 function spanOf(m: Canyon, c: number): [number, number] {
   return [airOf(m, c)[1], airOf(m, c + 1)[1]];
 }
@@ -579,12 +459,8 @@ function clusterAt(m: Canyon, x: number): number {
   return x < airOf(m, a)[1] ? a - 1 : a;
 }
 
-/**
- * Cluster `c`'s ground: from its start to the next stretch of air, less the city's own span — a QUIET
- * stretch (`quietSpans`, render/backdrop.ts: a canyon behind the shrine in a narrow gap between two of
- * the city's buildings looks overloaded); calm apartments stand there instead
- * (render/backdropApartments.ts). One stretch or two, none too narrow for a building.
- */
+/** Cluster `c`'s ground: up to the next stretch of air, less the city's own (quiet) span, where
+ * calm apartments stand instead. One stretch or two, none too narrow for a building. */
 function groundOf(m: Canyon, c: number): [number, number][] {
   let a = airOf(m, c)[1];
   const b = airOf(m, c + 1)[0];
@@ -597,14 +473,9 @@ function groundOf(m: Canyon, c: number): [number, number][] {
   return out;
 }
 
-/**
- * Cluster `c`'s buildings, left to right on its ground: every one 48..80 px wide by its hash — never
- * leaving the ground a sliver: the last takes what is left, 48..95 px. Every other one wears signs, the
- * rest are windows only (the calm pass: about half the buildings carry no signs). In a cluster of four
- * or more the karaoke box is the tallest of 56+ px (the leftmost of equals); in one cluster in four a video
- * screen goes on the first other signed building of 64+ px (shown if it stands 6+ storeys). Every other signed
- * blade wears two of `FEATURED`, in turn along the cluster: any two signed neighbours show all four.
- */
+/** Cluster `c`'s buildings, 48..80 px wide by hash (the last takes the rest, 48..95), every other
+ * one signed. Clusters of 4+ get a karaoke box (tallest of 56+ px), one in four a video screen.
+ * Signed blades alternate `FEATURED` pairs, so any two signed neighbours show all four. */
 function plansOf(m: Canyon, c: number): Plan[] {
   const plans: Plan[] = [];
   let i = 0;
@@ -695,12 +566,8 @@ function boxOf(batches: Batch[], windows: Batch[]): Box | null {
   return x0 === Infinity ? null : [x0, y0, x1 - x0, y1 - y0];
 }
 
-/**
- * One building into the cluster: its walls, storeys, signs, roof and lights. Its height is its plan's,
- * less what a landmark's crown over it (`roofLimit`) or the city's sky (`SKY_SHARE`) will not allow —
- * its roof object goes first, then storeys (never the last); then its blade is the biggest that still
- * fits it: the karaoke box's giant (or its カラオケ at the font's size), two plates (or the first), or none.
- */
+/** One building into the cluster. Landmark crowns (`roofLimit`) and `SKY_SHARE` cut its height:
+ * roof object first, then storeys (never the last); its blade is the biggest that still fits. */
 function building(
   m: Canyon,
   out: Compiler,
@@ -869,10 +736,8 @@ const WIN_W = 3;
 const WIN_H = 6;
 const WIN_GAP = 3;
 
-/**
- * A row of windows across [x, x + w) at world y `y`: single panes of glass (never a band), each its own
- * light at night — lit once the lit share passes its threshold (never, a vacant flat's: `WINDOW_SHARE`).
- */
+/** A row of single windows across [x, x + w) at y, each lit once the lit share passes its own
+ * threshold (vacant flats never: `WINDOW_SHARE`). */
 function windows(out: Compiler, tone: Tone, x: number, y: number, w: number): void {
   for (let px = x + 1; px + WIN_W <= x + w - 1; px += WIN_W + WIN_GAP) {
     out.art(1, ALL, tone.glass, px, y, WIN_W, WIN_H);
@@ -880,11 +745,8 @@ function windows(out: Compiler, tone: Tone, x: number, y: number, w: number): vo
   }
 }
 
-/**
- * A signboard of `plastic` over [x, x + w) × [y, y + PANEL_H): a word of kana that fits it (kind 2–4),
- * a pictogram (5–7), or plain plastic with a band or a block of ink (8–9). Lit from behind at night
- * unless its tenant has closed (`lit`). The word it shows, if any.
- */
+/** A signboard over [x, x + w) × [y, y + PANEL_H): kana (kind 2–4), pictogram (5–7) or plain
+ * plastic (8–9), back-lit at night unless closed (`lit`). Returns the word it shows, if any. */
 function signboard(out: Compiler, plastic: Plastic, lit: boolean, x: number, y: number, w: number, kind: number, hs: number): CanyonSign | null {
   out.art(2, ALL, plastic.day, x, y, w, PANEL_H);
   if (lit) out.glow(2, ALL, plastic.lit, x, y, w, PANEL_H);
@@ -914,10 +776,8 @@ function signboard(out: Compiler, plastic: Plastic, lit: boolean, x: number, y: 
   return null;
 }
 
-/**
- * A rooftop billboard over [x, x + w), its panel `h` tall on a 2-px plinth on the roof at `roof`: an
- * abstract graphic (a sun over the sea, stripes, a wave, dots) — lit at night by lamps on its plinth.
- */
+/** A rooftop billboard over [x, x + w): an abstract graphic (never a brand) on a 2-px plinth at
+ * `roof`, lit at night by lamps on the plinth. */
 function billboard(out: Compiler, x: number, roof: number, w: number, h: number, hh: number): void {
   const top = roof - 2 - h;
   const pal = CANYON_ART.billboard;
@@ -965,12 +825,8 @@ function billboard(out: Compiler, x: number, roof: number, w: number, h: number,
 
 // ───────────────────────────── the screens ─────────────────────────────
 
-/**
- * What a video screen shows at `timeMs`: rects [colour, x, y, w, h] in paint order, inside its box. A
- * scene lasts `SCENE_MS`; which one — colour bars marching, a sun rising, a wipe, a word scrolling by
- * (twice the font's size), rings closing in — and its colours are a hash of the screen and the scene's
- * number. Pure.
- */
+/** A video screen's rects [colour, x, y, w, h] at `timeMs`, in paint order, inside its box. Each
+ * `SCENE_MS` scene and its colours are a hash of the screen and scene number. Pure. */
 export function screenScene(sc: CanyonScreen, timeMs: number): [string, number, number, number, number][] {
   const n = Math.floor(timeMs / SCENE_MS);
   const t = (timeMs - n * SCENE_MS) / SCENE_MS;
@@ -1045,11 +901,8 @@ function fillWorld(ctx: DrawTarget, cam: Camera, view: { w: number; h: number },
   if (x < view.w && y < view.h && x + rw > 0 && y + rh > 0) ctx.fillRect(x, y, rw, rh);
 }
 
-/**
- * The day pass: every cluster in view — at a whole zoom its day raster blitted in one `drawImage` (pixel
- * for pixel its rects: thousands of them, painted once), below 1 (or where the host has no canvas) its
- * batches rect by rect, one `fillStyle` each, every rect snapped like `rect` — then its screen's scene.
- */
+/** Day pass per cluster in view: at a whole zoom its day raster in one `drawImage` (pixel for
+ * pixel its rects); below 1 or without a canvas, batches rect by rect. Then the screen's scene. */
 function paint(s: BackdropScene): void {
   if (!inView(s.cam, s.view, s.horizon)) return;
   const { ctx, cam, view } = s;
@@ -1078,10 +931,8 @@ function paint(s: BackdropScene): void {
 /** The clusters holding rasters, least recently painted first. */
 const HELD = new Set<Cluster>();
 
-/**
- * Cluster `ch` is painted now: it becomes the most recent to hold rasters, and past `MAX_RASTERS` — or
- * past `inView` and a few more, a view of more clusters than that — the least recent loses its.
- */
+/** Mark cluster `ch` most recently painted; past `MAX_RASTERS` (or `inView` and a few more) the
+ * least recent loses its rasters. */
 function hold(ch: Cluster, inView: number): void {
   HELD.delete(ch);
   HELD.add(ch);
@@ -1116,10 +967,8 @@ function dayRaster(ch: Cluster, inView: number): SpriteImage | null {
   return (ch.rasters.day = r.image);
 }
 
-/**
- * Cluster `ch`'s lights at windows' lit share `level` — with the fine art, or the coarse — painted once
- * into a raster in world px and made a pattern; null without a canvas.
- */
+/** Cluster `ch`'s lights at lit share `level` (fine or coarse art), painted once into a world-px
+ * raster pattern; null without a canvas. */
 function lightRaster(ch: Cluster, coarse: boolean, level: number, inView: number): Raster | null {
   hold(ch, inView);
   const slot = coarse ? "coarse" : "fine";
@@ -1136,11 +985,8 @@ function lightRaster(ch: Cluster, coarse: boolean, level: number, inView: number
   return (ch.rasters[slot] = { pattern, level });
 }
 
-/**
- * The night pass, at `neonStrength`: per cluster in view, its raster of lights through `fillLit` — one
- * fill over the view's part of it, less the temples' boxes and any letter stuttering out — then its
- * screen's scene, rect by rect.
- */
+/** Night pass at `neonStrength`: per cluster in view, one `fillLit` of its light raster less
+ * temple boxes and stuttering letters, then its screen's scene rect by rect. */
 function paintLights(s: BackdropLightScene): void {
   const k = neonStrength(s.amb);
   if (k <= 0 || !inView(s.cam, s.view, s.horizon)) return;
@@ -1194,10 +1040,8 @@ function faceAt(s: BackdropScene, x: number): number {
   return ch.face[Math.floor(x) - ch.x0];
 }
 
-/**
- * The signs with a word on them wholly inside world x ∈ [x0, x1) — blades and signboards, whatever
- * stands in front of them — for the tests and the PR: what a passer-by would read there.
- */
+/** Signs with a word wholly inside [x0, x1), blades and signboards, whatever stands in front: for
+ * the tests, what a passer-by would read there. */
 export function canyonSigns(world: World, amb: Ambience | undefined, horizon: number, x0: number, x1: number): CanyonSign[] {
   return clustersIn(canyonOf(world, amb, horizon), x0, x1).flatMap((ch) => ch.signs.filter((g) => g.box[0] >= x0 && g.box[0] + g.box[2] <= x1));
 }

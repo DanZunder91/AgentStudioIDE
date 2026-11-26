@@ -1,16 +1,6 @@
-/**
- * Dev-apps IPC — the ONE `invoke` seam for `src/features/procs/`.
- *
- * Its own file, not more exports on `agentlogs/logstreamIpc.ts`: the wire types live next to
- * their feature, and every test that `vi.mock`s that module with a factory would silently lack
- * these exports (a `vi.mock` factory does not grow new exports). Nothing here swallows — a
- * rejection is information the card shows.
- *
- * Command names and argument shapes are pinned literally by `procsIpc.test.ts`.
- *
- * 🔴 Tail commands only ever name a path Rust can check: one a listed process has open, or the
- * one the user just picked in Rust's own file dialog. The UI never invents one.
- */
+/** The one `invoke` seam for procs; its own file because a `vi.mock` factory of `logstreamIpc.ts`
+ * would silently lack new exports. Nothing swallows; names are pinned by `procsIpc.test.ts`. Tail
+ * commands only name a path Rust can check (a listed process has it open, or Rust's own picker). */
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -43,11 +33,8 @@ export function tailDocker(id: string): Promise<TailStarted> {
   return invoke<TailStarted>(LOGSTREAM_TAIL_DOCKER, { id });
 }
 
-/**
- * `logstream_untail` — stop a tail this UI started, by the key Rust gave it. `true` = a tail
- * was stopped; `false` = none ran under that key any more (it had ended on its own: the process
- * exited, the file went away, the container stopped). Either way nothing is tailing it now.
- */
+/** `true` = a tail was stopped; `false` = none ran under that key any more (it ended on its own).
+ * Either way nothing is tailing it now. */
 export function untail(key: string): Promise<boolean> {
   return invoke<boolean>(LOGSTREAM_UNTAIL, { key });
 }

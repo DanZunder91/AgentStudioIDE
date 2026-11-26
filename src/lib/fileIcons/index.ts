@@ -1,8 +1,5 @@
-// src/lib/fileIcons/index.ts
-//
-// Public surface of the file-icon module (docs/design/file-icons.md).
-// Consumers import from here; the *.generated.ts artifacts are owned by the
-// icon generator (scripts/icons) and are re-exported, never edited.
+// Public surface of the file-icon module (docs/design/file-icons.md). The *.generated.ts files
+// belong to the icon generator (scripts/icons): re-exported, never edited.
 
 export { FileIcon } from './FileIcon';
 export type { FileIconProps } from './FileIcon';

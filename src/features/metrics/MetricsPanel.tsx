@@ -1,71 +1,6 @@
-/**
- * MetricsPanel — the Claude metrics dashboard, rendered as a real tab.
- *
- * A **destination**, not a momentary diagnostic: kept open beside a running agent,
- * split next to a terminal, and it survives a webview reload — which is
- * exactly why it is a `TabKind` and not an `aria-modal` overlay like the Logs panel.
- * It steals no Esc from the panes and holds state worth persisting.
- *
- * ── The visual hierarchy, top to bottom ──────────────────────────────────────
- *
- * 0. **The honesty header** — one filter row above everything it scopes: the window
- *    toggle, the **scope toggle**, freshness, the coverage badge, Rescan. There are no
- *    per-chart filters: one row, scoping everything below it.
- * 0b. **The account block** — tier 1, and the ONLY numbers on this page that are true
- *    across devices. See {@link AccountUsage}.
- * 0c. **The context-window card** — the SELECTED agent's `/context` breakdown
- *    (`features/context`). It follows the rail's selection, not this tab's
- *    cwd or scope, and sits outside the report conditional for the account block's
- *    reason: a different data source with a different failure mode.
- * 1. **One hero: Time in turns.** Deliberately the only display-size number on the
- *    page — six equally-weighted tiles is a table dump, not a dashboard. It is also
- *    the figure Claude Code's own turn footer leads with, and its definition is one
- *    line away rather than in a tooltip.
- * 2. **KPI tiles**, subordinate to the hero.
- * 3. **The token group** — the centrepiece of the honesty story, bordered and titled
- *    "Tokens — four classes, never summed", with the reason underneath. Four tiles and
- *    no fifth: the *structure* is what removes any place to put a total. Deliberately
- *    NOT a stacked bar — the classes span a 14,000× range, so a linear stack is one
- *    segment plus three invisible slivers.
- * 4. **Requests per hour**, hand-rolled SVG (no charting dependency: the production
- *    dependency tree is zero-tolerance in the audit gate, and two chart shapes are not
- *    worth a permanent audit liability). Requests is chosen because it is the one series with a fair
- *    linear scale.
- * 5. **The top-turns table**, expandable in place to a turn detail with the corrected
- *    per-turn footer.
- *
- * ── Honesty rules this component obeys ──────────────────────────────────────
- *
- * It never renders a number it does not have. There is no `?? 0`:
- *   - no report, no error  → a composed "Reading your sessions…" placeholder;
- *   - no report, an error  → one true sentence from `describeMetricsError`;
- *   - a report + an error  → the last good numbers, marked **stale** (a failed rescan
- *     must not be able to pass old numbers off as live) — the `UsageLimits` precedent;
- *   - an empty window      → "No Claude sessions found…", composed, not broken;
- *   - `durationMs === null` → an em dash, never 0.
- *
- * 🔴 **No summed token total anywhere** — not in a tile, a chart, a `title`, or an
- * aria-label. `MetricsPanel.test.tsx` asserts it over the rendered DOM.
- *
- * 🔴 **Two blocks, two labels, and the labelling is the honesty.** The account block says
- * *"All devices · from your Claude account"*; everything below it says *"This machine"*.
- * The dashboard shows machine or account usage — so it must say which is which,
- * and the rule is: *a number may never be labelled "all my usage" unless it came
- * from the account*.
- *
- * 🔴 **The scope toggle never offers a control that fails.** "This project" is `disabled`
- * when no agent is selected (there is no project to scope to), which is the other half of
- * the no-selection fix: an earlier version had no toggle at all and shipped a hard-coded
- * `scope: "project"` that errored on exactly that state.
- *
- * ── Two clocks, one owned elsewhere in spirit ────────────────────────────────
- * `metricsStore` owns the DATA (and pointedly does not poll — a filesystem sweep is
- * not a 5 s cadence). The second clock is the panel's own "now", which "Scanned 2 min
- * ago" is measured against: it lives in state and is advanced by a slow interval
- * rather than read during render, because `Date.now()` in a render body is an impure
- * read (`react-hooks/purity`) and would also mean the freshness string only moved when
- * some other state changed.
- */
+/** The Claude metrics dashboard as a tab (not a modal: it persists and steals no Esc). It renders
+ * only numbers it has (stale/empty states, no `?? 0`), never a summed token total, and labels
+ * account figures "All devices" and transcript figures "This machine". */
 
 import { useEffect, useState } from "react";
 
@@ -103,11 +38,7 @@ import { ensureMetrics, useMetricsStore } from "./metricsStore";
 import type { HourBucket, MetricsReport, MetricsWindowKind, TurnRow } from "./metricsTypes";
 import "./metrics.css";
 
-/**
- * A bar-chart glyph for the tab/header. Defined locally rather than in
- * `src/components/icons.tsx`, so the feature owns its mark and does not touch a shared
- * file — exactly as `UsageLimits.tsx` defines its own `RefreshIcon`.
- */
+/** Local, like `UsageLimits.tsx`'s `RefreshIcon`, so the feature touches no shared file. */
 function ChartIcon(): React.JSX.Element {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">
@@ -143,12 +74,8 @@ function RefreshIcon(): React.JSX.Element {
 /** The accessible sentence behind the stale marker — asserted verbatim in tests. */
 const STALE_LABEL = "Last scan failed — showing the last good numbers";
 
-/**
- * How often the panel re-reads the wall clock, ms. Every string it drives has minute
- * granularity at its finest, so 30 s is the coarsest tick that can never leave a stale
- * minute on screen. Independent of any fetch cadence: this ticks the *display* of
- * numbers we already have.
- */
+/** Wall-clock re-read interval, ms: 30 s never leaves a stale minute on screen. Kept in state, not
+ * read in render, because `Date.now()` in render is impure (`react-hooks/purity`). */
 const CLOCK_TICK_MS = 30_000;
 
 /** Best-effort swallow — a clipboard failure must never throw out of a click. */
@@ -220,11 +147,7 @@ export function MetricsPanel({ cwd }: { cwd: string | null }): React.JSX.Element
           ))}
         </div>
 
-        {/* The scope toggle. Defaults to All (the store's INITIAL_QUERY), and "This
-            project" is DISABLED with nothing selected — a control that produces an error
-            when clicked is worse than no control, and that error is exactly what an
-            earlier version shipped. The disabled button keeps its `title` so the reason is
-            reachable. */}
+        {/* "This project" is disabled with nothing selected (it would error); `title` says why. */}
         <div
           className="metrics__windows"
           role="group"
@@ -316,11 +239,8 @@ export function MetricsPanel({ cwd }: { cwd: string | null }): React.JSX.Element
           failed transcript scan must not blank them (nor vice versa). */}
       <AccountUsage />
 
-      {/* Per-agent, and outside the report conditional for the same reason as the
-          account block: a failed or empty transcript scan says nothing about how full
-          the selected agent's context is. It reads the panel's clock so "measured …"
-          and "Scanned …" tick together. Shown in BOTH scopes — scope narrows the
-          machine-wide figures, while this card is always exactly one agent. */}
+      {/* Outside the report conditional: a failed transcript scan says nothing about context fill.
+          Shown in both scopes (it is always one agent); shares the panel clock. */}
       <ContextCard nowMs={nowMs} />
 
       {report === null ? (
@@ -381,26 +301,9 @@ export function MetricsPanel({ cwd }: { cwd: string | null }): React.JSX.Element
 
 /* ── tier 1: the account, and the only cross-device numbers here ─────────────── */
 
-/**
- * 🔴 **"All devices · from your Claude account"** — the dashboard shows machine or
- * account usage, and this is the account half.
- *
- * These three windows come from `claude -p "/usage"`, i.e. from the account, so
- * they are **cross-device by construction** — the one block on this page whose numbers do
- * not become wrong the moment the user opens a laptop. Everything below it is one
- * machine's transcripts and is labelled "This machine". Getting those two labels the wrong
- * way round would turn a true dashboard into a false one, which is why it is a rule
- * rather than a style note.
- *
- * It **reuses `features/usage`** rather than re-reading anything: `startUsagePolling()` is
- * reference-counted precisely so a second consumer shares one process spawn and one timer
- * with the rail's strip, so this whole block costs zero extra `claude` invocations. Nothing
- * in `features/usage` is modified — this is a consumer.
- *
- * No progress bars, matching the rail (the number is the signal),
- * and no reset countdown — the rail owns that interaction, and duplicating a live tooltip
- * in a second place is how two surfaces start disagreeing.
- */
+/** "All devices · from your Claude account": `/usage` windows are cross-device; everything below is
+ * "This machine". Shares the ref-counted `startUsagePolling()` (no extra `claude` spawn); no bars,
+ * as in the rail, and the reset countdown stays the rail's. */
 function AccountUsage(): React.JSX.Element {
   const snapshot = useUsageStore((s) => s.snapshot);
   const error = useUsageStore((s) => s.error);
@@ -422,10 +325,7 @@ function AccountUsage(): React.JSX.Element {
           signed in on — unlike the transcript figures below.
         </span>
       </p>
-      {/* `== null`, not `=== null`: the empty state is the right answer for BOTH null
-          and undefined. A strict check here crashed the whole panel when a consumer
-          handed it an unset store — found by a test, and cheap insurance for a value
-          that arrives from another feature's store. */}
+      {/* `== null` on purpose: undefined from an unset store must render the empty state too. */}
       {snapshot == null ? (
         error === null ? (
           <p className="metrics__account-state" data-testid="metrics-account-placeholder">
@@ -487,13 +387,7 @@ function EmptyWindow({ report }: { report: MetricsReport }): React.JSX.Element {
 
 /* ── row 1: the hero ────────────────────────────────────────────────────────── */
 
-/**
- * One hero figure, and everything else on the page is subordinate to it.
- *
- * "Time in turns", never "time worked": concurrent agents make turns overlap, so this
- * sum can exceed elapsed wall-clock time. The label says exactly what it is, and the
- * definition sits under it rather than in a tooltip.
- */
+/** "Time in turns", never "time worked": concurrent agents overlap, so it can exceed wall-clock. */
 function Hero({ report }: { report: MetricsReport }): React.JSX.Element {
   const t = report.totals;
   const coverage = formatDurationCoverage(t.turnsWithDuration, t.turns);
@@ -550,13 +444,7 @@ function Kpi({
 
 /* ── row 3: the token group ─────────────────────────────────────────────────── */
 
-/**
- * 🔴 Four tiles, and there is nowhere to put a fifth.
- *
- * The wire has no `total` (see `metricsTypes.ts`), this component computes no sum, and
- * the reason is printed on screen instead of hidden in a design doc — because a user
- * who cannot see why the number is missing will assume it is a bug.
- */
+/** Four tiles and no total: the wire has none (see `metricsTypes.ts`), and the reason is shown. */
 function TokenGroup({ report }: { report: MetricsReport }): React.JSX.Element {
   const { freshInput, output, cacheWrite, cacheRead } = report.totals.tokens;
   return (
@@ -614,21 +502,9 @@ const BAR_GAP = 2;
 /** Rounded top, square baseline. */
 const BAR_RADIUS = 4;
 
-/**
- * Requests per hour: 24 columns for a day, 168 for a week. Single series ⇒ no legend,
- * no gridlines (they would out-weigh the data at this size), no animation
- * (data that slides in is data you cannot read).
- *
- * `viewBox` + `preserveAspectRatio="none"` is what makes this scale with the pane
- * without a `ResizeObserver`: the viewBox height equals the CSS height, so **vertical**
- * geometry — the hairline axis, the bar heights, the tick positions — is pixel-exact at
- * any width, and only the horizontal axis stretches. The documented cost is that
- * {@link BAR_RADIUS} ovalizes slightly at extreme widths; a corner radius is the one
- * thing here that can distort harmlessly.
- *
- * Every value is reachable without hovering: each column carries a `<title>`, and
- * `Copy summary` writes the whole series as text.
- */
+/** Requests per hour as hand-rolled SVG (no chart dependency in the zero-tolerance prod tree).
+ * viewBox height = CSS height with `preserveAspectRatio="none"`: vertical geometry stays exact and
+ * only x stretches (BAR_RADIUS may ovalize). Each column has a `<title>`. */
 function HourlyChart({
   buckets,
   window: windowKind,
@@ -720,13 +596,8 @@ function HourlyChart({
   );
 }
 
-/**
- * A column: rounded top corners, square at the baseline — so the bars sit ON the axis
- * rather than floating above a rounded gap.
- *
- * The radius is clamped to half the height so a 1-unit-tall column cannot invert into
- * a lens shape (which is what a naive `Q` at r=4 on h=1 draws).
- */
+/** A column with rounded top corners and a square base; the radius is clamped so a 1-unit column
+ * cannot invert into a lens. */
 export function barPath(x: number, y: number, w: number, h: number): string {
   const r = Math.min(BAR_RADIUS, w / 2, h);
   return [
@@ -744,11 +615,7 @@ function round(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-/**
- * The smallest "clean" number at or above `peak`: 1, 2 or 5 × a power of ten. A y axis
- * topping out at 37 makes the reader do arithmetic; one topping out at 50 does not.
- * `0` stays `0` — an axis for an empty series must not claim a scale it does not have.
- */
+/** Smallest 1/2/5 × 10^n at or above `peak`, for a readable axis top; `0` stays `0`. */
 export function niceMax(peak: number): number {
   if (!Number.isFinite(peak) || peak <= 0) return 0;
   const magnitude = 10 ** Math.floor(Math.log10(peak));
@@ -770,11 +637,7 @@ function xTicks(buckets: HourBucket[]): Array<{ index: number; label: string }> 
 
 /* ── row 5: the top-turns table ─────────────────────────────────────────────── */
 
-/**
- * `tabular-nums` lives here and ONLY here (see `metrics.css`): columns of figures must
- * align, while the hero and the tiles read better with proportional figures at display
- * size.
- */
+/** The only place with `tabular-nums` (see `metrics.css`): table columns must align. */
 function TopTurns({
   report,
   openTurn,

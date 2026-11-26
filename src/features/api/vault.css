@@ -1,7 +1,4 @@
-/* ── Vault panel (the right-rail secrets / environment manager) ───────────────
-   Reuses the API client's env-row classes (api.css) for the key/value rows;
-   this file styles only the panel shell + its calm secure-storage note. Theme
-   variables come from App.css. */
+/* Vault panel: rows reuse api.css's env-row classes; this styles only the shell and the note. */
 
 .vault-panel {
   display: flex;
@@ -31,14 +28,8 @@
   min-width: 0;
 }
 
-/* ── narrow-rail fit for the shared api-* row classes ──────────────────────
-   VaultEnv reuses ApiRequestView's `.api-env` / `.api-header-row*` classes,
-   which assume the wide request-view column (a fixed 200px name/key basis is
-   fine there). The rail is only ~276px of content, where that fixed basis
-   plus the value input and the remove/add button overflow horizontally (the
-   add-variable row is the tightest: 200px key + value + "+ Add" > the rail).
-   Everything below is scoped under `.vault-panel`, so `<ApiRequestView/>` —
-   whose `.api-env` lives outside `.vault-panel` — is completely unaffected. */
+/* Narrow-rail fit: the shared .api-env rows assume a 200px key basis that overflows the ~276px
+   rail. Scoped under .vault-panel so <ApiRequestView/> is unaffected. */
 .vault-panel .api-env-manager,
 .vault-panel .api-env {
   max-width: 100%;
@@ -65,10 +56,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Keep the ✕ / "+ Add" buttons at their natural content width so they never
-   get squeezed into wrapping their own text; flex-wrap on the row (above) is
-   the fallback that drops a button to its own line if the key/value columns
-   ever shrink to nothing and there is still no room. */
+/* Buttons keep their content width; the row's flex-wrap drops one to its own line if needed. */
 .vault-panel .api-add-header {
   flex: 0 0 auto;
   white-space: nowrap;

@@ -1,16 +1,6 @@
-//! The cold telemetry plane's outlet: `agent://event` (ARCHITECTURE §1).
-//!
-//! # Why a trait and not an `AppHandle`
-//!
-//! The supervisor needs to emit events, but taking a `tauri::AppHandle` would make
-//! it unconstructable without a running Tauri app — and the whole agent lifecycle
-//! (spawn → status → exit) would become untestable, which is exactly the logic
-//! most worth testing.
-//!
-//! So the supervisor depends on this trait instead. Production passes
-//! [`TauriEventSink`]; tests pass a recorder and assert on what was emitted.
-//! `emit` is the only thing the core needs from Tauri, so it is the only thing
-//! abstracted here — this is a seam, not a framework.
+//! The cold telemetry plane's outlet: `agent://event` (ARCHITECTURE §1). A trait, not an
+//! `AppHandle`, so the supervisor is constructible in tests: production passes [`TauriEventSink`],
+//! tests pass a recorder.
 
 use crate::model::AgentEvent;
 

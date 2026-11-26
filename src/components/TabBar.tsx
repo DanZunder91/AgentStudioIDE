@@ -1,18 +1,6 @@
-/**
- * TabBar — one leaf pane's tab strip.
- *
- * Tabs are drag sources; <Pane> is the drop target (store: moveTab). Each tab
- * subscribes to its own store record so one tab's title/dirty change re-renders
- * that tab only (ARCHITECTURE §4: selector-scoped subscriptions).
- *
- * ── Tab tear-off (docs/design/tab-tearoff.md) ────────────────────────────────
- * A tab can leave its OS window, both ways (the way a browser tab
- * becomes a new window, and the way IntelliJ and VS Code do it): the right-click command
- * ("Move to New Window" / "Move to Main Window"), and the gesture — drag the tab and
- * let go outside the window, and it opens in a new one where it was dropped; drop it
- * on ANOTHER IDE window and it moves there. Kinds that cannot leave (an API request,
- * a DB console…) have no menu, and dragging them out does nothing.
- */
+/** One leaf pane's tab strip. Tabs are drag sources; <Pane> is the drop target (`moveTab`). Each
+ * tab subscribes to its own record (ARCHITECTURE §4). Movable kinds tear off to another OS window
+ * by menu or by dropping outside the window (docs/design/tab-tearoff.md). */
 
 import { useState, type DragEvent, type MouseEvent } from "react";
 
@@ -33,19 +21,12 @@ import "./panes.css";
 /** Drag payload: the TabId being moved between panes. */
 export const TAB_DND_MIME = "application/x-agentstudio-tab";
 
-/**
- * Drag payload: the label of the WINDOW the dragged tab lives in. A `TabId` only means
- * something in its own window's store, so a drop on another window must know where to
- * ask for the tab (tab tear-off's `give`).
- */
+/** Drag payload: the dragged tab's WINDOW label. A `TabId` only means something in its own
+ * window's store, so another window must know where to ask (tear-off `give`). */
 export const TAB_WINDOW_MIME = "application/x-agentstudio-tab-window";
 
-/**
- * A tab's right-click menu: where it can go. `newWindow` — it can start a window of its
- * own (`canStartWindow`: a movable kind, and not already alone in a detached window);
- * `mainWindow` — it is in a detached window and can go home. Empty when neither, and
- * an empty menu is not opened at all.
- */
+/** A tab's window menu: `newWindow` if `canStartWindow` (movable, not alone in a detached
+ * window), `mainWindow` if detached. Empty when neither, and an empty menu is not opened. */
 export function tabWindowMenuItems(opts: {
   newWindow: boolean;
   mainWindow: boolean;
@@ -58,30 +39,18 @@ export function tabWindowMenuItems(opts: {
   return items;
 }
 
-/**
- * A drop that carries a tab from ANOTHER window: ask that window for it and swallow the
- * drop. False for one of this window's own tabs — the caller carries on as before.
- */
+/** A drop carrying another window's tab: ask that window for it and swallow the drop. False
+ * for this window's own tabs. */
 export function takeTabFromAnotherWindow(dataTransfer: DataTransfer): boolean {
   return takeForeignDrop(dataTransfer.getData(TAB_DND_MIME), dataTransfer.getData(TAB_WINDOW_MIME));
 }
 
-/**
- * The tab strip's class — also the hit-test handle `<Pane>` uses to yield to
- * this component. Exported so that coupling is explicit and greppable rather
- * than a string duplicated in two files.
- */
+/** The strip's class, also `<Pane>`'s hit-test handle to yield to it; exported to keep that
+ * coupling greppable. */
 export const TABBAR_CLASS = "pane__tabbar";
 
-/**
- * Where a drop at `clientX` would insert, as an index into the strip as drawn
- * (i.e. counting the dragged tab, if it is from this pane — `moveTab` adjusts).
- *
- * Each tab claims the drop up to its own midpoint; past the last midpoint the
- * tab lands at the end. Under jsdom every rect is 0×0, so `clientX < 0` is
- * false for all of them and this returns "append" — deterministic, and why the
- * tests stub rects rather than trusting the default.
- */
+/** Insertion index for a drop at `clientX`, counting the dragged tab if from this pane
+ * (`moveTab` adjusts). Each tab claims up to its midpoint; under jsdom (0×0) it appends. */
 export function insertionIndexAt(tabs: readonly HTMLElement[], clientX: number): number {
   for (let i = 0; i < tabs.length; i++) {
     const rect = tabs[i].getBoundingClientRect();
@@ -197,10 +166,7 @@ function TabKindIcon({ kind }: { kind: Tab["kind"] }) {
   // falls through to the terminal glyph and reads as a shell, which in a tab strip is
   // the most confusing place for a wrong icon.
   if (kind === "db-console") return <DatabaseIcon />;
-  // The third sighting of the same trap (metrics, db-console, now diff).
-  // A diff tab's title is the bare FILENAME, so without this arm it is a
-  // terminal glyph next to the same filename as the editor tab beside it — the
-  // icon is the only thing that tells the two views of one file apart.
+  // A diff tab's title is the bare filename: only the icon tells it from the editor tab.
   if (kind === "diff") return <DiffIcon />;
   // The two fleet views — both singletons titled one word, so the glyph
   // is what separates "Logs" from a terminal someone renamed "Logs".
@@ -270,10 +236,8 @@ function TabItem({
     e.dataTransfer.setData(TAB_DND_MIME, tabId);
     e.dataTransfer.setData(TAB_WINDOW_MIME, currentWindowLabel());
     e.dataTransfer.effectAllowed = "move";
-    // Publish who is moving, for the drop preview. The drop targets cannot read
-    // it back off `dataTransfer` on dragover — the drag data store is in
-    // protected mode until the drop — and the preview needs it on every move,
-    // so the source has to say. Cleared on dragEnd, including a cancelled drag.
+    // Publish who is moving for the drop preview: targets can't read `dataTransfer` until the
+    // drop. Cleared on dragEnd, including a cancelled drag.
     session.beginDrag(tabId);
     setDragging(true);
   };
@@ -281,10 +245,8 @@ function TabItem({
   const onDragEnd = (e: DragEvent) => {
     session.endDrag();
     setDragging(false);
-    // No drop target took it (`none`): maybe it was let go OUTSIDE the window, which
-    // tears it off into a new one. The OS is asked where the cursor is; a drag that
-    // ended inside (a cancel, or a drop on nothing) stays exactly where it was. (`?.`:
-    // a synthetic dragend can carry no DataTransfer at all, and then nothing was dropped.)
+    // No target took it (`none`): if released OUTSIDE the window (the OS reports the cursor),
+    // tear it off; otherwise it stays. `?.`: a synthetic dragend may carry no DataTransfer.
     if (e.dataTransfer?.dropEffect === "none") void tearOffIfReleasedOutside(tabId);
   };
 
@@ -408,12 +370,8 @@ export function TabBar({
 
   const accepts = (e: DragEvent) => e.dataTransfer.types.includes(TAB_DND_MIME);
 
-  /**
-   * The strip handles its own drops so that a drag over the tabs reorders
-   * rather than splitting. `<Pane>` yields to us by hit-test (see TABBAR_CLASS)
-   * — it stays on the dragover path so it can clear its own edge preview, which
-   * is why we do NOT stopPropagation here.
-   */
+  /** The strip handles its own drops (reorder, not split). `<Pane>` yields by hit-test but stays
+   * on the dragover path to clear its edge preview, so NO stopPropagation here. */
   const onDragOver = (e: DragEvent) => {
     if (!accepts(e)) return;
     e.preventDefault();

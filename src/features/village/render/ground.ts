@@ -1,14 +1,6 @@
-/**
- * Agent Village — the cached ground layer.
- *
- * The ground (grass, paths, plaza, indoor floors, wall bases) never changes for a
- * given World, yet painting it tile by tile costs thousands of `fillRect`s and
- * `fillStyle` parses per frame. So it is painted ONCE, at zoom 1 in world pixels,
- * into an offscreen canvas, and each frame blits it with a single `drawImage` (an
- * integer zoom with smoothing off is pixel-identical to painting it scaled).
- * Water is the one animated ground tile: it is left out here and still painted per
- * frame on top (its first fill covers the whole tile).
- */
+/** The ground never changes for a World, so it is painted ONCE at zoom 1 into an offscreen canvas
+ * and blitted each frame (integer zoom, smoothing off: pixel-identical). Water animates, so it is
+ * left out here and painted per frame on top. */
 
 import { TILE, type DrawItem } from "../villageTypes";
 import type { Camera } from "./camera";
@@ -51,11 +43,8 @@ export function isCachedGround(item: DrawItem): boolean {
   return item.t === "tile" && item.kind !== "water";
 }
 
-/**
- * Paint every cached ground tile of `items` into a fresh `cols×rows`-tile layer.
- * `bank` is the art bank (null = flat fallback fills), exactly as the frame would
- * use it. Null when the host cannot make a canvas — the frame then paints tiles.
- */
+/** `bank` null = flat fallback fills. Null when the host cannot make a canvas (the frame then
+ * paints tiles). */
 export function paintGround(
   make: MakeLayer,
   items: readonly DrawItem[],

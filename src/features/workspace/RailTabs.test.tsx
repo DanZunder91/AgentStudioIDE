@@ -1,21 +1,5 @@
-/**
- * RailTabs — the right rail's Files / Vault / History / Collections / DB / Tools / Git
- * tab bar. Find is a titlebar icon, not a rail tab. The seven tabs switch the
- * persistent `rightRailTab`.
- *
- * Also pins the icon-per-label polish: every tab
- * shows a glyph AND keeps its text, the glyph is decoration only (so the
- * accessible name is unchanged), and each tab gets ITS OWN glyph — not a shared
- * placeholder.
- *
- * The strip's overflow menu: visibility is
- * PURE width math over the store's `rightRailWidth` (`railTabsLayout.ts` — no
- * ResizeObserver, no DOM measuring), which is exactly why jsdom can test all of it:
- * setting the width through the store is the whole layout input. Whether the strip's
- * PIXELS actually fit is still a layout claim and lives in
- * `src/e2e/railChrome.browser.test.tsx`; jsdom has no layout engine, so asserting
- * that here would be vacuous.
- */
+/** Overflow visibility is pure width math over the store's `rightRailWidth`, so jsdom tests it
+ * all; whether the PIXELS fit is `src/e2e/railChrome.browser.test.tsx`'s claim. */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -173,10 +157,7 @@ describe("RailTabs — icons on the labels", () => {
   it("renders the icon ONLY, with the label as the tooltip and the accessible name", () => {
     render(<RailTabs />);
 
-    // Icon-only. With labels, "Collections" clipped at the rail edge, so the words
-    // live in the tooltip. The three assertions below are the whole contract, and the middle one
-    // is the one that matters: with no text node, `aria-label` is the ONLY thing keeping
-    // these buttons from being announced as unlabelled.
+    // Icon-only: with no text node, `aria-label` is the ONLY thing giving these buttons a name.
     for (const [id, label] of [
       ["files", "Files"],
       ["vault", "Vault"],
@@ -226,20 +207,14 @@ describe("RailTabs — icons on the labels", () => {
   it("gives each tab its OWN glyph — folder / lock / clock / bookmark / database / wrench / branch", () => {
     render(<RailTabs />);
 
-    // Literal expectations, written out here rather than read from the component's
-    // TABS table (an expectation derived from the source under test
-    // can only catch plumbing, never a wrong value). Swapping any two icons in
-    // RailTabs, or pointing them all at one placeholder, fails this.
+    // Literal expectations, not read from TABS: swapped icons or one shared placeholder fail.
     expect(icon("files")).toHaveAttribute("data-icon", "folder");
     expect(icon("vault")).toHaveAttribute("data-icon", "lock");
     expect(icon("history")).toHaveAttribute("data-icon", "clock");
     expect(icon("collections")).toHaveAttribute("data-icon", "bookmark");
     expect(icon("db")).toHaveAttribute("data-icon", "database");
     expect(icon("tools")).toHaveAttribute("data-icon", "wrench");
-    // Git = the branch glyph. Asserted by NAME, not just by distinctness: the realistic
-    // failure when adding a tab beside an existing one is a copy-pasted `Icon:` still
-    // pointing at its neighbour (`WrenchIcon`), which the set-size check below would
-    // catch only because the count drops — this line names the actual mistake.
+    // Asserted by NAME: the likely mistake is a copy-pasted `Icon:` still naming its neighbour.
     expect(icon("git")).toHaveAttribute("data-icon", "git-branch");
 
     // Belt and braces: seven DISTINCT shapes (a shared placeholder would collapse
@@ -253,10 +228,7 @@ describe("RailTabs — icons on the labels", () => {
 
     fireEvent.click(tab("history")); // one active tab, six dim ones
     for (const id of IDS) {
-      // No hard-coded fill/stroke colour anywhere: the glyph takes the button's
-      // `color`, so `.rail__tab--active`'s brighter text carries the icon with it.
-      // (EllipsisIcon is the one filled glyph in the icon set, but it is the overflow
-      // TRIGGER's, not a tab's — and it fills with currentColor for the same reason.)
+      // No hard-coded colour: the glyph takes the button's `color`, so the active text carries it.
       expect(icon(id)).toHaveAttribute("stroke", "currentColor");
       expect(icon(id)).toHaveAttribute("width", "13");
       expect(icon(id)).toHaveAttribute("height", "13");

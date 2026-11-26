@@ -1,54 +1,6 @@
-//! The ClickHouse engine — over its **HTTP interface**, using the `reqwest` already in the tree.
-//!
-//! Its own module rather than another block in `engine.rs` because it shares nothing with the
-//! `sqlx` engines: no connection, no prepared statements, no streaming rows. What it does share
-//! is the *contract* — [`DbEngine`] / [`DbSession`] and [`DbResultSet`] — which is the point of
-//! having a seam at all. No new dependency (`reqwest` 0.13, already shipped).
-//!
-//! ## Every choice below was measured against the fixture, not read from the docs
-//!
-//! **The response format is `JSONCompact`, and the obvious-looking alternative is a trap.**
-//! `JSONCompactStrings` renders every value as a string, which sounds like an exact match for
-//! our `Option<String>` cell model — but it renders SQL NULL as the literal string `"ᴺᵁᴸᴸ"`
-//! (U+1D3A…), indistinguishable from a real string containing those characters. That is exactly
-//! the NULL-vs-`''` collapse the text-only cell model exists to prevent. `JSONCompact` gives real JSON `null`, and
-//! quotes 64-bit integers by default:
-//!
-//! ```text
-//! JSONCompact        SELECT toInt64(9007199254740993), NULL, ''  → ["9007199254740993", null, ""]
-//! JSONCompactStrings same query                                  → ["9007199254740993", "ᴺᵁᴸᴸ", ""]
-//! ```
-//!
-//! **Two output settings are not optional.** `output_format_json_quote_decimals=1` and
-//! `output_format_json_quote_64bit_floats=1` make ClickHouse render those types as strings, so
-//! their exact text reaches the user instead of a round trip through an `f64`. Without them a
-//! `Decimal(20, 8)` arrives as a JSON number, and `Decimal(20, 8)` can hold values `f64` cannot
-//! represent — a silently wrong digit in a decimal column is the worst possible bug here.
-//!
-//! **Credentials go in headers, never in the URL.** `X-ClickHouse-User` / `X-ClickHouse-Key`
-//! rather than `?user=&password=`, because ClickHouse logs the query string in `system.query_log`
-//! and in its server log — a password in the URL is a password written to disk on the server.
-//!
-//! ## Read-only here is the real thing, unlike the SQL engines
-//!
-//! `readonly=1` as a request setting is enforced by the server **and** it forbids changing
-//! settings, so the `SET`-it-back-off escape the SQL engines have to guard against does not
-//! exist here. Measured:
-//!
-//! ```text
-//! ?readonly=1  INSERT INTO tracks …  → Code: 164 … Cannot execute query in readonly mode
-//! ?readonly=1  SET readonly=0        → Code: 164 … Cannot modify 'readonly' setting in readonly mode
-//! ```
-//!
-//! It is sent on **every** request rather than once at connect, which is the only option a
-//! stateless protocol offers — and is stronger for it: there is no session for a later statement
-//! to have changed. `readonly=2` would allow settings changes and is deliberately not used.
-//!
-//! ## Multi-statement is sequential POSTs
-//!
-//! ClickHouse's HTTP interface runs one statement per request. A script therefore becomes one
-//! POST per statement, in order, stopping at the first failure — the same visible behaviour as
-//! the SQL engines' `fetch_many`, reached differently.
+//! ClickHouse over its HTTP interface (`reqwest`). `JSONCompact`, not `JSONCompactStrings` (which
+//! renders NULL as the string "ᴺᵁᴸᴸ"); decimals/64-bit floats are quoted to stay exact. Credentials
+//! go in headers (URLs reach query_log); `readonly=1` per request; one POST per statement.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -85,32 +37,9 @@ impl ClickhouseEngine {
         }
     }
 
-    /// `http(s)://host:port/`.
-    ///
-    /// The port is **always written**, and when the record's field is empty it comes from the
-    /// descriptor (`ResolvedConfig::port_or_default` → 8123). Unlike the sqlx engines there is no
-    /// driver to hand an absent port to: this module *is* the URL builder, and `reqwest` would read
-    /// `http://host/` as port 80 — a number nothing about ClickHouse suggests.
-    ///
-    /// ⚠️ **The fallback does not know about TLS, and that is a real edge.** A TLS ClickHouse
-    /// conventionally listens on **8443**, so `sslMode: require` with an empty port dials
-    /// `https://host:8123`, which is the plaintext interface and will not complete a handshake. The
-    /// descriptor has one `default_port` and cannot express "8123, or 8443 with TLS", and inventing
-    /// a second number here would be the app deciding a port the dialog's placeholder does not
-    /// show. So it stays 8123 and the failure is loud: `unknown_scheme` in `url.rs` already names
-    /// both ports, and the fix is to type the port — or to use the URL override below, which is now
-    /// the place a non-default TLS port can be expressed. Recorded in `EngineSpec::default_port` too.
-    ///
-    /// 🔴 **The `url` override is honoured; an earlier version silently ignored it** — this
-    /// engine read only `host`/`port`, so the dialog's URL box (which says *"Overrides settings
-    /// above"*, and which every other engine obeys) did nothing at all for ClickHouse. Redis and
-    /// DynamoDB both honour it, which left the asymmetry as this engine's alone; it is one
-    /// `match`, so the only reason it existed was the order things were written.
-    ///
-    /// The scheme in the string **wins over the SSL control**, for the reason the SRV work
-    /// settled: a `https://` URL is a more specific statement of intent than a dropdown,
-    /// and silently dialling plaintext for it would be a control that reports one thing and does
-    /// another.
+    /// `http(s)://host:port/`, port always written (empty → descriptor's 8123, even with TLS where
+    /// 8443 is usual; the fix is to type the port). A `url` override wins, and its scheme beats the
+    /// SSL control.
     fn base_url(cfg: &ResolvedConfig) -> Result<String, DbError> {
         if let Some(raw) = cfg.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
             let parsed = reqwest::Url::parse(raw).map_err(|e| {
@@ -146,17 +75,8 @@ impl ClickhouseEngine {
         ))
     }
 
-    /// Build the client.
-    ///
-    /// ⚠️ **`Require` accepts an unverified certificate, and that is what `require` means** on
-    /// the libpq ladder this app borrows its vocabulary from: encrypt, do not verify. It is a
-    /// real reduction in protection and it is the mode the user explicitly chose.
-    ///
-    /// ⚠️ **`VerifyCa` behaves as `VerifyFull` here**, because `reqwest` has no "check the chain
-    /// but not the hostname" setting — its verifier always checks both. Erring toward the
-    /// stricter of the two is the safe direction, and it is recorded rather than papered over:
-    /// a certificate valid for a different hostname will be rejected under `verify-ca` on
-    /// ClickHouse where Postgres would accept it.
+    /// `Require` encrypts without verifying (the libpq meaning). `VerifyCa` acts as `VerifyFull`:
+    /// `reqwest` cannot check the chain without the hostname, so the stricter mode wins.
     fn client(cfg: &ResolvedConfig) -> Result<Client, DbError> {
         // `rustls-no-provider` means the builder PANICS without a process-wide provider. `run()`
         // installs one at startup; tests and any non-Tauri caller do not go through `run()`, and
@@ -231,10 +151,7 @@ impl DbEngine for ClickhouseEngine {
             query_id_prefix: ulid::Ulid::new().to_string(),
             query_seq: AtomicU64::new(0),
         };
-        // 🔴 A real round trip before returning. HTTP is stateless, so "open" could return a
-        // struct without ever contacting the server — and then Test Connection would report
-        // success for a host that does not exist, and the first query would be the one to fail.
-        // A session that has not proven it can reach the server is not open.
+        // HTTP is stateless: probe before returning, or Test Connection would pass for any host.
         let mut session = session;
         session.probe().await?;
         Ok(Box::new(session))
@@ -273,21 +190,14 @@ impl ChSession {
         format!("{}-{n}", self.query_id_prefix)
     }
 
-    /// POST one statement and return the raw body, or a mapped error.
-    ///
-    /// `row_limit` is `None` for the internal statements (probe, cancel) that return one row and
-    /// must not be capped by the user's setting.
+    /// `row_limit` is `None` for internal one-row statements (probe, cancel) the user cap must
+    /// skip.
     async fn post(&self, sql: &str, row_limit: Option<u32>) -> Result<String, DbError> {
         self.post_with(sql, row_limit, &[]).await
     }
 
-    /// POST with ClickHouse **query parameters** (`{name:String}` in the SQL, `param_name=` on the
-    /// URL).
-    ///
-    /// 🔴 This is why the tree's catalog queries interpolate nothing. A database or table name is
-    /// server-provided *data*, and a table someone created as `x'; …` would otherwise splice into
-    /// our SQL. ClickHouse's own parameter binding is the injection-proof route, and it is the
-    /// direct equivalent of the bound parameters the sqlx engines use.
+    /// POST with ClickHouse query parameters (`{name:String}` in SQL, `param_name=` on the URL):
+    /// the catalog queries bind server-provided names this way instead of interpolating them.
     async fn post_with(
         &self,
         sql: &str,
@@ -533,11 +443,8 @@ impl DbSession for ChSession {
     }
 }
 
-/// ClickHouse: `KILL QUERY WHERE query_id LIKE '<prefix>-%' SYNC`.
-///
-/// Owned separately from the session so it stays reachable while a query holds the session mutex —
-/// see [`DbCancel`]. Unlike the SQL engines there is no sibling *connection* to open: HTTP is
-/// stateless, so a cancel is simply another request.
+/// `KILL QUERY WHERE query_id LIKE '<prefix>-%' SYNC`, owned apart from the session so it stays
+/// reachable while a query holds the session mutex (see [`DbCancel`]).
 struct ChCancel {
     client: Client,
     headers: HeaderMap,
@@ -574,11 +481,8 @@ impl DbCancel for ChCancel {
             read_only: false,
             timeout_ms: self.timeout_ms,
             password: self.password.clone(),
-            // 🔴 A FRESH ULID, not `format!("{prefix}-kill")`. Every request stamps its own
-            // `query_id` from this prefix, so a derived one would make the KILL's own id
-            // (`<prefix>-kill-0`) match its own `LIKE '<prefix>-%'` predicate — a statement asked
-            // to kill itself. ClickHouse is believed to exclude the killing query from its own
-            // match, but "believed to" is not something to build on when a distinct id is free.
+            // A fresh ULID, not one derived from `prefix`: a derived id would match the KILL's own
+            // predicate.
             query_id_prefix: ulid::Ulid::new().to_string(),
             query_seq: AtomicU64::new(0),
         };
@@ -619,10 +523,8 @@ impl ChSession {
 /// so this is mostly a rename — the interesting part is the per-cell rendering.
 fn shape(statement: &str, body: &str, limits: &Limits, duration_ms: u64) -> DbResultSet {
     let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else {
-        // A statement with no result set (`INSERT`, `CREATE`, `KILL`) returns an EMPTY body, not
-        // JSON. That is a success with nothing to show, and `affected` is the honest shape —
-        // ClickHouse's HTTP interface does not report a row count for a write, so `rows_affected`
-        // stays None rather than being invented as 0.
+        // No result set (`INSERT`, `CREATE`, `KILL`) → empty body. The HTTP interface reports no
+        // row count for writes, so `rows_affected` stays None.
         return DbResultSet {
             kind: DbResultKind::Affected,
             statement: statement.to_string(),
@@ -699,10 +601,7 @@ fn shape(statement: &str, body: &str, limits: &Limits, duration_ms: u64) -> DbRe
     }
 }
 
-/// One JSON cell → the text a grid shows, or `None` for SQL NULL.
-///
-/// The `Null` arm is the whole reason `JSONCompact` was chosen over `JSONCompactStrings` (see the
-/// module doc): here NULL is a distinct JSON value, so it cannot be confused with a string.
+/// One JSON cell → grid text, or `None` for SQL NULL (why `JSONCompact` was chosen).
 fn render_cell(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::Null => None,
@@ -718,10 +617,7 @@ fn render_cell(value: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// Every row of a `JSONCompact` body as text — the catalog queries' shape.
-///
-/// Reuses `render_cell`, so a NULL in a catalog answer becomes `None` here exactly as it would in
-/// a user's result set, rather than an empty string that looks like a real name.
+/// Every row of a `JSONCompact` body as text (the catalog queries' shape); NULL stays `None`.
 fn text_rows(body: &str) -> Vec<Vec<String>> {
     let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else {
         return Vec::new();
@@ -811,24 +707,16 @@ fn map_status_error(status: StatusCode, body: &str) -> DbError {
         (_, Some(164)) => DbErrorCode::Blocked,
         // 159 TIMEOUT_EXCEEDED — the server's `max_execution_time` stopped it.
         (_, Some(159)) => DbErrorCode::Timeout,
-        // 60 UNKNOWN_TABLE, 47 UNKNOWN_IDENTIFIER, 62 SYNTAX_ERROR: "your statement is wrong",
-        // which is a normal console outcome and not a broken connection. This comment said exactly
-        // that while the code said `invalid-config`, whose sentence is about hosts and ports — the
-        // same misattribution that happened on MongoDB.
+        // 60 UNKNOWN_TABLE, 47 UNKNOWN_IDENTIFIER, 62 SYNTAX_ERROR: the statement is wrong, not the
+        // connection.
         (_, Some(60 | 47 | 62)) => DbErrorCode::InvalidStatement,
-        // 81 UNKNOWN_DATABASE stays a CONFIG problem, and the split is deliberate: `database` is a
-        // connection setting, so this is what a Test Connection against a mistyped database name
-        // reports — where "check the settings this engine requires" is the true advice. A statement
-        // naming another database can also raise it; the connection reading is the more common one
-        // and the more actionable, and it matches Postgres's 3D000 mapping in `error.rs`.
+        // 81 UNKNOWN_DATABASE is a config problem: `database` is a connection setting (matches
+        // Postgres's 3D000 mapping in `error.rs`).
         (_, Some(81)) => DbErrorCode::InvalidConfig,
         _ => DbErrorCode::Unknown,
     };
-    // 🔴 `blocked` is the one code whose detail the panel renders verbatim, so it carries OUR
-    // prose and never the server's (`DbError::blocked` has the finding this comes from).
-    // ClickHouse's own words here are `agentstudio: Cannot execute query in readonly mode.` — it
-    // restates the code and leads with the user name; what replaces it names the two places
-    // `readonly` can come from, only one of which this app can change.
+    // The panel renders a `blocked` detail verbatim, so it carries our prose, never the server's
+    // (see `DbError::blocked`).
     if mapped == DbErrorCode::Blocked {
         return DbError::blocked(
             "ClickHouse refused that query in readonly mode. Untick \"Read-only\" in this \
@@ -846,10 +734,7 @@ fn clickhouse_error_code(body: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-/// The exception text, trimmed of the version suffix and capped.
-///
-/// ClickHouse appends `(version 25.6.13.41 (official build))` to every message, which is noise in
-/// a toast, and a long message can carry a whole query plan.
+/// The exception text without ClickHouse's `(version …)` suffix, capped (it can hold a query plan).
 fn clean_exception(body: &str) -> String {
     let text = body.trim();
     let text = match text.find(" (version ") {
@@ -1018,12 +903,8 @@ mod tests {
         }
     }
 
-    /// 🔴 `blocked` is the code whose detail the panel renders verbatim (`DbError::blocked`), so
-    /// this arm — and only this arm — drops ClickHouse's own words instead of forwarding them.
-    ///
-    /// The body carries a DSN on purpose. `DbError::redacted` masks the **password**; the host, the
-    /// port, the database and the user survive it, so "the password is not in there" would be a
-    /// leak test that passes on a message still naming the server.
+    /// The body carries a whole DSN: `DbError::redacted` masks only the password, so host, port,
+    /// database and user must also be absent.
     #[test]
     fn a_readonly_refusal_carries_none_of_the_servers_text_because_the_panel_renders_it() {
         let body = "Code: 164. DB::Exception: catalog_ro: Cannot execute query in readonly mode \
@@ -1102,13 +983,8 @@ mod tests {
         assert!(!err.message.contains("s3cret"), "{}", err.message);
     }
 
-    /// The base URL always carries a port, and an empty port field takes the **descriptor's** 8123
-    /// — there is no driver to hand an absent port to here, because this module is the URL builder.
-    ///
-    /// ⚠️ The last case is the honest one: `sslMode: require` with no port dials `https://…:8123`,
-    /// the *plaintext* interface, because `EngineSpec::default_port` is one number and a TLS
-    /// ClickHouse conventionally listens on 8443. Asserted so the edge is a **recorded fact** rather
-    /// than a surprise, and so nobody "fixes" it by inventing a second port the dialog does not show.
+    /// The last case is a known edge: `sslMode: require` with no port dials `https://…:8123` (the
+    /// plaintext port); asserted so nobody invents a second default port the dialog does not show.
     #[test]
     fn the_base_url_always_has_a_port_and_an_empty_field_takes_the_descriptors() {
         let mut cfg = cfg_with_password("pw");
@@ -1134,12 +1010,6 @@ mod tests {
         );
     }
 
-    /// 🔴 **The `url` override, which an earlier version of this engine IGNORED.**
-    ///
-    /// The dialog's URL box says *"Overrides settings above"* and every other engine obeys it; this
-    /// one read `host`/`port` and nothing else, so pasting a URL here did literally nothing. It was
-    /// recorded in code as a known gap for a day, and it stopped being defensible once Redis and
-    /// DynamoDB both honoured theirs in the same session.
     #[test]
     fn a_url_override_wins_over_the_host_and_port_fields() {
         let mut cfg = cfg_with_password("pw");
@@ -1148,10 +1018,8 @@ mod tests {
         cfg.url = Some("https://clickhouse.example.com:8443".to_string());
         assert_eq!(url(&cfg), "https://clickhouse.example.com:8443/");
 
-        // 🔴 And this is the 8443 edge's actual answer: `sslMode` says `disable`, the STRING says
-        // https on the TLS port, and the string wins — a URL is a more specific statement of intent
-        // than a dropdown, exactly as the SRV work settled. Dialling plaintext here
-        // would be a control that reports one thing and does another.
+        // The string's https on 8443 wins over `sslMode: disable`: a URL is the more specific
+        // intent.
         cfg.ssl_mode = SslMode::Disable;
         assert_eq!(url(&cfg), "https://clickhouse.example.com:8443/");
 
@@ -1191,24 +1059,9 @@ mod tests {
         );
     }
 
-    /// ✅ **ClickHouse was checked for the dropped-password bug and does NOT have it** — this
-    /// test is the check, kept so it stays that way.
-    ///
-    /// Every other engine dropped the typed password when a URL override was present. ClickHouse
-    /// could not, because its credential does not travel in the URL at all: [`base_url`] builds the
-    /// endpoint and [`headers`] builds `X-ClickHouse-User`/`X-ClickHouse-Key` from the fields,
-    /// independently. So the two halves of a URL-override configuration compose correctly here by
-    /// construction rather than by luck — and that construction is now asserted.
-    ///
-    /// ⚠️ **The residual, stated rather than discovered later:** the traffic goes the *other* way.
-    /// `base_url` normalises the override to `scheme://host[:port]/`, so a credential written *into*
-    /// the string (`http://user:pw@ch.local:8123`, or `?password=`) is **dropped**, not honoured —
-    /// the mirror image of the bug fixed elsewhere. It is reachable only from an unsaved draft: the
-    /// save path (`db_connection_upsert` → `url::split_url_credentials`) moves any inline credential
-    /// into the Vault and leaves a `{{VAR}}`, which `db::substitute_url` resolves back into
-    /// `cfg.password` — the very field these headers read. Left as-is deliberately: honouring it
-    /// would mean carrying the password *value* out of `url.rs`, and the redaction design keeps that surface as
-    /// small as it can be. Asserted below so it is a recorded fact.
+    /// The credential travels in headers built from the fields, so a URL override cannot drop it.
+    /// Residual: one written into the override string is dropped; only an unsaved draft hits that
+    /// (save moves inline credentials to the Vault: `url::split_url_credentials`).
     #[test]
     fn a_url_override_does_not_suppress_the_typed_password_because_it_never_carried_it() {
         let mut cfg = cfg_with_password("typed-pw");

@@ -1,28 +1,6 @@
-/**
- * F1 — the find overlays default to the workspace you are LOOKING AT (from a gazelle file or a
- * gazelle console, find searches gazelle; `src/features/find/contextScope.ts`), in the real app
- * with two workspace roots open.
- *
- * Setup, all local and inside the container:
- *   - root 1: the fixture workspace the app was launched in (`e2e/fixtures/workspace`);
- *   - root 2: a throwaway git repo named `gazelle` under /tmp, made here. It becomes a root the way
- *     it does for a user: the rail's ⚡ quick-launch starts an agent in the most recent project, and a
- *     root agent's folder is a workspace root. "Most recent project" is the app's own persisted list
- *     (`recent-projects.json` in the app config dir), seeded here — inside the throwaway container
- *     only (guarded by /.dockerenv), and restored afterwards so later specs launch where they expect.
- *
- * Then, through the REAL hotkeys (Ctrl+Shift+F, Ctrl+Shift+O — the Linux spelling of Cmd+Shift):
- *   - gazelle's agent console focused → Find in Files opens scoped to `gazelle`, and searching a
- *     word both roots contain finds gazelle's files only;
- *   - a gazelle file focused in the editor → Find Files opens scoped to `gazelle`;
- *   - a workspace file focused → Find Files opens scoped to `workspace` (the default follows the
- *     focus; it is not stuck on the last answer).
- *
- * And the BARE keys (no Shift — `src/features/shortcuts/FindKeysShortcut.tsx`:
- * Ctrl+F and Ctrl+O always use the workspace of the window that is open):
- * Ctrl+O is quick open, on the focused workspace; Ctrl+F stays the editor's own find bar
- * inside an editor, and is Find in Files (on the focused workspace) where nothing else claims it.
- */
+/** F1: find overlays default to the focused workspace (`src/features/find/contextScope.ts`), with a
+ * second root `gazelle` in /tmp. recent-projects.json is seeded only in the container (/.dockerenv)
+ * and restored after, so later specs launch where they expect. */
 
 import { $, $$, browser, expect } from "@wdio/globals";
 import { execFileSync } from "node:child_process";
@@ -217,10 +195,8 @@ describe("find scope follows the focused workspace (two roots: workspace + gazel
   });
 
   it("bare Ctrl+F is the editor's own find in an editor, and Find in Files where nothing claims it", async () => {
-    // In the editor, Ctrl+F belongs to the editor's own find bar — the fallback must not steal it.
-    // (Three guards in FindKeysShortcut hold this: the key arrives already handled by CodeMirror's
-    // keymap, its target is CodeMirror's contenteditable, and the deferred check sees it handled.
-    // Falsified: this goes red only with all three removed.)
+    // In the editor, Ctrl+F belongs to CodeMirror's find bar: three guards in FindKeysShortcut keep
+    // the fallback from stealing it, and only removing all three turns this red.
     await $(".cm-content").click();
     await pressCtrl("f");
     const editorFind = $('.cm-editor input[aria-label="Find"]');
@@ -232,10 +208,8 @@ describe("find scope follows the focused workspace (two roots: workspace + gazel
     await $('.cm-editor button[aria-label="Close find bar"]').click();
     await editorFind.waitForExist({ reverse: true, timeout: 5_000 });
 
-    // A tab header is a surface with no find of its own: there Ctrl+F is Find in Files, on the
-    // workspace of the tab you are in.
-    // Every pane has a selected tab, so this matches one per pane. WebdriverIO 10's `$` is strict
-    // (it throws on more than one match), so take the first by name — what `$` did until 9.
+    // A tab header has no find of its own, so Ctrl+F there is Find in Files. WebdriverIO 10's `$`
+    // throws on multiple matches, and every pane has a selected tab, so take the first.
     await $$('[role="tab"][aria-selected="true"]')[0].click();
     const focused = await browser.execute(() => {
       const a = document.activeElement;

@@ -1,36 +1,6 @@
-//! Tab tear-off — a tab moves into its own OS window, and back (tabs are movable out of
-//! the IDE into a new window of their own, as in Chrome, IntelliJ or VS Code). Design and
-//! measurements: `docs/design/tab-tearoff.md`.
-//!
-//! # What crosses the window boundary, and what never does
-//!
-//! Every `WebviewWindow` is its own JS realm with its own store (tab-tearoff.md §2.1), so a
-//! torn-off tab is a *description* — a [`TornTab`] — handed from one realm to another through
-//! this module. The things that make a tab expensive never move: a terminal's PTY stays in
-//! the supervisor, and the receiving window re-binds the same PTY with `terminal_reattach`
-//! (swap the pump's sink, replay the ring). Nothing in this file touches a process,
-//! so no move can kill or restart an agent.
-//!
-//! # A mailbox per window, not an event with a payload
-//!
-//! A new window's JS is not listening when its tabs are sent — it does not exist yet — so an
-//! event carrying the payload would be lost by construction. Tabs are *posted* instead: the
-//! payload waits in the receiver's mailbox here, an event rings the doorbell, and the
-//! receiver *claims* its mail when it is ready (on boot, and on every doorbell). A claim
-//! drains only the caller's own mailbox, and the caller's label comes from Tauri, never from
-//! the page.
-//!
-//! # Holdings: what each detached window is showing
-//!
-//! Every detached window reports the tabs it holds. Three things read that record:
-//! - the main window's reload (`bridge.ts`) skips terminals another window holds — otherwise
-//!   it would re-attach them, stealing their PTY stream from the window showing them;
-//! - a detached window's own reload recovers its tabs (its store reset; Rust did not);
-//! - a detached window that dies — closed, crashed, killed — has its last-reported tabs
-//!   re-homed into the main window's mailbox, so closing a window never kills a terminal.
-//!
-//! The rules live in [`Registry`], plain data behind a mutex; the Tauri glue below it is thin,
-//! so every rule is a unit test without a running app.
+//! Tab tear-off (`docs/design/tab-tearoff.md`): a tab crosses windows as a [`TornTab`]; its PTY
+//! never moves (`terminal_reattach`). Tabs wait in a per-window mailbox until the receiver claims
+//! them (a new window can't listen yet); a dead window's holdings re-home to main.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, MutexGuard};
@@ -108,10 +78,8 @@ pub struct EditorBuffer {
     pub text: String,
     /// The last saved (or loaded) text — the dirty flag is `text != baseline`.
     pub baseline: String,
-    /// CodeMirror's `EditorState.toJSON({ history })`, stringified by the page — the
-    /// selection and the undo stack. Opaque to Rust and carried as a STRING on purpose: a
-    /// `serde_json::Value` would re-order its keys. `null` in a periodic
-    /// holdings report, which carries text only.
+    /// CodeMirror `EditorState.toJSON({ history })`, opaque to Rust and kept a STRING so its
+    /// key order survives; `null` in a periodic holdings report (text only).
     #[serde(default)]
     pub state: Option<String>,
     /// The stamp the buffer was last read or written at, so the receiving window's disk
@@ -124,13 +92,9 @@ pub struct EditorBuffer {
     pub stale: bool,
 }
 
-/// One tab, described well enough to be re-created in another window
-/// (`src/app/tearoff/contract.ts` `TornTab`; golden: `src/test/contract/goldens/tearoff.json`).
-///
-/// Only the kinds that are cheap to recreate exist here. `api-request`/`sequence` (store
-/// state with in-flight responses and live bearer tokens), `db-console` (a live Rust
-/// session, one console per connection), `session-picker` and `agent-activity` are absent
-/// on purpose (tab-tearoff.md §3) — their menu item is hidden, so they cannot be sent.
+/// One tab, enough to re-create it in another window (`src/app/tearoff/contract.ts`; golden
+/// `src/test/contract/goldens/tearoff.json`). Kinds with live state (API requests, DB consoles,
+/// …) are absent on purpose (tab-tearoff.md §3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum TornTab {
@@ -239,10 +203,8 @@ pub enum Mail {
     /// `tab_id` is the SENDER's own tab id, valid only in that window.
     #[serde(rename_all = "camelCase")]
     Give { tab_id: String, to: String },
-    /// An agent's custom name changed in the sending window (`None` = back to its derived
-    /// title). Detached → main so the main window persists it with the layout (it is the
-    /// only window that writes `layout-prefs.json`); main → the holder so the tab there
-    /// shows what the main rail now says.
+    /// An agent's custom name changed (`None` = derived title). Detached → main, the only writer
+    /// of `layout-prefs.json`; main → the holder, so its tab matches the rail.
     #[serde(rename_all = "camelCase")]
     Renamed {
         agent_id: String,
@@ -275,13 +237,9 @@ pub struct ScreenPoint {
 
 /* ──────────────────────────────── the registry ──────────────────────────────── */
 
-/// Everything this module remembers. Plain data: every rule is a method, and every method
-/// is unit-tested below without Tauri.
-///
-/// Invariant: a detached window is **live** exactly while `holdings` has its label —
-/// inserted by [`Registry::open`], removed by [`Registry::destroyed`]. Nothing else creates
-/// a holdings entry, so a late report from a dying window cannot resurrect it (a resurrected
-/// entry would make the main window skip those terminals on every reload, forever).
+/// Everything this module remembers; plain data, so every rule is unit-tested without Tauri.
+/// Invariant: a window is live exactly while `holdings` has its label, inserted only by
+/// [`Registry::open`], so a late report cannot resurrect a dead one.
 #[derive(Debug, Default)]
 pub struct Registry {
     holdings: BTreeMap<String, Vec<TornTab>>,
@@ -344,10 +302,8 @@ impl Registry {
         }
     }
 
-    /// Replace what the detached window `label` holds. Ignored for the main window (which
-    /// holds, implicitly, everything no detached window does) and for any label that is not
-    /// live — see the invariant on [`Registry`]. Returns whether the set of KEYS changed, so
-    /// a report that only refreshed an editor's text does not broadcast new holdings.
+    /// Replace what live detached window `label` holds (main and dead labels are ignored).
+    /// Returns whether the set of KEYS changed, so a text-only refresh broadcasts nothing.
     pub fn report(&mut self, label: &str, tabs: Vec<TornTab>) -> bool {
         let Some(held) = self.holdings.get_mut(label) else {
             return false;
@@ -380,10 +336,8 @@ impl Registry {
         rehome
     }
 
-    /// The close button was pressed on `label`: should the close be held back while the
-    /// page hands its tabs over? True exactly once per live detached window — a second
-    /// press while the handshake runs lets the window close (the destroy path still
-    /// re-homes its tabs), and the main window is never held back.
+    /// Whether to hold back `label`'s close while its page hands tabs over: true once per live
+    /// detached window (a second press closes; destroy still re-homes), never for main.
     pub fn begin_close(&mut self, label: &str) -> bool {
         self.holdings.contains_key(label) && self.closing.insert(label.to_string())
     }
@@ -444,16 +398,9 @@ pub fn window_title(tabs: &[TornTab]) -> String {
     }
 }
 
-/// Where to put the top-left of a window opened by a drag released at `at`, in logical
-/// pixels (`WebviewWindowBuilder::position` takes logical).
-///
-/// `scale` is the factor the platform used to turn logical into the physical point it
-/// reported: on macOS tao scales the cursor by the PRIMARY monitor's factor
-/// (`tao/src/platform_impl/macos/util/mod.rs` `cursor_position`), elsewhere the cursor is
-/// in physical pixels of the monitor under it — the caller picks (see `placement_scale`).
-/// A nonsense factor (zero, negative, NaN) is treated as 1 rather than flinging the window
-/// to infinity. Negative coordinates are legitimate: a monitor left of or above the
-/// primary one.
+/// Top-left, in logical pixels, for a window dropped at `at`. `scale` is the platform's cursor
+/// factor (macOS tao: the PRIMARY monitor's; see `placement_scale`); a nonsense one counts as 1.
+/// Negative coordinates are legitimate (a monitor left of or above the primary).
 pub fn window_origin(at: ScreenPoint, scale: f64) -> (f64, f64) {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
@@ -498,13 +445,9 @@ fn broadcast_holdings(app: &AppHandle, state: &Tearoff) {
 
 /* ────────────────────────────────── commands ────────────────────────────────── */
 
-/// Open a new window holding `tabs`, moved out of the calling window. `at` is where a drag
-/// was released (the page's raw `cursorPosition()`); `None` for the menu command, which
-/// lets the OS place the window. Returns the new window's label.
-///
-/// `async` because `WebviewWindowBuilder::build` deadlocks inside a synchronous command on
-/// Windows (its own docs; tab-tearoff.md §4.1). Creating the window from Rust needs no ACL,
-/// so the page needs no `allow-create-webview-window`.
+/// Open a window holding `tabs` moved out of the caller; `at` is the drop point, `None` lets
+/// the OS place it. `async` because `build` deadlocks in a sync command on Windows
+/// (tab-tearoff.md §4.1). Returns the new label.
 #[tauri::command]
 pub async fn tearoff_open(
     app: AppHandle,
@@ -613,15 +556,9 @@ pub async fn tearoff_close(window: WebviewWindow) -> Result<(), String> {
 
 /* ──────────────────────────────── window events ──────────────────────────────── */
 
-/// Window lifecycle, registered with `Builder::on_window_event`.
-///
-/// - **Close pressed on a detached window:** held back once while its page hands every tab
-///   (with unsaved text and undo history) to the main window; destroyed after
-///   [`CLOSE_GRACE`] regardless, so a hung page cannot make it unclosable.
-/// - **A detached window destroyed:** its last-reported tabs go to the main window's
-///   mailbox — the crash-safe half of "closing a window never kills a terminal".
-/// - **The main window destroyed:** the app quits. The main window IS the app (the rails,
-///   the layout, the fleet); detached windows without it would be orphans with no way back.
+/// Window lifecycle: a detached close is held once while its page hands tabs to main (destroyed
+/// after [`CLOSE_GRACE`] regardless); a destroyed detached window's tabs go to main's mailbox;
+/// main destroyed quits the app.
 pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     let label = window.label();
     match event {

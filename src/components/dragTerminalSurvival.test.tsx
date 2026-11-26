@@ -1,24 +1,6 @@
-/**
- * Dragging a terminal tab to an edge must not cost you the terminal.
- *
- * This is the one regression that would be both most likely and most visible:
- * a tab moving between panes is re-parented in the React tree, so its
- * `<TerminalView>` genuinely unmounts and remounts. Everything downstream of
- * that is what keeps the session alive — `useTerminal` DETACHES on unmount
- * (never disposes), the registry parks the DOM in an offscreen holder, and the
- * next mount re-ATTACHES the very same xterm instance and PTY.
- *
- * So this file deliberately mocks NOTHING below the IPC boundary: real
- * `<Pane>` → real `<TerminalView>` → real `useTerminal` → real
- * `TerminalRegistry` → real xterm. Only Rust is faked (there is no PTY in a
- * Vitest run), via the shared Tauri mock — which lets us push real bytes down
- * the real hot-plane Channel and then assert the scrollback survived the drag.
- *
- * The rest of the suite mocks `features/terminal` at the module boundary, which
- * is right for unit-testing the store/pane in isolation — but it means no other
- * test can see this failure mode at all: with the registry mocked, "did the
- * emulator survive?" is a question about the mock.
- */
+/** A tab moved between panes truly remounts `<TerminalView>`; the session must survive (detach,
+ * park, re-attach). Nothing below IPC is mocked (real registry and xterm): elsewhere
+ * `features/terminal` is mocked, so no other test can see this failure. */
 
 import { act, cleanup, createEvent, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -32,12 +14,8 @@ import { PaneTreeRoot } from "./PaneTree";
 import { TABBAR_CLASS, TAB_DND_MIME } from "./TabBar";
 
 let ipc: TauriMock;
-/**
- * One driver per TerminalId. A single shared driver would silently re-point at
- * whichever terminal opened last — and the split legitimately opens a second
- * one (the tab left behind gets a pane of its own) — so bytes "sent to the
- * dragged terminal" would land in the wrong emulator and the test would lie.
- */
+/** One driver per TerminalId: the split opens a second terminal, and a shared driver would
+ * re-point at it, sending the dragged terminal's bytes to the wrong emulator. */
 const ptys = new Map<string, ChannelDriver>();
 const ptyOf = (id: TerminalId): ChannelDriver => {
   const driver = ptys.get(id);
@@ -306,10 +284,8 @@ describe("promoting an ad-hoc agent's tab — the emulator survives", () => {
   const fleet = () => useAppStore.getState().agentActions;
 
   it("keeps the SAME xterm instance, its PTY and its scrollback across promotion", async () => {
-    // The user types `claude` in a plain shell; agent_started promotes the
-    // tab in place. Promotion rewrites tab METADATA only — the terminalId is
-    // unchanged, so `<TerminalView key={terminalId}>` must not remount and the
-    // session must survive intact. Same guarantee as the drag, different trigger.
+    // Promotion to an agent rewrites tab metadata only; the terminalId is unchanged, so
+    // `<TerminalView key={terminalId}>` must not remount.
     const tabId = actions().openTerminalTab({ cwd: "/w/scratch" });
     const termId = terminalIdOf(tabId);
 

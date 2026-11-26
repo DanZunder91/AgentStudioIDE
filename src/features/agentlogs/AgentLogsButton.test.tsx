@@ -1,7 +1,4 @@
-/**
- * The titlebar button calls `openAgentLogsTab` — asserted from the button, not the
- * store, by the store change it causes.
- */
+/** Asserted from the button by the store change it causes (`openAgentLogsTab`). */
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";

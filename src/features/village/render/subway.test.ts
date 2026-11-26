@@ -1,9 +1,4 @@
-/**
- * The City's subway, painted (render/subway.ts): the tunnel across the whole view, the station, the
- * stairwell, the train on its timetable, the street entrance — and their night lights — read back from a
- * recording target (jsdom has no canvas; the pixels are subway.browser.test.tsx's). Plus the wiring:
- * the backdrop, the lights pass and the `metro` prop dispatch them.
- */
+/** Reads a recording target (jsdom has no canvas); the pixels are subway.browser.test.tsx's. */
 
 import { describe, expect, it } from "vitest";
 

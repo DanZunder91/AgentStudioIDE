@@ -1,14 +1,6 @@
-//! End-to-end through the **real `ClaudeAdapter`** — the exact production code path
-//! for a `+`-spawned agent: resolve the binary, mint `--session-id`, spawn, start
-//! the tailer, poll, parse, emit. Nothing is mocked except `claude` itself, which
-//! is a shell script that writes the fixture transcript for the session id it was
-//! handed (exactly what real `claude` does) and then stays alive.
-//!
-//! If the rail never updates because of our code, it reproduces here.
-//!
-//! Unix-only: `claude` is faked with a shell script (`#!/bin/sh`). The Claude
-//! adapter's production path is otherwise cross-platform and covered by the
-//! `#[cfg]`-free `fanout_production_order` / `fanout_wiring` tests.
+//! End to end through the real `ClaudeAdapter` (the `+`-spawn path): resolve, mint
+//! `--session-id`, spawn, tail, parse, emit; only `claude` is faked, by a shell script writing
+//! the fixture for its session id (hence Unix-only; `fanout_*` tests cover the rest).
 #![cfg(unix)]
 
 mod common;

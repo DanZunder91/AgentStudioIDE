@@ -1,31 +1,6 @@
-/**
- * 🔴 SEAM test — the Collections rail's folders, driven end to end.
- *
- * This is **not** a unit test and must not be turned into one. Everything below it is
- * real: the panel's DOM, its drag handlers, the store actions, `apiStoreIpc`'s typed
- * wrappers, and the `invoke()` argument shapes. The ONLY thing mocked is the outer
- * boundary — the Tauri IPC bridge itself, standing in for the Rust commands in
- * `src-tauri/src/api_store.rs`.
- *
- * It exists because that is exactly where this feature can be 100%-covered on both
- * sides and still not work. Two earlier defects had the same shape:
- * a fully-tested button passing `cwd: null` to a fully-tested command that rejects it,
- * and a fully-tested `db-console` tab with no `case` in `Pane.tsx`'s switch. Here the
- * joins that no unit test owns are:
- *   • the command NAMES (`api_folder_create`, `api_request_move`, …),
- *   • the ARGUMENT KEYS Tauri deserializes into the Rust signatures (`requestId` →
- *     `request_id`, `folderId` → `folder_id`, `ids`, `name`, `id`),
- *   • that `null` — not `""`, not `"root"` — is how "put it at the root" crosses,
- *   • and that what Rust returns re-hydrates the rail, rather than being dropped on
- *     the floor while the UI keeps showing a stale grouping.
- *
- * The Rust handlers below are deliberately *behavioural* stand-ins (they mutate a
- * store the way `api_store.rs` does) rather than constant returns, because a constant
- * return would let a wrong argument key pass unnoticed.
- *
- * FALSIFIED: each assertion here was watched go red before being trusted (a seam test never
- * seen red proves nothing).
- */
+/** SEAM test, not a unit test: real panel DOM, drag handlers, store and `apiStoreIpc`; only the
+ * Tauri bridge is faked. Pins command names, Tauri arg keys, `null` as "root", and re-hydration;
+ * the Rust stand-ins mutate like `api_store.rs` so a wrong arg key can't pass. */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -73,11 +48,8 @@ const req = (id: string, name: string): SavedRequest => ({
   protocol: "http",
 });
 
-/**
- * The Rust commands, standing in for `api_store.rs`. Each handler does what its
- * Rust counterpart does — load, mutate, save, return the WHOLE store — reading the
- * SNAKE_CASE argument names Tauri produces from the camelCase the frontend sends.
- */
+/** Stand-ins for `api_store.rs`: load, mutate, save, return the WHOLE store, reading the
+ * snake_case argument names Tauri derives from the camelCase the frontend sends. */
 function installRustLane(): void {
   ipc.handle("api_store_load", () => disk);
   ipc.handle("api_store_save", (args) => {

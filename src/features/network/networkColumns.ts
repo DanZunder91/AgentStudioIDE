@@ -1,14 +1,6 @@
-/**
- * The two Network tables' columns, for the shared resizable/hideable layout
- * (`components/columns`).
- *
- * Widths are px for a 12px monospace cell (≈7.2px per glyph) plus the cell's 6px + 6px
- * padding — a `ch` width counts glyphs, not padding. The one `flex` column
- * per table takes what the others leave; the table's `min-width` is the sum of the visible
- * fixed widths plus the flex column's floor, so the flex column never collapses to 0px in
- * a narrow pane (`table-layout: fixed` gives an `auto` column only the leftovers, which can be
- * zero) — the scroller scrolls sideways instead.
- */
+/** Network tables' columns for the shared layout (`components/columns`). Widths are px for a 12px
+ * monospace cell (≈7.2px/glyph) plus 6px + 6px padding. The table's `min-width` (visible fixed
+ * widths + flex floor) keeps the one flex column from collapsing; narrow panes scroll sideways. */
 
 import { DEFAULT_MIN_WIDTH, visibleColumns, type ColumnDef, type ColumnLayout } from "../../components/columns";
 
@@ -20,27 +12,17 @@ export type IdeColumnId =
 
 export interface IdeColumn extends ColumnDef {
   id: IdeColumnId;
-  /**
-   * The width it may be squeezed to when the pane is too narrow for the defaults
-   * ({@link fitColumns}): its common values still fit (glyphs × 7.2 + 12), a rare wide one
-   * ellipsizes and keeps its full text in the cell's `title`. Default: its width.
-   */
+  /** Squeezed width for a narrow pane ({@link fitColumns}): common values still fit (glyphs × 7.2
+   * + 12); a rare wide one ellipsizes with its full text in `title`. Default: its width. */
   compactWidth?: number;
-  /**
-   * Hidden by itself when the pane cannot hold every column ({@link fitColumns}) — lower goes
-   * first. Absent = never auto-hidden. A column the user ticked on is never auto-hidden.
-   */
+  /** Auto-hidden, lowest first, when the pane can't hold every column ({@link fitColumns}).
+   * Absent = never. A column the user ticked on is never auto-hidden. */
   autoHide?: number;
 }
 
-/*
- * At the 1280 px window with both rails and the Apps sidebar, the table is ~440 px — without a
- * fit only Time / Proto / Method / Host were on screen, Status, Path and Source off
- * the right edge. DECIDED: Time, Proto, Method, Host, Path, Status and Source always fit (squeezed
- * toward `compactWidth`, with the TIGHT 3 px + 3 px cell padding — `Fit.tight`); Process, Size,
- * Duration and Type give way, in that order, until the user ticks one on in Columns ▾.
- * Compact widths are glyphs × 7.2 + 6 (tight padding): their common values still fit.
- */
+/* Time, Proto, Method, Host, Path, Status and Source always fit (squeezed toward `compactWidth`
+ * with `Fit.tight` 3px + 3px padding); Process, Size, Duration and Type give way in that order.
+ * Compact widths are glyphs × 7.2 + 6. */
 export const IDE_COLUMNS: readonly IdeColumn[] = [
   // `20:58:58` is 8 glyphs = 58 px + 6.
   { id: "time", label: "Time", width: 74, minWidth: 74, required: true, compactWidth: 64 },
@@ -78,10 +60,7 @@ export const MACHINE_COLUMNS: readonly MachineColumn[] = [
   { id: "bytesOut", label: "↑ total", width: 80, minWidth: 56 },
 ];
 
-/**
- * The table's floor: every visible fixed column at its width, the flex column at its minimum.
- * Below this the pane scrolls sideways rather than squeezing a column to nothing.
- */
+/** Visible fixed columns at their width plus the flex column's minimum; below it, scroll. */
 export function tableMinWidth(cols: ReadonlyArray<ColumnDef & { px: number }>): number {
   return cols.reduce((sum, c) => sum + (c.flex ? (c.minWidth ?? DEFAULT_MIN_WIDTH) : c.px), 0);
 }
@@ -97,20 +76,9 @@ export interface Fit<C extends ColumnDef> {
   tight: boolean;
 }
 
-/**
- * The columns to render in a table `available` px wide (the scroll box's client width; 0 =
- * unmeasured, e.g. jsdom → the plain layout). In order, stopping as soon as the table fits:
- *
- * 1. the defaults (the user's widths, hidden set);
- * 2. Host gives up to its `compactWidth` — the long one, ellipsized with its title;
- * 3. `autoHide` columns drop, lowest first, never one the user ticked on (`layout.shown`),
- *    Host re-growing into what each frees;
- * 4. every column the user did not size shrinks toward its `compactWidth` (Path below its
- *    160 px floor too) by one shared fraction — ONLY when that is enough to fit: squeezing
- *    columns and still scrolling sideways would lose on both counts, so then the table keeps
- *    its default widths (Host too) minus the dropped columns, and scrolls (Path never
- *    collapses).
- */
+/** Columns for a table `available` px wide (0 = unmeasured: plain layout); stops once it fits:
+ * defaults, Host to `compactWidth`, `autoHide` drops (never user-shown), then one shared squeeze
+ * of unsized columns toward `compactWidth` only if that fits, else default widths and scroll. */
 export function fitColumns<C extends IdeColumn>(
   defs: readonly C[],
   layout: ColumnLayout,

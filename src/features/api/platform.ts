@@ -1,11 +1,5 @@
-/**
- * platform — the one platform fact the API client needs: is this Windows?
- *
- * On Windows "Copy as cURL" must say which shell it is writing for (PowerShell,
- * cmd or bash — `curlExport.ts`); everywhere else it is bash, as it always was.
- * A thin wrapper over `lib/platform`'s `os()`, the one OS answer for the whole UI
- * (which documents why it matches `Windows`, never `Win`).
- */
+/** On Windows "Copy as cURL" must name its target shell (curlExport.ts); elsewhere it is bash.
+ * Wraps lib/platform's os(), the one OS answer for the whole UI. */
 
 import { os } from "../../lib/platform";
 

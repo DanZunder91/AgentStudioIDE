@@ -1,18 +1,4 @@
-/**
- * Sources, hosts and the capture guide — requests from the IDE's own API client must
- * appear, and an app like Postman must be more than Whole-Mac connections (what those
- * connections are doing must be visible).
- *
- * 1. Source labels: `ide-api-client` → **API client**; no userinfo + a resolved process →
- *    **external · <name>**; only null/null is unattributed. Picker rows keyed accordingly.
- * 2. A Host picker in the IDE-traffic toolbar, composing with everything, named in the
- *    "hidden by" empty state, cleared by Show all flows, and kept in the store.
- * 3. "Capture this app's requests…" on every expanded Whole Mac row: proxy address, CA path
- *    (Copy path), the Decrypt state, per-app steps, and where the traffic then shows up.
- * 4. An external source's undecrypted tunnel points at the CA step, not at "open a terminal".
- *
- * Only `./netcapIpc` / `./netmachineIpc` are mocked; stores, formatters, AppPicker are real.
- */
+/** Only `./netcapIpc` / `./netmachineIpc` are mocked; stores, formatters, AppPicker are real. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

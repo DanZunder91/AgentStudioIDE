@@ -1,16 +1,5 @@
-/**
- * cmTestKit — jsdom harness for real-CM6 tests (test-only; imported exclusively
- * by test files — this directory's find suites and the editor's
- * CodeEditor.test.tsx — never by app code).
- *
- * CM6's EditorView runs fine in jsdom for state/panel/keymap logic, but its
- * async measure cycle calls geometry APIs jsdom does not implement
- * (`Range#getClientRects` / `Range#getBoundingClientRect` throw
- * "not implemented"). The stubs below give them the same answer a zero-layout
- * environment would give anyway: no rectangles. Anything that needs REAL
- * geometry (scroll position of a match, pixel layout of the bar) belongs in
- * the browser tier, not here.
- */
+/** Test-only jsdom harness for real CM6. Stubs `Range#getClientRects`/`getBoundingClientRect`
+ * (unimplemented in jsdom) to return no rects; real geometry belongs in the browser tier. */
 
 import { EditorState, EditorSelection } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";

@@ -1,46 +1,6 @@
-/**
- * The Tools panel's time primitives — an exact instant, the numeric-epoch reader,
- * and the renderers that turn an instant into the lines a human reads.
- *
- * ⚠️ **This file's exported signatures are a CONTRACT** (see `epoch.ts` and
- * `dateParse.ts`, which are written against it). Change a shape here and you change
- * both of them.
- *
- * ── Why `Instant` and not `Date` ─────────────────────────────────────────────
- * A JS `number` holds an integral nanosecond epoch only up to 2^53 ns ≈ 104 days
- * past 1970, so `1700000000123456789` (a perfectly ordinary Go/`hrtime` nanosecond
- * stamp) does not survive `Number()`. Everything numeric here is read with `BigInt`
- * and only then split into `{ epochMs, nanos }` — whole milliseconds, which `Date`
- * can hold exactly, plus the sub-millisecond remainder that `Date` cannot.
- *
- * ── Why the formatting is hand-rolled ────────────────────────────────────────
- * `new Date(string)` parsing is engine-defined for anything that is not exactly ISO
- * 8601, so it is never used (see `dateParse.ts`). `Date` IS used for calendar maths,
- * but only through its `getUTC*` accessors, which are specified exactly.
- *
- * `usageFormat.ts` and `metricsFormat.ts` each have an "N min ago" helper; neither is
- * reusable here — both hard-code a prefix ("Updated…", "Scanned…"), both stop at
- * hours, and neither can express the future ("in 3 days"), which is half of what a
- * date converter is asked.
- *
- * ── Why `Intl` is used for zones and NOTHING else ────────────────────────────
- * There is no zone database in this repo and there will not be one: the app is
- * zero-install, and shipping `luxon`/`date-fns-tz` to learn that Paris was
- * `+02:00` on 15 Jun 2026 means shipping a tzdata copy that goes stale. The platform
- * already has one, reachable through `Intl.DateTimeFormat`, so zone offsets are
- * *derived* from it (see {@link zoneOffsetMsAt}) rather than tabulated.
- *
- * But `Intl` is asked ONLY for numbers — year, month, day, hour, minute, second —
- * never for words. Every weekday and month name below comes from a table in this
- * file, and every string is assembled here. Two reasons: `toLocaleString` output
- * moves with the host's locale and its ICU version (`11:00 AM` / `11:00 a.m.` /
- * `11.00`), which would make these strings untestable and inconsistent between two
- * developers' laptops; and the panel wants one fixed shape, not the user's. The
- * formatter is built with an explicit `en-US-u-ca-gregory-nu-latn` locale for the
- * same reason — a host whose default locale is `ar-EG` would otherwise hand back
- * Arabic-Indic digits and a non-Gregorian year, and `Number()` would quietly return
- * `NaN`.
- */
+/** Time primitives; exported signatures are a CONTRACT for `epoch.ts` and `dateParse.ts`. Epochs
+ * are read with `BigInt` (`number` loses ns stamps). `Intl` gives zone NUMBERS only, under an
+ * explicit `en-US-u-ca-gregory-nu-latn` locale; every word comes from tables here. */
 
 /** The units a bare number on the clipboard is plausibly in. */
 export type EpochUnit = "s" | "ms" | "us" | "ns";
@@ -56,14 +16,8 @@ export const UNIT_LABEL: Readonly<Record<EpochUnit, string>> = {
   ns: "nanoseconds",
 };
 
-/**
- * An exact point in time.
- *
- * `epochMs` is FLOORED whole milliseconds since 1970-01-01T00:00:00Z (negative
- * before it), and `nanos` is always `0…999_999` — the remainder ADDED to it. Floor
- * semantics (not truncation) so a pre-1970 instant still has a non-negative
- * remainder and `epochMs * 1e6 + nanos` is the total, at every sign.
- */
+/** `epochMs`: FLOORED whole ms since 1970 (negative before); `nanos`: the 0…999_999 remainder
+ * ADDED to it, so `epochMs * 1e6 + nanos` is the total at every sign. */
 export interface Instant {
   epochMs: number;
   nanos: number;
@@ -101,16 +55,8 @@ export const NANOS_PER: Readonly<Record<EpochUnit, bigint>> = {
 const NANOS_PER_MS = 1_000_000n;
 const MAX_EPOCH_MS_BIG = BigInt(MAX_EPOCH_MS);
 
-/**
- * Floor division for a POSITIVE divisor.
- *
- * `BigInt`'s `/` truncates toward zero, so `-1n / 1_000_000n` is `0n` and the
- * remainder comes out negative — which would give a pre-1970 instant a *negative*
- * `nanos` and break the `epochMs * 1e6 + nanos` identity that the whole file rests
- * on. Every division here is a floor for the same reason every epoch is a floor: an
- * epoch names the second/millisecond the instant is *inside*, and truncation would
- * round the past toward the future.
- */
+/** Floor division for a POSITIVE divisor: `BigInt` `/` truncates toward zero, which would give
+ * pre-1970 instants negative `nanos`. */
 function floorDiv(a: bigint, b: bigint): bigint {
   const q = a / b;
   return a % b < 0n ? q - 1n : q;
@@ -121,11 +67,8 @@ function clampMs(ms: number): number {
   return Math.min(MAX_EPOCH_MS, Math.max(-MAX_EPOCH_MS, ms));
 }
 
-/**
- * Split a total nanosecond count into an `Instant`, or `null` when it lands outside
- * the range `Date` can represent (±273,790 years). Floor division, so the `nanos`
- * remainder is non-negative before 1970 too.
- */
+/** Split total ns into an `Instant` (floored, so `nanos` ≥ 0), or `null` outside `Date`'s range
+ * (±273,790 years). */
 export function instantFromNanos(totalNs: bigint): Instant | null {
   const ms = floorDiv(totalNs, NANOS_PER_MS);
   if (ms > MAX_EPOCH_MS_BIG) return null;
@@ -138,23 +81,8 @@ export function nanosOf(instant: Instant): bigint {
   return BigInt(instant.epochMs) * NANOS_PER_MS + BigInt(instant.nanos);
 }
 
-/**
- * The UTC epoch of a set of wall-clock fields, in whole milliseconds — `NaN` when it
- * is out of `Date`'s range.
- *
- * ⚠️ **`Date.UTC` is not used**, and that is the entire point of this function.
- * `Date.UTC(50, 0, 1)` is **1950**, not the year 50: ECMA-262 §21.4.3.4 maps years
- * 0–99 onto 1900–1999, so a converter built on it silently answers a date nineteen
- * centuries away from the one it was asked about. `setUTCFullYear` has no such
- * mapping.
- *
- * The year, month and day are set in ONE call on purpose. Setting them one at a time
- * rolls over through an invalid intermediate — starting from 1 January and setting
- * the day to 29 before setting the month to February is fine, but the reverse order
- * turns 29 February of a leap year into 1 March. `setUTCFullYear(y, m, d)` computes
- * the day number from all three at once (MakeDay), so `0000-02-29` — a real date,
- * year 0 being divisible by 400 — survives.
- */
+/** UTC epoch ms of wall-clock fields, `NaN` out of range. Not `Date.UTC`: it maps years 0–99 to
+ * the 1900s. Year, month, day go in ONE `setUTCFullYear` call so 0000-02-29 doesn't roll over. */
 function utcMsOf(
   year: number,
   month: number,
@@ -170,14 +98,8 @@ function utcMsOf(
   return d.getTime();
 }
 
-/**
- * The instant those wall-clock fields name **in UTC**, or `null` if it is out of
- * range. Does not validate the calendar — `dateParse.ts` owns that.
- *
- * `civil.nanos` carries up to nine fractional digits, so it feeds BOTH halves of the
- * result: its whole-millisecond part joins the `Date` maths, and the sub-millisecond
- * remainder becomes the `Instant`'s `nanos`.
- */
+/** The instant those fields name in UTC, or `null` out of range; no calendar validation
+ * (`dateParse.ts` owns that). `civil.nanos` splits into whole ms and the sub-ms `nanos`. */
 export function instantFromCivilUtc(civil: Civil): Instant | null {
   const carryMs = Math.floor(civil.nanos / 1_000_000);
   const subMs = civil.nanos - carryMs * 1_000_000;
@@ -209,11 +131,7 @@ interface Wall {
   second: number;
 }
 
-/**
- * Numbers only, `h23` so midnight is `00` rather than `12 AM`, and `era` so that a
- * BC year is recognisable — `Intl` reports year 0 as "1 BC", and reading that as
- * 1 would put the offset probe two thousand years off.
- */
+/** Numbers only; `h23` so midnight is `00`; `era` so year 0 ("1 BC") isn't misread as 1. */
 const ZONE_FIELDS: Intl.DateTimeFormatOptions = {
   era: "short",
   year: "numeric",
@@ -262,16 +180,8 @@ function utcMsOfWall(w: Wall): number {
   return utcMsOf(w.year, w.month, w.day, w.hour, w.minute, w.second, 0);
 }
 
-/**
- * How far the zone is AHEAD of UTC at that instant, in milliseconds — negative west
- * of Greenwich, and DST-correct because it is measured at `atMs` rather than looked
- * up in a table that would be wrong twice a year.
- *
- * Measured against the whole SECOND containing `atMs`: `Intl` reports no sub-second
- * field, and some historical offsets are not whole minutes (Paris ran on
- * +00:09:21 mean time until 1911), so subtracting the raw millisecond value would fold the
- * instant's own fraction into the offset.
- */
+/** Zone offset AHEAD of UTC at `atMs`, ms (DST-correct: measured, not tabulated), against the
+ * whole containing SECOND: `Intl` has no sub-second field and old offsets aren't whole minutes. */
 function zoneOffsetMsAt(fmt: Intl.DateTimeFormat, atMs: number): number {
   return utcMsOfWall(wallInZone(fmt, atMs)) - Math.floor(atMs / 1000) * 1000;
 }
@@ -284,31 +194,9 @@ function wallKey(w: Wall): string {
 /** How far back to look for the offset in force BEFORE a transition. */
 const AMBIGUITY_PROBE_MS = 86_400_000;
 
-/**
- * The instant those wall-clock fields name **in `timeZone`** — how the "you may have
- * meant your own clock" alternative is computed for a date typed with no offset.
- *
- * `null` when the zone is unknown to the platform, or the result is out of range.
- * A wall-clock time that a DST jump skipped resolves the way the platform's own
- * offset lookup does; a repeated hour resolves to its first occurrence.
- *
- * ── Why three probes and not one ─────────────────────────────────────────────
- * Going wall-clock → instant is the hard direction: the answer depends on the offset,
- * and the offset depends on the answer. The standard fix is two passes — read the
- * offset at the UTC guess, apply it, read it again at the corrected guess — and two
- * passes settle every unambiguous case, because a zone transition is at most a couple
- * of hours wide.
- *
- * Two passes are not enough for the hour that DST gives back, though. On 25 October
- * 2026 Paris's 02:30 happens twice, and both passes probe *after* the transition, so
- * they converge on the second (standard-time) occurrence and never see the first.
- * A third probe a day earlier finds the pre-transition offset, and then the candidates
- * are FILTERED — a candidate counts only if the zone actually renders it back as the
- * wall clock we were asked about — and the earliest survivor wins. That filter is what
- * makes the skipped-hour case honest too: on 29 March 2026 Paris has no 02:30 at all,
- * every candidate is rejected, and the fallback is the platform's own settled offset
- * rather than a silently invented time.
- */
+/** The instant wall-clock fields name in `timeZone`; `null` for an unknown zone or out of range.
+ * Three offset probes (one a day earlier), filtered to candidates the zone renders back, earliest
+ * wins: a repeated DST hour gives its first occurrence, a skipped one the platform's offset. */
 export function civilInZone(civil: Civil, timeZone: string): Instant | null {
   const asUtc = instantFromCivilUtc(civil);
   if (asUtc === null) return null;
@@ -336,13 +224,7 @@ export function civilInZone(civil: Civil, timeZone: string): Instant | null {
   return { epochMs: at, nanos: asUtc.nanos };
 }
 
-/**
- * One way of reading a bare number: "if this is microseconds, it is …".
- *
- * `instant` is `null` when that reading falls outside the representable range —
- * which is the NORMAL case for three of the four readings of a 19-digit nanosecond
- * stamp, so it is a state to render, not an error.
- */
+/** One reading of a bare number; `instant` null (out of range) is a NORMAL state to render. */
 export interface EpochReading {
   unit: EpochUnit;
   /** Why this unit could be the one, in a sentence the panel prints verbatim. */
@@ -362,15 +244,8 @@ export interface NumericEpoch {
   normalized: string;
 }
 
-/**
- * Sign, digits with single `_` separators, an optional fraction, an optional unit.
- *
- * `\d(?:_?\d)*` rather than `[\d_]*` so a trailing or doubled separator is NOT
- * numeric: `1700000000_` is a typo, and reading it as a valid epoch would hide the
- * typo behind a plausible date. Both micro signs are listed because U+00B5 (MICRO
- * SIGN, what a keyboard emits) and U+03BC (GREEK SMALL LETTER MU, what a Go or Rust
- * program prints) are visually identical and both arrive on the clipboard.
- */
+/** `\d(?:_?\d)*` so a trailing or doubled `_` is a typo, not numeric. Both micro signs (U+00B5
+ * from keyboards, U+03BC from program output) are accepted. */
 const NUMERIC_RE = /^([+-]?)(\d(?:_?\d)*)(?:\.(\d(?:_?\d)*))?\s*(s|ms|us|µs|μs|ns)?$/i;
 
 /** Typed suffix (lower-cased) → the unit it names. */
@@ -383,13 +258,8 @@ const SUFFIX_UNIT: Readonly<Record<string, EpochUnit>> = {
   ns: "ns",
 };
 
-/**
- * The digit-count heuristic, in the words the panel prints.
- *
- * Every boundary is the same moment — 10^11 seconds, 10^14 milliseconds and 10^17
- * microseconds are all the year 5138 — which is why one rule can sort all four units
- * and why it will not need revisiting in anyone's career.
- */
+/** The digit-count rule as printed. Every boundary is the same moment (10^11 s = 10^14 ms = 10^17
+ * µs, year 5138), so one rule sorts all four units. */
 const DIGIT_RULE_TEXT: Readonly<Record<EpochUnit, string>> = {
   s: "11 or fewer digits reads as seconds",
   ms: "12 to 14 digits reads as milliseconds",
@@ -410,29 +280,9 @@ function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-/**
- * Read a bare number as an epoch, or return `null` when the input is not numeric at
- * all (so the caller can try to parse it as a date string instead).
- *
- * Accepts: optional sign, `_` digit separators, an optional fractional part, and an
- * optional unit suffix (`s`, `ms`, `us`, `µs`, `ns`, case-insensitive, with or
- * without a space). Anything else is not numeric.
- *
- * **Unit detection, when no suffix was typed**, by the digit count of the integer
- * part — the standard heuristic, chosen because each boundary sits at the year 5138:
- * ≤11 digits → seconds, ≤14 → milliseconds, ≤17 → microseconds, more → nanoseconds.
- * `because` states the rule that fired, because a guess the user cannot see is a
- * guess they cannot correct.
- *
- * Leading zeros do not count — `01700000000` is ten significant digits and a seconds
- * epoch, not eleven digits of something else.
- *
- * All four readings are computed every time, and each is scaled with `BigInt` from
- * the digit STRING. Nothing here ever goes through `Number()`: `1700000000123456789`
- * is 2^53-and-then-some, and the one number this tool exists to read correctly is
- * exactly the one that `Number()` corrupts. Fractional digits finer than a nanosecond
- * are floored away, in the same direction (toward the past) as everything else.
- */
+/** Read a bare number as an epoch, or `null` when not numeric (the caller then tries a date).
+ * Without a suffix the unit comes from significant integer digits (≤11 s, ≤14 ms, ≤17 µs, else
+ * ns). All via `BigInt` from the digit STRING, never `Number()`; sub-ns digits are floored. */
 export function parseNumericEpoch(raw: string): NumericEpoch | null {
   const m = NUMERIC_RE.exec(raw.trim());
   if (m === null) return null;
@@ -475,15 +325,8 @@ export function parseNumericEpoch(raw: string): NumericEpoch | null {
   };
 }
 
-/**
- * The instant's epoch in one unit, as an exact decimal string.
- *
- * A string, not a number: `1700000000123456789` is not representable as a `number`,
- * and this value's whole purpose is to be copied and pasted somewhere else. Sub-unit
- * precision that the unit cannot hold is TRUNCATED toward the past (floor), matching
- * how every epoch is a floor of the instant it names — so one nanosecond before 1970
- * is `-1` seconds, the second it is inside, and never `0`.
- */
+/** The epoch in `unit` as an exact decimal string (a `number` can't hold it), floored: 1 ns
+ * before 1970 is `-1` seconds, never `0`. */
 export function epochIn(instant: Instant, unit: EpochUnit): string {
   return floorDiv(nanosOf(instant), NANOS_PER[unit]).toString();
 }
@@ -552,26 +395,16 @@ function utcWall(epochMs: number): Wall {
   };
 }
 
-/**
- * `Mon, 15 Jun 2026 · 07:12:34`.
- *
- * The weekday is DERIVED from the fields rather than read from `Intl`: a wall clock
- * plus a weekday is redundant information, and asking two different sources for it
- * is how a UI ends up claiming that Monday the 15th was a Tuesday.
- */
+/** `Mon, 15 Jun 2026 · 07:12:34`. The weekday is derived from the fields, never asked of a
+ * second source that could disagree. */
 function formatWall(w: Wall): string {
   const weekday = WEEKDAYS[new Date(utcMsOfWall(w)).getUTCDay()];
   const date = `${pad2(w.day)} ${MONTHS[w.month - 1]} ${formatYear(w.year)}`;
   return `${weekday}, ${date} · ${pad2(w.hour)}:${pad2(w.minute)}:${pad2(w.second)}`;
 }
 
-/**
- * `UTC+02:00` / `UTC-03:30` / `UTC`.
- *
- * Rounded to whole minutes. Modern offsets are all whole minutes; the ones that are
- * not are pre-1900 local mean times (Paris's +00:09:21), where the seconds are an
- * artefact of a town clock rather than information anybody wants in this field.
- */
+/** `UTC+02:00` / `UTC-03:30` / `UTC`, rounded to whole minutes (only pre-1900 mean times have
+ * seconds). */
 function formatOffset(offsetMs: number): string {
   const minutes = Math.round(offsetMs / 60_000);
   if (minutes === 0) return "UTC";
@@ -580,17 +413,8 @@ function formatOffset(offsetMs: number): string {
   return `UTC${sign}${pad2(Math.floor(abs / 60))}:${pad2(abs % 60)}`;
 }
 
-/**
- * The ISO 8601 form, widened only as far as the instant actually goes: milliseconds
- * normally, six digits when there are microseconds, nine when there are nanoseconds.
- * Padding every timestamp out to nine digits would make `.000000000` the most common
- * thing on screen and bury the digits that matter.
- *
- * `toISOString` supplies the calendar part, including the expanded-year form for
- * anything outside 0000–9999 (`+275760-09-13T…`, `-000001-…`) — a format worth
- * inheriting rather than re-deriving. The sub-millisecond digits are ours, because
- * `Date` does not have them.
- */
+/** ISO 8601 widened only as far as the instant goes (ms, µs or ns digits); `toISOString`
+ * supplies the calendar part, expanded years included. */
 function isoOf(instant: Instant): string {
   const base = new Date(instant.epochMs).toISOString();
   if (instant.nanos === 0) return base;
@@ -614,12 +438,8 @@ function zoneReading(epochMs: number, timeZone: string): { name: string; wall: W
   };
 }
 
-/**
- * Render an instant. `now` drives {@link relativeTo}; `timeZone` is an IANA zone id
- * (the panel passes the host's). An unknown zone degrades to UTC rather than
- * throwing — a converter that dies because a machine has an odd zone is worse than
- * one that says UTC.
- */
+/** Render an instant; `now` drives {@link relativeTo}. An unknown IANA `timeZone` degrades to
+ * UTC rather than throwing. */
 export function viewInstant(instant: Instant, opts: { now: number; timeZone: string }): InstantView {
   const zone = zoneReading(instant.epochMs, opts.timeZone);
   return {
@@ -647,20 +467,8 @@ const MONTH_MS = 2_629_800_000;
 /** 365.25 days. The Julian year, for the same reason: the two must be consistent. */
 const YEAR_MS = 31_557_600_000;
 
-/**
- * The scale ladder: use `ms` as the divisor while `|Δ|` is under `limit`.
- *
- * Each `limit` is exactly the next scale's unit, which is what makes the floor below
- * safe: the smallest `|Δ|` that reaches a rung is one whole unit of that rung, so no
- * rung can ever print `0`, and every rung can print `1`. That is the property the
- * commonly-copied ladder (45s / 90min / 36h / 30d) does NOT have — under it the
- * smallest value on the "hours" rung is 90 minutes, which floors to 1 but rounds to
- * 2, "1 day ago" is unreachable, and there is a window where the honest answer is
- * "12 months". The rungs below are boring and always true: `2 hours ago` means at
- * least two hours have passed, at every scale.
- *
- * Years is the open-ended rung and therefore has no `limit`; see {@link relativeTo}.
- */
+/** Divide by `ms` while `|Δ|` < `limit`. Each `limit` is the next rung's unit, so no rung prints
+ * `0` and every rung can print `1` ("2 hours ago" means at least two). Years has no limit. */
 const SCALES: readonly { limit: number; ms: number; noun: string }[] = [
   { limit: MINUTE_MS, ms: SECOND_MS, noun: "second" },
   { limit: HOUR_MS, ms: MINUTE_MS, noun: "minute" },
@@ -669,17 +477,8 @@ const SCALES: readonly { limit: number; ms: number; noun: string }[] = [
   { limit: YEAR_MS, ms: MONTH_MS, noun: "month" },
 ];
 
-/**
- * `just now` / `42 seconds ago` / `in 3 days` / `2 years ago`.
- *
- * Bidirectional on purpose (an epoch converter is asked about the future as often as
- * the past), and singular/plural is real English. The scale boundaries are pinned by
- * tests, not by feel — see {@link SCALES} for the ladder and why it is that one.
- *
- * Anything within a second either way is `just now`, which is also how the sign stops
- * mattering at the point where it stops being meaningful. The instant's sub-millisecond
- * part is deliberately ignored: no phrasing here has the resolution to show it.
- */
+/** `just now` (within a second) / `42 seconds ago` / `in 3 days`: bidirectional, real plurals;
+ * the ladder is {@link SCALES}. Sub-millisecond parts are ignored. */
 export function relativeTo(instant: Instant, nowMs: number): string {
   const delta = nowMs - instant.epochMs;
   const abs = Math.abs(delta);

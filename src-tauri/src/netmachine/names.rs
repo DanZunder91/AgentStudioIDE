@@ -1,12 +1,6 @@
-//! App names for the Whole Mac table from each pid's **executable**. nettop truncates
-//! process names (`Google Chrome H`) and Claude Code installs as
-//! `…/claude/versions/2.1.281`, whose basename is only a version number — a row would be
-//! called `2.1.272`. So the name comes from the executable path when we can read it (macOS
-//! `proc_pidpath`, Linux `/proc/<pid>/exe`; no permission either way), and from the
-//! backend's own name when we cannot.
-//!
-//! [`display_name`] is pure and table-tested on every OS; [`NameCache`] takes the lookup
-//! as a function, so the cache and its pid-reuse rule are tested without real processes.
+//! App names from each pid's executable (nettop truncates, and Claude Code's binary is named by
+//! version), else the backend's name. [`display_name`] is pure; [`NameCache`] takes the lookup
+//! as a function so its pid-reuse rule is tested without real processes.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -19,15 +13,8 @@ pub fn no_lookup() -> ExeLookup {
     Arc::new(|_| None)
 }
 
-/// The name for an executable path:
-/// - `…/claude/versions/<version>` → `claude <version>` (Claude Code's installer layout);
-/// - otherwise the basename, untruncated — for a macOS bundle
-///   `…/Google Chrome.app/Contents/MacOS/Google Chrome Helper` that is `Google Chrome Helper`.
-///
-/// A Windows path (`C:\Program Files\Git\cmd\git.exe`) splits on `\` too and loses its
-/// `.exe`, so the same program has the same name on every OS.
-///
-/// `None` for a path with no usable basename.
+/// Name for an executable path: `…/claude/versions/<v>` → `claude <v>`, else the untruncated
+/// basename (`\` splits too and `.exe` is dropped, so names match across OSes). `None` if empty.
 pub fn display_name(path: &str) -> Option<String> {
     let parts: Vec<&str> = path.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
     let base = super::wintable::strip_exe(parts.last()?);

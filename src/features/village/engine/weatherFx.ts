@@ -1,23 +1,6 @@
-/**
- * WeatherFx — rain, snow, splashes and lightning, in WORLD px.
- *
- * Every drop is aimed at an OUTDOOR landing spot inside the visible world rect and
- * falls towards it (slanted by the wind); when it lands it leaves a short-lived
- * splash and is recycled at the top of a new fall. Interiors stay dry twice over:
- * a drop never targets an indoor spot, and any particle whose position (or, for
- * rain, the top of its streak) is indoors is left out of `particles()` that frame.
- *
- * Deterministic (seeded mulberry32 — same seed + same inputs ⇒ same particles) and
- * allocation-free in steady state: a fixed pool of MAX_PARTICLES objects is reused
- * and `particles()` returns the same array every frame.
- *
- * Rain streak convention for the renderer: a rain particle is drawn from (x, y) up to
- * (x − rainSlant(wind)·size, y − size).
- *
- * Seen from the side (the city), most landing spots are open sky: `update`'s optional
- * `ground` test says which spots are ground (a street, a roof), and a drop that ends
- * anywhere else simply ends — no splash ring hanging in mid-air.
- */
+/** Weather in WORLD px, seeded and allocation-free (pooled; `particles()` reuses one array).
+ * Interiors stay dry: drops target outdoor spots only, indoor particles are left out. Off-`ground`
+ * drops end with no splash. Rain streak: (x, y) up to (x − rainSlant(wind)·size, y − size). */
 
 import type { Ambience, WeatherKind, WeatherParticle } from "../villageTypes";
 import { mulberry32, range, type Rng } from "./rng";
@@ -181,11 +164,8 @@ export class WeatherFx {
     return Math.min(MAX_DROPS, Math.round((px / AREA_PER_DROP) * spec.density * k));
   }
 
-  /**
-   * (Re)start drop `p` on a fresh fall towards an outdoor landing spot in `area`.
-   * `midFall` places it part-way down (filling the sky at once instead of a curtain
-   * sweeping in from the top). False when no outdoor spot was found.
-   */
+  /** (Re)aim drop `p` at an outdoor spot in `area`; `midFall` starts it part-way down (fills the
+   * sky at once). False when no outdoor spot was found. */
   private aim(p: P, spec: Spec, area: Area, indoors: Indoors, vx: number, midFall: boolean): boolean {
     let gx = 0;
     let gy = 0;

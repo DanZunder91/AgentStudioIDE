@@ -1,13 +1,6 @@
-/**
- * Netcap IPC — the ONE `invoke`/`listen` seam of the Network view.
- *
- * Feature-local (not `app/ipc.ts`) so the wire types live next to their feature. Nothing here
- * swallows — a failed call is information the panel
- * shows, so rejections pass straight through to the store.
- *
- * Command names and argument shapes are pinned by `netcapIpc.test.ts`; they mirror
- * the Rust `netcap` commands exactly.
- */
+/** The one `invoke`/`listen` seam of the Network view, feature-local so wire types sit with it.
+ * Nothing swallows: rejections reach the store, which shows them. Names mirror the Rust `netcap`
+ * commands exactly and are pinned by `netcapIpc.test.ts`. */
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -21,10 +14,8 @@ export function netcapStatus(): Promise<NetcapStatus> {
   return invoke<NetcapStatus>("netcap_status");
 }
 
-/**
- * Change capture/decrypt. Only the keys present in `patch` are sent, so Rust's
- * `Option<bool>` args see "absent" rather than a `false` the user never chose.
- */
+/** Only keys present in `patch` are sent, so Rust's `Option<bool>` args see "absent", not a
+ * `false` the user never chose. */
 export function netcapSet(patch: NetcapPatch): Promise<NetcapStatus> {
   const args: Record<string, boolean> = {};
   if (patch.enabled !== undefined) args.enabled = patch.enabled;
@@ -33,10 +24,8 @@ export function netcapSet(patch: NetcapPatch): Promise<NetcapStatus> {
   return invoke<NetcapStatus>("netcap_set", args);
 }
 
-/**
- * Opt one app in to (or out of) HTTPS decryption. `app` is the name the
- * capture guide shows — the `.app` bundle name, else the executable name.
- */
+/** Per-app HTTPS decryption opt-in. `app` is the name the capture guide shows: the `.app` bundle
+ * name, else the executable name. */
 export function netcapSetAppDecrypt(app: string, on: boolean): Promise<NetcapStatus> {
   return invoke<NetcapStatus>("netcap_set_app_decrypt", { app, on });
 }

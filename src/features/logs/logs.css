@@ -1,7 +1,4 @@
-/* ── Diagnostics log overlay ─────────────────────────────────────────────────
-   A right-docked panel over a dimming backdrop — a calm dark feed of the event /
-   status / error stream. Theme vars from App.css (same vocabulary as RailTabs /
-   the shortcuts overlay). */
+/* ── Diagnostics log: a right-docked panel over a dimming backdrop; App.css theme vars ── */
 
 .logs-backdrop {
   position: fixed;

@@ -1,12 +1,6 @@
-// src/lib/language/tables.ts
-//
-// Detection tables (exact filenames, filename prefixes, extensions, compound
-// extensions, ambiguous-extension resolvers, and shebang interpreters).
-//
-// Data values are derived from GitHub Linguist (`languages.yml` /
-// `heuristics.yml`) and the `linguist-languages` npm package, both MIT-licensed.
-// The `LanguageId` id *strings* are original to this project. See
-// docs/design/language-detection.md §§8–10 for the source of truth.
+// Detection tables. Values derive from GitHub Linguist (`languages.yml`, `heuristics.yml`) and
+// `linguist-languages` (both MIT); the `LanguageId` strings are our own. Source of truth:
+// docs/design/language-detection.md §§8–10.
 
 import type { LanguageId } from './ids';
 
@@ -43,10 +37,8 @@ export const EXACT_FILENAMES: Record<string, LanguageId> = {
   'jenkinsfile': 'groovy', 'procfile': 'yaml', 'nginx.conf': 'nginx',
 };
 
-/**
- * Prefix rules (lowercased basename startsWith). Checked after EXACT_FILENAMES.
- * Order matters: first match wins, so keep specific prefixes above generic ones.
- */
+/** Lowercased-basename prefix rules, checked after EXACT_FILENAMES. First match wins: keep
+ * specific prefixes above generic ones. */
 export const FILENAME_PREFIXES: ReadonlyArray<readonly [string, LanguageId]> = [
   ['dockerfile.', 'dockerfile'],   // Dockerfile.prod, Dockerfile.dev
   ['.env.', 'dotenv'],             // .env.local, .env.production

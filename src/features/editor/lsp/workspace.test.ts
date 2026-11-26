@@ -1,11 +1,5 @@
-/**
- * `AgentStudioWorkspace.displayFile` — where cross-file go-to-definition lands — and tab
- * tear-off: a definition in a file another OS window holds brings THAT window forward, and
- * this window must not build its own buffer for the file just to hand the LSP client a view
- * (a second copy of a file the other window is the writer of).
- *
- * The registry is mocked at its module boundary; the store and its open router are real.
- */
+/** A file another OS window holds is that window's to write: this window must not open a buffer
+ * for it just to hand the LSP client a view. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

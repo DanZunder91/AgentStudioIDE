@@ -1,15 +1,5 @@
-/**
- * useLaunchAgent — the one place an agent is started in a folder.
- *
- * Every launch surface (the rail header `+` picker, the ⚡ quick-launch, a
- * folder header's `+`, the session picker's "recover") funnels through
- * here so they cannot drift:
- *   - record the folder as recent, in the store (immediate) AND in Rust
- *     (persisted `push_recent_project`), so ⚡ and folder ordering track usage;
- *   - create the agent in that folder.
- *
- * The Rust push is best-effort — a failure must not stop the agent launching.
- */
+/** The one place an agent is started in a folder, for every launch surface: records the folder
+ * as recent (store now, Rust best-effort) and creates the agent there. */
 
 import { useCallback } from "react";
 
@@ -20,22 +10,12 @@ import { pushRecentProject } from "./fleetIpc";
 
 /** Optional launch modifiers. Plain launches pass nothing. */
 export interface LaunchAgentOptions {
-  /**
-   * Resume an existing Claude session instead of starting fresh ("Recover
-   * session"). Forwarded to `agent_spawn` via the registry's
-   * pre-registration seam — see the note on `SpawnOptionsWithResume`.
-   */
+  /** Resume this Claude session; reaches `agent_spawn` via `SpawnOptionsWithResume`. */
   resumeSessionId?: string;
 }
 
-/**
- * `TerminalSpawnOptions` plus the resume key.
- *
- * `configureTerminal` STORES the key (it merges options verbatim) and
- * `openAgentPty` passes `resumeSessionId: spawn.resumeSessionId` to
- * `spawnAgent`. `TerminalSpawnOptions` declares the optional field itself, so
- * this alias is redundant-but-identical; it keeps the call typed either way.
- */
+/** `configureTerminal` stores the key and `openAgentPty` forwards it to `spawnAgent`. Identical to
+ * `TerminalSpawnOptions` (which has the field), but keeps the call typed either way. */
 type SpawnOptionsWithResume = TerminalSpawnOptions & { resumeSessionId?: string };
 
 export function useLaunchAgent(): (cwd: string, opts?: LaunchAgentOptions) => AgentId {
@@ -51,12 +31,8 @@ export function useLaunchAgent(): (cwd: string, opts?: LaunchAgentOptions) => Ag
       const agentId = createAgent({ cwd });
       const resumeSessionId = opts?.resumeSessionId;
       if (resumeSessionId) {
-        // Merge the resume key into the spawn options `createAgent` just
-        // pre-registered (an agent terminal's TerminalId IS its AgentId, and
-        // `configureTerminal` merges `{...previous, ...opts}`). Ordering is
-        // safe by construction: the PTY opens lazily when <TerminalView>
-        // first mounts — strictly after this synchronous handler — so the
-        // merge always lands before `agent_spawn` fires.
+        // Merged into the options `createAgent` pre-registered (TerminalId = AgentId). Safe:
+        // the PTY opens when <TerminalView> first mounts, after this synchronous handler.
         const patch: SpawnOptionsWithResume = { resumeSessionId };
         configureTerminal(asTerminalId(agentId), patch);
       }

@@ -1,17 +1,5 @@
-/**
- * The classifier seam (two fully-covered halves do not add up to a working
- * feature; test the seam explicitly).
- *
- * `instant.ts` and `dateParse.ts` each have their own exhaustive suites. What is
- * asserted HERE is only what `parseToolInput` itself decides:
- *
- *  1. **Numeric wins.** Every digit string is a valid epoch, so `20260615` must be
- *     1970-08-23 in seconds — NOT 15 June 2026. This is the one ordering decision in
- *     the file, and it is the one a future refactor is most likely to flip.
- *  2. Empty is a state, not an error.
- *  3. A date-SHAPED string that is not a real date keeps its own reason; only a
- *     string that is not date-shaped at all falls back to the generic list.
- */
+/** Only what `parseToolInput` decides: numeric wins (`20260615` is 1970-08-23 in seconds),
+ * empty is a state, and a date-shaped non-date keeps its own reason. */
 
 import { describe, expect, it } from "vitest";
 

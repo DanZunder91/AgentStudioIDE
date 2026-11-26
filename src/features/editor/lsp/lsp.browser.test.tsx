@@ -1,13 +1,4 @@
-/**
- * Layer 5 (testing-strategy §1) — go-to-definition end to end, in Chromium.
- *
- * A deterministic **fake rust-analyzer** speaks Content-Length-free JSON-RPC over
- * the mocked `lsp_start`/`lsp_send` + the per-server Channel — a fake stub server,
- * no real toolchain. It drives the REAL `LSPClient`,
- * Workspace, and definition navigation through real CodeMirror 6, proving:
- * open→didOpen, F12→definition→jump, the -32801 indexing retry, and the calm
- * install hint when the server is absent.
- */
+/** Go-to-definition end to end in Chromium, against a fake rust-analyzer over the mocked relay. */
 
 import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

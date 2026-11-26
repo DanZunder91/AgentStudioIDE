@@ -1,11 +1,5 @@
-/**
- * Helpers for the gazelle-like scenario (e2e/specs/gazelle-like*.e2e.ts; docs/design/testing-strategy.md
- * "gazelle-like scenario"): start the Rust fixture in an IDE terminal the way a realistic Rust
- * service is run, run the fake agent in another, and — for the hermetic spec — a LOCAL TLS upstream the
- * fixture trusts through one extra test root (never the IDE's CA).
- *
- * Reads the shared real-service helpers; owns nothing in them.
- */
+/** Gazelle-like helpers (docs/design/testing-strategy.md): the Rust fixture, the fake agent, and a
+ * local TLS upstream it trusts via one extra test root, never the IDE's CA. */
 
 import { $, browser, expect } from "@wdio/globals";
 import { execFileSync } from "node:child_process";
@@ -28,12 +22,8 @@ export const GAZELLE_DIR = "../gazelle-like";
 /** The local TLS upstream of the hermetic spec. */
 export const TLS_UPSTREAM_PORT = 47830;
 
-/**
- * Where the fixture writes its log file. NOT in the repo: under Docker Desktop the bind-mounted repo
- * is a virtiofs share, and the kernel reports an open file there as `/run/host_virtiofs/<host path>`
- * — a path that does not exist inside the container, so Stream failed with ENOENT (an
- * artefact of the E2E's mount, not of a real Mac). A container-native dir avoids it.
- */
+/** Not in the repo: Docker Desktop's virtiofs mount reports open files at host paths that do not
+ * exist in the container, so Stream would fail with ENOENT. */
 export const GAZELLE_LOG_DIR = "/tmp/gazelle-like";
 
 /** The shell line that runs the fixture in the foreground of an IDE terminal (its cwd = its own dir). */
@@ -124,12 +114,8 @@ export interface TlsUpstream {
   stop: () => void;
 }
 
-/**
- * A local HTTPS server on `localhost:<port>` with a certificate from a throwaway test CA (made
- * here with the image's `openssl`, in a temp dir, deleted on stop — no key is ever committed).
- * Every response carries `Connection: close`, so each call is one connection and its tunnel row
- * CLOSES (shows `closed` + final bytes) instead of idling in a pool.
- */
+/** Throwaway test CA made with openssl in a temp dir (no key committed). `Connection: close` makes
+ * each call one connection, so its tunnel row closes instead of idling in a pool. */
 export function startTlsUpstream(port = TLS_UPSTREAM_PORT): Promise<TlsUpstream> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gl-tls-"));
   const p = (f: string): string => path.join(dir, f);
@@ -182,11 +168,7 @@ async function terminalIdList(): Promise<string[]> {
   );
 }
 
-/**
- * Launch an agent with the left rail's ⚡ quick-launch, its stub `claude` running the fake agent
- * (`fake-agent.sh [--external]`). Returns the agent's terminal (id = its agent id) and tab title.
- * The trigger file is removed as soon as the agent is up, so no later agent in the run is affected.
- */
+/** The trigger file is removed once the agent is up, so no later agent in the run is affected. */
 export async function launchFakeAgent(opts: { external?: boolean } = {}): Promise<OpenedTerminal> {
   fs.rmSync(AGENT_OUT, { force: true });
   const args = opts.external ? " --external" : "";
@@ -218,11 +200,8 @@ export function clearFakeAgentTrigger(): void {
   fs.rmSync(AGENT_TRIGGER, { force: true });
 }
 
-/**
- * What the fake agent printed. An AGENT terminal's PTY output is deliberately not in the log hub
- * (Claude's TUI redraws are noise), and under WebGL its screen is a canvas — so the agent tees its
- * output to this file (same container as the runner). The screenshot shows the same text on screen.
- */
+/** Agent PTY output stays out of the log hub and its WebGL screen is a canvas, so the fake agent
+ * tees its output to this file. */
 const AGENT_OUT = path.join(os.tmpdir(), "agentstudio-e2e-agent.out");
 export function fakeAgentOutput(): string {
   try {

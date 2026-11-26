@@ -1,26 +1,6 @@
-//! Native macOS application menu.
-//!
-//! The default Tauri menu binds **Cmd+W** to "Close Window", which closes the app.
-//! We want Cmd+W to close the active *tab* (terminal / editor) instead — like a
-//! browser or VS Code. So on macOS we install a custom menu whose Window submenu
-//! carries a **"Close Tab"** item on Cmd+W that emits [`CLOSE_TAB_EVENT`]; the
-//! frontend listens for it and closes the focused pane's active tab. (The native
-//! menu accelerator fires *before* the webview, so a JS keydown listener alone can
-//! never intercept Cmd+W on macOS — the menu is the only reliable hook.)
-//!
-//! On non-macOS the default menu is left untouched: there is no native Cmd+W
-//! accelerator to fight, so the webview receives Ctrl+W and the frontend handles it
-//! with a keydown listener.
-//!
-//! **Best-effort:** any failure here logs and leaves the default menu in place — a
-//! menu problem must never block app startup.
-//!
-//! **One window, not all of them** (tab tear-off, docs/design/tab-tearoff.md §4.4). The
-//! macOS menu is app-wide and its event carries no window, so a plain `emit` reached every
-//! window and one Cmd+W closed a tab in each. The event now goes to the FOCUSED window
-//! only ([`close_tab_target`]) — and the page listens with its own label as the target,
-//! because a JS listener left on the default `Any` target receives every `emit_to`
-//! whatever its label says (tauri `event/listener.rs` `match_any_or_filter`).
+//! macOS app menu: Cmd+W is "Close Tab" ([`CLOSE_TAB_EVENT`]), since the native accelerator
+//! fires before the webview; other OSes keep the default. Best-effort: failure keeps the default.
+//! Sent to the FOCUSED window only; pages listen on their own label (`docs/design/tab-tearoff.md`).
 
 /// The event emitted when the "Close Tab" menu item (Cmd+W) is triggered. The
 /// frontend (`src/features/shortcuts/CloseTabShortcut.tsx`) listens for it.

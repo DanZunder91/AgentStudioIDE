@@ -1,7 +1,4 @@
-/* ── Find in terminal ──────────────────────────────────────────────────────────
-   IntelliJ-style search bar floating over the terminal's top-right corner.
-   Same look as the Find-in-Files bar (`features/find/find.css`): theme
-   variables from App.css, mono font, accent focus ring. */
+/* ── Find in terminal ── floating bar, same look as Find in Files (`features/find/find.css`). */
 
 .terminal-search {
   position: absolute;

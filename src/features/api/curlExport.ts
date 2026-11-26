@@ -1,35 +1,6 @@
-/**
- * curlExport — turn the API client's current request into a paste-ready `curl`
- * command (a Postman-style copy-as-curl). This is the exact
- * inverse of `curlParse.ts`: whatever this builds, `parseCurl` must read back
- * unchanged — the round-trip is tested against the REAL parser, not a copy of
- * its rules.
- *
- * 🔴 Secret-safety: `resolve` splices real environment values into
- * the output, so the returned string can carry live secrets. It exists for the
- * CLIPBOARD, and only the clipboard — never call this on a persistence path.
- * Saved collections keep `{{VAR}}` literal; this module must never feed them.
- *
- * Shell safety is the whole job. Every value rides inside single quotes, where
- * bash and zsh treat EVERYTHING as literal — `$`, backticks, newlines, unicode,
- * and `!` (history expansion does not fire inside single quotes). The one
- * character a single-quoted run cannot hold is the single quote itself, handled
- * with the classic `'\''` idiom: close the quoted run, emit one
- * backslash-escaped literal `'`, reopen. The output is ONE line — these get
- * pasted into terminals and chat windows, where a trailing-`\` line wrap
- * gets mangled — so no backslash-newline continuations are ever added. (A
- * newline INSIDE a quoted body is a different thing: legal shell, kept
- * verbatim.)
- *
- * Windows. None of that survives a Windows shell: PowerShell takes
- * `'…'` literally but then re-quotes native arguments by its own 5.1 rules, and
- * cmd.exe knows no single quotes at all; neither continues a line with `\`. So
- * the same request can also be written for cmd (`^"…^"`, carets) or PowerShell
- * (`curl.exe`, C-runtime quoting inside `'…'`) — see `buildCurl`'s `shell`. The
- * bash form is untouched, byte for byte; each Windows form round-trips through
- * `parseCurl` exactly like it, and was run for real (cmd.exe, Windows PowerShell
- * 5.1, System32 curl.exe) before its rules were written down.
- */
+/** Copy-as-curl, the exact inverse of `curlParse.ts` (round-trip tested against the real parser).
+ * `resolve` splices live secrets in: the output is for the CLIPBOARD only, never persistence.
+ * Always ONE line (pasted into terminals/chat); Windows forms via `buildCurl`'s `shell`. */
 
 /** The request parts the exporter needs — a structural slice of the editor's state. */
 export interface CurlableRequest {
@@ -52,22 +23,14 @@ interface CurlPlan {
   body: string | null;
 }
 
-/**
- * Wrap `s` so it pastes into bash/zsh verbatim-safe. Single quotes make every
- * character literal; an embedded `'` becomes `'\''`. `tokenizeCurl` reads that
- * idiom back as one token (quoted run + bare escape + quoted run), which is
- * what keeps the round-trip exact.
- */
+/** Single-quote for bash/zsh (all literal); an embedded `'` becomes `'\''`, which `tokenizeCurl`
+ * reads back as one token, keeping the round-trip exact. */
 function shellQuote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
-/**
- * The request as curl will be told it — resolved, filtered, method decided.
- *
- * Order matters: resolve FIRST, quote SECOND (in each renderer) — a resolved
- * secret containing a quote must land inside the quoting, not break out of it.
- */
+/** The request as curl will be told it. Resolve FIRST, quote SECOND (in each renderer), so a
+ * resolved secret containing a quote lands inside the quoting. */
 function planCurl(request: CurlableRequest, resolve: (text: string) => string): CurlPlan {
   // Uppercase to match curl convention AND `parseCurl`'s own normalisation, so
   // the round-trip is exact whatever the editor stored. An all-blank method is
@@ -75,10 +38,8 @@ function planCurl(request: CurlableRequest, resolve: (text: string) => string): 
   const method = request.method.trim().toUpperCase() || "GET";
   const body = request.body === null || request.body === "" ? null : resolve(request.body);
   return {
-    // `-X GET` is omitted for a plain GET — it is curl's default, and `parseCurl`
-    // infers GET when no body is present — EXCEPT when a GET carries a body:
-    // `--data` makes curl itself (and the parser's inference) switch to POST, so
-    // that one case must say `-X GET` out loud or the round-trip comes back POST.
+    // `-X GET` is omitted (curl's default; `parseCurl` infers it) unless a GET has a body: `--data`
+    // switches curl and the parser to POST, so the round-trip needs it said.
     method: method !== "GET" || body !== null ? method : null,
     url: resolve(request.url),
     headers: request.headers
@@ -105,36 +66,19 @@ function renderBash(p: CurlPlan): string {
   return parts.join(" ");
 }
 
-/**
- * curl globs `[ ] { }` in a URL — `?filter[a]=1` is a "bad range" error, and an
- * unresolved `{{VAR}}` a broken set — unless each is backslash-escaped, which curl
- * strips again before sending (DevTools escapes them the same way). The Windows
- * forms do this; the bash form still does not (a known gap in the bash shape).
- */
+/** curl globs `[ ] { }` in a URL unless backslash-escaped (it strips them before sending). The
+ * Windows forms escape; the bash form still does not (a known gap). */
 const globEscape = (url: string) => url.replace(/[[\]{}]/g, "\\$&");
 
-/**
- * The Microsoft C runtime's quoting for one argument: wrap in `"`, write each
- * literal quote as `quote`, and double a backslash run only where the runtime
- * reads it — right before a quote, or before the closing one. Everywhere else a
- * backslash is literal, so it is left alone (DevTools doubles every one, and the
- * server then receives two — measured).
- */
+/** Microsoft C runtime quoting: wrap in `"`, write each literal quote as `quote`, and double a
+ * backslash run only before a quote or the closing one (elsewhere a backslash is literal). */
 function crtQuote(s: string, quote: string): string {
   return `"${s.replace(/(\\*)"/g, `$1$1${quote}`).replace(/(\\+)$/, "$1$1")}"`;
 }
 
-/**
- * cmd.exe. The argument is C-runtime-quoted with `\"`, then every character cmd
- * could act on gets a `^` — the quotes included, so cmd never enters its own
- * quoted mode and every caret is honoured. Backslashes stay bare on purpose:
- * they mean nothing to cmd, and a bare one is how `parseCurl` tells our command
- * from DevTools' doubled `^\^\`. `%` before a name character is followed by a `^`
- * so `%PATH%` can never expand (DevTools' trick; verified live). A newline is `^`
- * plus TWO newlines: the first continues the line, the second is the escaped,
- * literal one. cmd cannot carry a CR at all — it deletes every one it reads — so a
- * CR becomes that newline (a textarea never produces one anyway).
- */
+/** cmd.exe: CRT-quoted with `\"`, then `^` before every char cmd could act on (quotes included).
+ * Bare backslashes tell ours from DevTools' `^\^\` for `parseCurl`; `%` gets a `^` (no expansion).
+ * A newline is `^` + two newlines; a CR becomes a newline (cmd deletes every CR). */
 function cmdQuote(value: string): string {
   return crtQuote(value.replace(/\r\n?/g, "\n"), '\\"')
     .replace(/[^\P{ASCII}a-zA-Z0-9\s_\-:=+~'/.,?;*\\]/gu, "^$&")
@@ -152,18 +96,9 @@ function renderCmd(p: CurlPlan): string {
   return parts.join(" ");
 }
 
-/**
- * What Windows PowerShell 5.1 must be handed so curl.exe receives exactly `value`.
- *
- * 5.1 wraps an argument in `"` when it holds whitespace after an even number of
- * quotes, never escapes what is inside, and drops an empty argument (all measured).
- *   • No quote, not empty: pass it as is. With whitespace 5.1 will wrap it, so a
- *     trailing backslash run is doubled to survive the closing quote it adds.
- *   • A quote, or empty: quote it ourselves, writing each literal quote as `""` (a
- *     literal quote inside quotes, to the C runtime). That keeps the quote count
- *     odd at every space — so 5.1 never adds a second pair — where `\"` would
- *     flip it and split the JSON at its first space.
- */
+/** Encode for Windows PowerShell 5.1 → curl.exe (rules measured): no quote and non-empty passes
+ * as is (trailing backslashes doubled if 5.1 will wrap it); otherwise self-quote with `""` per
+ * literal quote, keeping the quote count odd at every space so 5.1 never adds a second pair. */
 function legacyArg(value: string): string {
   if (value !== "" && !value.includes('"')) {
     return /\s/.test(value) ? value.replace(/(\\+)$/, "$1$1") : value;
@@ -171,17 +106,9 @@ function legacyArg(value: string): string {
   return crtQuote(value, '""');
 }
 
-/**
- * PowerShell. `curl.exe`, never `curl` — in a stock 5.1 window `curl` is an alias
- * for Invoke-WebRequest. Each value is `legacyArg`-encoded and then single-quoted
- * (`''` for a `'`), where PowerShell expands nothing: no `$`, no backtick.
- *
- * When any value needed that encoding, the command is wrapped in a scriptblock
- * that sets `$PSNativeCommandArgumentPassing = 'Legacy'` — scoped to the block,
- * ignored by 5.1, and what makes PowerShell 7.3+ pass the arguments the 5.1 way
- * instead of escaping our quotes a second time. (7.x is reasoned from its docs,
- * not run here: the VM has only 5.1.)
- */
+/** PowerShell: `curl.exe` (5.1 aliases `curl` to Invoke-WebRequest); values `legacyArg`-encoded,
+ * then single-quoted. If any needed encoding, a scriptblock sets `$PSNativeCommandArgumentPassing`
+ * to 'Legacy' so 7.3+ passes them the 5.1 way (7.x reasoned from docs, not run). */
 function renderPowerShell(p: CurlPlan): string {
   let legacy = false;
   const q = (value: string) => {
@@ -198,14 +125,9 @@ function renderPowerShell(p: CurlPlan): string {
   return legacy ? `& { $PSNativeCommandArgumentPassing = 'Legacy'; ${command} }` : command;
 }
 
-/**
- * Build a shell-safe curl command from `request`, written for `shell` (bash by
- * default — the only form before Windows, and still every call site's on macOS
- * and Linux). `resolve` is the send path's own `{{VAR}}` substitution, applied to
- * the url, header VALUES and body — never to header names: a `{{VAR}}` header name
- * is a config error, not a secret seam, and leaving it literal keeps the mistake
- * visible in the pasted command instead of silently exporting a wrong-named header.
- */
+/** Shell-safe curl for `shell` (default bash). `resolve` is the send path's `{{VAR}}` substitution,
+ * applied to url, header VALUES and body, never header names (a `{{VAR}}` name is a config error
+ * left visible in the pasted command). */
 export function buildCurl(
   request: CurlableRequest,
   resolve: (text: string) => string,

@@ -1,8 +1,4 @@
-/**
- * sortJsonKeys — the A/B compare key sorter. Every expectation is
- * a hand-written literal structure (an expectation derived from
- * the function's own output — or from a shared input table — proves nothing).
- */
+/** Every expectation is a hand-written literal: one derived from the output proves nothing. */
 
 import { describe, expect, it } from "vitest";
 

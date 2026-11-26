@@ -1,24 +1,6 @@
-/**
- * TerminalSearch — the IntelliJ-style find-in-terminal overlay.
- *
- * A small floating bar rendered by `<TerminalView>` in the terminal host's
- * top-right corner: query input, Cc / W / .* toggles, a live `k/N` counter,
- * ↑ ↓ navigation and ✕. All searching is delegated to the per-terminal
- * `@xterm/addon-search` instance the registry loaded (`getSearchAddon`) — the
- * addon searches the whole buffer including scrollback and keeps highlights
- * fresh as new output streams in (it re-runs on `onWriteParsed`).
- *
- * Keyboard contract (keyboard bugs here are FOCUS bugs):
- *   - the input is focused on mount and re-focused whenever `focusSignal`
- *     bumps (Cmd/Ctrl+F pressed while already open), and a non-null `seed`
- *     riding along with that bump replaces the query — the terminal's selection;
- *   - Enter / ↓ = next, Shift+Enter / ↑ = previous (the addon wraps natively);
- *   - Esc or ✕ = clear decorations, close, and hand focus BACK to the terminal
- *     (`term.focus()`), so the shell keeps typing without a click.
- *
- * Query + toggles persist per terminal in the registry (`searchUi`), so
- * reopening recalls the last search — and the state dies with the terminal.
- */
+/** Find overlay over a terminal; searching is delegated to its `@xterm/addon-search` (whole
+ * buffer, re-runs on new output). Esc/✕ clears decorations and returns focus to the terminal.
+ * Query and toggles persist per terminal in the registry (`searchUi`) and die with it. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -45,17 +27,10 @@ export interface TerminalSearchProps {
   terminalId: TerminalId;
   /** Close the overlay (unmounts this component). Focus is returned to the terminal first. */
   onClose: () => void;
-  /**
-   * Bump to re-focus + select the input while the overlay is already open —
-   * the "Cmd/Ctrl+F pressed again" IntelliJ affordance.
-   */
+  /** Bump to re-focus and select the input while already open (Cmd/Ctrl+F pressed again). */
   focusSignal?: number;
-  /**
-   * What the terminal had selected when Cmd/Ctrl+F was pressed, already passed
-   * through `selectionSeed`'s rule; `null` means "leave the query alone" (no
-   * selection, or a multi-line one). Applied on every `focusSignal` bump, so it
-   * overwrites an already-open bar exactly as VS Code does.
-   */
+  /** The selection at Cmd/Ctrl+F after `selectionSeed`'s rule; `null` leaves the query alone.
+   * Applied on every `focusSignal` bump, overwriting an open bar as VS Code does. */
   seed?: string | null;
 }
 
@@ -80,24 +55,9 @@ export function TerminalSearch({
    *  after typing runs ONE search, not two (which would skip a match). */
   const debounceRef = useRef<number | null>(null);
 
-  /**
-   * The selection seed, applied DURING RENDER — React's documented "adjust state
-   * when a prop changes" pattern, the same one `ResultsGrid` and `ResponseBody`
-   * use, keyed on the press counter so one Cmd/Ctrl+F seeds exactly once.
-   *
-   * 🔴 Not an effect, and the difference is visible: an effect would land the
-   * seed one render late, so the focus effect below would `select()` the OLD
-   * value and React's following `node.value = …` assignment would collapse the
-   * selection to the caret — a seeded query the user cannot type over, which is
-   * the whole affordance. Seeding in render means the committed DOM already
-   * carries the query when `select()` runs, and the debounced search effect
-   * fires ONCE, with the seed.
-   *
-   * `setQuery` is the SAME call the input's onChange makes, so a seeded search
-   * and a typed one are one code path — there is deliberately no second "apply
-   * the query" route (the bar must actually search for what was selected, not
-   * merely display it).
-   */
+  /** Seeded during render (keyed on the press counter), not in an effect: an effect lands a
+   * render late, so `select()` would hit the old value and the selection collapse. `setQuery` is
+   * the same call as typing: one search path. */
   const [seededFor, setSeededFor] = useState<number | null>(null);
   if (seededFor !== focusSignal) {
     setSeededFor(focusSignal);

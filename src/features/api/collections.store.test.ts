@@ -1,11 +1,5 @@
-/**
- * Store-level coverage for the Collections + save-name actions that
- * the component tests don't reach: protocol snapshotting on save, protocol restore on
- * open (incl. the legacy no-protocol → HTTP default), and the guard branches of
- * openSavedRequest / confirmSaveRequestName / cancelSaveRequestName.
- *
- * `apiStoreIpc` is mocked because save actions persist across the Tauri boundary.
- */
+/** Store coverage the component tests miss: protocol snapshot on save, restore on open (legacy
+ * no-protocol → HTTP), save-name guard branches. `apiStoreIpc` is mocked (saves cross Tauri). */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -247,10 +241,8 @@ describe("folder actions — the commands", () => {
         store({ folders: ids.map((id, i) => ({ id, name: id.toUpperCase(), order: i })) }),
       ),
     );
-    // "Drop C onto A" → C lands immediately BEFORE A. That is `moveBefore`'s contract,
-    // asserted here on the real ordering the shared primitive produces rather than on
-    // a copy of it (an expectation derived from the code under test
-    // would only prove the call happened).
+    // `moveBefore`'s contract: C lands right BEFORE A; asserted on the real primitive's output,
+    // not a copy derived from the code under test.
     await api().moveApiFolder("c", "a");
     expect(apiStoreIpc.reorderApiFolders).toHaveBeenCalledWith(["c", "a", "b"]);
 

@@ -1,11 +1,4 @@
-/**
- * CollectionsPanel — the right rail's saved-request library.
- *
- * `apiStoreIpc` is mocked at the module boundary (load + persist cross Tauri). Under
- * test: hydrate-on-mount (+ skip/cancelled guards), the empty state, protocol-aware
- * rows (HTTP method / WS / gRPC badges + subtitles), that clicking a row OPENS it in
- * a new tab restored to the saved protocol and titled by name, and delete.
- */
+/** CollectionsPanel with `apiStoreIpc` mocked at the module boundary (load/persist cross Tauri). */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -576,12 +569,8 @@ describe("CollectionsPanel — folders", () => {
 });
 
 describe("CollectionsPanel — a drag whose payload type is present but EMPTY", () => {
-  /**
-   * A `dataTransfer` can carry a type with an empty value — this app does it on
-   * purpose for the self-drop marker (`apiFolderIdType`). So "the type is in the
-   * list" is not the same as "there is an id here", and acting on the empty string
-   * would file a request under `""` or reorder a folder that does not exist.
-   */
+  /** A `dataTransfer` type can carry an empty value (our `apiFolderIdType` marker); acting on ""
+   * would file a request under `""` or reorder a missing folder. */
   const renderWith = async (s: ApiStore) => {
     act(() => {
       useAppStore.getState().apiActions.hydrateApiStore(s);

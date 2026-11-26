@@ -1,46 +1,6 @@
-/**
- * The street theme — the village and the city dressed for where this machine is.
- *
- * The Tokyo theme: sakura trees with petals falling from them, vending
- * machines on the street, and some temples. The theme is picked by the machine's IANA time zone (`themeFor`, the zone the live weather already reads for its
- * city): Asia/Tokyo dresses the scene, anywhere else leaves it exactly as built.
- *
- * Two dressers, one per scene. Each takes a BUILT world and returns a NEW one — never mutating its
- * input: a World is immutable and several modules cache per World object (walkGrid, indoors,
- * puddles, the LAN wiring), so an edited prop list on an old object would leave every one of those
- * caches describing a world that no longer exists.
- *
- *   dressVillage (top-down, engine/world.ts)
- *     - a third of the trees (rounded up) blossom into `sakura` — same 2×2 footprint, so the walk
- *       grid is unchanged (sakura blocks like the tree it replaces);
- *     - a `torii` as the plaza's gate: on the row just north of the plaza square, centred on the
- *       fountain's column, so you walk through its middle tile into the plaza (where a road runs
- *       down that column, the gate straddles it);
- *     - two `vending` machines side by side on the same row, a tile clear of the gate, facing the
- *       plaza (a single one when only one spot is free).
- *   dressCity (side view, engine/city.ts — the capacity HQ in the middle of the one street, the
- *   projects on both sides of it: the HQ is the centre)
- *     - half the street trees (rounded up) blossom;
- *     - `vending` machines on the near sidewalk: in front of half the buildings (rounded up; the HQ
- *       is one of them), two tiles left of the street door (else right; every third of them a
- *       pair), and on a third of the gaps' free sidewalk tiles — the column between a gap's lamp and
- *       its tree;
- *     - a `torii` at one end of the near sidewalk when three columns are free there — right end
- *       first, as close to the buildings as fits; with the HQ centred, that is usually the shorter
- *       side's empty stretch — else on the far sidewalk at the right end of the street, under the
- *       last building.
- *   Never on the PEDESTRIAN CROSSING (`crossingOf`): busy agents ride the lounge's lift up to
- *   its kiosk on the far sidewalk, cross both lanes and reach the HQ's door. Its far landing — the
- *   kiosk's tile and one either side — is reserved before anything is placed (only the far-sidewalk
- *   gate could reach it). Its near landing needs no reservation: it is the HQ's door and the front
- *   wall either side, where nothing is ever placed — a machine stands two or three tiles off a door,
- *   a gap's under open sky, and a gate only past the street's last building.
- *
- * Neither vending machines nor the torii block (villageTypes: you walk past one and through the
- * other), so dressing never changes a walkable tile. Every choice is a hash of tile positions —
- * no `Math.random` — so the same world always dresses the same way, and dressing is idempotent:
- * a dressed world dresses to itself (the same object).
- */
+/** Tokyo street theme, picked by the machine's IANA zone (`themeFor`); elsewhere the world is left
+ * as built. Dressers return a NEW World, never mutate it (modules cache per World object). Theme
+ * props never block; choices hash tile positions, so dressing is idempotent. */
 
 import type { Prop, PropKind, TileKind, World } from "../villageTypes";
 import { hash2 } from "./rng";
@@ -63,12 +23,8 @@ const PLACED: ReadonlySet<PropKind> = new Set<PropKind>(["vending", "torii"]);
 const VILLAGE_BLOSSOM = 3;
 const CITY_BLOSSOM = 2;
 
-/**
- * Tiles of art a prop's sprite rises above its footprint (render/props.ts and render/tokyoProps.ts).
- * A theme prop is only placed where its footprint AND that art are clear of every other prop's, so
- * no machine stands inside a tree's canopy or a lamp's post. Only outdoor props are listed: the
- * theme never places anything indoors, where the rest of the art stays.
- */
+/** Tiles of art a prop rises above its footprint (render/props.ts, render/tokyoProps.ts). A theme
+ * prop needs its footprint AND art clear of every other prop's. Outdoor props only. */
 const ART_ABOVE: Partial<Record<PropKind, number>> = {
   tree: 1,
   sakura: 1,
@@ -83,12 +39,8 @@ export function artBox(p: Prop): { col: number; row: number; w: number; h: numbe
   return { col: p.col, row: p.row - up, w: p.w, h: p.h + up };
 }
 
-/**
- * A world's tile kind at (c, r). No bounds check, on purpose: every tile the dressers ask about is
- * inside the map by construction — buildWorld keeps the plaza ≥ 3 rows from either edge and its
- * fountain ≥ 16 columns in; the city's probes stay between its margins or are bounded by `cols` —
- * so a check here could never fire. A new caller must keep that: a column off the map wraps.
- */
+/** No bounds check on purpose: every dresser probe is in-map by construction (plaza margins, city
+ * margins or `cols`). A new caller must keep that: a column off the map wraps. */
 function tileAt(world: World, c: number, r: number): TileKind {
   return world.tiles[r * world.cols + c];
 }
@@ -128,11 +80,8 @@ function retag(id: string, from: string, to: string): string {
   return id.replace(new RegExp(`(^|:)${from}(?=:|$)`), `$1${to}`);
 }
 
-/**
- * The trees with a blossom: 1 in `share` of the 2×2 trees (rounded up), chosen by a hash of their
- * position. Trees and sakura are ranked TOGETHER, so a dressed world picks exactly the same ones
- * again (idempotence) and a tree's fate depends only on where the trees stand.
- */
+/** 1 in `share` of the 2×2 trees (rounded up) blossom, by position hash. Trees and sakura rank
+ * TOGETHER, so a dressed world picks the same ones again (idempotence). */
 function blossom(props: readonly Prop[], share: number): Prop[] {
   const trees = props.filter((p) => p.kind === "tree" || p.kind === "sakura");
   const pick = new Set(ranked(trees, (p) => hash2(p.col * 31 + 7, p.row * 17 + 3)).slice(0, Math.ceil(trees.length / share)));
@@ -209,12 +158,8 @@ function noWall(world: World, c: number, r: number, w: number, up: number): bool
   return true;
 }
 
-/**
- * The torii is the plaza's gate: on the row just north of the plaza square, centred on the
- * fountain's column — you walk through its middle tile into the plaza, from the road above (where a
- * road runs down that column, the gate straddles it). Shifted a tile or more sideways if something
- * is in the way, then tried on the row south of the square.
- */
+/** The plaza's gate: the row north of the plaza square, centred on the fountain's column
+ * (straddling a road there); shifted sideways if blocked, then tried south of the square. */
 function villageTorii(world: World, cover: Cover, out: Prop[], sq: PlazaSquare): void {
   const cx = world.plaza.col;
   for (const r of [sq.top - 1, sq.bottom + 1])
@@ -226,11 +171,8 @@ function villageTorii(world: World, cover: Cover, out: Prop[], sq: PlazaSquare):
     }
 }
 
-/**
- * Two machines side by side on the grass just north of the plaza square, facing it — beside the
- * gate, a tile clear of it (left first, then right, then closer in); then the row south of the
- * square. When no pair fits anywhere, the first single spot that does.
- */
+/** Two machines side by side north of the plaza square, facing it, a tile clear of the gate (left,
+ * right, then closer in); then south of the square; else the first single spot that fits. */
 function villageVending(world: World, cover: Cover, out: Prop[], sq: PlazaSquare): void {
   const cx = world.plaza.col;
   const rows = [sq.top - 1, sq.bottom + 1];
@@ -248,10 +190,8 @@ function villageVending(world: World, cover: Cover, out: Prop[], sq: PlazaSquare
       if (spot(cx + d, r) && place(cover, out, vending(cx + d, r))) return;
 }
 
-/**
- * The village dressed for `zone`: a new World with sakura, vending machines and a torii in Tokyo;
- * the SAME world object anywhere else, for a city world, or when dressing changes nothing.
- */
+/** A new World with sakura, vending machines and a torii in Tokyo; the SAME object anywhere else,
+ * for a city world, or when dressing changes nothing. */
 export function dressVillage(world: World, zone: string | null | undefined): World {
   if (themeFor(zone) !== "tokyo" || world.city) return world;
   const cached = villageCache.get(world);
@@ -274,29 +214,17 @@ const cityCache = new WeakMap<World, World>();
 /** Columns the pedestrian crossing reaches either side of the lounge lift's column: it is three tiles wide. */
 export const CROSSING_HALF = 1;
 
-/**
- * The PEDESTRIAN CROSSING in front of the capacity HQ (a busy agent rides an
- * elevator up to the street and walks to its building): the lounge's lift comes up at its kiosk
- * on the far sidewalk, right under the HQ's door, and a rider crosses both lanes there. Its tiles:
- * `w` columns centred on the lift's column, from the near sidewalk (`row`, the street's first row —
- * the HQ's door is right above it) through the two lanes to the far sidewalk (`row + h − 1`, the
- * kiosk's). render/crossing.ts paints its stripes on the two lanes; the dresser keeps its far landing
- * clear. null in a city without a lounge (no capacity layout) and in the village.
- *
- * It lives here, not in render/, because an engine module (this dresser) needs it too and the engine
- * never imports the renderer.
- */
+/** The crossing: `w` columns centred on the lounge lift's column, from the near sidewalk (`row`) to
+ * the far one (`row + h − 1`); null without a lounge or in the village. Lives in the engine because
+ * this dresser needs it and the engine never imports the renderer. */
 export function crossingOf(world: World): TileBox | null {
   const city = world.city;
   if (!city?.lounge) return null;
   return { col: city.lounge.lift.col - CROSSING_HALF, row: city.street, w: 2 * CROSSING_HALF + 1, h: 4 };
 }
 
-/**
- * A machine on a sidewalk tile (c, r): path under it, its art against a building's front wall or
- * the open sky of a gap. Never in front of an opening — a street door is a `floor` tile in the front
- * wall, so the door (its light, its way out) is never covered.
- */
+/** A sidewalk tile (c, r) whose art backs onto a front wall or open sky; never in front of a door
+ * (a `floor` tile in the front wall), so a door is never covered. */
 function cityVendingSpot(world: World, c: number, r: number): boolean {
   const art = tileAt(world, c, r - 1);
   return tileAt(world, c, r) === "path" && (art === "wall" || art === "sky");
@@ -307,10 +235,7 @@ function bits(c: number, r: number, salt: number): number {
   return hash2(c * 13 + salt, r * 7 + salt);
 }
 
-/**
- * The machines. Every building stands on the one street — its front wall on the row above the near
- * sidewalk (`city.street`) — so that is the row they all go on.
- */
+/** The machines, all on the near sidewalk row (`city.street`), under the buildings' front walls. */
 function cityVending(world: World, cover: Cover, out: Prop[]): void {
   const city = world.city as NonNullable<World["city"]>;
   const sr = city.street;
@@ -337,10 +262,8 @@ function cityVending(world: World, cover: Cover, out: Prop[]): void {
   for (const c of ranked(gaps, (c) => bits(c, sr, 2)).slice(0, Math.ceil(gaps.length / 3))) place(cover, out, vending(c, sr));
 }
 
-/**
- * `items` ordered by `key` (a hash), ties by input order: a deterministic shuffle. The tie order
- * needs no comparator arm — `Array.prototype.sort` is stable (ES2019), so equal keys keep their order.
- */
+/** A deterministic shuffle: `items` by `key` (a hash); ties keep input order since `sort` is
+ * stable (ES2019). */
 function ranked<T>(items: readonly T[], key: (t: T) => number): T[] {
   return items
     .map((t) => ({ t, k: key(t) }))
@@ -348,15 +271,9 @@ function ranked<T>(items: readonly T[], key: (t: T) => number): T[] {
     .map((x) => x.t);
 }
 
-/**
- * A torii on the street. On its near sidewalk (under the buildings) at an end: three free columns of
- * sidewalk with open sky above them, not touching another prop's tile — the right end first, as close
- * to the buildings as fits, then the left end. The HQ stands in the middle and the world is as wide
- * on both sides of it, so the side with less street built has an empty stretch at its end: the gate
- * usually stands there, beside its last building. With no room at either end (both sides built
- * alike), on the far sidewalk (across the road) at the right end of the street, under the last
- * building — never on the crossing's landing there (reserved by `dressCity`).
- */
+/** On the near sidewalk at an end with three free columns under open sky, right end first, nearest
+ * the buildings; else the far sidewalk's right end under the last building, never on the crossing's
+ * reserved landing (`dressCity`). */
 function cityTorii(world: World, cover: Cover, out: Prop[]): void {
   const city = world.city as NonNullable<World["city"]>;
   const sr = city.street;
@@ -387,10 +304,8 @@ function cityTorii(world: World, cover: Cover, out: Prop[]): void {
   for (let c = right - 3; c >= left; c--) if (fits(c, far, road)) return void place(cover, out, torii(c, far));
 }
 
-/**
- * The city dressed for `zone`: a new World with sakura street trees, vending machines and a torii in
- * Tokyo; the SAME world object anywhere else, for a village world, or when dressing changes nothing.
- */
+/** A new World with sakura, vending machines and a torii in Tokyo; the SAME object anywhere else,
+ * for a village world, or when dressing changes nothing. */
 export function dressCity(world: World, zone: string | null | undefined): World {
   if (themeFor(zone) !== "tokyo" || !world.city) return world;
   const cached = cityCache.get(world);

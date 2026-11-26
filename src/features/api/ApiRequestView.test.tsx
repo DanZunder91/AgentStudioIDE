@@ -1,16 +1,5 @@
-/**
- * ApiRequestView — the API client's request/response surface.
- *
- * `httpIpc` is mocked at the module boundary: the real `http_send` crosses Tauri,
- * which does not belong in a jsdom unit test (its marshalling is pinned in
- * `httpIpc.test.ts`). What is under test here is the view — editing the request,
- * the header table, the send that builds the right wire `HttpRequest`, and the
- * response/error rendering (status pill, stats, JSON pretty-print, calm error).
- *
- * The mocked `sendHttp` resolves on a microtask, so each send is issued inside an
- * `act(async …)` window that also flushes the resolved-promise `.then` (which
- * runs `setApiResponse`/`setApiError`) — assertions then run against settled state.
- */
+/** ApiRequestView with `httpIpc` mocked at the module boundary (marshalling: `httpIpc.test.ts`).
+ * Sends run inside `act(async …)` so the resolved `.then` lands before assertions. */
 
 import {
   act,
@@ -70,12 +59,8 @@ const methodSelect = () =>
 const urlInput = () => screen.getByLabelText("Request URL") as HTMLInputElement;
 const sendButton = () => screen.getByRole("button", { name: /send/i });
 
-/**
- * Create a fresh request, render its view, and return the id. `seed` is hydrated
- * FIRST — which also marks the durable store loaded, so the mount effect
- * short-circuits (the load-on-mount path has its own test) and never clobbers a
- * seeded environment with an async empty-store resolve.
- */
+/** New request + render; returns its id. `seed` is hydrated FIRST, marking the store loaded so
+ * the mount effect cannot clobber it with an async empty-store resolve. */
 function setup(seed: ApiStore = emptyStore): string {
   useAppStore.getState().apiActions.hydrateApiStore(seed);
   const id = useAppStore.getState().apiActions.createApiRequest();
@@ -640,10 +625,7 @@ describe("ApiRequestView — manage environments", () => {
   });
 });
 
-// The saved-request LIST + save flow moved out of the request view into the
-// Collections rail tab and Cmd/Ctrl+S. Those surfaces are
-// covered by CollectionsPanel.test.tsx and SaveRequestShortcut.test.tsx; the view
-// itself no longer renders a collections panel.
+// Saved-request list + save flow: CollectionsPanel.test.tsx and SaveRequestShortcut.test.tsx.
 
 describe("ApiRequestView — substitution on send (secrets only on the wire)", () => {
   it("resolves {{VAR}} from the active env on send, but the saved collection stays literal", async () => {
@@ -767,13 +749,8 @@ describe("ApiRequestView — protocol toggle (HTTP | WebSocket)", () => {
   });
 });
 
-/**
- * The bug: the find bar still disappeared when moving
- * between tabs, and it was noticeable in the HTTP request view. `Pane` renders
- * only the ACTIVE tab, so switching (or dragging) a tab unmounts this whole
- * view — the find bar's state now survives in `findBars["api:<requestId>"]`.
- * Here unmount + remount of the view IS the tab switch.
- */
+/** `Pane` unmounts inactive tabs, so the bar's state lives in `findBars["api:<requestId>"]`;
+ * unmount + remount here IS the tab switch. */
 describe("ApiRequestView — the find bar survives a tab switch", () => {
   /** A request with a JSON response already landed — seeded BEFORE render. */
   function seedResponse(body = '{"alpha":"beta","gamma":"beta-2"}'): string {
@@ -845,12 +822,8 @@ describe("ApiRequestView — the find bar survives a tab switch", () => {
   });
 });
 
-/**
- * Copy as cURL: the command on the clipboard is built by
- * `buildCurl` from the request's CURRENT fields, resolved through the SAME
- * `{{VAR}}` seam the send path uses (`activeVars` + `substituteVars`). The
- * resolved secret exists on the clipboard only — never at rest.
- */
+/** Built by `buildCurl` from CURRENT fields via the send path's `{{VAR}}` seam; the resolved
+ * secret exists on the clipboard only. */
 describe("ApiRequestView — Copy as cURL", () => {
   const PROD: ApiStore = {
     collections: [],
@@ -975,13 +948,8 @@ describe("ApiRequestView — Copy as cURL", () => {
   });
 });
 
-/**
- * Windows. A bash command is broken in PowerShell and cmd, so on
- * Windows "Copy as cURL" says which shell it writes for; and the URL field reads
- * the Windows pastes (DevTools' cmd form) and names the one it cannot read
- * (Copy as PowerShell). The quoting itself is curlExport/curlParse's job — this
- * pins the wiring.
- */
+/** Windows: "Copy as cURL" names its shell; the URL field reads DevTools' cmd paste and names
+ * the one it can't (Copy as PowerShell). Quoting is curlExport/curlParse's; this pins wiring. */
 describe("ApiRequestView — Windows: Copy as cURL per shell, and Windows pastes", () => {
   const WEBVIEW2 =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";

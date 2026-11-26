@@ -1,10 +1,6 @@
-//! Integration tests for the PTY layer — **against real PTYs**.
-//!
-//! These drive `pty::spawn_pty` + `pty::reader::start_reader` directly: a real
-//! `openpty`/`forkpty` (ConPTY on Windows), a real child process, the real
-//! blocking reader thread. Nothing about the OS is mocked; that is the point,
-//! because every bug this layer can have (EOF-vs-EIO, the slave fd keeping the
-//! master open, `wait()` blocking the killer) only exists at the OS boundary.
+//! Integration tests of the PTY layer against real PTYs, children and reader threads. Nothing is
+//! mocked: its bugs (EOF vs EIO, the slave fd keeping the master open, `wait()` blocking the
+//! killer) only exist at the OS boundary.
 
 mod common;
 
@@ -24,10 +20,8 @@ fn spec(program: String, args: Vec<String>, rows: u16, cols: u16) -> SpawnSpec {
     }
 }
 
-/// Drain the reader channel until it closes, returning everything read.
-///
-/// Reaching `None` is itself the assertion in several tests: it means the reader
-/// thread saw EOF (or Linux's `EIO`), broke its loop, and dropped its sender.
+/// Reaching `None` is itself an assertion: the reader thread saw EOF (or Linux's `EIO`), broke its
+/// loop, and dropped its sender.
 async fn drain_to_eof(mut rx: tokio::sync::mpsc::Receiver<bytes::Bytes>) -> Vec<u8> {
     let mut out = Vec::new();
     let collect = async {
@@ -41,22 +35,9 @@ async fn drain_to_eof(mut rx: tokio::sync::mpsc::Receiver<bytes::Bytes>) -> Vec<
         .expect("reader channel never closed — the reader thread is stuck (zombie)")
 }
 
-/// Run a PTY child to completion **the way the supervisor does**: drain its output
-/// while it runs, reap it with a bounded poll, close the terminal, read to EOF.
-/// Returns the exit code and everything the terminal showed.
-///
-/// Three things here are load-bearing, each of them on Windows:
-/// - **Never `child.wait()` without a deadline.** It is `WaitForSingleObject(INFINITE)`
-///   on Windows, and a tokio runtime waits for its blocking tasks on drop — so one
-///   child that never exits hangs this whole binary indefinitely. `try_wait` is polled
-///   instead, and a child that outlives [`TIMEOUT`] is killed and the screen printed.
-/// - **Output is drained while waiting**, never after: a chatty child blocks on a full
-///   pipe and would never exit (the high-volume test is that case).
-/// - **On Windows the terminal is closed after the exit, then read to EOF.** ConPTY's
-///   host keeps the output pipe open until the pseudo-console is closed, so EOF cannot
-///   come first there; the supervisor closes it by dropping the handle on `ChildExited`
-///   (`on_child_exited` → `rt.pty = None`). On Unix the slave closing is enough and the
-///   handle is kept until EOF — that is the invariant `pty_eof_closes_…` pins.
+/// Runs a child as the supervisor does. Poll `try_wait` (Windows `wait()` is INFINITE and hangs the
+/// runtime's drop); drain while waiting (a full pipe blocks the child); on Windows close the PTY
+/// before reading to EOF, as ConPTY keeps the pipe open until then (Unix keeps it until EOF).
 async fn run_to_exit(spawn: pty::PtySpawn) -> (u32, String) {
     let pty::PtySpawn {
         handle,
@@ -104,26 +85,9 @@ async fn child_output_reaches_the_reader() {
     assert!(out.contains("hello-from-pty"), "PTY output was {out:?}");
 }
 
-/// EOF handling: the reader thread must **terminate** when the child goes away,
-/// whichever way the kernel reports it, without losing the last bytes.
-///
-/// Two things were measured rather than assumed here, and both are worth knowing:
-///
-/// 1. **`drop(pair.slave)` is load-bearing, and only Linux says so.** A C probe
-///    (child exits while the parent still holds a slave fd) shows Linux's master
-///    `read` returning `EIO` when the slave is dropped, but **blocking forever**
-///    when it is leaked. Confirmed end-to-end: `mem::forget(pair.slave)` makes
-///    this test hang and fail on Linux — and stay green on macOS, which revokes
-///    the tty when the session leader exits and reports EOF regardless. Passing
-///    locally on macOS proves nothing here; a Linux run is what guards
-///    this invariant.
-///
-/// 2. **`reader.rs`'s `Err(_) => break` is not what handles Linux's `EIO`.**
-///    `portable-pty` already normalizes it: `unix.rs` maps `EIO` → `Ok(0)` before
-///    we ever see it. Mutating our arm to `Err(_) => continue` leaves this test
-///    green on *both* platforms, because the arm is unreachable for `EIO`. It is
-///    correct defence-in-depth for other read errors, not the `EIO` fix its
-///    comment implies.
+/// `drop(pair.slave)` is load-bearing only on Linux: a leaked slave makes the master read block
+/// forever, while macOS reports EOF regardless, so only a Linux run guards it. Linux's `EIO` never
+/// reaches `reader.rs`'s error arm: `portable-pty` maps it to `Ok(0)`.
 #[tokio::test]
 async fn pty_eof_closes_the_reader_without_error() {
     // `exit` immediately after the write, so EOF races the last bytes.
@@ -191,21 +155,9 @@ async fn child_exit_code_is_reported_verbatim() {
     }
 }
 
-/// **A child that exits at once is reaped even when nothing answers the terminal.**
-///
-/// On Windows, `cmd /C "exit 0"` spawned under ConPTY used to stay alive indefinitely,
-/// its `conhost --headless --inheritcursor` beside it, and every agent test that waited
-/// for an exit timed out. The pseudo-console was
-/// created with `PSEUDOCONSOLE_INHERIT_CURSOR`, which makes the console host ask the
-/// terminal where its cursor is (`ESC[6n`) and hold the client until a reply comes
-/// back on input. xterm.js replies in the app, so a terminal there looked fine — but
-/// nothing replies in a test, nor in the app for a PTY spawned before its UI attaches
-/// (a restored agent, a background view). A terminal emulator that creates a fresh
-/// console has no cursor to inherit, so the flag is gone (`vendor/portable-pty`,
-/// `psuedocon.rs`).
-///
-/// Nothing is written to the PTY here, on purpose: that is the condition. On Unix the
-/// assertions hold trivially and pin that they stay so.
+/// With `PSEUDOCONSOLE_INHERIT_CURSOR` ConPTY asks for the cursor (`ESC[6n`) and holds the child
+/// until a reply; nothing replies in a test or before the UI attaches, so the vendored portable-pty
+/// drops the flag (`psuedocon.rs`). Nothing is written to the PTY: that is the condition.
 #[tokio::test]
 async fn a_child_that_exits_at_once_is_reaped_with_nobody_answering_the_terminal() {
     let (program, args) = sh("exit 7");
@@ -220,13 +172,9 @@ async fn a_child_that_exits_at_once_is_reaped_with_nobody_answering_the_terminal
     );
 }
 
-/// Windows: **typing into a live shell works** with the pseudo-console's input mode —
-/// keystrokes as plain bytes, the way xterm.js sends them. `PSEUDOCONSOLE_WIN32_INPUT_MODE`
-/// makes the host ask the terminal for win32-input-mode (`ESC[?9001h`), which xterm.js
-/// ignores; the host must still take plain VT input. PowerShell, the default shell,
-/// reads keys through `ReadConsoleInput` (PSReadLine), unlike `cmd` — so both are typed at.
-/// The needle is built by the shell (`'typed-' + 'ps-ok'`), so the echo of the typed
-/// line itself cannot satisfy it.
+/// `PSEUDOCONSOLE_WIN32_INPUT_MODE` asks for win32-input-mode, which xterm.js ignores, so the host
+/// must take plain VT bytes. PowerShell reads via `ReadConsoleInput`, unlike `cmd`, so both are
+/// typed at. The needle is built by the shell so the echoed input cannot satisfy it.
 #[cfg(windows)]
 #[tokio::test]
 async fn typing_into_cmd_and_powershell_echoes_back_through_the_pty() {
@@ -278,15 +226,9 @@ async fn typing_into_cmd_and_powershell_echoes_back_through_the_pty() {
     }
 }
 
-/// Windows: **closing a terminal kills what runs in it** — the shell and the console
-/// program it started. `PtyHandle`'s `Drop` terminates the shell, and dropping the master
-/// closes the pseudo-console, whose host then ends every program still attached to it
-/// (the Windows counterpart of the SIGHUP a Unix master's close sends).
-///
-/// The close waits until `ping` has PRINTED, i.e. is attached to the console. Closing
-/// in the instant between `ping`'s creation and its attach left it running, measured
-/// once in a parallel run: a program not yet on the console is not ended with it.
-/// That window is milliseconds at a program's start; it is a race, not the bug here.
+/// `PtyHandle`'s Drop ends the shell; closing the pseudo-console ends programs attached to it
+/// (Windows' SIGHUP). The close waits until `ping` has printed: a program not yet attached is not
+/// ended with it, a startup race that is not the bug here.
 #[cfg(windows)]
 #[tokio::test]
 async fn dropping_the_handle_kills_the_shell_and_the_program_it_started() {
@@ -327,14 +269,9 @@ async fn dropping_the_handle_kills_the_shell_and_the_program_it_started() {
 #[cfg(windows)]
 const ORPHAN_HELPER: &str = "AGENTSTUDIO_PTY_ORPHAN_HELPER";
 
-/// Windows: **a terminal dies with the app that opened it**, even when the app does
-/// not get to clean up (a crash, End task). On Unix the kernel's SIGHUP does this; on
-/// Windows it is the console host noticing that its creator is gone.
-///
-/// The "app" is this same binary, re-run as [`orphan_helper`]: it opens a terminal
-/// running `cmd` → `ping`, prints the shell's pid, and waits. This test kills it with
-/// `TerminateProcess` — no destructors run — and watches the shell, the program and
-/// the console host go.
+/// With no cleanup (a crash, End task) the console host ends once its creator is gone. The app is
+/// this binary re-run as [`orphan_helper`] (opens `cmd` then `ping`, prints the shell's pid),
+/// killed with `TerminateProcess` so no destructors run.
 #[cfg(windows)]
 #[test]
 fn a_terminal_dies_with_the_app_that_opened_it() {
@@ -686,27 +623,17 @@ async fn child_starts_in_the_requested_cwd() {
     );
 }
 
-/// **Bursty concurrent PTY allocation must not fail.** Regression test for the
-/// `PTY_ALLOC_LOCK` in `pty/mod.rs`.
-///
-/// macOS's `openpty(3)` is not concurrency-safe: allocating from several threads
-/// at once transiently fails `posix_openpt` with `ENXIO`, sometimes surfacing as
-/// the nonsense `errno = -6`. Unlocked, ~5% of calls in a burst failed.
-///
-/// A burst is not a synthetic stress case — it is precisely what M3 fan-out does
-/// when an orchestrator spawns several agents at once, so this models the real
-/// product path. Every thread starts at the same instant deliberately: staggering
-/// them is what makes the bug hide.
+/// Guards `PTY_ALLOC_LOCK` (`pty/mod.rs`): macOS's `openpty(3)` is not concurrency-safe and a
+/// burst fails `posix_openpt` with `ENXIO` (or `errno = -6`). Fan-out allocates in bursts; all
+/// threads start at once on purpose, because staggering them hides the bug.
 #[tokio::test]
 async fn concurrent_pty_allocation_bursts_do_not_fail() {
     use std::sync::{Arc, Barrier};
 
     const THREADS: usize = 16;
     const PER_ROUND: usize = 3;
-    // A race test is a probabilistic detector, so take several independent shots
-    // at it: one burst caught the unlocked bug ~50% of the time, and the barrier
-    // re-syncs every round, so 6 rounds make a regression very hard to miss while
-    // still peaking at only 48 live PTYs (`kern.tty.ptmx_max` is 511).
+    // One burst caught the unlocked race ~50% of the time, so 6 rounds make a regression hard to
+    // miss while peaking at 48 live PTYs (`kern.tty.ptmx_max` is 511).
     const ROUNDS: usize = 6;
 
     let barrier = Arc::new(Barrier::new(THREADS));
@@ -731,10 +658,8 @@ async fn concurrent_pty_allocation_bursts_do_not_fail() {
                             held.push(s);
                             opened += 1;
                         }
-                        // Record and carry on — never bail out early. An early
-                        // return would skip this thread's remaining
-                        // `barrier.wait()` calls and hang the other 15 forever,
-                        // so a regression would deadlock CI instead of failing it.
+                        // Never bail early: skipping this thread's remaining
+                        // `barrier.wait()` calls would hang the others, not fail.
                         Err(e) => errors.push(format!("{e:#}")),
                     }
                 }
@@ -762,10 +687,8 @@ async fn concurrent_pty_allocation_bursts_do_not_fail() {
     assert_eq!(opened, attempted);
 }
 
-/// A chatty child (well past the reader's 64KB read buffer and the bounded
-/// channel's 256 slots) must not lose or reorder bytes. This exercises the
-/// backpressure path: a full channel parks the reader thread, which fills the
-/// kernel PTY buffer, which throttles the child.
+/// Past the reader's 64KB buffer and the channel's 256 slots: a full channel parks the reader,
+/// which fills the kernel PTY buffer, which throttles the child.
 #[tokio::test]
 async fn high_volume_output_is_not_lost_under_backpressure() {
     // 2000 lines ≈ 20KB of payload, chunked across many reads.

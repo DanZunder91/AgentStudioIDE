@@ -1,59 +1,13 @@
-//! The database client's **live** tier — real PostgreSQL, in Docker.
-//!
-//! ```bash
-//! npm run db:fixtures:up          # blocks on the healthchecks: up == queryable AND seeded
-//! cargo test --manifest-path src-tauri/Cargo.toml -- --ignored db_live
-//! npm run db:fixtures:down        # -v, so the next `up` re-runs the seeds
-//! ```
-//!
-//! Every test here is `#[ignore]`d, so `cargo test` and CI stay hermetic. They
-//! follow `usage.rs::live_smoke_reads_real_usage_from_the_cli`: the *other* tests in this feature
-//! feed fixtures to pure functions, which can only prove we still handle the shapes we once saw.
-//! These prove the whole path against a real server — which is the actual requirement for this
-//! feature: the databases must run in Docker and be reachable from our own Rust code.
-//! Compiling was never the deliverable.
-//!
-//! The tests are inside `mod db_live` on purpose: it puts `db_live` into every test's **name**, so
-//! the documented `-- --ignored db_live` filter selects them (a filter matches test names, not
-//! binary names).
-//!
-//! Fixture facts these tests depend on, all from `docker/db-fixtures/README.md` and
-//! `docker/db-fixtures/seed/postgres.sql`:
-//!
-//! * `127.0.0.1:55432`, user `agentstudio`, password `agentstudio-test-pw`, database `maestro`.
-//!   Throwaway credentials, published in the repo, bound to localhost — never reuse them.
-//! * **The host-mapped port is the route that actually authenticates.** The image's stock
-//!   `pg_hba.conf` grants `trust` to `local` and to `host … 127.0.0.1/32`, so a client *inside*
-//!   the container dialling `127.0.0.1` is let in with **any** password. A connection from the
-//!   host arrives over the Docker bridge instead and falls through to
-//!   `host all all all scram-sha-256`. Every password assertion here depends on that, and a
-//!   `docker compose exec … psql "…@127.0.0.1:5432…"` measurement would silently prove nothing.
-//! * `tracks` row **2** has `tag IS NULL`; row **3** has `tag = ''`. That pair is the
-//!   NULL-vs-empty invariant the whole no-type-mapping design rests on.
-//! * `tracks` also carries a user-defined `ENUM`, an `integer[]`, `numeric(12,4)`, `jsonb` and
-//!   `bytea` — types a per-OID binary decoder would need five feature flags for.
-//! * `tall` has 2000 rows, i.e. more than the shipped default cap of 500.
-//! * `id, title, ensemble, duration` are `NOT NULL`, which matters for the write probes below.
+//! The database client's live tier against real Docker servers: `npm run db:fixtures:up`, then
+//! `cargo test … -- --ignored db_live` (tests sit in `mod db_live` so that filter matches).
+//! Only the host-mapped port checks passwords: in-container loopback is `trust` in pg_hba.
 
 use agent_studio_scaffold_lib::db::engine::{engine_for, Limits, ResolvedConfig, Script};
 use agent_studio_scaffold_lib::db::model::{DbEngineId, DbFamily, DbRunMode, SslMode};
 use agent_studio_scaffold_lib::db::result::{DbResultKind, DbResultSet};
 
-/// 🔴 **THE LIVE TIER MAY ONLY EVER DIAL OUR OWN CONTAINERS — and this test is what enforces it.**
-///
-/// The standing rule: live tests must never run against anyone's real databases or
-/// use real credentials; they start their own local fixtures. Real clusters hold real data, a
-/// write probe is damage rather than a test, and a credential we read is a credential we could
-/// leak.
-///
-/// A rule nobody can check is a rule that erodes, so this is a
-/// **hermetic** test — it runs in the default `cargo test`, needs no Docker, and reads this file's
-/// own source. If anyone ever pastes a real endpoint, an Atlas SRV URI or a cloud hostname into the
-/// live tier, the ordinary gate goes red before it ever dials.
-///
-/// It deliberately does NOT scan for collection or database *names*: `temp_playlists` and
-/// `ARCHIVEDB` appear here in test inputs and comments as sample names, and they are strings, not
-/// destinations. What matters is where a socket is opened.
+/// Hermetic guard: the live tier may only dial our own loopback containers, never real
+/// databases or credentials. Scans this file's code (not names, not comments) for anything else.
 #[test]
 fn the_live_tier_only_ever_dials_loopback() {
     let src = include_str!("db_live.rs");
@@ -75,16 +29,8 @@ fn the_live_tier_only_ever_dials_loopback() {
         );
     }
 
-    // 2. Nothing that could reach a real service, however it were spelled — the hostnames a pasted
-    //    connection string carries, and the Atlas SRV scheme specifically.
-    //
-    // 🔴 **Two false positives on its first run, and both are worth keeping in mind.** The scan
-    //    matched (a) its OWN forbidden list and (b) a doc comment further down that says "No test
-    //    dials MongoDB Atlas" — a sentence promising the very thing this enforces. So the needles
-    //    are assembled with `concat!` (the literal never appears in this file) and **comments are
-    //    stripped before scanning**: what matters is code that could open a socket, not prose that
-    //    mentions a hostname. A scanner that trips over the documentation of its own rule would be
-    //    turned off within a week.
+    // 2. Nothing that could reach a real service (pasted hostnames, the Atlas SRV scheme). Needles
+    //    are built with `concat!` and comments are stripped, so the list and prose never trip it.
     let code_only: String = src
         .lines()
         .filter(|l| !l.trim_start().starts_with("//"))
@@ -115,13 +61,8 @@ mod db_live {
     const PASSWORD: &str = "agentstudio-test-pw";
     const DATABASE: &str = "maestro";
 
-    /// Each write probe gets its **own** id in the 9000 range — nothing in the seed uses those, and
-    /// every probe deletes its row afterwards so the fixture stays reusable without a reset.
-    ///
-    /// One shared id would be a flake, and was: `cargo test` runs these in parallel by default, so
-    /// the read-write control's row was still there when the read-only probe looked for it and the
-    /// read-only test failed claiming a leak that had not happened. Sharing a mutable row between
-    /// parallel tests against one server is the same class of bug as sharing a temp file.
+    /// A distinct 9000-range id per write probe, each deleted afterwards: tests run in parallel,
+    /// so a shared mutable row is a flake.
     const PROBE_READ_ONLY: i32 = 9001;
     const PROBE_SCRIPT: i32 = 9002;
     const PROBE_CONTROL: i32 = 9003;
@@ -259,18 +200,9 @@ mod db_live {
 
     /* ─────────────────── every column arrives as Option<String> ─────────────────── */
 
-    /// **The most important test in this tier.**
-    ///
-    /// This is the decision the whole feature rests on: read every value out of the text protocol
-    /// as `Option<String>`, so there is no per-type decoder, no `chrono`/`uuid`/`rust_decimal`
-    /// feature flags, and no `<unsupported type>` cell. This asserts that against types a binary
-    /// decoder would each need a branch for — a user-defined `ENUM`, an `integer[]`,
-    /// `numeric(12,4)`, `jsonb`, `bytea`, `timestamptz` — and, above all, that `None` (SQL NULL)
-    /// and `Some("")` (the empty string) are two different cells.
-    ///
-    /// That last pair is not decoration. A design that collapsed them would need a sentinel, and
-    /// any sentinel is a string a real value can equal. Row 2's `tag` is NULL and row 3's is `''`
-    /// precisely so this can be asserted rather than assumed.
+    /// The decision the feature rests on: every value comes back from the text protocol as
+    /// `Option<String>`, across types a binary decoder would need branches for, and NULL (`None`)
+    /// stays distinct from `''` (`Some("")`) with no sentinel.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn text_protocol_returns_every_column_as_option_string() {
@@ -287,20 +219,9 @@ mod db_live {
         assert_eq!(set.rows.len(), 6, "the seed has six rows");
         assert!(!set.truncated);
 
-        // The declared type names, verbatim. They drive rendering; they are never
-        // parsed, and no value's decoding depends on them.
-        //
-        // ⚠️ MEASURED LIMITATION, recorded rather than papered over. It is natural to assume the
-        // declared type name "is available (`column.type_info().name()`)". For **built-in** types
-        // it is. For a
-        // user-defined type it is NOT: the simple query protocol hands back a type OID, and sqlx
-        // only resolves an unknown OID to a name via `Describe`, which the unprepared path never
-        // runs. So the fixture's `track_ensemble` ENUM arrives as the literal `"?"`.
-        //
-        // The text-protocol guarantee itself is untouched — the enum's *value* comes back as
-        // `Some("duo")`, asserted below — so this costs a column header, not data. Fixing it means
-        // caching a `pg_type` OID → name lookup at connect; that is future work, and this
-        // assertion is what will notice when it lands (this line will have to change).
+        // Declared type names drive rendering only. Measured: a user-defined type (the ENUM) comes
+        // back as `"?"` (simple protocol, no `Describe`); values are unaffected. This line must
+        // change if an OID → name lookup at connect lands.
         let types: Vec<&str> = set.columns.iter().map(|c| c.type_name.as_str()).collect();
         assert_eq!(
             types,
@@ -435,20 +356,9 @@ mod db_live {
         });
     }
 
-    /// **The guardrail that a plausible implementation would silently void.**
-    ///
-    /// `sqlx::raw_sql` sends a whole `;`-separated script as ONE simple-query batch, and the
-    /// obvious way to make a session read-only is to prepend `SET SESSION CHARACTERISTICS AS
-    /// TRANSACTION READ ONLY` to that string. Measured against this very fixture, that does not
-    /// work: the batch's implicit transaction has already begun with the old characteristics, so
-    /// the `SET` does not bind the statements behind it and **the INSERT succeeds**. Issuing the
-    /// `SET` as its own round trip at connect does bind them.
-    ///
-    /// ⚠️ **An error is not sufficient evidence here, which is the whole point of this test.** The
-    /// first attempt at that measurement returned `ERROR: null value in column "title" violates
-    /// not-null constraint` — a failure that looks exactly like the guard working, while the guard
-    /// had in fact already let the write through and only the schema stopped it. So this test
-    /// asserts on **the absence of the row**, from a separate session, after the script has run.
+    /// Prepending `SET … READ ONLY` to a batch does not bind it (its implicit transaction already
+    /// began); it must be its own round trip. Asserts the row's ABSENCE from another session: an
+    /// error (e.g. NOT NULL) once looked like the guard working while the write had gone through.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn read_only_survives_a_multi_statement_script() {
@@ -534,10 +444,8 @@ mod db_live {
 
     /* ─────────────────────────── redaction, for real ─────────────────────────── */
 
-    /// `sqlx` and libpq echo connection strings — and therefore passwords — into their error text.
-    /// This proves the redaction against a **real** authentication failure rather than a synthetic
-    /// string, with a deliberately hostile password: characters that percent-encode, so a
-    /// redactor matching only the raw bytes would pass while the secret shipped.
+    /// `sqlx`/libpq echo connection strings into errors: proves redaction on a REAL auth failure
+    /// with a password that percent-encodes, which a raw-bytes redactor would miss.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_wrong_password_never_appears_in_the_error() {
@@ -661,19 +569,9 @@ mod db_live {
 
     /* ─────────────── the whole command path, end to end ─────────────── */
 
-    /// **The integration this feature is actually for**: save a connection with a typed password,
-    /// then open it *by id* and run a query — the exact sequence the dialog and the console will
-    /// perform, through the same functions the `#[tauri::command]`s call.
-    ///
-    /// It also asserts the two secret properties on real files, which is the only place they can be
-    /// asserted honestly:
-    ///
-    /// * `db-connections.json` holds **no password**, only a `{{VAR}}` reference.
-    /// * the password is in the **Vault** (`api-store.json`), the one secret store this feature is
-    ///   allowed to use, and `db_open` finds it there without the caller passing it.
-    ///
-    /// Both files live in a temp directory injected via `db::Paths::in_dir`. Nothing here can touch
-    /// the developer's real config directory, which is the whole point.
+    /// Save with a typed password, open by id and query, through the commands' own functions. Real
+    /// temp files (`db::Paths::in_dir`): `db-connections.json` holds only a `{{VAR}}`, the
+    /// password sits in the Vault (`api-store.json`); never the developer's config dir.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn the_whole_command_path_saves_a_connection_then_opens_and_queries_it() {
@@ -718,14 +616,8 @@ mod db_live {
             let opened = agent_studio_scaffold_lib::db::open(&paths, &saved.id, None)
                 .await
                 .unwrap_or_else(|e| panic!("open failed: {} ({})", e.message, e.code.as_str()));
-            // 🔴 **One dial returns BOTH the session and what answered.** The store
-            // used to spend an entire second dial — DNS, TLS handshake, authentication — on
-            // `db_test_connection` purely to learn this string, and then throw that connection
-            // away. Against a remote cluster that roughly doubles the time to open.
-            //
-            // Asserted against a REAL server here because the frontend half (that the store now
-            // calls nothing else) is a mock-level claim: only this proves there is something true
-            // to return.
+            // One dial returns the session AND the server version; asserted against a real
+            // server since the frontend half is only a mock-level claim.
             assert!(
                 opened.server_version.starts_with("PostgreSQL "),
                 "open must report the real server, got {:?}",
@@ -763,46 +655,9 @@ mod db_live {
 
     /* ──────────────── a credential in the QUERY STRING ──────────────── */
 
-    /// **The half that makes the query-string change a feature rather than a saved string.**
-    ///
-    /// A `?password=` parameter stays part of the connection string,
-    /// because every database system accepts it there. So `db_connection_upsert` no longer rejects a
-    /// pasted string carrying `?password=`; it puts the value in the Vault and leaves
-    /// `?password={{VAR}}` in the same parameter. This test is the proof that the resolved value
-    /// really reaches the server **in that parameter**: it saves such a connection, opens it *by
-    /// id* with no password argument, and reads real rows back.
-    ///
-    /// Measured first, with `psql`, before any code was written:
-    ///
-    /// ```text
-    /// psql "postgresql://agentstudio@postgres:5432/maestro?password=agentstudio-test-pw"
-    ///    → works: agentstudio
-    /// psql "postgresql://agentstudio@postgres:5432/maestro?password=wrong-pw"
-    ///    → FATAL:  password authentication failed for user "agentstudio"
-    /// ```
-    ///
-    /// ⚠️ **The route is load-bearing, and it is the trap here.** This fixture's `pg_hba.conf` is
-    /// the stock image one, whose first rules are `local … trust` and
-    /// `host all all 127.0.0.1/32 trust`. A client running *inside* the container and dialling
-    /// `127.0.0.1` therefore authenticates with **trust** — a wrong password succeeds and proves
-    /// nothing. Only the last rule, `host all all all scram-sha-256`, actually checks a password.
-    /// Two routes reach it: the service name `postgres:5432` from inside the compose network, or
-    /// the **host-mapped port** — which is what these tests use, because a connection from the
-    /// host arrives over the Docker bridge (a `172.x`/`192.x` source address), not over the
-    /// container's loopback. That is why `127.0.0.1:55432` from `cargo test` is a real
-    /// authentication and `127.0.0.1:5432` from inside the container is not.
-    /// **The fresh-paste path against a real server — the `?password=` rule, proven.**
-    ///
-    /// The test above pastes a string that still CARRIES the credential. That is not what the
-    /// dialog sends: `db_url_parse` strips the value out and discards it, so upsert receives a
-    /// credential-free URL plus the typed password and a `passwordParam` hint. Nothing in the
-    /// string says `?password=` any more, and until `DbConnectionInput::password_param` existed
-    /// the reference was written into the `user:password@` userinfo instead.
-    ///
-    /// This is the version a user actually performs, and it has to authenticate — the unit tests
-    /// prove the *string* is rebuilt correctly, and only a real server proves that string works.
-    /// The fixture enforces scram-sha-256 on this route, so a green run means Postgres accepted
-    /// a password that travelled paste → strip → Vault → re-render → dial.
+    /// The dialog's path: `db_url_parse` strips the password; upsert gets a credential-free URL,
+    /// the typed password and a `passwordParam` hint. Green means Postgres accepted a password
+    /// that went paste → strip → Vault → re-render → dial (scram on the host-mapped port).
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_stripped_paste_with_a_param_hint_authenticates_against_the_real_server() {
@@ -945,11 +800,8 @@ mod db_live {
                     )
                 });
             let session_id = opened.session_id;
-            // **Named seed rows, never `count(*)`.** The first version of this test asserted
-            // `count(*) = 6` and failed with `7`: the fixture is shared, `cargo test` runs this
-            // tier in parallel, and one of the write probes' rows (ids 9001–9003) was live in
-            // `tracks` at that instant. A count over a mutable table is a flake — the same class
-            // of bug as the shared probe id the constants at the top of this file exist to avoid.
+            // Named seed rows, never `count(*)`: parallel write probes make a count over
+            // `tracks` flaky.
             let sets = agent_studio_scaffold_lib::db::query(
                 &session_id,
                 "SELECT title, tag FROM tracks WHERE id IN (2, 3) ORDER BY id".to_string(),
@@ -977,14 +829,9 @@ mod db_live {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The wrong-password counterpart, so the test above cannot be green because authentication is
-    /// not happening at all — and redaction for the new position.
-    ///
-    /// The wrong value is deliberately **hostile** (`&`, `=`, `?`, `#`, `/`, `:`, unicode): those
-    /// are the characters a naive splice would let terminate the parameter, and a mangled string
-    /// fails with something *other* than `auth` — a missing database, an unparseable URL, a
-    /// different host. So `code == auth` is itself evidence that the whole value arrived at the
-    /// server as one parameter, and the absence of the value from the message is redaction.
+    /// Wrong-password control for the test above, plus redaction. The hostile value (`&=?#/:`,
+    /// unicode) would make a naive splice fail as something other than `auth`, so `auth` proves
+    /// it arrived as one parameter.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_wrong_query_string_password_is_an_auth_failure_that_never_echoes_it() {
@@ -1053,23 +900,9 @@ mod db_live {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The multi-statement speed bump, against a real server: a script is refused *before*
-    /// anything is sent when the connection has not opted in. Refused by us, not by the server —
-    /// stated plainly here because that is the difference between this control and read-only.
-    /// 🔴 **The escape the read-only badge did not cover, measured against the fixture.**
-    ///
-    /// Postgres refuses `SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE; INSERT …` inside
-    /// ONE batch, because a batch is a single implicit transaction whose access mode is already
-    /// fixed. That made it look safe. It is not: across **two round trips on the same session**
-    /// — which is exactly what this console does, one `run` per press of ⌘⏎ — the pair succeeds.
-    /// Measured against the fixture before the fix:
-    ///
-    /// ```text
-    /// psql -c 'SET … READ ONLY' -c 'SET … READ WRITE' -c 'INSERT …'   → SET / SET / INSERT 0 1
-    /// ```
-    ///
-    /// `guard::read_only_escape` refuses the statement, on both engines. It is a client-side
-    /// speed bump and is documented as one — the unconditional boundary is a read-only account.
+    /// Measured: Postgres refuses `SET … READ WRITE; INSERT` in one batch but accepts it across two
+    /// round trips on one session (what the console does). `guard::read_only_escape` refuses it;
+    /// a client-side speed bump, the real boundary is a read-only account.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_statement_that_would_turn_read_only_off_is_refused() {
@@ -1158,24 +991,8 @@ mod db_live {
 
     /* ─────────────── the URL override and the password typed beside it ─────────────── */
 
-    /// 🔴 **The dropped-password bug, end to end against a real PostgreSQL.**
-    ///
-    /// The configuration was `Connection type: URL only` with
-    /// `postgresql://gazelle@localhost:5433/orders` — a string our own importer had *stripped*
-    /// the password out of, leaving no `{{VAR}}` behind — plus the password typed into the field
-    /// the dialog points at. Every engine but ClickHouse read "a URL is present" as "ignore the
-    /// password field", so the app dialled with **no password**. Nothing covered that pairing, which
-    /// is exactly why it shipped.
-    ///
-    /// Three claims, and the second is what makes the first mean anything:
-    ///
-    /// 1. a URL carrying **no** credential plus a typed password connects and returns a row;
-    /// 2. the same URL with the typed password **wrong** fails as `auth` — without this the test
-    ///    would pass against a server that accepts anything, which is not hypothetical here
-    ///    (the stock `pg_hba.conf` trusts loopback, which is why every password assertion in
-    ///    this file arrives on the host-mapped port over the Docker bridge);
-    /// 3. a URL that **does** carry a password keeps its own, proved by making the typed one wrong
-    ///    and the connection succeeding anyway.
+    /// A URL without a credential uses the typed password; a wrong typed one fails as `auth` (so
+    /// auth really happens); a URL carrying its own password keeps it.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_url_with_no_password_uses_the_one_typed_beside_it_and_a_url_with_one_keeps_its_own() {
@@ -1254,17 +1071,8 @@ mod db_live {
     }
 }
 
-/// **The MySQL family, against the real MySQL 8.4.6 in `docker/db-fixtures`.**
-///
-/// A separate module rather than a parameterised version of `db_live` above, for one reason worth
-/// stating: the two engines' *claims* differ, and a shared harness would push those differences
-/// into flags until the tests stopped saying anything specific. In particular
-/// `max_execution_time` is SELECT-only on MySQL while Postgres's `statement_timeout` is not, and
-/// MySQL refuses a same-batch write that Postgres runs — the asymmetries are the interesting part.
-///
-/// Probe ids live in the **9100** range so nothing here can collide with the Postgres module's
-/// 9000s even though they hit different servers (one shared mutable row between parallel tests
-/// is a flake, and the fix is disjoint ids, not coordination).
+/// MySQL 8.4 live tier, separate from `db_live` because the engines' claims differ (e.g.
+/// `max_execution_time` is SELECT-only, same-batch writes are refused). Probe ids in the 9100s.
 mod db_live_mysql {
     use super::*;
 
@@ -1293,12 +1101,8 @@ mod db_live_mysql {
             database: DATABASE.to_string(),
             user: USER.to_string(),
             password: password.to_string(),
-            // `Prefer` for the same reason as the Postgres module: it encrypts when the server
-            // offers it (MySQL 8.4 auto-generates a self-signed cert, so it does) without
-            // verifying a chain no fixture can have. This is also what makes the run below proof
-            // that `caching_sha2_password` completes WITHOUT the forbidden `mysql-rsa` feature:
-            // MySQL 8.4 disables `mysql_native_password`, and full sha2 auth needs either RSA
-            // key exchange or a TLS tunnel. `agentstudio` is a `caching_sha2_password` account.
+            // `Prefer` encrypts with the server's self-signed cert without verifying a chain,
+            // which also lets `caching_sha2_password` complete without the `mysql-rsa` feature.
             ssl_mode: SslMode::Prefer,
             ca_pem: None,
             options: Default::default(),
@@ -1432,22 +1236,16 @@ mod db_live_mysql {
             "id's type name was {:?}",
             types[0]
         );
-        // ⚠️ `BOOLEAN`, not `TINYINT`. The seed's comment says MySQL reports `boolean` as
-        // `tinyint(1)` — true of the mysql CLI, and NOT of what arrives here: sqlx's
-        // `MySqlTypeInfo` normalises it back to `BOOLEAN`. An earlier version of this assertion
-        // expected TINYINT and failed, which is the test correcting an assumption rather than
-        // finding a bug. Asserted as what the driver really reports, since that is what the
-        // column header will show the user.
+        // `BOOLEAN`, not `TINYINT`: sqlx's `MySqlTypeInfo` normalises `tinyint(1)` back, and
+        // the header shows what the driver reports.
         assert_eq!(
             types[2].to_ascii_uppercase(),
             "BOOLEAN",
             "ok's type name was {:?}",
             types[2]
         );
-        // A `blob` whose bytes ARE valid UTF-8 comes through as that text — row 1's
-        // `X'48656C6C6F'` is literally "Hello". An earlier version asserted hex here and failed
-        // with `left: "Hello"`: the byte fallback is reached by *undecodable* bytes, not by the
-        // column being declared `blob`. The test corrected the assumption.
+        // A `blob` of valid UTF-8 comes through as text ("Hello"); only undecodable bytes fall
+        // back to hex.
         assert_eq!(
             sets[0].rows[0][4].clone().expect("raw is not NULL"),
             "Hello"
@@ -1481,10 +1279,7 @@ mod db_live_mysql {
         assert_eq!(sets.len(), 1);
         assert_eq!(sets[0].kind, DbResultKind::Message);
         let msg = sets[0].notice.clone().unwrap_or_default();
-        // The message is OURS, not MySQL's echo — the `blocked` code was
-        // made uniform in provenance so the frontend could stop discarding it, which meant the
-        // server's own words ("read only", error 1792) no longer travel. The refusal is still
-        // proven; what changed is whose sentence describes it.
+        // The `blocked` message is ours, not MySQL's ("read only", error 1792).
         assert!(
             msg.to_lowercase().contains("read-only"),
             "the server did not refuse the write: {msg}"
@@ -1554,13 +1349,9 @@ mod db_live_mysql {
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_statement_that_would_turn_read_only_off_is_refused() {
-        // 🔴 **The finding this test exists for, measured against the fixture.** MySQL applies
-        // `SET SESSION TRANSACTION READ WRITE` immediately, so the very next autocommit
-        // statement writes — the fixture accepted `rows_affected: Some(1)` before
-        // `guard::read_only_escape` existed. (Postgres refuses that *same batch*, because a
-        // batch is one implicit transaction whose access mode is already fixed — but it accepts
-        // the same pair across two round trips, which is what our console does. Both engines
-        // are affected; see the Postgres module's version of this test.)
+        // Measured: MySQL applies `SET SESSION TRANSACTION READ WRITE` at once, so the next
+        // autocommit statement writes; `guard::read_only_escape` must refuse it (Postgres too,
+        // across round trips).
         let out = rt().block_on(async {
             let engine = engine_for(DbEngineId::Mysql).expect("mysql is wired");
             let mut s = engine.open(&config(true, PASSWORD)).await.expect("open");
@@ -1694,10 +1485,8 @@ mod db_live_mysql {
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn aurora_mysql_dials_the_same_wire_and_reports_its_own_label() {
-        // Aurora MySQL is registered against the same engine type. This proves the *pairing* is
-        // right — the descriptor is Aurora's — while dialling the only MySQL-compatible server
-        // this repo ships. Stated plainly: no Aurora cluster was contacted, so nothing here
-        // claims anything about Aurora's failover or reader-endpoint behaviour.
+        // Proves Aurora's descriptor is paired with this engine, against plain MySQL; no Aurora
+        // cluster was contacted, so nothing is claimed about failover or reader endpoints.
         let engine = engine_for(DbEngineId::AuroraMysql).expect("aurora mysql is wired");
         assert_eq!(engine.spec().label, "Amazon Aurora MySQL");
 
@@ -1717,24 +1506,8 @@ mod db_live_mysql {
 
     /* ─────────────── the URL override and the password typed beside it ─────────────── */
 
-    /// 🔴 **The dropped-password bug, end to end against a real MySQL.**
-    ///
-    /// The configuration was `Connection type: URL only` with
-    /// `postgresql://gazelle@localhost:5433/orders` — a string our own importer had *stripped*
-    /// the password out of, leaving no `{{VAR}}` behind — plus the password typed into the field
-    /// the dialog points at. Every engine but ClickHouse read "a URL is present" as "ignore the
-    /// password field", so the app dialled with **no password**. Nothing covered that pairing, which
-    /// is exactly why it shipped.
-    ///
-    /// Three claims, and the second is what makes the first mean anything:
-    ///
-    /// 1. a URL carrying **no** credential plus a typed password connects and returns a row;
-    /// 2. the same URL with the typed password **wrong** fails as `auth` — without this the test
-    ///    would pass against a server that accepts anything, which is not hypothetical here
-    ///    (the stock `pg_hba.conf` trusts loopback, which is why every password assertion in
-    ///    this file arrives on the host-mapped port over the Docker bridge);
-    /// 3. a URL that **does** carry a password keeps its own, proved by making the typed one wrong
-    ///    and the connection succeeding anyway.
+    /// A URL without a credential uses the typed password; a wrong typed one fails as `auth` (so
+    /// auth really happens); a URL carrying its own password keeps it.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_url_with_no_password_uses_the_one_typed_beside_it_and_a_url_with_one_keeps_its_own() {
@@ -1805,14 +1578,8 @@ mod db_live_mysql {
     }
 }
 
-/// **ClickHouse, against the real 25.6 in `docker/db-fixtures`, over its HTTP interface.**
-///
-/// The fixture publishes only port 8123 (HTTP), so these run with `SslMode::Disable`. The TLS
-/// ladder is exercised by the unit tests in `db/clickhouse.rs` and by the live TLS smokes in
-/// `http.rs` — nothing here claims ClickHouse-over-TLS was proven, because this repo ships no
-/// ClickHouse with a certificate.
-///
-/// Probe ids live in the **9200** range (disjoint from the 9000s and 9100s).
+/// ClickHouse 25.6 over HTTP (port 8123, `SslMode::Disable`): TLS is NOT proven here (unit
+/// tests in `db/clickhouse.rs` and `http.rs`'s smokes cover the ladder). Probe ids: 9200s.
 mod db_live_clickhouse {
     use super::*;
 
@@ -1885,12 +1652,7 @@ mod db_live_clickhouse {
         out.unwrap_or_else(|e| panic!("run failed: {} ({})", e.message, e.code.as_str()))
     }
 
-    /// 🔴 **The `url` override really dials; an earlier version IGNORED it.**
-    ///
-    /// The dialog's URL box says *"Overrides settings above"*; this engine read `host`/`port` and
-    /// nothing else, so pasting a URL did literally nothing. A unit test proves the string we build;
-    /// only this proves the built string is what reaches a real server — so the `host` field is set
-    /// to a host that does not exist, and the run can only succeed if the override won.
+    /// The `url` override must really dial: `host` points nowhere, so success means the URL won.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_url_override_is_what_actually_dials() {
@@ -2138,11 +1900,8 @@ mod db_live_clickhouse {
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn read_only_cannot_be_turned_off_by_sql_here_and_the_server_says_so() {
-        // 🔴 The contrast with the SQL engines. On Postgres and MySQL a session's read-only is a
-        // *default for later transactions* that the user's own SQL can change, which is why
-        // `guard::read_only_escape` exists. ClickHouse sends `readonly=1` on EVERY request and
-        // the server refuses to modify the setting — so the escape does not exist, and this is
-        // the test that proves the difference rather than assuming it.
+        // Unlike Postgres/MySQL, ClickHouse sends `readonly=1` on EVERY request and the server
+        // refuses to change it, so there is no read-only escape; this proves it.
         let sets = rt().block_on(run(
             true,
             "SET readonly = 0",
@@ -2239,12 +1998,8 @@ mod db_live_clickhouse {
     }
 }
 
-/// **The connection tree, walked against all three real engines.**
-///
-/// One module rather than three, because the *point* is that the same walk works on engines whose
-/// hierarchies differ — and the differences are asserted rather than smoothed over: PostgreSQL has
-/// a schema level and can only see the database it is connected to, while MySQL and ClickHouse
-/// list every database on the server and have no schemas.
+/// The connection tree walked on all three SQL engines, differences asserted: Postgres has
+/// schemas and sees only its database; MySQL and ClickHouse list every database, no schemas.
 mod db_live_tree {
     use super::*;
     use agent_studio_scaffold_lib::db::tree::{DbGroup, DbNodeKind, DbNodeRef};
@@ -2566,10 +2321,8 @@ mod db_live_tree {
         });
     }
 
-    /// 🔴 **A catalog query must not be splice-able.** The tree passes names that came from the
-    /// server back into the next query, and a table created as `x'; DROP …` would otherwise be
-    /// injected. Every engine binds them (ClickHouse via `{name:String}` parameters), so a hostile
-    /// name is *data* — it simply matches nothing.
+    /// Server-supplied names are bound, never spliced (ClickHouse via `{name:String}`), so a
+    /// table named `x'; DROP …` is data that matches nothing.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_hostile_object_name_is_data_and_not_sql() {
@@ -2598,27 +2351,9 @@ mod db_live_tree {
     }
 }
 
-/// **MongoDB, against the real 8.0 in `docker/db-fixtures`, through the official driver.**
-///
-/// The fixture publishes no TLS listener, so these run with `SslMode::Disable`. Nothing here
-/// claims MongoDB-over-TLS was proven — the ladder is exercised by the unit tests in
-/// `db/mongo.rs`, and this repo ships no MongoDB with a certificate.
-///
-/// Probe ids live in the **9300** range (disjoint from the 9000s, 9100s and 9200s),
-/// spelled as ObjectIds so they sort after the seed's `oid(1..6)` and cannot collide with it.
-///
-/// 🔴 **Two fixture constraints shape every write here.**
-///
-/// 1. **No test may create a collection.** `compose.yaml`'s healthcheck asserts
-///    `db.getCollectionNames().length === 6` every two seconds, so a seventh collection — even for
-///    a moment — makes the container `unhealthy` and blocks the *whole* database tier for every
-///    engine (an untested engine must never block the tier). Write probes therefore go into
-///    the existing `tracks`, and the `$merge` control targets the existing, deliberately-empty
-///    `studios`.
-/// 2. **That is also why `$out` has no read-write control.** `$out` stages through a temporary
-///    `tmp.agg_out.*` collection, which would appear in that count. The `$merge` test below is the
-///    negative control that proves the refusal is our filter and not a typo; `$out`
-///    is only proved refused.
+/// MongoDB 8.0 via the official driver (`SslMode::Disable`; TLS not proven); probe ids in the
+/// 9300s as ObjectIds. Never create a collection: the healthcheck requires exactly 6, so writes
+/// use `tracks`/`studios`, and `$out` (stages a temp collection) has no read-write control.
 mod db_live_mongo {
     use super::*;
     use agent_studio_scaffold_lib::db::tree::{DbGroup, DbNodeKind, DbNodeRef};
@@ -2789,17 +2524,8 @@ mod db_live_mongo {
         assert_eq!(sets[0].notice, None, "{:?}", sets[0].notice);
     }
 
-    /// 🔴 **A SQL statement, RUN against a real MongoDB.**
-    ///
-    /// The whole history in one test. `select * from …` first failed as if the *connection* were
-    /// broken (a code→sentence mapper discarding the engine's message), then was refused with an
-    /// honest explanation that MongoDB has no SQL. SQL-first tools run that exact statement — they
-    /// translate client-side — so this app does too, and the assertion below is the reverse of
-    /// what this test first asserted.
-    ///
-    /// Only a live run proves the translation is a command the SERVER accepts; the unit tests pin
-    /// the document, and this pins that MongoDB agrees with it. Against the Docker fixture only,
-    /// never anyone's real cluster.
+    /// SQL is translated client-side and RUN; only a live run proves the server accepts the
+    /// translated command (unit tests pin the document). Docker fixture only.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_select_star_is_translated_and_really_runs() {
@@ -2833,11 +2559,7 @@ mod db_live_mongo {
         );
     }
 
-    /// 🔴 A translation that changes meaning must say so in the RESULT.
-    ///
-    /// `IS NULL` becomes `{"f": null}`, which in MongoDB matches an **absent** field as well as a
-    /// null one — a real difference from SQL that a person reading the rows would never learn from
-    /// the rows.
+    /// `IS NULL` → `{"f": null}` also matches ABSENT fields in MongoDB, so the result must say so.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_translation_that_changes_meaning_says_so_in_the_result() {
@@ -2855,18 +2577,8 @@ mod db_live_mongo {
         assert!(!plain_notice.contains("absent"), "{plain_notice}");
     }
 
-    /// 🔴 **`{"count": "temp_playlists"}`, against a real server.**
-    ///
-    /// It showed `clusterTime`, `signature`, `hash` and `keyId` in the grid — MongoDB's session
-    /// envelope, which rides on **every** reply — with the answer pushed off the side. Only a live
-    /// test can prove this: the envelope is added by the server, so a hand-built fixture document
-    /// would not have it and the bug would be invisible.
-    /// 🔴 **`$db` reaches another database, against a real server.**
-    ///
-    /// A connection made from an SRV URI with no `/dbname` was bound to `admin`, so its
-    /// `find` searched a database nobody named and answered with an empty cursor and no error.
-    /// This proves the escape hatch works: the session is bound to `maestro`, and `$db` sends the
-    /// command somewhere else.
+    /// `$db` sends the command to a database other than the session's (`maestro`); without it a
+    /// URI with no `/dbname` silently searched `admin`.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_db_override_runs_the_command_against_another_database() {
@@ -2889,6 +2601,8 @@ mod db_live_mongo {
         );
     }
 
+    /// The session envelope rides on every reply and only a real server adds it, so a
+    /// hand-built fixture document could never show the bug.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_count_shows_its_number_and_not_the_protocol_envelope() {
@@ -2902,21 +2616,13 @@ mod db_live_mongo {
         let notice = sets[0].notice.as_deref().unwrap_or_default();
         assert!(notice.contains("protocol envelope"), "{notice}");
         assert!(notice.contains("ok"), "{notice}");
-        // 🔴 `$clusterTime`/`operationTime` — the fields the bug actually showed — are **absent
-        // here on purpose**: they are causal-consistency metadata that only a REPLICA SET sends,
-        // and this fixture is a standalone `mongod`. An Atlas cluster is a replica set, which is
-        // why the bug was visible there and cannot be reproduced against this container. The unit
-        // test `a_command_reply_shows_its_answer_and_not_the_protocol_envelope` carries that case
-        // with a synthesised reply — said out loud, because "the live test passed" would otherwise
-        // read as coverage of the exact thing it cannot reach.
+        // `$clusterTime`/`operationTime` come only from a replica set, not this standalone
+        // `mongod`; the unit test `a_command_reply_shows_its_answer_and_not_the_protocol_envelope`
+        // covers them with a synthesised reply.
     }
 
-    /// 🔴 **An empty result explains itself now.**
-    ///
-    /// `{"find": "temp_playlists", "limit": 10}` answered *"No rows. The statement ran and matched
-    /// nothing"* — true whether the collection is empty, absent, or in a different database. Mongo
-    /// returns an empty cursor for a missing collection **with no error**, so silence is the one
-    /// thing the server will never explain.
+    /// Mongo returns an empty cursor with no error for a missing collection, so an empty result
+    /// must say whether the collection exists.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn an_empty_result_says_whether_the_collection_is_even_there() {
@@ -2934,13 +2640,8 @@ mod db_live_mongo {
             "and name the database: {notice}"
         );
 
-        // Present but matching nothing — the OTHER fact, which must read differently or the notice
-        // is just decoration.
-        //
-        // 🔴 A FILTER that matches nothing, not the "deliberately empty" `studios` collection: an
-        // earlier version used `studios` and failed, because the `$merge` tests write a probe
-        // document into it and `cargo test` runs this tier in parallel — an assertion about a shared
-        // fixture's contents is a flake by construction.
+        // Present but matching nothing must read differently. Uses a non-matching FILTER, not
+        // `studios`: parallel `$merge` tests write into it.
         let empty = rt().block_on(run(
             true,
             r#"{"find": "tracks", "filter": {"title": "NO-SUCH-TITLE-EVER"}, "limit": 10}"#,
@@ -3007,13 +2708,8 @@ mod db_live_mongo {
         );
     }
 
-    /// 🔴 **The three states, from one query, and the honest half of the finding.**
-    ///
-    /// `tag: null` (doc 2), `tag: ""` (doc 3) and `tempo` **absent** (doc 6) are three distinct
-    /// MongoDB states, and `Vec<Vec<Option<String>>>` has two cells. Null and the empty string
-    /// stay distinct; **absent collapses into the null cell**, and the result's `notice` is what
-    /// carries the difference. See `db/mongo.rs`'s module doc for the proof that no encoding into
-    /// the current contract can do better, and for the one extra field that would fix it.
+    /// Null, `""` and ABSENT are three MongoDB states but the cell has two: absent collapses into
+    /// null and the `notice` carries it (see `db/mongo.rs`'s module doc).
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn all_three_null_states_come_back_and_the_notice_names_the_absent_field() {
@@ -3074,13 +2770,8 @@ mod db_live_mongo {
         assert_eq!(complete[0].notice, None, "{:?}", complete[0].notice);
     }
 
-    /// 🔴 **`Decimal128` must not round-trip through an `f64`.**
-    ///
-    /// The trailing zeros are the tell: `0.5000` would be `0.5` and `-2.5000` would be
-    /// `-2.5` if anything on this path parsed the value as a float. `seq` is the same point for
-    /// `Int64`: 2^53 + 1 is the smallest integer an `f64` cannot represent, and `mongosh`'s own
-    /// *relaxed* extended JSON gets it wrong (it prints …992), so this asserts a value our
-    /// renderer is measurably more exact about than the reference tool.
+    /// Trailing zeros (`0.5000`) and 2^53 + 1 would be lost through an `f64`; `mongosh`'s relaxed
+    /// JSON gets the latter wrong.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn decimal128_and_int64_arrive_with_their_exact_digits() {
@@ -3156,12 +2847,8 @@ mod db_live_mongo {
         rt().block_on(cleanup("tracks", PROBE_INSERT));
     }
 
-    /// 🔴 **The structural `$out`/`$merge` refusal, and the string-search trap.**
-    ///
-    /// `aggregate` IS on the read-only allowlist, so the only thing that can stop a `$out` stage is
-    /// the walk over the parsed BSON. Both spellings below are refused; the second one is the case
-    /// a `text.contains("$out")` implementation cannot catch, because JSON's `$` escape means
-    /// the request body never contains the substring at all.
+    /// `aggregate` is allowlisted, so only the BSON walk stops `$out`; the escaped spelling has
+    /// no `$out` substring, which a `text.contains` check would miss.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_write_stage_is_refused_structurally_including_one_a_string_search_cannot_see() {
@@ -3196,12 +2883,8 @@ mod db_live_mongo {
         assert!(sets[0].rows.is_empty(), "no fixture document has that tag");
     }
 
-    /// The read-write control for the write-stage guard, using `$merge` rather than `$out`.
-    ///
-    /// `$merge` writes in place, so it cannot create the temporary collection that would trip the
-    /// fixture's exactly-six healthcheck (see the module doc). The target is `studios`, the seed's
-    /// deliberately-empty collection, and the probe document is deleted again — so `studios` is left
-    /// empty, which is what the seed comment says it is for.
+    /// Read-write control via `$merge` (writes in place, no temp collection to trip the
+    /// exactly-six healthcheck) into empty `studios`; the probe is deleted again.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn the_same_write_stage_succeeds_on_a_read_write_session() {
@@ -3339,20 +3022,9 @@ mod db_live_mongo {
         assert!(truncated[0].truncated, "2000 documents under a cap of 3 is");
     }
 
-    /// Two documents: neither runs, and the report says which problem it is.
-    ///
-    /// **Changed deliberately, and the old assertion was the weaker one.** This used to require a
-    /// *rejection* carrying `invalid-config`, and it asserted only the code — while its name
-    /// promised "rather than running the first", which it never checked (a test named after a
-    /// guarantee is not a test of that guarantee).
-    ///
-    /// It is now an `invalid-statement` **message result**, for a reason specific to this engine:
-    /// one command document per request is a property of the MongoDB wire protocol, not a policy.
-    /// `allowMultiStatement` cannot switch it on, so reporting it as `blocked` — the code the SQL
-    /// engines' multi-statement guard uses — would tell the user to change a setting that would
-    /// not help. What they need is the sentence, and this is the shape that carries it.
-    ///
-    /// The guarantee in the name is now actually tested: a `find` that had run would return rows.
+    /// One command document per request is a wire-protocol property, not a policy, so this is an
+    /// `invalid-statement` message (not `blocked`, which suggests a setting). A run `find` would
+    /// return rows.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_second_command_document_is_refused_rather_than_running_the_first() {
@@ -3401,11 +3073,8 @@ mod db_live_mongo {
                 .expect("groups");
             assert_eq!(groups.len(), 1, "{groups:#?}");
             assert_eq!(groups[0].kind, DbNodeKind::Group);
-            // ⚠️ FINDING, recorded rather than worked around: one could expect the literal
-            // string `collections (6)`, but the implemented node shape is a `label` plus a
-            // `sub_label` and `tree::count_label` spells the count as "6 collections". Rather than
-            // hand-rolling a second label function (which would then disagree with every other
-            // engine's group rows), this asserts what the shared helpers actually produce.
+            // `tree::count_label` spells the count "6 collections"; assert the shared helper's
+            // output rather than add a second label function.
             assert_eq!(groups[0].label, "Collections");
             assert_eq!(groups[0].sub_label.as_deref(), Some("6 collections"));
             assert!(groups[0].expandable);
@@ -3490,12 +3159,8 @@ mod db_live_mongo {
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn it_hands_out_no_cancel_handle_because_it_has_no_server_side_cancel() {
-        // Dropping the cursor is not a cancel, and a real `killOp` needs `currentOp`
-        // privileges. A Stop button that silently does nothing is worse than one that says so.
-        //
-        // 🔴 The refusal is STRUCTURAL — `cancel_handle()` returns `None`
-        // rather than every call returning a runtime error. That lets `db_cancel` say so
-        // without a round trip, and it keeps "cannot" distinct from "tried and failed".
+        // Dropping a cursor is not a cancel and `killOp` needs privileges, so cancel is
+        // STRUCTURALLY absent (`cancel_handle()` is `None`): "cannot", not "tried and failed".
         rt().block_on(async {
             let session = open(true).await;
             assert!(
@@ -3508,29 +3173,8 @@ mod db_live_mongo {
 
     /* ─────────────── the URL override and the password typed beside it ─────────────── */
 
-    /// 🔴 **The dropped-password bug, end to end against a real MongoDB.**
-    ///
-    /// The configuration was `Connection type: URL only` with
-    /// `postgresql://gazelle@localhost:5433/orders` — a string our own importer had *stripped*
-    /// the password out of, leaving no `{{VAR}}` behind — plus the password typed into the field
-    /// the dialog points at. Every engine but ClickHouse read "a URL is present" as "ignore the
-    /// password field", so the app dialled with **no password**. Nothing covered that pairing, which
-    /// is exactly why it shipped.
-    ///
-    /// Three claims, and the second is what makes the first mean anything:
-    ///
-    /// 1. a URL carrying **no** credential plus a typed password connects and returns a row;
-    /// 2. the same URL with the typed password **wrong** fails as `auth` — without this the test
-    ///    would pass against a server that accepts anything, which is not hypothetical here
-    ///    (the stock `pg_hba.conf` trusts loopback, which is why every password assertion in
-    ///    this file arrives on the host-mapped port over the Docker bridge);
-    /// 3. a URL that **does** carry a password keeps its own, proved by making the typed one wrong
-    ///    and the connection succeeding anyway.
-    ///
-    /// ⚠️ `authSource=admin` is written into the URI rather than left to the `options` map: the
-    /// URL branch hands the *string* to the driver, so a setting that is not in the string is not in
-    /// the credential. That is the pre-existing shape of this engine and it is not what was fixed
-    /// here — noted so the URI below does not read as superstition.
+    /// A URL without a credential uses the typed password; a wrong typed one fails as `auth`; a
+    /// URL with its own keeps it. `authSource=admin` is in the URI: the URL is sent as-is.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_uri_with_no_password_uses_the_one_typed_beside_it_and_a_uri_with_one_keeps_its_own() {
@@ -3600,21 +3244,8 @@ mod db_live_mongo {
         assert_eq!(sets[0].rows.len(), 1);
     }
 
-    /// 🔴 **A connection that opens but returns nothing.**
-    ///
-    /// The quietest bug in this feature so far, and MongoDB is where it did the most damage.
-    /// `MongoSession.database` was `cfg.database` — the *form field* — while the connection had been
-    /// made from the URI. Under `Connection type: URL only` that field is empty, and
-    /// `command_database()` falls back to **`admin`**, which exists and answers. So the connection
-    /// opened, the probe passed, the command succeeded, and `{"find": "tracks"}` returned **zero
-    /// documents and no error**: an empty grid with nothing anywhere saying why.
-    ///
-    /// That is why this asserts on a **row that must be there**. An assertion that the call merely
-    /// succeeded is exactly the assertion that passed all along.
-    ///
-    /// The negative control is the second half: pointed at a database that really has no `tracks`,
-    /// the same query must come back empty — otherwise this test would pass on an engine that
-    /// ignored the database entirely and searched everything.
+    /// Under `URL only` the form's database is empty, and falling back to `admin` returned zero
+    /// documents with no error. So assert a row that must be there, and emptiness elsewhere.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_uri_that_names_the_database_queries_that_database_and_not_admin() {
@@ -3677,41 +3308,9 @@ mod db_live_mongo {
     }
 }
 
-/// **An empty port field, proven against real servers — plus the honest limits of that proof**
-/// (for `DbConnection::port: Option<u16>` and `DbConnection::srv`).
-///
-/// ## Why there is a loopback forwarder in here
-///
-/// The whole point of the change is that a record with **no port** dials the engine's standard port
-/// (5432 / 3306). The fixture is deliberately published on 55432 / 53306 — non-default *precisely*
-/// so it cannot be mistaken for a developer's own database (`docker/db-fixtures/compose.yaml` says
-/// so: a development machine commonly already has something on 5432 and 3306). So
-/// there is nothing listening on the port a no-port record dials, and the only way to *prove* the
-/// behaviour rather than assert it is to put a byte pump on the standard port and let the driver
-/// find it there.
-///
-/// That is a real proof, not a stand-in: the record round-trips through a real file, `db::open`
-/// resolves the password out of the Vault, the sqlx driver picks the port itself, a real TCP
-/// connection is made **to 5432**, and a real server answers a real query. The forwarder copies
-/// bytes and knows nothing about the protocol — if the driver dialled any other port, the pump would
-/// never see a connection and the test would fail to open.
-///
-/// ## When 5432 / 3306 are already taken, this test SKIPS — loudly
-///
-/// A developer with their own PostgreSQL on 5432 cannot lend it to us, and `npm run verify` treats
-/// this file as a **blocking** tier. Failing there would make the gate red for a reason that has
-/// nothing to do with the code — a permanently-red gate gets waved through, and an untested engine
-/// must never block the tier. So an `AddrInUse` prints a named
-/// SKIPPED line and returns. The port-resolution logic itself is pinned **hermetically and
-/// unconditionally** by `engine.rs`'s `an_empty_port_field_dials_the_engines_standard_port`, so a
-/// skip here loses the end-to-end evidence and none of the coverage.
-///
-/// ## What is NOT in this module, deliberately
-///
-/// **No test dials MongoDB Atlas.** `mongodb+srv://` is how Atlas is reached and the fix that makes
-/// it representable is real, but there is no Atlas cluster in this fixture and this tier must not
-/// depend on a third party's DNS or uptime. The SRV evidence is therefore hermetic and stops where
-/// the honesty does — see `db::mongo`'s module doc for the table of what is and is not proven.
+/// A record with no port dials the standard port (5432/3306): a byte pump there forwards to the
+/// fixture, so only that dial can connect. Port taken → a loud SKIP (the logic is pinned in
+/// `engine.rs`). No test dials Atlas; SRV evidence is hermetic (`db::mongo`).
 mod db_live_port_and_srv {
     use super::*;
     use tokio::net::{TcpListener, TcpStream};
@@ -3744,10 +3343,8 @@ mod db_live_port_and_srv {
         dir
     }
 
-    /// Bind `listen` and pump every connection to `to`, until the returned handle is dropped.
-    ///
-    /// `Ok(None)` means the port is already in use — see the module doc for why that is a skip and
-    /// not a failure. Everything else is a real error and panics.
+    /// Pump every connection on `listen` to `to` until the handle drops; `None` = port in use
+    /// (a skip, see the module doc). Other errors panic.
     async fn forward(listen: u16, to: u16) -> Option<tokio::task::JoinHandle<()>> {
         let listener = match TcpListener::bind((HOST, listen)).await {
             Ok(l) => l,
@@ -3778,11 +3375,8 @@ mod db_live_port_and_srv {
 
     const SEED_QUERY: &str = "SELECT title, tag FROM tracks WHERE id IN (2, 3) ORDER BY id";
 
-    /// Save a draft with **no port**, open it by id, and read real rows back.
-    ///
-    /// Everything after the draft is the production path: `upsert` → the file on disk → `open`
-    /// (which resolves the Vault reference itself) → `query`. The only thing the test supplies is a
-    /// listener on the standard port.
+    /// Save a draft with no port, then the production path (`upsert` → file → `open` → `query`);
+    /// the test supplies only the listener on the standard port.
     fn no_port_connects(tag: &str, engine: &str, standard: u16, fixture: u16, ssl_mode: &str) {
         let dir = temp_dir(tag);
         let paths = agent_studio_scaffold_lib::db::Paths::in_dir(&dir);
@@ -3872,26 +3466,16 @@ mod db_live_port_and_srv {
         );
     }
 
-    /// 🔴 **A record written by the previous build still works.** Not "still parses" — *connects*.
-    ///
-    /// The port went from `u16` to `Option<u16>` and `srv` did not exist, so every connection
-    /// already on a user's disk is in the old shape. The file below is written by hand, key for key,
-    /// as the old serialiser would have produced it: a bare number for `port` and no `srv` at all. A
-    /// fixture generated by today's code could not express the old shape, which is the point.
-    ///
-    /// If `#[serde(default)]` were missing on either new field, `store::load` would fall back to an
-    /// empty store — and the user's connection list would be silently gone. That failure arrives as
-    /// silence, so it gets a test that ends in real rows.
+    /// A hand-written previous-shape record (numeric `port`, no `srv`) must connect: without
+    /// `#[serde(default)]`, `store::load` would silently fall back to an empty store.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_record_in_the_previous_shape_still_loads_and_queries() {
         let dir = temp_dir("old-shape");
         let paths = agent_studio_scaffold_lib::db::Paths::in_dir(&dir);
 
-        // The Vault entry the old record's `{{VAR}}` points at. Created through the ordinary save
-        // path — `api_store::save` is `pub(crate)` and this is a separate crate, which is the right
-        // way round: the Vault file is written by the real writer, and the reference name comes back
-        // from `upsert` instead of being a guess about how names are minted.
+        // Seed the Vault through the ordinary save path (`api_store::save` is `pub(crate)`), so
+        // the reference name comes from `upsert`, not a guess.
         let seed: agent_studio_scaffold_lib::db::model::DbConnectionInput =
             serde_json::from_str(&format!(
                 r#"{{"name":"Old Fixture","engine":"postgres","host":"{HOST}","port":{PG_FIXTURE},
@@ -3969,18 +3553,8 @@ mod db_live_port_and_srv {
     }
 }
 
-/// **Redis, against the real 8.2.1 in `docker/db-fixtures`, through `redis-rs`.**
-///
-/// The fixture publishes no TLS listener, so these run with `SslMode::Disable` — nothing here
-/// claims Redis-over-TLS was proven. `redis.rs`'s unit tests exercise which `ConnectionAddr` each
-/// SSL mode asks for; a `rediss://` handshake is not proven anywhere and is stated as such.
-///
-/// Probe keys live under the **`probe:9400:`** prefix (every other engine's probe ids are numeric
-/// row ids, and a prefix is Redis's equivalent of owning your own rows).
-///
-/// 🔴 **Unlike Mongo's, this fixture's healthcheck does NOT count keys** — it tests one marker key
-/// (`EXISTS fixture:seeded`), so creating a key here cannot take the tier down. The
-/// read-write probe still deletes what it writes, because the next run reads the same database.
+/// Redis 8.2.1 via `redis-rs` (`SslMode::Disable`; `rediss://` not proven). Probe keys under
+/// `probe:9400:`; the healthcheck tests one marker key, but probes still delete what they write.
 mod db_live_redis {
     use super::*;
     use agent_studio_scaffold_lib::db::tree::{DbGroup, DbNodeKind, DbNodeRef};
@@ -4102,12 +3676,7 @@ mod db_live_redis {
         assert!(info.backend_pid.is_none());
     }
 
-    /// 🔴 An absent key and a key holding `""` are DIFFERENT answers, against the real
-    /// server rather than against a synthesised `Value`.
-    ///
-    /// The fixture seeds `fixture:empty` as the empty string and deliberately never creates
-    /// `fixture:absent`, so this is the one assertion that proves the whole `Option<String>` cell
-    /// model survives a real RESP round trip in the engine where it is easiest to lose.
+    /// Absent vs `""` over a real RESP round trip (`fixture:absent` is never created).
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn an_absent_key_and_an_empty_value_are_not_the_same_answer() {
@@ -4203,10 +3772,7 @@ mod db_live_redis {
         assert!(sets[0].rows.len() <= 3, "{} rows", sets[0].rows.len());
     }
 
-    /// 🔴 The read-only allowlist, with the read-WRITE control beside it.
-    ///
-    /// A refusal test alone cannot tell "our guard stopped it" from "that command never works
-    /// here" — so the same `SET` is run on a read-write session and must land, then be cleaned up.
+    /// The read-WRITE control tells "our guard stopped it" from "never works here".
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn read_only_refuses_a_write_and_the_read_write_session_performs_it() {
@@ -4233,11 +3799,7 @@ mod db_live_redis {
         assert_eq!(gone[0].rows, vec![vec![None]]);
     }
 
-    /// 🔴 `KEYS` is refused on a **read-write** session too, against the real server.
-    ///
-    /// The rule is about blocking a single-threaded server, not about writes, so testing it only in
-    /// read-only mode would miss the half that matters on a production database — and `KEYS` is on
-    /// the read-only allowlist precisely so this test has something to prove.
+    /// `KEYS` blocks a single-threaded server, so it is refused on read-write sessions too.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn keys_is_refused_even_on_a_read_write_session() {
@@ -4396,28 +3958,8 @@ mod db_live_redis {
 
     /* ─────────────── the URL override and the password typed beside it ─────────────── */
 
-    /// 🔴 **The dropped-password bug, end to end against a real Redis.**
-    ///
-    /// The configuration was `Connection type: URL only` with
-    /// `postgresql://gazelle@localhost:5433/orders` — a string our own importer had *stripped*
-    /// the password out of, leaving no `{{VAR}}` behind — plus the password typed into the field
-    /// the dialog points at. Every engine but ClickHouse read "a URL is present" as "ignore the
-    /// password field", so the app dialled with **no password**. Nothing covered that pairing, which
-    /// is exactly why it shipped.
-    ///
-    /// Three claims, and the second is what makes the first mean anything:
-    ///
-    /// 1. a URL carrying **no** credential plus a typed password connects and returns a row;
-    /// 2. the same URL with the typed password **wrong** fails as `auth` — without this the test
-    ///    would pass against a server that accepts anything, which is not hypothetical here
-    ///    (the stock `pg_hba.conf` trusts loopback, which is why every password assertion in
-    ///    this file arrives on the host-mapped port over the Docker bridge);
-    /// 3. a URL that **does** carry a password keeps its own, proved by making the typed one wrong
-    ///    and the connection succeeding anyway.
-    ///
-    /// ⚠️ The fixture is a `requirepass` server with **no ACL user**, so the credential the string
-    /// carries is `redis://:password@…` — an empty user position. That is the pre-6 shape and the
-    /// one this engine must keep working, so it is what the precedence case uses.
+    /// A URL without a credential uses the typed password; a wrong typed one fails as `auth`; a
+    /// URL with its own keeps it. The fixture is `requirepass`, no ACL user: `redis://:pw@…`.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_url_with_no_password_uses_the_one_typed_beside_it_and_a_url_with_one_keeps_its_own() {
@@ -4483,17 +4025,9 @@ mod db_live_redis {
     }
 }
 
-/// **DynamoDB, against `amazon/dynamodb-local` in `docker/db-fixtures`, through our own SigV4.**
-///
-/// 🔴 **What these tests CANNOT prove, stated first because it decides how to read them.** DynamoDB
-/// Local **does not verify signatures** — it accepts any credentials — so every test here would pass
-/// with a completely broken signer. They prove the *request shape*, the PartiQL round trip, the
-/// result shaping and the guardrails. The signing itself is pinned in `db/dynamodb.rs`'s unit tests
-/// against **AWS's published SigV4 vectors**, and that split is deliberate (a positive result is
-/// not evidence the mechanism under test is engaged).
-///
-/// Write probes go into the deliberately-empty `studios` table and delete what they write, so the
-/// seeded `tracks` rows stay stable for the next run (own your own rows).
+/// DynamoDB Local via our SigV4. It does NOT verify signatures, so these prove request shape,
+/// PartiQL, result shaping and guardrails only; signing is pinned against AWS's vectors in
+/// `db/dynamodb.rs`. Writes go into empty `studios` and are deleted.
 mod db_live_dynamodb {
     use super::*;
 
@@ -4620,11 +4154,7 @@ mod db_live_dynamodb {
         assert!(info.backend_pid.is_none());
     }
 
-    /// 🔴 A 38-digit DynamoDB number survives EXACTLY, against the real server.
-    ///
-    /// The seed stores `12345678901234567890123456789012345678` — far beyond what an `f64` can
-    /// represent. A client that parsed the wire value to re-render it would silently corrupt a
-    /// decimal column, which is the same failure ClickHouse's decimal quoting exists to prevent.
+    /// The seed's 38-digit number exceeds `f64`; re-rendering a parsed value would corrupt it.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_38_digit_number_round_trips_without_going_through_a_float() {
@@ -4639,11 +4169,7 @@ mod db_live_dynamodb {
         );
     }
 
-    /// 🔴 All THREE states of an attribute, from a real reply: NULL, the empty string, and absent.
-    ///
-    /// The contract's cell has two states and the data has three, so the third is reported in the
-    /// notice rather than collapsed silently. The seed was built to contain all three
-    /// precisely so this cannot be hand-waved.
+    /// The cell has two states and the data three, so absent is named in the notice.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn null_empty_and_absent_are_three_different_things_and_the_notice_names_the_third() {
@@ -4713,10 +4239,8 @@ mod db_live_dynamodb {
         assert!(sets[0].truncated, "4 items under a cap of 2 is truncated");
     }
 
-    /// 🔴 The read-only filter, with the read-WRITE control beside it.
-    ///
-    /// Without the control, "the INSERT was refused" cannot be told apart from "an INSERT never
-    /// works here". The write goes into the deliberately-empty `studios` table and is deleted again.
+    /// The read-WRITE control tells "refused" from "never works here"; the write into `studios`
+    /// is deleted again.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn read_only_refuses_a_write_and_the_read_write_session_performs_it() {
@@ -4889,19 +4413,9 @@ mod db_live_dynamodb {
     }
 }
 
-/// **Cancel, against real servers.**
-///
-/// 🔴 This module is the point of the whole `db_cancel` change, and it is deliberately the last
-/// thing in this file: PostgreSQL, MySQL and ClickHouse have had correct cancel implementations
-/// since their engines shipped, and **no caller could reach them** — `db::query` holds the session
-/// mutex for the whole of `run`, so anything behind that lock is unreachable exactly while a query
-/// is running. The hermetic half of the fix is proven in `db::session`'s tests (a handle usable
-/// while the lock is held; the old shape deadlocks). This is the other half: that the request the
-/// handle sends actually stops a real query on a real server.
-///
-/// Each test runs a **genuinely slow** statement, cancels it from another task, and asserts the
-/// query came back early *and* said it was cancelled. A test that only checked "the cancel call
-/// returned Ok" would pass against a cancel that did nothing at all.
+/// Cancel against real servers: the request a handle sends must stop a real query
+/// (`db::session`'s tests prove the handle works while the lock is held). Each test asserts
+/// the query came back early AND said cancelled; "cancel returned Ok" proves nothing.
 mod db_live_cancel {
     use super::*;
     use agent_studio_scaffold_lib::db::engine::DbCancel;
@@ -4930,10 +4444,8 @@ mod db_live_cancel {
         }
     }
 
-    /// Open a session, take its cancel handle, run `sql`, and cancel it mid-flight.
-    ///
-    /// Returns `(elapsed, the run's outcome)`. The handle is taken **before** the run, exactly as
-    /// `session::insert` does — that ordering is the fix.
+    /// Run `sql` and cancel it mid-flight; the handle is taken BEFORE the run, as
+    /// `session::insert` does (that ordering is the fix). Returns `(elapsed, outcome)`.
     async fn run_and_cancel(
         engine: DbEngineId,
         cfg: ResolvedConfig,
@@ -4981,16 +4493,8 @@ mod db_live_cancel {
         (elapsed, outcome)
     }
 
-    /// The assertion every engine shares — and it is **two-sided on purpose**.
-    ///
-    /// 🔴 The upper bound alone is not enough, and this is not hypothetical: the first ClickHouse
-    /// version of this test **passed with the cancel disabled**, because its statement was refused
-    /// instantly under `readonly=1` and returned in ~0ms. An upper-bound-only assertion cannot tell
-    /// "cancelled after 700ms" from "never ran at all", and the second one silently proves nothing.
-    ///
-    /// So: it must have taken at least as long as the delay before the cancel was sent (the query
-    /// really was in flight), and much less than the sleep it asked for (the cancel really stopped
-    /// it).
+    /// Two-sided: at least the pre-cancel delay (it was in flight; an instantly refused statement
+    /// once passed) and well under its own sleep (the cancel stopped it).
     fn assert_stopped_early(elapsed: Duration, label: &str) {
         assert!(
             elapsed >= LET_IT_START,
@@ -5063,17 +4567,9 @@ mod db_live_cancel {
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn clickhouse_really_cancels_a_running_query() {
         rt().block_on(async {
-            // 🔴 Also the regression test for the KILL matching ITSELF: the killer session takes a
-            // FRESH ULID prefix, so `KILL QUERY WHERE query_id LIKE '<prefix>-%'` cannot match the
-            // KILL's own id. With a derived `<prefix>-kill` it could.
-            // 🔴 A big SCAN, not a sleep — and this took three attempts, each caught by the
-            // lower-bound assertion rather than by review:
-            //   `SETTINGS max_block_size = 1` → refused under `readonly=1`, returned in ~0ms.
-            //   `sleepEachRow(1)`             → accepted and returns in ~10ms; ClickHouse does not
-            //                                   honour it the way the name suggests.
-            //   counting 50e9 numbers         → genuinely ~50s of work, and read-only permits it.
-            // Measured against the fixture: 20e9 takes ~19.6s, so 50e9 is comfortably longer than
-            // the 15s ceiling `assert_stopped_early` allows.
+            // The killer takes a FRESH ULID prefix so `KILL QUERY … LIKE '<prefix>-%'` can't match
+            // itself. A big scan, not a sleep (`max_block_size` is refused read-only and
+            // `sleepEachRow` returns fast): 50e9 numbers ≈ 50 s, well past the 15 s ceiling.
             let (elapsed, outcome) = run_and_cancel(
                 DbEngineId::Clickhouse,
                 super::db_live_clickhouse::config(true, "agentstudio-test-pw"),
@@ -5118,24 +4614,9 @@ mod db_live_cancel {
     }
 }
 
-/// **The stale cached connection — reproduced, then fixed.**
-///
-/// 🔴 With PostgreSQL, Test Connection succeeded but queries would not run, failing with
-/// `(expected to read 5 bytes, got 0 bytes at EOF)` — and then the decisive half: after restarting
-/// Agent Studio, queries worked again.
-///
-/// A session is one connection cached in the process for the life of the app, and nothing ever
-/// asked whether its socket was still there. A laptop suspend, a pooler's idle timeout, a NAT entry
-/// expiring, a server restart — each of them closes that socket, and each turned every later
-/// `db_query` into a write to a corpse. Test Connection kept working the entire time because it
-/// dials a *fresh* connection every call and never touches the cache, so the one diagnostic the user
-/// reaches for agreed with them that the server was fine. Restarting the app empties the map, which
-/// is why a restart "fixed" it.
-///
-/// `pg_terminate_backend` from a sibling connection is that failure, exactly: the server closes the
-/// socket out from under a client that is not looking. **A stub could not have produced this** — the
-/// EOF only exists because a real backend really went away — which is why this tier is where the fix
-/// has to be proven.
+/// A cached session's socket can die (suspend, pooler timeout, server restart) while Test
+/// Connection, which dials fresh, still passes. `pg_terminate_backend` from a sibling
+/// reproduces the real EOF; a stub could not.
 mod db_live_reconnect {
     use super::*;
     use agent_studio_scaffold_lib::db::session;
@@ -5238,12 +4719,8 @@ mod db_live_reconnect {
         out
     }
 
-    /// Kill `pid` and **wait for it to actually be gone**.
-    ///
-    /// The two-argument form is PostgreSQL 14+ and the fixture pins 17.6: with a timeout it blocks
-    /// until the backend has exited and returns `t`, or gives up and returns `f`. That is what makes
-    /// the negative half of a two-sided assertion available here — a kill that silently did nothing is
-    /// distinguishable from one that worked, so this test cannot go green on a no-op.
+    /// Kill `pid` and wait until it is gone (`pg_terminate_backend(pid, 5000)`, PG 14+), so a
+    /// no-op kill is distinguishable and the test can't go green on one.
     async fn terminate_and_confirm(pid: i32) {
         let sets = on_a_sibling(&format!("SELECT pg_terminate_backend({pid}, 5000)")).await;
         let answer = sets
@@ -5317,17 +4794,8 @@ mod db_live_reconnect {
         });
     }
 
-    /// 🔴 **A reconnect is a NEW server session, and `SET SESSION CHARACTERISTICS AS TRANSACTION
-    /// READ ONLY` died with the old one.**
-    ///
-    /// If `ensure_live` did not re-apply the guardrail, the user would silently be handed a
-    /// read-write connection on a connection they had configured as read-only — a worse bug than the
-    /// one being fixed, and one nothing else in this suite would notice, because every other
-    /// read-only test opens a fresh session that never lost its socket.
-    ///
-    /// Asserted on **the absence of the row**, not on the presence of an error: the first attempt at
-    /// the original read-only measurement failed with a NOT NULL violation, which looks exactly like
-    /// the guard working while the guard had in fact let the write through.
+    /// A reconnect is a NEW server session, so `ensure_live` must re-apply READ ONLY. Asserts the
+    /// row's absence, not an error (a NOT NULL error once masked a write that went through).
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn the_read_only_guardrail_is_re_applied_after_a_reconnect() {
@@ -5384,20 +4852,8 @@ mod db_live_reconnect {
         });
     }
 
-    /// 🔴 **The cancel handle must follow the reconnect, not fire at the backend that died.**
-    ///
-    /// `LiveSession::cancel` is captured once, at `session::insert`, and outlives every reconnect.
-    /// PostgreSQL's cancel here is `SELECT pg_cancel_backend(pid)` — a SQL call against whichever
-    /// backend holds that pid **now**, not libpq's cancel-key handshake, which is the thing that
-    /// would have made a frozen handle harmlessly inert. Backend pids are OS pids and OS pids get
-    /// recycled, and `pg_cancel_backend` succeeds for any backend the same role owns — including
-    /// this app's own other session on the same database. So a frozen pid is not a stale curiosity,
-    /// it is a Stop button that interrupts a stranger.
-    ///
-    /// Two-sided, and both halves do work: the query must have been genuinely in flight when the
-    /// cancel was sent (a lower bound — a ClickHouse test without one once passed with the cancel
-    /// disabled), and it must have come back long before its own sleep. A handle still
-    /// holding the dead pid cancels nothing, the sleep runs its full 30 s, and the upper bound fails.
+    /// The cancel handle (captured at `session::insert`) must follow the reconnect: a stale pid
+    /// could cancel a recycled pid's query. Two-sided: really in flight, and back well before 30 s.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn the_cancel_handle_targets_the_backend_the_session_reconnected_onto() {
@@ -5451,11 +4907,8 @@ mod db_live_reconnect {
     }
 }
 
-/// **MySQL's half of the same fix.** [`db_live_reconnect`] is where the reasoning lives; this
-/// exists because `MySqlSession::ensure_live` is a *separate* override, and an override proven only
-/// by "it compiles" is exactly the kind that quietly stops working. `KILL <connection_id>` from a
-/// sibling is MySQL's `pg_terminate_backend`: it drops the whole session rather than one statement,
-/// which is precisely the failure a pooler or an idle timeout produces.
+/// MySQL's half of [`db_live_reconnect`]: `MySqlSession::ensure_live` is a separate override.
+/// `KILL <connection_id>` from a sibling drops the whole session, like a pooler timeout.
 mod db_live_mysql_reconnect {
     use super::*;
     use agent_studio_scaffold_lib::db::session;
@@ -5538,34 +4991,9 @@ mod db_live_mysql_reconnect {
     }
 }
 
-/// 🔴 **A simple URL with no password could not connect.**
-///
-/// The plainest connection string there is, against a local auth-less `mongod`, came back as
-/// *"No MongoDB server could be reached — check the host, the port, and whether a VPN or firewall
-/// is in the way. (Server selection timeout: … Error: Kind: I/O error: **tls handshake eof** …)"*
-/// — about a server that was listening, reachable, and speaking plaintext. Two defects in one
-/// message, and this module is the tier that can fail on either:
-///
-/// 1. **We forced TLS onto a string that never asked for it.** `client_options` applied the
-///    *form's* SSL ladder whenever the driver had left `opts.tls` unset — and the driver leaves it
-///    unset for a plain `mongodb://` URL precisely because the connection-string spec says that
-///    scheme defaults to `tls=false` (only the SRV scheme defaults to true). The MongoDB row's
-///    descriptor default is `SslMode::Require`, `tls_for(Require)` is `Tls::Enabled`, so a pasted
-///    plaintext URL was dialled over TLS, the server dropped the handshake, and the driver said
-///    `tls handshake eof`. It also broke the dialog's own promise: *"Overrides the fields above —
-///    Agent Studio sends this string to the driver as-is."*
-/// 2. **The sentence then pointed at the one thing that was fine.** A handshake EOF means the TCP
-///    connection was established and the server refused/failed TLS: the host and the port are
-///    demonstrably reachable. This is the misattribution `db/error.rs` already fixed once for
-///    Postgres's `UnexpectedEof` (see the comment there — same reasoning, same voice).
-///
-/// **Why this fixture is the right server to prove it against:** its `mongod` publishes no TLS
-/// listener at all, so "the ladder was applied to a pasted string" and "the ladder was not" are
-/// visibly different outcomes rather than two ways of succeeding.
-///
-/// ⚠️ Every test here that must FAIL sets `connectTimeout` to a few seconds. The failure is a
-/// *server selection* timeout — the driver retries the handshake for the whole window — so the
-/// default 10s would be paid four times over for nothing.
+/// A plain `mongodb://` URL must not get the form's TLS ladder (the scheme defaults to
+/// `tls=false`), and a handshake EOF must not be blamed on host/port. The fixture has no TLS
+/// listener, so the outcomes differ visibly. Failing tests use a short `connectTimeout`.
 mod db_live_mongo_plain_url {
     use super::*;
     use agent_studio_scaffold_lib::db::error::DbErrorCode;
@@ -5592,10 +5020,8 @@ mod db_live_mongo_plain_url {
         }
     }
 
-    /// A config carrying the MongoDB row's **descriptor default** SSL mode — `Require`, which is
-    /// what a freshly-created record holds and what the failing case had. Writing `Disable` here
-    /// would make every test below pass against the bug, so it is spelled out rather than
-    /// inherited.
+    /// The MongoDB row's descriptor default `Require` (what new records hold and the failing case
+    /// had); `Disable` here would let every test pass against the bug.
     fn requiring_tls(read_only: bool) -> ResolvedConfig {
         let mut cfg = super::db_live_mongo::config(read_only, PASSWORD);
         cfg.ssl_mode = SslMode::Require;
@@ -5642,16 +5068,8 @@ mod db_live_mongo_plain_url {
             .await
     }
 
-    /// 🔴 **The exact failing case.** A plain `mongodb://127.0.0.1:PORT/db` with **no
-    /// credentials anywhere** — not in the string, not in the fields — connects and runs a command.
-    ///
-    /// `{"hello": 1}` is the trivial command on purpose: it is on this engine's read-only allowlist
-    /// *and* it is one of the handful `mongod` answers before authentication, so the assertion is
-    /// about the transport and never about the fixture's `admin` user. (Measured against the
-    /// fixture: `hello` and `buildInfo` answer unauthenticated, `find` comes back `Unauthorized`.)
-    ///
-    /// **Seen red before the fix** with exactly the failing text — `No MongoDB server could be
-    /// reached … Kind: I/O error: tls handshake eof` — which is the whole reason it exists.
+    /// No credentials anywhere; `{"hello": 1}` is allowlisted and answered before auth, so this
+    /// tests the transport (a wrongly applied TLS ladder fails with `tls handshake eof`).
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_plain_mongodb_url_with_no_credentials_connects_and_runs_a_command() {
@@ -5693,12 +5111,8 @@ mod db_live_mongo_plain_url {
         );
     }
 
-    /// **The control for defect 1: the fix removed the forced default, not TLS support.** The same
-    /// plaintext server, the same plain scheme, but the string itself says `tls=true` — and the
-    /// string is what we promised to honour, so this must still fail at the handshake.
-    ///
-    /// `ssl_mode` is `Disable` here deliberately: the *form's* ladder says plaintext and the
-    /// **string** says TLS. If the fields had been allowed to win, this would connect.
+    /// The string's `tls=true` must still win over the form's `Disable`, so it fails at the
+    /// handshake against this plaintext server.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn a_url_that_asks_for_tls_still_gets_tls_and_therefore_still_fails_here() {
@@ -5728,11 +5142,7 @@ mod db_live_mongo_plain_url {
         );
     }
 
-    /// **The FORM path is untouched: the ladder still applies where there is no string to respect.**
-    ///
-    /// Two-sided by construction — `Disable` connects to this plaintext server and `Require` cannot,
-    /// against the identical record. A fix that had disabled the ladder everywhere would pass the
-    /// first half and fail the second.
+    /// Two-sided on the identical record: `Disable` connects, `Require` cannot.
     #[test]
     #[ignore = "needs the Docker fixture — run with --ignored"]
     fn the_form_paths_ssl_ladder_still_decides_when_there_is_no_url() {
@@ -5833,23 +5243,9 @@ mod db_live_mongo_plain_url {
 The stale-tree fix: **does DDL actually arrive as `affected`?**
 ─────────────────────────────────────────────────────────────────────────────────────────── */
 
-/// The frontend's automatic object-tree refresh fires on `kind === "affected"` and on nothing
-/// else, so the entire fix for the stale tree — a database edit that the object tree did not
-/// reflect — rests on one claim about the wire: a `CREATE TABLE` — a statement that affects **zero
-/// rows** — comes back as `Affected` and not as `Message`.
-///
-/// `engine.rs` says so in code (`saw_rows || is_row_returning(stmt)` → `Rows`, otherwise
-/// `Affected`) and `the_same_write_succeeds_on_a_read_write_session` says so for an INSERT. But
-/// DML is not DDL, and DDL is the statement that was run. Reading the classifier and believing
-/// it is prose; this is the assertion. If it ever stops holding, the tree silently goes back to
-/// showing yesterday's schema and nothing else in the suite notices.
-///
-/// **Safe to create a table here, and that was checked rather than assumed**: the
-/// Postgres fixture's healthcheck is `SELECT count(*) FROM tracks` — it counts ROWS IN ONE TABLE,
-/// not schema objects, so an extra table cannot mark the container unhealthy. (Mongo's
-/// `getCollectionNames().length === 6` is the check that can, which is why nothing here goes near
-/// Mongo.) The tree tests next door assert `labels(&tables).contains("tracks")`, never an exact
-/// list, so a transient neighbour cannot redden them under `cargo test`'s parallelism either.
+/// The tree auto-refreshes only on `kind === "affected"`, so a zero-row `CREATE TABLE` must
+/// come back `Affected`, not `Message`. Safe here: the Postgres healthcheck counts `tracks`
+/// rows, not schema objects, and tree tests never assert exact lists.
 mod db_live_ddl_kind {
     use super::*;
 
@@ -5874,11 +5270,7 @@ mod db_live_ddl_kind {
         }
     }
 
-    /// Run each statement on ONE read-write session, in order, and return their result sets.
-    ///
-    /// One session rather than one per statement because the sequence is a story — drop, create,
-    /// read, drop — and running it across four connections would let another test's session
-    /// interleave in the middle of it.
+    /// Run statements in order on ONE read-write session, so another test can't interleave.
     async fn run_each(statements: &[&str]) -> Vec<DbResultSet> {
         let engine = engine_for(DbEngineId::Postgres).expect("postgres is wired");
         let mut session = engine
@@ -5916,10 +5308,8 @@ mod db_live_ddl_kind {
     fn ddl_on_postgres_is_an_affected_result_with_zero_rows() {
         let create = format!("CREATE TABLE {PROBE_TABLE} (id integer primary key)");
         let drop = format!("DROP TABLE IF EXISTS {PROBE_TABLE}");
-        // The leading DROP makes the sequence idempotent: a previous run that panicked between
-        // its CREATE and its DROP must not make this one fail for a reason that is not the
-        // subject. The trailing DROP is the cleanup, so the fixture stays reusable without a
-        // reset — the same discipline as `delete_probe_row`.
+        // Leading DROP keeps a panicked earlier run from failing this one; trailing DROP cleans
+        // up so the fixture stays reusable.
         let sets =
             rt().block_on(async { run_each(&[&drop, &create, "SELECT 1 AS n", &drop]).await });
 
@@ -5963,10 +5353,8 @@ mod db_live_ddl_kind {
     }
 }
 
-/// `agent-studio db connect <url>` against the real Postgres fixture: what an agent does when the
-/// user says "connect me to this database". The URL carries the password, the way a user pastes it
-/// into a conversation; it must come out tested, saved read-only, with the password in the Vault,
-/// and open from the saved record alone.
+/// `agent-studio db connect <url>` against Postgres: a pasted URL with its password must come
+/// out tested, saved read-only with the password in the Vault, and open from the record alone.
 mod db_live_agent_ctl {
     const HOST: &str = "127.0.0.1";
     const PORT: u16 = 55432;
@@ -7233,10 +6621,8 @@ mod db_live_agent_ctl {
                 r.message
             );
 
-            // A function the database already holds turns the SESSION read-write, which a
-            // ROLLBACK does not undo in MySQL; a DDL statement's implicit commit would then run
-            // read-write (measured: the table is created). The session is asked before each
-            // statement, so the DDL is never sent.
+            // A stored function can flip the SESSION read-write (ROLLBACK doesn't undo it in
+            // MySQL) and DDL's implicit commit would then write; checked before each statement.
             let flip = format!("agent_probe_flip_{}", std::process::id());
             my_root(&format!(
                 "DROP FUNCTION IF EXISTS {flip}; CREATE FUNCTION {flip}() RETURNS INT \

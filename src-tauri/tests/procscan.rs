@@ -1,12 +1,6 @@
-//! **Dev apps on this machine** — the classifier against a table
-//! of real-world command lines with hand-written expectations, and the live
-//! path against real children: discovery, the tail guard, `app` lines through a real hub,
-//! and Restart in the IDE through the real supervisor.
-//!
-//! Hermetic: the live children are `/bin/sh` scripts in a private temp dir;
-//! the restart opens a terminal running that same `/bin/sh` script, never the user's
-//! shell. Runs on macOS and Linux (`node scripts/linux-check.mjs test --manifest-path
-//! src-tauri/Cargo.toml --test procscan`).
+//! Dev apps on this machine: the classifier against real-world command lines, and the live path
+//! (discovery, tail guard, `app` lines, Restart) against real children. Hermetic: children are
+//! `/bin/sh` scripts in a temp dir, never the user's shell. macOS and Linux (`linux-check.mjs`).
 
 #![cfg(any(target_os = "macos", target_os = "linux"))]
 
@@ -717,12 +711,9 @@ async fn a_docker_tail_follows_the_cli_until_it_exits() {
 /// Env var that turns [`helper_restart_service`] into the service the restart test runs.
 const HELPER: &str = "PROCS_HELPER";
 
-/// **Not a test** — the restart test's child. It is this test binary run with
-/// `--exact helper_restart_service` and `PROCS_HELPER=restart`: it appends
-/// `run $PROCS_RESTART_MARK` to `marks.txt` in its cwd and waits to be stopped. A test
-/// binary, not `/bin/sh`, because macOS hides the environment of Apple's platform binaries
-/// from `KERN_PROCARGS2` (`ps -E` shows none for `/bin/sh`), and the
-/// point is to prove the env is carried over. Without the variable it returns at once.
+/// Not a test: the restart test's child (`PROCS_HELPER=restart`); appends a mark to `marks.txt`
+/// and waits. A test binary, not `/bin/sh`, because macOS hides the env of Apple's platform
+/// binaries from `KERN_PROCARGS2`, and the point is to prove the env is carried over.
 #[test]
 fn helper_restart_service() {
     if std::env::var(HELPER).as_deref() != Ok("restart") {
@@ -878,12 +869,8 @@ fn restart_is_refused_when_the_os_hides_the_environment() {
         .spawn()
         .unwrap();
     let mut child = Reaped(Some(child));
-    // Until the fork has exec'd, the pid is still this test binary (whose env IS readable) —
-    // under a loaded full `cargo test` the prepare below could land in that window. Wait for
-    // the exec.
-    // "Exec'd" = the pid no longer runs THIS binary. Not `== "/bin/sh"`: macOS's /bin/sh is a
-    // shim that re-execs into bash/zsh/dash, and under a loaded full `cargo test` the scan
-    // lands after that second exec, so an exact match never comes true.
+    // Wait until the pid no longer runs this binary (whose env IS readable), or a loaded run can
+    // scan before the exec. Not `== "/bin/sh"`: macOS's /bin/sh re-execs into bash/zsh/dash.
     let pid = child.pid();
     let me = std::env::current_exe().unwrap();
     let me = std::fs::canonicalize(&me).unwrap_or(me);
@@ -972,10 +959,8 @@ const T1_TTY: &str = "/dev/ttys011";
 const T2_TTY: &str = "/dev/ttys012";
 const CLAUDE: &str = "/Users/sam/.local/share/claude/versions/2.1.212";
 
-/// The IDE (a dev build — a cargo artifact, so it would classify as Rust), a plain terminal
-/// T1 (zsh 101), a terminal T2 (zsh 201) with a `claude` typed in it and bound as agent A,
-/// a terminal T3 whose PTY child IS the app (Restart in the IDE), an unbound terminal T4
-/// with a claude in it, and the outside world.
+/// The IDE (a dev build, so it classifies as Rust), plain terminal T1 (zsh 101), T2 (zsh 201) with
+/// a `claude` bound as agent A, T3 whose PTY child IS the app, unbound T4 with a claude, the world.
 fn machine() -> Vec<RawProc> {
     vec![
         rp(1, 0, "/sbin/launchd", &["/sbin/launchd"]),
@@ -1367,10 +1352,8 @@ fn the_exclusion_table() {
 
 // ── live: an app in a real IDE terminal ──────────────────────────────────────
 
-/// **Not a test** — the IDE-terminal test's app: this test binary, copied to
-/// `<project>/target/debug/<name>` (so it classifies as a Rust dev app, like `cargo run`'s
-/// output), run with `PROCS_HELPER=probe`. Prints a line and waits to be killed. Without the
-/// variable it returns at once.
+/// Not a test: the IDE-terminal test's app, copied to `<project>/target/debug/<name>` so it
+/// classifies as a Rust dev app; prints a line and waits under `PROCS_HELPER=probe`.
 #[test]
 fn helper_ide_probe() {
     if std::env::var(HELPER).as_deref() != Ok("probe") {
@@ -1525,10 +1508,8 @@ impl FlowSink for NoFlows {
     fn emit(&self, _: &[FlowSummary]) {}
 }
 
-/// The app's capture proxy, installed once per test binary (`netcap::install`) so the
-/// supervisor's PTYs get the capture env exactly as in the app. Its own runtime, leaked, so it
-/// outlives every test's; `user_env: vec![]`, so it injects even when this test runs inside
-/// an IDE terminal whose own proxy vars are set; an ephemeral port; hermetic trust.
+/// Installed once per binary so supervisor PTYs get the app's capture env; its own leaked runtime
+/// outlives every test's. `user_env: vec![]` so it injects even inside an IDE terminal.
 fn capture_proxy_port() -> u16 {
     static PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
     *PORT.get_or_init(|| {
@@ -1556,11 +1537,9 @@ fn capture_proxy_port() -> u16 {
     })
 }
 
-/// A typical case: an agent in an IDE terminal runs its service with every
-/// proxy variable stripped. It must be listed as `captured: false` (a control probe started
-/// the normal way: `true`); Restart with capture relaunches it in a new IDE terminal whose env
-/// points at the proxy again → `captured: true`. Only booleans are asserted and printed
-/// (a captured environment must never be printed).
+/// A service started with every proxy var stripped is listed `captured: false`; Restart with
+/// capture relaunches it in an IDE terminal, giving `true`. Only booleans are asserted and
+/// printed: a captured environment must never be printed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_ide_app_started_without_the_proxy_is_flagged_and_restart_with_capture_restores_it() {
     let port = capture_proxy_port();

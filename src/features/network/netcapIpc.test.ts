@@ -1,8 +1,5 @@
-/**
- * The netcap IPC seam: command names and argument shapes are the contract with the Rust
- * side. Pinned literally here — a rename on either
- * side must red this file, not a user's empty table.
- */
+/** Command names and argument shapes are the Rust contract, pinned literally: a rename on either
+ * side must fail here, not leave a user's table empty. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

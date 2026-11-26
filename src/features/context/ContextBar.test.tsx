@@ -1,14 +1,5 @@
-/**
- * `ContextCard` — the rendered card, driven the way the user drives it.
- *
- * Only the IPC boundary is mocked (`installTauriMock`): the app store's selection, the
- * context store, the wire-code splitter and the formatters are all the real code, so
- * this file also owns the seam between them — "select a root agent →
- * the card asks for THAT session's context → the bar draws it".
- *
- * Real layout (that the widths computed here are the widths Chromium paints, and that a
- * narrow pane wraps instead of scrolling) is `context.browser.test.tsx`'s job.
- */
+/** Only IPC is mocked, so this owns the seam: select a root agent, the card reads THAT agent, the
+ * bar draws it. Real layout is context.browser.test.tsx's job. */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -83,11 +74,7 @@ function setStatus(id: string, status: AgentStatus): void {
   });
 }
 
-/**
- * A selected root agent. Deliberately with `sessionId: null` — that is what the store
- * really holds for every agent (the field is a client layout id, never set from the
- * wire), and the card must measure the root anyway, by its agent id.
- */
+/** sessionId: null is what the store really holds; the card must measure by agent id anyway. */
 function selectRoot(id = "root-a", status: AgentStatus = "idle"): void {
   seedAgent({ id, status });
   select(id);

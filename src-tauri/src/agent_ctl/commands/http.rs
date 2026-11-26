@@ -1,40 +1,6 @@
-//! API-client tools: HTTP requests, collections, environments, history and compare.
-//!
-//! Two kinds of request, with different rights:
-//! * **Agent-authored** (`http send`, `http open`, a URL side of `api compare`): the agent wrote
-//!   every byte, so nothing is substituted. Anything that spells `{{` — URL, a header, the body,
-//!   the curl command; as written, or once JSON escapes (`\u007b`) or percent-escapes (`%7B`) are
-//!   decoded ([`spells_vault_ref`]) — is **refused**: it would name a Vault variable, and an agent
-//!   that could get one substituted could send the user's saved secret to a host it chose.
-//!   (`http open` needs this most: the tab it opens substitutes on the user's Send, and its
-//!   Format button turns `"\u007b\u007bKEY}}"` into `"{{KEY}}"`.)
-//! * **User-saved** (`api run`, a saved side of `api compare`): the request is sent exactly as the
-//!   user saved it — the agent picks which one and which of the user's environments, and cannot
-//!   change its method, URL, headers or body. Its `{{VAR}}`s are resolved here, in Rust, by the
-//!   API client's own rule (the chosen environment, or the active one; an unset name becomes
-//!   empty). Whatever comes back is passed through [`report::Redactor`], built from that
-//!   request's own substituted values, so a value an echo endpoint or an error repeats reads as
-//!   its `{{NAME}}` again, and a credential the user typed literally into the request (URL
-//!   userinfo, a credential-named parameter or header) reads as `***`.
-//!
-//! Nothing an agent reads carries a Vault value: environments are listed by variable **name**,
-//! saved requests by URL as written ({{HOST}} stays a name) with credential-looking URL parts
-//! masked, and the history by method, URL as written (masked the same way), status and time —
-//! no headers, no bodies, no recorded status text, and of a failure only its kind
-//! ([`report::failure_kind`]): an error the user's own send recorded can quote the URL as sent.
-//!
-//! 🔴 No oracle: nothing an agent wrote — its request, what answers it, its error, its history
-//! entry — is matched against Vault values. A `{{NAME}}` put back there would tell the agent
-//! that a value it guessed (`?q=Summer2024!`, a host) is the user's secret. An agent-authored
-//! request cannot carry a Vault value it does not already know, so there is nothing to hide.
-//!
-//! Bounded: request inputs ([`MAX_URL`], [`MAX_HEADERS`], [`MAX_BODY`]), time
-//! ([`crate::http::REQUEST_TIMEOUT`] at most), and every reply ([`report`]'s caps), each cut said
-//! in the reply.
-//!
-//! Visible: every send is recorded in the API history (the literal request, as the app records
-//! its own) and the `apiHistory` event brings the History rail into view; `http open` opens a
-//! request tab (`httpOpen`). Every send also shows in the Network view, as the API client's do.
+//! API-client tools. Agent-authored requests are never substituted, and any `{{` (also JSON- or
+//! percent-escaped) is refused; user-saved ones run as saved, resolved in Rust, replies redacted.
+//! No oracle: agent text is never matched against Vault values. Sends show in History and Network.
 
 use std::time::Duration;
 
@@ -275,11 +241,7 @@ fn hex4(s: &str) -> Option<u32> {
         .flatten()
 }
 
-/// `text` with JSON string escapes decoded (`\u007b` → `{`, `\"` → `"`, surrogate pairs
-/// joined), leniently: anything that is not an escape stays as written. Run over the whole
-/// text, which for valid JSON leaves the structure alone and decodes every string and key in
-/// place — and also reads JSON that `serde_json` would reject but `JSON.parse` accepts (a lone
-/// surrogate).
+/// Lenient: non-escapes stay as written. Also reads what only `JSON.parse` takes (lone surrogate).
 fn json_unescape(text: &str) -> std::borrow::Cow<'_, str> {
     if !text.contains('\\') {
         return std::borrow::Cow::Borrowed(text);
@@ -325,15 +287,9 @@ fn json_unescape(text: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-/// Does `text` spell `{{` — as written, or once decoded the way something between the agent and
-/// the user's Send could decode it: JSON string escapes (the request tab's Format button parses
-/// and re-serializes a JSON body: `"\u007b\u007bKEY}}"` becomes `"{{KEY}}"`) or percent-escapes
-/// (`%7B%7B`, `%7b{`, any case), in either order, a few layers deep (`%257B`, `\u0025 7B`)?
-///
-/// A superset of "the body parses as JSON and a decoded string or key contains `{{`": decoding
-/// the whole text leniently reads every string and key of valid JSON in place, and also reads
-/// what only `JSON.parse` accepts. A text that is merely odd (a literal `\u007b\u007b` in plain
-/// text) is refused too — the cost of a check that cannot be talked around.
+/// `{{` as written or once JSON- or percent-decoded (any case, either order, a few layers deep),
+/// as something before the user's Send could decode it. Odd plain text is refused too: the check
+/// must not be talked around.
 pub fn spells_vault_ref(text: &str) -> bool {
     const LAYERS: usize = 3;
     let mut frontier: Vec<String> = vec![text.to_string()];
@@ -808,11 +764,8 @@ pub fn resolve(saved: &SavedRequest, env: Option<&Environment>) -> Result<Resolv
     })
 }
 
-/// Credentials the user typed into a saved request rather than keeping in the Vault: the
-/// userinfo and the credential-named query/fragment parameters of the URL as sent, the
-/// `Authorization: Basic …` reqwest builds from that userinfo, and every credential-named
-/// header written without a `{{VAR}}` (whole, and the part after its scheme: `Bearer <this>`).
-/// An echo endpoint or an error could hand any of them back; they read as `***`.
+/// Credentials typed into a saved request instead of the Vault (userinfo, its Basic header,
+/// credential-named params and headers); an echo or error could return them, so they read `***`.
 pub fn literal_secrets(wire_url: &str, headers: &[&api_store::HttpHeader]) -> Vec<String> {
     use base64::Engine as _;
     let mut out = report::url_secrets(wire_url);
@@ -882,11 +835,8 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Send `wire` through the API client's engine, redact what comes back, and append the literal
-/// request and its outcome to the API history.
-///
-/// `redactor` is the request's own: a saved request's substituted values and literal
-/// credentials, or nothing for an agent's request (see the module doc's 🔴 on oracles).
+/// `redactor` is the request's own: a saved request's values and literal credentials, or empty
+/// for an agent's request (module doc: no oracles).
 async fn send_recorded(
     ctx: &ToolCtx,
     wire: HttpRequest,
@@ -1068,12 +1018,7 @@ fn load_store(ctx: &ToolCtx) -> ApiStore {
     api_store::load(&api_store::path_in(&ctx.dir))
 }
 
-/// A saved request as an agent may see it: no header values, no body, the URL as written with
-/// credential-looking parts masked, and the `{{NAME}}`s it needs.
-///
-/// Bounded: names cut at [`NAME_CAP`] characters and the URL at [`report::VALUE_CAP`] (a cut ends
-/// in `…`), at most [`HEADER_NAMES_CAP`] header names and variable names each, and
-/// `headersTruncated` / `variablesTruncated` say when a list was cut.
+/// No header values or body; the URL as written, masked; every capped list says it was cut.
 pub fn saved_summary(store: &ApiStore, r: &SavedRequest) -> Value {
     let name = |s: &str| report::short_to(s, NAME_CAP);
     let mut vars = var_names(&r.url);
@@ -1394,13 +1339,9 @@ fn run_history(ctx: ToolCtx, args: Args) -> ToolFuture {
         if total == 0 {
             return Ok(ToolOk::new("The API history is empty.", json!([])));
         }
-        // 🔴 Only what cannot carry a substituted value is handed back, and nothing is matched
-        // against Vault values (the agent's own entries are here too: a match would confirm a
-        // value it guessed). The method, service and URL are the request as written (the app
-        // and these tools record the literal request, `{{VAR}}`s unsubstituted), the URL masked
-        // by its shape; the status is a number and its reason phrase comes from the number. A
-        // recorded error or status text can quote the request as sent or a server's message,
-        // so neither is returned: a failure shows only its kind.
+        // Nothing that could carry a substituted value, and no Vault matching (agents' own entries
+        // are here: a match confirms a guess). Recorded error/status text can quote the request,
+        // so a failure shows only its kind.
         let recent: Vec<&HistoryEntry> = history.entries.iter().rev().take(limit).collect();
         let mut lines = vec![format!(
             "{} request{} in the API history, newest first{}:",

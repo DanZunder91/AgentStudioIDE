@@ -1,22 +1,6 @@
-/**
- * Agent Village — the CITY's pedestrian crossing (busy agents take a lift up
- * to the street and walk to the building they belong in). A rider comes up the lounge's lift at its
- * kiosk on the far sidewalk, right under the capacity HQ's door, and walks across both lanes to the
- * near sidewalk there. A zebra crossing marks that walk: `crossingOf` (engine/streetTheme.ts — the
- * dresser keeps its landing clear) gives its three columns, centred on the lift.
- *
- * The stripes run ALONG the road — parallel to the traffic, as on a real zebra (Japan's included) —
- * stacked across the two lanes, so a walker steps over them one by one: four bars of 4 world px with
- * 4-px gaps, below the kerb line the first lane carries (render/tiles.ts) and clear of the far
- * sidewalk. Whole world pixels on purpose: at ½ each bar and each gap is 2 screen px (still four
- * bars), at 3 they are 12. The road's yellow centre dashes stop at the crossing, as a real centre line
- * does: one asphalt row covers them where the bars would leave them showing.
- *
- * Painted every frame (render/frame.ts, right after the ground, under the puddles and everything
- * standing on the street), NOT baked into the cached ground layer: the backdrop lays copies of that
- * layer's street band beside the world (render/city.ts) to run the street on past its ends, and a
- * crossing baked into it would repeat every world-width, in front of nothing. Five rects, culled.
- */
+/** Painted every frame, NOT baked into the cached ground: the backdrop repeats that layer's street
+ * band past the world's ends (render/city.ts), so a baked crossing would repeat every world-width.
+ * Whole world px on purpose, so the four bars survive at ½ zoom. Columns come from `crossingOf`. */
 
 import { crossingOf } from "../engine/streetTheme";
 import { TILE, type World } from "../villageTypes";

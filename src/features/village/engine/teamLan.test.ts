@@ -18,11 +18,9 @@ function agent(key: string, folder: string, parentKey: string | null = null): Vi
 }
 const subs = (root: string, folder: string, n: number): VillageAgent[] => Array.from({ length: n }, (_, i) => agent(`${root}.${i}`, folder, root));
 
-/**
- * Village: alpha — two roots, 6 sub-agents (8 team seats: two tables, one team row); beta — one root,
- * 13 sub-agents and a sub-agent of a sub-agent (16 seats: four tables, two team rows); delta — 2
- * sub-agents (one table: a branch that stops at the door column); gamma — no sub-agents, no router.
- */
+/** alpha: two roots, 6 sub-agents (8 seats: two tables, one team row); beta: one root, 13 subs
+ * and a nested one (16 seats: four tables, two rows); delta: 2 subs (one table, a branch that
+ * stops at the door column); gamma: no sub-agents, no router. */
 const VILLAGE_AGENTS = [
   agent("a", "alpha"),
   agent("a2", "alpha"),
@@ -37,11 +35,8 @@ const VILLAGE_AGENTS = [
 ];
 /** City: proj — leader L with 13 sub-agents (14 team PCs, one desk row, on every floor) and leader M with none; quiet — no team. */
 const CITY_AGENTS = [agent("L", "proj"), ...subs("L", "proj", 13), agent("M", "proj"), agent("Q", "quiet")];
-/**
- * City, several desk rows (after every 10 tables, continue vertically): tall — leader T
- * with `n` sub-agents and leader U with one, so BOTH floors have `n` rounded up to desks of two, in
- * rows of 20 seats; short — one desk row.
- */
+/** City, several desk rows: tall = leader T with `n` sub-agents and U with one, so both floors
+ * have `n` rounded up to desks of two, in rows of 20 seats; short = one desk row. */
 const rowsAgents = (n: number): VillageAgent[] => [
   agent("T", "tall"),
   ...subs("T", "tall", n),
@@ -51,10 +46,8 @@ const rowsAgents = (n: number): VillageAgent[] => [
   ...subs("V", "short", 3),
 ];
 
-/**
- * Interior offsets: the door column the village router hangs in; the city router's column (over the
- * end of the leader's desk) and the building's lift, the column right of it (the street door's).
- */
+/** Interior offsets: the village router's door column; the city router's column (over the end of
+ * the leader's desk); the lift, the column right of it (the street door's). */
 const DOOR = 6;
 const ROUTER = 3;
 const LIFT = 4;
@@ -531,12 +524,9 @@ describe("teamLanWiring — what gets no wiring", () => {
 
 // ───────────────────────────── traffic ─────────────────────────────
 
-/**
- * A hand-made room "R": the router at (48, 0); team seat "p" 48 px left of it, team seat "c" 36 px
- * straight below it, team seat "c2" 48 px right of it; boss seat "B" whose antenna is 30 px left of
- * and 40 px above the router (a 50 px hop), boss seat "B2" 30 px right of and 40 px above it (another
- * 50 px hop). A second room "S" far to the right: team seat "s", boss seat "SB".
- */
+/** Room "R": router at (48, 0); team seats p 48 px left, c 36 px below, c2 48 px right; boss
+ * seats B and B2 with antennas 30 px left/right and 40 px above (50 px hops). Room "S" far
+ * right: team seat s, boss seat SB. */
 const ROOM: TeamRoomWiring = {
   room: "R",
   hub: { x: 48, y: 0 },
@@ -571,10 +561,8 @@ const OTHER: TeamRoomWiring = {
 };
 const WIRING = [ROOM, OTHER];
 
-/**
- * Who sits where: boss "b" (seat B) started "c" (seat c) and "q" (seat p); "q" started "c2" (seat c2);
- * boss "b2" (seat B2) has nobody; in room S, boss "o" started "s".
- */
+/** Boss b (seat B) started c (seat c) and q (seat p); q started c2; boss b2 (B2) has nobody;
+ * in room S, boss o started s. */
 const SEATED: SeatedAgent[] = [
   seat("b", "B"),
   seat("c", "c", "b"),

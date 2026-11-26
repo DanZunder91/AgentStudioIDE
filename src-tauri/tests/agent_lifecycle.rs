@@ -1,11 +1,5 @@
-//! M2 integration tests: the agent lifecycle through the supervisor.
-//!
-//! **No real `claude` is ever spawned here.** It needs auth and a network, and the
-//! suite would become slow, flaky and dependent on somebody's login. That is the
-//! point of the `AgentAdapter` seam: the supervisor is driven by a stub that
-//! spawns a real shell in a real PTY, so everything under test — the forest, the
-//! terminal binding, exit handling, telemetry — is exercised for real. The
-//! Claude-specific logic is pure and unit-tested in `agent/claude.rs`.
+//! The agent lifecycle through the supervisor, via a stub adapter spawning a real shell in a
+//! real PTY; never a real `claude` (auth, network). Claude logic is tested in `agent/claude.rs`.
 
 mod common;
 
@@ -67,12 +61,8 @@ async fn agent_spawn_returns_an_agent_terminal_and_streams_output() {
     wait_for_output(&out, "agent-is-alive").await;
 }
 
-/// **Deterministic session binding** — the crux of M2.
-///
-/// The adapter *imposes* an identity on the process rather than inferring one
-/// afterwards. Asserting the child can read it back proves the binding actually
-/// reached the process: it is a fact, not a claim. For the real adapter the same
-/// mechanism is `claude --session-id <uuid>`.
+/// The adapter imposes the identity (`claude --session-id <uuid>` for the real one); the child
+/// reading it back proves it reached the process.
 #[tokio::test]
 async fn the_session_identity_is_imposed_on_the_child_process() {
     let adapter = Arc::new(StubAdapter::running(&format!(
@@ -92,11 +82,8 @@ async fn the_session_identity_is_imposed_on_the_child_process() {
     wait_for_output(&out, &format!("session={}", minted[0])).await;
 }
 
-/// **Two agents in the same cwd** — the exact case that broke the cwd-mangling
-/// heuristic cmux deleted, and the reason we dictate identity instead.
-///
-/// Both agents share a directory; their identities must still be distinct and each
-/// bound to the right terminal.
+/// Two agents in one cwd still get distinct identities, each bound to the right terminal: why
+/// identity is dictated, not inferred from the cwd.
 #[tokio::test]
 async fn two_agents_in_one_cwd_get_distinct_identities() {
     let adapter = Arc::new(StubAdapter::running(&format!(
@@ -333,11 +320,7 @@ async fn m2_never_emits_subagent_spawned() {
     assert!(snap.agents.iter().all(|n| n.parent_id.is_none()));
 }
 
-/// **Closing a tab removes the agent** (the revised model): a closed agent
-/// will not be opened again, so a later `fleet_snapshot` must not resurrect it. A
-/// graveyard of dead nodes in the rail is clutter.
-///
-/// This supersedes the earlier "keep it as a greyed `done` node" behaviour.
+/// A closed agent is removed, so no later `fleet_snapshot` resurrects it.
 #[tokio::test]
 async fn closing_an_agent_removes_it_from_the_fleet() {
     let (sup, sink) = supervisor_with(Arc::new(StubAdapter::interactive()));
@@ -398,10 +381,8 @@ async fn a_closed_agent_stays_gone_across_repeated_snapshots() {
     }
 }
 
-/// **Race safety: a close kills the child, and the resulting `ChildExited` must not
-/// resurrect the removed agent.** The waiter thread reports the kill *after* the
-/// close has already removed the node — if that late message re-inserted anything,
-/// the agent would flicker back to life.
+/// The waiter reports the kill AFTER close removed the node; that late `ChildExited` must not
+/// re-insert it.
 #[tokio::test]
 async fn a_late_child_exit_after_close_does_not_resurrect_the_agent() {
     // A living agent, so closing it genuinely triggers a kill → a real ChildExited.
@@ -430,10 +411,7 @@ async fn a_late_child_exit_after_close_does_not_resurrect_the_agent() {
     );
 }
 
-/// The close path must never fabricate an exit code, and — now that close removes
-/// the node — must not emit a death event for it at all. "exited with code -1" was
-/// the original bug's symptom; the signal codes a kill produces (143/137) describe
-/// *our kill*, not the agent, and are equally meaningless to the user.
+/// Close removes the node with no death event; 143/137 describe our kill, not the agent.
 #[tokio::test]
 async fn closing_never_reports_a_made_up_exit_code() {
     let (sup, sink) = supervisor_with(Arc::new(StubAdapter::interactive()));
@@ -509,16 +487,8 @@ async fn a_child_that_kills_itself_is_still_an_error() {
     );
 }
 
-/// **The collision of crash, then close.**
-///
-/// An agent crashes on its own (recorded as `error`, one `exited` event), and the
-/// user *then* closes the tab. Close wins — the node is removed. Rationale: the
-/// crash was retained *until the user dismissed it*, and closing the tab is that
-/// dismissal, an explicit action that supersedes the retained record.
-///
-/// Crucially, the crash's own `exited` telemetry (with the real code) still fired
-/// while the node existed — the failure was reported, then the user cleared it.
-/// The close must not *add* a second, laundered event.
+/// Crash then close: the crash's own `exited` event (real code) already fired; the close
+/// removes the node and must not add a second event.
 #[tokio::test]
 async fn a_close_after_a_crash_removes_the_node_but_keeps_the_crash_report() {
     let (sup, sink) = supervisor_with(Arc::new(StubAdapter::running("exit 9")));
@@ -582,10 +552,7 @@ async fn a_close_after_a_clean_exit_removes_the_node() {
     );
 }
 
-/// **The retain direction, explicit: an agent that exits on its OWN stays in the
-/// fleet** — inspectable until the user dismisses it. This is the test that fails
-/// if a future change starts removing agents on natural exit (the mistake in the
-/// opposite direction from the original bug).
+/// The opposite direction: an agent that exits on its OWN stays in the fleet until dismissed.
 #[tokio::test]
 async fn an_agent_that_exits_on_its_own_is_retained() {
     for (script, want) in [

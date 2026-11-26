@@ -1,14 +1,6 @@
-/**
- * Agent Village — furniture and outdoor props.
- *
- * Indoor furniture uses the vendored pixel-agents PNGs (desk/table, team table,
- * PC on/off frames, chair by facing, plant, bookshelf, bin, coffee, sofa). The
- * sub-agents' laptops, the city leaders' monitors (seen from behind) and the outdoor
- * props — tree, fountain, lamp, sign, campfire — are OUR procedural pixel art. Every
- * sprite is anchored to the BOTTOM of its footprint and centred across it, so
- * tall art (a 16×32 PC, a tree) rises above its tiles the way a top-down view
- * expects. Without art a prop degrades to a flat footprint-sized rectangle.
- */
+/** Furniture and outdoor props: vendored pixel-agents PNGs indoors, our own art for laptops,
+ * monitors and outdoor props. Sprites are anchored to the footprint's BOTTOM, centred, so tall art
+ * rises above its tiles; without art a prop is a flat footprint-sized rectangle. */
 
 import { TILE, type Ambience, type Prop, type PropReading } from "../villageTypes";
 import type { Camera } from "./camera";
@@ -180,13 +172,8 @@ export const LAPTOP = {
   glow: "rgba(120, 210, 255, 0.2)",
 } as const;
 
-/**
- * A sub-agent's laptop on a team table, lit while its owner works (screen glow +
- * flickering text lines over 3 frames), dark otherwise. `facing` is the SITTER's:
- * "up" (sitting below it) shows the screen; "down" (sitting above it) shows the
- * keyboard behind the lid's back, with the screen's light spilling over the keys
- * and a lit logo. Drawn inside its own 16×16 tile, on the table top.
- */
+/** A sub-agent's laptop, lit while its owner works. `facing` is the SITTER's: "up" shows the
+ * screen, "down" the keyboard behind the lid. Drawn inside its own 16×16 tile. */
 function laptop(
   ctx: DrawTarget,
   cam: Camera,
@@ -236,16 +223,9 @@ export const MONITOR = {
   keyShadow: "rgba(0, 0, 0, 0.22)",
 } as const;
 
-/**
- * A city leader's workstation (prop kind `monitor`, 2 tiles wide from x0): in the LEFT tile its
- * monitor, seen from BEHIND (the leader faces the street, so its screen faces the leader) — a dark back
- * panel on a stand with a power LED, and while its owner works the screen's light spilling round its
- * edges; in the RIGHT tile, right in front of the leader's chair, its KEYBOARD on the desk's board,
- * one key lit and hopping along it while its owner types (with only a screen beside them, the leaders
- * had nothing under their hands to type on — and a monitor moved in front is still not a keyboard).
- * A monitor in front would hide the seated leader's face; the keyboard is low, so the face shows over
- * it and the hands sit on it.
- */
+/** A city leader's workstation, 2 tiles from x0: the monitor seen from BEHIND in the left tile,
+ * the keyboard (a key hopping while it types) in the right. A monitor in front would hide the
+ * seated leader's face; the low keyboard does not. */
 function monitor(ctx: DrawTarget, cam: Camera, x0: number, bottom: number, on: boolean, phase: number): void {
   const b = bottom;
   if (on) rect(ctx, cam, x0 + 2, b - 32, 14, 12, MONITOR.glow);
@@ -351,13 +331,9 @@ function campfire(
   );
 }
 
-/**
- * One prop. `on`/`frame` drive the PC / laptop screen and a router's LEDs; `reading`
- * the capacity props (the Seats hall, racks, gauges, a lounge bench's waiter);
- * `timeMs` drives the fountain, the campfire and the hall's audience. `ambience`
- * (absent = the old always-lit look) turns lamps on only with `lightsOn` and puts the
- * campfire out when `!campfireLit`.
- */
+/** One prop. `on`/`frame` drive screens and router LEDs, `reading` the capacity props, `timeMs`
+ * the animated ones. `ambience` (absent = always lit) lights lamps only with `lightsOn` and puts
+ * the campfire out when `!campfireLit`. */
 export function drawProp(
   ctx: DrawTarget,
   cam: Camera,

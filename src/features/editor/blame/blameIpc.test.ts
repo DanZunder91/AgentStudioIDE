@@ -1,8 +1,4 @@
-/**
- * `blameIpc` — the git-blame wire. A thin wrapper, so the command
- * *name*, the arg *shape*, and the string-rejection passthrough are the whole
- * contract with the Rust side being built in parallel.
- */
+/** The command name, arg shape and string-rejection passthrough are the whole Rust contract. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

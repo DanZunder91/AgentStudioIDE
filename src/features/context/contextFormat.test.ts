@@ -1,9 +1,4 @@
-/**
- * contextFormat — the card's strings and its two drawings' geometry.
- *
- * Every expectation is a literal written out by hand: a table that reads
- * its expected value from the code under test proves nothing about values.
- */
+/** Every expectation is a hand-written literal: one read from the tested code proves nothing. */
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";

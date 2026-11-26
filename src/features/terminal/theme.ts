@@ -1,12 +1,5 @@
-/**
- * xterm theme, derived from the app's CSS custom properties.
- *
- * ARCHITECTURE §4 ("Theming"): xterm and CM6 themes are derived from the same
- * tokens via `getComputedStyle`, so all three surfaces stay in lockstep on a
- * theme switch. The tokens live in `src/App.css` `:root` — read, never edited
- * from here. The literals below are fallbacks for when the stylesheet has not
- * applied yet (or in a non-DOM context).
- */
+/** xterm theme from the `src/App.css` `:root` tokens via `getComputedStyle` (ARCHITECTURE §4),
+ * read, never edited; the literals are fallbacks before the stylesheet applies. */
 
 import type { ITheme } from "@xterm/xterm";
 
@@ -35,10 +28,7 @@ export function terminalFontFamily(): string {
 export const TERMINAL_FONT_SIZE = 13;
 export const TERMINAL_LINE_HEIGHT = 1.3;
 
-/**
- * Bound scrollback: memory is roughly scrollback x cols x cell x terminals,
- * and a fan-out fleet multiplies it.
- */
+/** Memory ≈ scrollback × cols × cell × terminals, and a fan-out fleet multiplies it. */
 export const TERMINAL_SCROLLBACK = 5000;
 
 /** Build the xterm theme from the current CSS tokens. Call per terminal. */

@@ -1,47 +1,6 @@
-/**
- * ExportDialog — "share this config with someone" (config bundles).
- *
- * ── Presentational on purpose ────────────────────────────────────────────────
- * No store subscription, no `invoke`, no `@tauri-apps/plugin-dialog`. Every action is a
- * prop and every piece of data arrives as data, so the dialog is independent of the IPC
- * wrappers and the store slice behind those props. It is the same seam `ConnectionDialog`
- * uses for the database client, and it lets each half be tested on its own.
- *
- * Note what that means for the destination path: this dialog never asks for one. It hands
- * `ExportOptions` to `onExport` and the wiring layer runs the native save picker, because
- * a picker is an IPC call and the bundle's *bytes* stay out of the webview
- * entirely — the only thing that crosses is a path, and the path is not ours to know.
- *
- * ── Props API ────────────────────────────────────────────────────────────────
- * | Prop       | Meaning |
- * |---|---|
- * | `source`   | Everything on this machine that could be included, with per-variable `hasValue`. |
- * | `busy`     | An export is in flight. Owned by the caller so there is ONE source of truth. |
- * | `error`    | Already a sentence. This file does not map error codes — see below. |
- * | `exported` | The `BundleHeader` the command returned, or `null`. Non-null switches to the receipt. |
- * | `onExport` | `(options: ExportOptions) => void`. Fire-and-forget; the caller reports back through `busy`/`error`/`exported`. |
- * | `onClose`  | Esc, Cancel, and the receipt's Done button. |
- *
- * Three of those (`busy`, `error`, `exported`) are caller-owned deliberately: a dialog that
- * owns its own pending state ends up with two truths about whether an export is running,
- * and one of them is always stale.
- *
- * `error` is a **sentence, not a code**. Mapping `PortabilityErrorCode` → English lives in
- * `portabilityErrors.ts`; a second table here would be a duplicate free to drift.
- *
- * ── What this dialog is careful about ────────────────────────────────────────
- * 1. **`structure` is the default**, from `DEFAULT_EXPORT_MODE` rather than a literal, so
- *    the design's most consequential line has exactly one home.
- * 2. **The passphrase copy does not reassure.** The format's own stated limitation is that
- *    the passphrase is the weak link; the sealed block therefore leads with why, not with
- *    a padlock. See `PASSPHRASE_TRUTH`.
- * 3. **Structure mode says what it is LEAVING OUT**, by name. A user who believes they
- *    shared a working config and did not is the most preventable complaint here.
- * 4. **Nothing is confirmed with `alert`/`confirm`.** Errors render in the dialog.
- * 5. **The passphrase is local state and travels only inside `ExportOptions`**, which is
- *    the one object the contract says may carry it — and only in `sealed` mode, where the
- *    contract requires it. `toExportOptions` omits the key otherwise.
- */
+/** Presentational (like `ConnectionDialog`): the caller runs the save picker, so only a path
+ * crosses and bundle bytes never reach the webview, and owns `busy`/`error`/`exported`. `error` is
+ * already a sentence (`portabilityErrors.ts`). Only sealed `ExportOptions` carry the passphrase. */
 
 import { useEffect, useState } from "react";
 
@@ -101,14 +60,8 @@ const LABEL_ID = "portability-export-label";
 
 /* ────────────────────────────── the shell ────────────────────────────────── */
 
-/**
- * The modal shell: overlay, labelled `role="dialog"`, Esc, the Tab trap, focus in and
- * focus restored. Identical in behaviour to `ConnectionDialog`'s shell on purpose — two
- * dialogs that trap focus differently in one app is a bug, not a style choice.
- *
- * `tabWrapTarget` is imported from the database feature rather than reimplemented: it is
- * a pure, already-tested function with no database semantics in it.
- */
+/** Modal shell (overlay, Esc, Tab trap, focus restore), behaving exactly like `ConnectionDialog`'s:
+ * two dialogs that trap focus differently is a bug. */
 export function ExportDialog(props: ExportDialogProps): React.JSX.Element {
   const { onClose } = props;
 
@@ -375,10 +328,8 @@ function ExportForm({
 
 /* ────────────────────────── small pieces ─────────────────────────────────── */
 
-/**
- * One tick-list. The empty case is a sentence rather than an absent block: "you have no
- * saved requests" and "requests are not exportable" look the same when nothing renders.
- */
+/** An empty group is a sentence, not an absent block: "no saved requests" and "requests are not
+ * exportable" look the same when nothing renders. */
 function IncludeGroup({
   title,
   items,
@@ -425,10 +376,7 @@ function IncludeGroup({
   );
 }
 
-/**
- * The receipt. It restates the mode, because "did I send them the sealed one?" is a
- * question people ask thirty seconds later and the file name will not answer it.
- */
+/** Restates the mode: the file name will not answer "did I send them the sealed one?". */
 function Receipt({
   header,
   onClose,

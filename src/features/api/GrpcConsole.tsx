@@ -1,25 +1,6 @@
-/**
- * GrpcConsole — the API client's gRPC console.
- *
- * Rendered by `ApiRequestView` when a request's `protocol` is `"grpc"`. Unlike
- * `WsConsole` (a live streaming session), gRPC is request/response like HTTP: one
- * Send → one response. So the SEND is a one-shot through the shared
- * `executeGrpcRequest` (substitution + record-to-history in one place, also used
- * by the History re-run), and the RESPONSE surface mirrors the HTTP ResponsePanel
- * (a status pill + a pretty-printed JSON body), not the WS log.
- *
- * The request surface differs enough from HTTP to warrant a sibling component:
- * a `host:port` endpoint + plaintext/TLS toggle, a reflect-to-populate
- * service/method picker (with a manual fallback), a JSON message editor, and
- * metadata rows (which reuse the exact HTTP header-row model + actions —
- * metadata IS headers for gRPC).
- *
- * gRPC is a NATIVE, in-process `tonic` call — no external tool, always
- * available, so there is no "install X" degrade path (unlike bring-your-own LSP
- * servers). Endpoint/message/metadata reuse the request's `url`/`body`/`headers`
- * (the way `WsConsole` overloads `url`); the gRPC-specific state (plaintext, the
- * reflected schema, the selection, the last outcome) lives in `req.grpc`.
- */
+/** Native in-process tonic call, so no "install X" path. Send goes through executeGrpcRequest
+ * (substitution + history in one place); endpoint/message/metadata reuse url/body/headers, and the
+ * gRPC-only state lives in `req.grpc`. */
 
 import { useState } from "react";
 
@@ -35,11 +16,7 @@ function statusClass(statusCode: number): string {
   return statusCode === 0 ? "api-status--ok" : "api-status--grpcerr";
 }
 
-/**
- * The response message pretty-printed (2-space JSON) when it parses, else the raw
- * text unchanged. gRPC's message is always JSON from Rust, so it will parse — the
- * guard is kept for symmetry with `formatBody` and robustness.
- */
+/** Rust always sends JSON; the parse guard mirrors formatBody. */
 function formatMessage(message: string): string {
   try {
     return JSON.stringify(JSON.parse(message), null, 2);
@@ -334,12 +311,7 @@ export function GrpcConsole({
   );
 }
 
-/**
- * The gRPC response surface: a calm transport-error block, nothing yet, or the
- * resolved call (status pill + optional grpc-message + pretty-printed body). Split
- * out so each state is one `if` and `response` narrows non-null cleanly (like
- * ApiRequestView's ResponsePanel).
- */
+/** One `if` per state, so `response` narrows non-null (like ResponsePanel). */
 function GrpcResponsePanel({
   grpc,
 }: {

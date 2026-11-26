@@ -1,17 +1,5 @@
-/**
- * A2 (+A3) — the API client, driven end-to-end against a local server.
- *
- * The CI-only "real webview ↔ real Rust core" smoke (half 2 of 2). This is the
- * one flow that needs NO app seam: arbitrary outbound requests are the feature
- * by design. The spec binds a throwaway server on 127.0.0.1 (seam S7) and
- * points the app at it, so the whole chain runs for real and deterministically:
- *
- *   click → React store action → invoke('http_send') → reqwest in the Rust core
- *   → real loopback TCP → back across IPC → store → the status pill in the DOM.
- *
- * That IPC round-trip is exactly what the browser tier (mocked backend) cannot
- * cover, and the only reason this tier exists.
- */
+/** A2 (+A3): the API client against a throwaway 127.0.0.1 server (seam S7), through real IPC and
+ * reqwest in the Rust core: the round trip the browser tier's mocked backend cannot cover. */
 
 import { $, expect } from "@wdio/globals";
 import { startHttpFixture, type HttpFixture } from "../support/http-fixture";

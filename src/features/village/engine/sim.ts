@@ -1,56 +1,6 @@
-/**
- * VillageSim — the character simulation (pixel-agents' OfficeState + character
- * FSM, reimplemented for a village of houses).
- *
- * Three states, as in pixel-agents: IDLE (standing), WALK (following a BFS
- * path) and TYPE (at work — at a desk, or in place for sub-agents and agents
- * without a seat). Everything else is derived for the renderer in
- * `characters()`:
- *
- *   typing / thinking → walk to own seat, type      reading → same, read anim
- *   waiting           → sit at seat, sticky "waiting" bubble
- *   idle              → stand up, wander (house / plaza / campfire), pause
- *                       2–20 s, go home to rest every 3–6 moves
- *   done / error      → like idle, plus a 2 s bubble that fades over 0.5 s
- *
- * Sub-agents sit at the TEAM TABLES of their root's house (`Seat.forSub`), each at
- * its own laptop — the free sub seat nearest the parent's seat. They spawn right on
- * it, type/read there while working, and stay seated (resting) when idle/done; roots
- * never take a sub seat and sub-agents never take a desk. Only when every sub seat is
- * taken does a sub-agent fall back to the nearest free tile next to its parent, typing
- * where it stands (it moves to a sub seat as soon as one frees up). Every character
- * gets its OWN look (`pickPalette` over all live characters), so a parent and its
- * sub-agents never read as clones. New characters play a 0.3 s spawn effect; removed
- * ones a 0.3 s despawn effect, then vanish.
- *
- * Ambience (`setAmbience`): in bad weather or at night (`Ambience.stayIndoors`) idle
- * wandering only ever targets tiles inside the agent's own house, and anyone strolling
- * outside when the rain starts turns around and walks back in through the door.
- *
- * `stayPut` (the city view): roots keep their desk too — an idle or finished leader rests
- * in its chair, lights off, exactly like a sub-agent; nobody wanders a floor.
- *
- * The COMMUTE (a city with a lounge, `World.city.lounge`: agents wait
- * in the lounge under the street; one that is needed rides an elevator up to the street and goes
- * to its building, and when done it returns the same way and sits down to wait again). There a
- * SUB-AGENT lives in two places: its BENCH in the lounge (the seat number the view
- * hands over with `setLoungeSeats` — its capacity desk) and its desk on its leader's floor. It
- * appears ON its bench (spawn effect), and while busy travels the route of engine/commute.ts to its
- * desk — down to the aisle, the lounge's lift up to the far sidewalk, across the road, along the near
- * sidewalk, in at its building's door, up that lift, along the seat's row — and sits and works there
- * as ever (its PC lights only once it is seated). Done / error / idle at its desk, it stays seated
- * `RESULT_BEAT` (its result packet leaves from that desk — the team LAN wires only seated agents),
- * then goes back the same way and sits on its bench until it is removed. Finishing (or getting busy
- * again) mid-trip turns it round where it is; removed mid-trip, it despawns where it is; a world
- * rebuild re-routes it from where it stands (engine/commute.ts `project`) — never a teleport to its
- * desk. A bench another character already claims is never shared: a newcomer then takes the first
- * bench nobody claims, and with none left it stands at the lounge lift's lowest stop. Roots never
- * commute (`stayPut`: they keep their floor's desk). Without a lounge none of this applies.
- *
- * Pure and deterministic: time only advances through `tick(dt)` and all
- * randomness comes from a seeded mulberry32. `tick` allocates nothing on the
- * steady-state path (paths are only computed at decision points).
- */
+/** Character sim (pixel-agents' OfficeState + FSM, reimplemented): IDLE, WALK and TYPE; the rest
+ * is derived in `characters()`. Sub-agents sit at their root's team tables; in a lounge city they
+ * commute (engine/commute.ts). Pure and deterministic (seeded; time only via `tick`). */
 
 import { TILE, type Ambience, type CharacterAnim, type CharacterView, type CityLounge, type Dir, type Seat, type SeatedAgent, type VillageActivity, type VillageAgent, type VillageOrigin, type World } from "../villageTypes";
 import { advance, benchTiles, commuteRoute, facing, legLength, LEGS, place, project, riding, type Cursor, type Route } from "./commute";
@@ -76,19 +26,14 @@ const WANDER_MOVES: [number, number] = [3, 6];
 const HOME_REST: [number, number] = [20, 60];
 /** Rest after being placed at the desk (spawn / world rebuild) while not working. */
 const PLACED_REST: [number, number] = [2, 8];
-/**
- * Seconds a commuter that finished stays seated at its desk before it heads back to the lounge: the
- * longest a LAN packet takes (`MAX_TRIP`), so its RESULT packet — which the team LAN draws only
- * between SEATED agents (`seating`) — leaves from its desk instead of vanishing as it stands up.
- */
+/** Seconds a finished commuter stays seated: `MAX_TRIP`, so its RESULT packet (drawn only between
+ * SEATED agents) leaves from its desk instead of vanishing as it stands up. */
 export const RESULT_BEAT = MAX_TRIP;
 /** A commuter's walk frames step faster in proportion to its brisk walk (engine/commute.ts COMMUTE_WALK). */
 export const COMMUTE_FRAME_SEC = WALK_FRAME_SEC / 2.5;
 
-/**
- * `bench` (a commuter): sitting on its lounge bench — or, with none, standing at the lounge lift's
- * lowest stop; `commute`: on its way between the bench and its desk (`Char.trip`).
- */
+/** `bench`: on its lounge bench (or, with none, at the lounge lift's lowest stop); `commute`:
+ * between bench and desk (`Char.trip`). */
 type State = "idle" | "walk" | "type" | "bench" | "commute";
 
 /** A commuter's trip: its route and where on it it is. */
@@ -187,11 +132,8 @@ export class VillageSim {
     return this._time;
   }
 
-  /**
-   * Swap in a rebuilt world. Seat ids are stable across rebuilds (`<house>:seat:<i>`),
-   * so assignments survive; a seat that vanished or moved house is reassigned.
-   * Every character is re-placed (house positions shift when houses are added).
-   */
+  /** Swap in a rebuilt world. Seat ids (`<house>:seat:<i>`) are stable, so assignments survive; a
+   * seat that vanished or moved house is reassigned. Everyone is re-placed. */
   setWorld(world: World): void {
     this.indexWorld(world);
     for (const c of this.chars.values()) {
@@ -204,12 +146,9 @@ export class VillageSim {
     for (const c of this.liveSubs()) this.resettle(c);
   }
 
-  /**
-   * Who holds which bench of the city's lounge — agent key → seat number (the capacity frame's
-   * desk index; `VillageView` hands it over whenever the desks change). A sub-agent still appearing
-   * on its bench moves to the one it holds (the view sends the seats right AFTER the agents, so a
-   * newcomer first sits on the first free bench); one that has left keeps the bench it left from.
-   */
+  /** Lounge bench holders: agent key → seat number (the capacity frame's desk index). Sent right
+   * AFTER the agents, so a newcomer first sits on the first free bench, then moves; one that has
+   * left keeps the bench it left from. */
   setLoungeSeats(seats: ReadonlyMap<string, number>): void {
     this.loungeSeats = seats;
     const appearing = [...this.chars.values()].filter((c) => c.state === "bench" && c.fx === "spawn");
@@ -227,11 +166,8 @@ export class VillageSim {
     }
   }
 
-  /**
-   * The lounge benches a character is on, leaving from, away from or heading back to — every
-   * commuter's, despawning ones included (they are still drawn there). The lounge draws no waiter
-   * on them. The same Set, refilled on every call: read it before the next.
-   */
+  /** Benches any commuter is on, leaving, away from or heading back to (despawning ones too); the
+   * lounge draws no waiter there. The same Set, refilled per call: read it before the next. */
   loungeClaims(): ReadonlySet<number> {
     this.claims.clear();
     for (const c of this.chars.values()) if (c.bench !== null) this.claims.add(c.bench);
@@ -257,11 +193,8 @@ export class VillageSim {
     }
   }
 
-  /**
-   * Apply the sky. When `stayIndoors` switches on, every idle or strolling root that is
-   * (or is heading) outdoors walks back into its house; from then on wandering never
-   * targets an outdoor tile. Switching it off just lets them roam again.
-   */
+  /** When `stayIndoors` switches on, idle or strolling roots outdoors walk back in and wandering
+   * never targets outdoors; switching it off lets them roam again. */
   setAmbience(amb: Ambience): void {
     const was = this.indoorsOnly;
     this.indoorsOnly = amb.stayIndoors;
@@ -310,12 +243,8 @@ export class VillageSim {
     return out;
   }
 
-  /**
-   * Who is SEATED where right now — at its seat, not walking to or from it (a despawn releases the
-   * seat, so the departing are never listed), not travelling, not on a lounge bench; resting sitters
-   * included (the room's LAN still connects them). Roster order. What a project room's LAN
-   * (engine/teamLan.ts) wires up.
-   */
+  /** Who is SEATED now (not walking, travelling or on a bench; resting sitters included, despawning
+   * ones never), in roster order: what a room's LAN (engine/teamLan.ts) wires up. */
   seating(): SeatedAgent[] {
     const out: SeatedAgent[] = [];
     for (const c of this.chars.values())
@@ -523,11 +452,8 @@ export class VillageSim {
     return rootOf(c, this.chars)?.folder ?? null;
   }
 
-  /**
-   * Give sub-agent `c` the free team seat in its root's house nearest its parent's
-   * seat (or the parent itself when it has none); ties go to the first in layout
-   * order. Returns whether a seat was taken.
-   */
+  /** Give sub-agent `c` the free team seat in its root's house nearest its parent's seat (or the
+   * parent when seatless); ties go to layout order. Returns whether a seat was taken. */
   private assignSubSeat(c: Char): boolean {
     const home = this.homeOf(c);
     const seats = home === null ? undefined : this.seatsByHouse.get(home);
@@ -603,11 +529,8 @@ export class VillageSim {
     this.toIdle(c);
   }
 
-  /**
-   * BFS from `start` over walkable tiles (the start itself may be a chair) to the
-   * first walkable tile no other live character stands on, passing over `avoid` while
-   * any other free tile is reachable. Falls back to `start`.
-   */
+  /** BFS from `start` (may be a chair) to the first walkable tile no other live character stands
+   * on, skipping `avoid` while another free tile is reachable. Falls back to `start`. */
   private nearestFree(start: Tile, self: Char, avoid: Tile | null = null): Tile {
     const { cols } = this.world;
     const taken = new Set<number>();
@@ -792,11 +715,8 @@ export class VillageSim {
     return c.isSub && !!this.world.city?.lounge;
   }
 
-  /**
-   * The bench `c` should use: the one it holds (`setLoungeSeats`) unless another character already
-   * claims it; else the first bench no character claims; else none (null). Claims alone keep two
-   * characters off one bench, whatever the holders say: a holder already in the sim has its own bench.
-   */
+  /** The bench `c` holds (`setLoungeSeats`) unless another character claims it; else the first
+   * unclaimed bench; else null. Claims alone keep two characters off one bench. */
   private pickBench(c: Char): number | null {
     const want = this.loungeSeats.get(c.key);
     if (want !== undefined && this.benchFree(want, c)) return want;
@@ -876,12 +796,9 @@ export class VillageSim {
     else this.toBench(c);
   }
 
-  /**
-   * A sub-agent after a world rebuild. Outside a lounge city: at its desk, as ever. A commuter keeps
-   * its bench (a bench that is gone, or none: it picks again) and is re-placed where it is in its
-   * day: on its bench, at its desk, or — travelling — on the same leg of the new route, at the point
-   * nearest where it stood (no teleport to its desk). One whose desk is gone stops where it stands.
-   */
+  /** A sub-agent after a rebuild: outside a lounge city, at its desk. A commuter keeps its bench
+   * (or picks again) and is re-placed where it was: bench, desk, or the same leg of the new route
+   * (no teleport). One whose desk is gone stops where it stands. */
   private resettle(c: Char): void {
     if (!this.commutes(c)) return this.placeSub(c);
     if (c.bench === null || c.bench >= this.benches.length) c.bench = this.pickBench(c);

@@ -1,13 +1,5 @@
-/**
- * folderSemantics — value-pinning tests, organized per supported ecosystem
- * (scope: Rust, Kotlin/Gradle+Maven, web JS/TS).
- *
- * The role tables are private on purpose (an exported table
- * invites `expect(f(row)).toBe(table[row])` tests that can never catch a wrong
- * value). So every row is pinned HERE with an explicit literal assertion —
- * these literals are the independent copy of the table; a drifted row fails by
- * name. No routing loop exists because there is no exported table to loop.
- */
+/** The role tables are private on purpose: each row is pinned here by an explicit literal (the
+ * independent copy), so a drifted row fails by name. */
 
 import { describe, expect, it } from "vitest";
 

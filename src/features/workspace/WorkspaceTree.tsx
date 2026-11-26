@@ -1,68 +1,6 @@
-/**
- * WorkspaceTree — the right rail's real file tree (multi-root).
- *
- * The panel is **multi-root**: one collapsible root per UNIQUE folder path, the
- * `workspaceRoots` union of the root agents' distinct cwds (the same dedup the
- * AGENTS rail's folder grouping does) with the user-opened browse roots. Every
- * root is browsable at once (VS Code multi-root style) — selecting an agent no
- * longer re-roots the tree, it just adds/keeps that folder's root.
- *
- * Empty by default (no agents, no browse roots) → an "Open a folder" action that
- * adds a browse-only root via the native picker, so the panel is
- * never a dead end. A browse-only root (a folder with no agent of its own) carries
- * a ✕ to close it; an agent-cwd root has none — it lives while its agent does.
- *
- * Each root's file listing lives in `<WorkspaceTreeView>`: children load lazily (a
- * folder's `read_dir` fires only on first expand; the root loads on mount), reads
- * are cached across collapse/re-expand, and a failed read is a calm inline note
- * that never takes the rail down. Per-root expand/selection state is isolated by
- * the `key={root}` remount.
- *
- * File-mutation affordances live in `<WorkspaceTreeView>` too: create
- * folder/file, rename, delete (inline two-step confirm — NO native dialog), and
- * drag-to-move WITHIN a single root. All mutations refresh via the same `load()`
- * that seeds a folder, so the local children cache stays honest without lifting
- * state to the store; an open editor tab is kept consistent as paths change.
- *
- * A file row's menu also carries a **Git** submenu:
- * *Compare with HEAD* opens a read-only `diff` center tab, and *Revert changes…*
- * throws the working-tree edits away — behind the SAME inline two-step confirm
- * delete uses, because it is destructive and irreversible. Both are gated on the
- * git status the tree already subscribes to for its row colors, so opening the
- * menu costs no extra IPC: no Git submenu on a folder (it is per-file),
- * the whole submenu disabled when the root is not a repo, and Revert disabled
- * when there is nothing at HEAD to go back to.
- *
- * Reveal-active-file (IntelliJ's "Select Opened File"): the panel
- * toolbar's crosshair posts `uiActions.revealActiveFile()`, and each root's
- * `<WorkspaceTreeView>` consumes the store's one-shot `fileReveal` request when
- * the path is under ITS root — loading + expanding the ancestor chain (reusing
- * the same readDir cache as click-expand) and scrolling the row into view.
- * Tokens are seen-once per subtree, mirroring `rootCreate`. A reveal for a path
- * under NO open root can do none of that, so the shell says so in a calm note
- * rather than flipping the rail to Files and nothing else.
- *
- * 🔴 **Two behaviours, deliberately separate** (pressing the button should select
- * the file, so it is clear which one is open):
- *  - the **highlight** is `activeFilePath` read straight from the store, so it
- *    FOLLOWS the active file tab — open a file from Find, Git or a tab click and
- *    the row lights up on its own. It is free: highlighting an already-rendered
- *    row costs no `read_dir`, expands nothing, and must never switch the rail or
- *    force the Files tab. It is also rail-wide and survives a root collapse,
- *    because it is one store value rather than per-subtree component state
- *    (component state IS tab state until proven otherwise).
- *  - the **crosshair** is the loud gesture: un-collapse the rail, force Files,
- *    expand the ancestor chain, scroll. Only it does any of that.
- *
- * "Open in Browser" on an `.html` row: a submenu of the browsers
- * installed on this machine, default first and named, falling back to a single
- * "system default" leaf when the list has not arrived. The list is primed ONCE on
- * mount and read SYNCHRONOUSLY while the items are built, because `ContextMenu`
- * cannot grow after it opens — see `browserIpc.ts`, which owns that reasoning.
- *
- * `workspaceRoot` (single) is untouched — Find + the new-terminal cwd still ride
- * on it; only the Files panel became multi-root.
- */
+/** The right rail's multi-root file tree: one root per unique folder (agent cwds + browse roots),
+ * lazy cached reads, inline mutations and confirms (no native dialogs), Git and Open in Browser
+ * submenus. The highlight follows `activeFilePath`; only the crosshair expands and scrolls. */
 
 import {
   useCallback,
@@ -79,11 +17,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { ContextMenu, type ContextMenuItem } from "../../components/ContextMenu";
 import { ChevronIcon, CloseIcon, FileIcon, FolderIcon } from "../../components/icons";
 import { InlineEditInput } from "../../components/InlineEditInput";
-// NAME COLLISION, aliased on purpose: `FileIcon` from components/icons is the
-// generic monochrome document glyph (still used by the inline-create row);
-// `FileTypeIcon` is the per-file COLORED icon resolved via file-icons.md §3
-// against the sprite `<IconSprite>` injects app-level. File rows only —
-// folder rows keep `FolderIcon` + role colors (dir branch deferred).
+// Aliased: components/icons' `FileIcon` is the generic glyph (inline-create row); this is the
+// colored per-file icon (file-icons.md §3). Folder rows keep `FolderIcon` + role colors.
 import { FileIcon as FileTypeIcon } from "../../lib/fileIcons";
 import { relativeTo, samePath } from "../../lib/paths";
 import { ancestorDirsWithin } from "../../app/revealPath";
@@ -99,15 +34,9 @@ import {
   startGitPolling,
   useGitStore,
 } from "../git";
-// A revert rewrites the file underneath any open editor for it. `reloadFromDisk`
-// re-reads it into that buffer as an ordinary CM6 transaction, so the editor stops
-// showing content that no longer exists on disk — and the user can still Cmd+Z the
-// revert inside the buffer. No-op when the file has no editor.
-// …and `opensInExternalBrowser` is the SAME predicate the preview mount
-// asks, taken from the barrel rather than deep-imported (`previewKinds.ts` is
-// the single authority and must stay the only one). A file
-// that renders as a page in the app is exactly a file the menu offers to a
-// browser; there is no second extension table to drift out of step.
+// `reloadFromDisk` re-reads a reverted file into any open buffer (Cmd+Z can still undo it).
+// `opensInExternalBrowser` is the preview's own predicate via the barrel: no second extension
+// table.
 import { opensInExternalBrowser, reloadFromDisk } from "../editor";
 // The diagnostics log (bridge.ts's idiom): the inline note is what the user
 // reads, and this is what survives in the Logs panel with Rust's error code on it.
@@ -133,36 +62,17 @@ import "./workspace.css";
 
 const INDENT = 14; // px per depth level
 
-/**
- * The ROOT read can momentarily lose a race with folder *registration*: when an
- * ad-hoc `claude` is detected, its cwd is added to `read_dir`'s scope (the recents
- * push in `bridge.registerFleetRoots`) at the same instant this tree mounts and
- * reads that cwd. If the read lands first it is out-of-scope and 403s — and the
- * failure used to be sticky, so the folder showed "Can't read this folder." forever
- * (a real bug). So the root read RETRIES a few times, staying on "Loading…",
- * before conceding: by the next tick the registration has settled and the read is in
- * scope. Nested reads happen on user-expand, long after any registration, so they
- * never race and are never retried.
- */
+/** The root read can race the cwd's registration into `read_dir`'s scope and 403, so it retries a
+ * few times on "Loading…" before conceding. Nested reads follow user expands and never race. */
 export const ROOT_READ_TRIES = 4;
 export const ROOT_READ_RETRY_MS = 120;
 
-/**
- * Drag payload for reordering a FOLDER (root) in the Files rail: the
- * absolute folder path being moved. Deliberately distinct from `TAB_DND_MIME`
- * (application/x-agentstudio-tab) so a tab drag and a folder drag never accept each
- * other's payload — `dataTransfer.types.includes(...)` gates on this exact string.
- * The drop calls the SAME `moveFolder` action the left rail sorts by, so both rails
- * stay in lockstep.
- */
+/** Drag payload for reordering a root folder (its absolute path); distinct from `TAB_DND_MIME` so
+ * tab and folder drags never accept each other. The drop uses the left rail's `moveFolder`. */
 export const FOLDER_DND_MIME = "application/x-agentstudio-ws-folder";
 
-/**
- * Drag payload for MOVING an entry (file or folder) within a single root: the
- * absolute entry path. DISTINCT from `FOLDER_DND_MIME` so the root-header
- * reorder drag and the entry-move drag never accept each other's payload — each
- * drop target gates on its own exact mime via `dataTransfer.types.includes(...)`.
- */
+/** Drag payload for moving an entry within one root; distinct from `FOLDER_DND_MIME` so each drop
+ * target accepts only its own drag. */
 export const ENTRY_DND_MIME = "application/x-agentstudio-ws-entry";
 
 /** A create-at-root request forwarded from the OUTER header button to the INNER
@@ -194,11 +104,8 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Re-base `p` from `oldBase` onto `newBase` if it is at/under `oldBase`, else
- *  null (it is unrelated and unchanged). Used to keep open editor tabs pointing
- *  at the right path after a rename/move — and, through them, the highlight.
- *  Either separator, and Windows paths without case: a tab opened as `c:\w\a.ts`
- *  follows the rename of the tree's `C:\w`. */
+/** `p` re-based from `oldBase` onto `newBase` if at/under it, else null; keeps open editor tabs on
+ * the right path after a rename/move. Separator- and (Windows) case-insensitive. */
 function repathUnder(p: string, oldBase: string, newBase: string): string | null {
   const rel = relativeTo(oldBase, p);
   if (rel === null) return null;
@@ -280,11 +187,8 @@ function CrosshairIcon({ size = 13 }: { size?: number }) {
 }
 
 export function WorkspaceTree(): React.JSX.Element {
-  // Subscribe to the three slices `workspaceRoots` reads, each a stable reference
-  // under immer's structural sharing, and derive the roots with `useMemo`. That
-  // keeps the union pure (no module-level cache to reset) while staying
-  // referentially stable across renders that changed nothing structural — the
-  // same "don't build a fresh array on every render" discipline as the rail.
+  // Derive the roots from three stable store slices via `useMemo`: pure, and referentially stable
+  // across renders that changed nothing structural.
   const rootAgentIds = useAppStore((s) => s.rootAgentIds);
   const agents = useAppStore((s) => s.agents);
   const browseRoots = useAppStore((s) => s.browseRoots);
@@ -313,10 +217,7 @@ export function WorkspaceTree(): React.JSX.Element {
     [rootAgentIds, agents],
   );
 
-  // Which roots are collapsed (header caret). Read from the STORE, not
-  // component state, so a collapsed folder survives an app restart: `collapsedRoots`
-  // is persisted (via `toggleRootCollapsed`), and absence still means expanded — so a
-  // new root opens showing its files, matching the rail's folders-open default.
+  // From the STORE so collapse survives a restart (persisted); absence means expanded.
   const collapsedRoots = useAppStore((s) => s.collapsedRoots);
   const toggleRoot = useAppStore((s) => s.workspaceActions.toggleRootCollapsed);
 
@@ -324,20 +225,15 @@ export function WorkspaceTree(): React.JSX.Element {
   // folder drag, or null. Drives the calm drop indicator; cleared on drop/leave.
   const [dropTarget, setDropTarget] = useState<string | null>(null);
 
-  // Create-at-root: the header's New file/New folder buttons live out here, but the
-  // children cache + reload live in the INNER component. So a click forwards a
-  // bumped-token signal to that root's `<WorkspaceTreeView>`, which opens an inline
-  // create row at the root and reloads it on commit (children ownership stays put).
+  // The header's create buttons forward a bumped token to the root's `<WorkspaceTreeView>`, which
+  // owns the children cache and opens the inline create row.
   const [rootCreate, setRootCreate] = useState<{ root: string; kind: "file" | "dir"; token: number } | null>(
     null,
   );
   const tokenRef = useRef(0);
 
-  // Refresh (the tree needs a button to update it): the tree
-  // caches every listing it has read, so a file created OUTSIDE the app (an agent,
-  // a terminal, git) never showed up. Same token-forwarding shape as create-at-root,
-  // one token per root. A COLLAPSED root needs nothing: its listing is unmounted,
-  // and expanding it remounts and reads fresh.
+  // Refresh: listings are cached, so outside changes need it. Token-forwarded per root like create;
+  // a collapsed root needs nothing (expanding remounts and reads fresh).
   const [rootRefresh, setRootRefresh] = useState<Record<string, number>>({});
   const refreshRoot = (root: string): void => {
     tokenRef.current += 1;
@@ -354,39 +250,22 @@ export function WorkspaceTree(): React.JSX.Element {
     setRootCreate({ root, kind, token: tokenRef.current });
   };
 
-  // Right-click menu for a ROOT HEADER. Lives out here because
-  // the header — unlike the file listing — is present even when the root is
-  // collapsed. Its items reuse the SAME `startRootCreate` the header's hover
-  // buttons call; the root offers New File/New Folder only (Rust rejects a
-  // rename/delete of a workspace root, so those are omitted — a root is not an
-  // entry). Only one menu shows at a time: the ContextMenu's own outside-click /
-  // outside-contextmenu listeners close it (and any inner-listing menu) whenever
-  // another opens.
+  // Root-header menu, out here because headers show while collapsed. New File/Folder only: Rust
+  // rejects renaming or deleting a root. ContextMenu's outside listeners keep one menu open at
+  // once.
   const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; root: string } | null>(null);
 
-  // Keep the git status poll running while the Files rail is mounted — it feeds
-  // the row colors + folder dots below. The store refcounts starts, and the
-  // returned stop is idempotent (StrictMode double-cleanup safe), so this is
-  // exactly `useEffect`'s setup/teardown shape.
+  // Git status polling while mounted (row colors, folder dots); refcounted, idempotent stop.
   useEffect(() => startGitPolling(), []);
 
-  // Start the ONE browser enumeration for this app session, so the Open in
-  // Browser submenu can be built synchronously later (the Git submenu's rule:
-  // no IPC fires just to open a menu). Idempotent and
-  // de-duplicated in `browserIpc`, so a StrictMode double-invoke costs nothing
-  // and a remount of this rail never re-asks. The promise is deliberately
-  // unawaited and never rejects — a machine we cannot enumerate still gets the
-  // working "system default" leaf.
+  // Prime the session's one browser enumeration so the menu builds synchronously; idempotent, never
+  // rejects (no enumeration still gets the "system default" leaf).
   useEffect(() => {
     void primeBrowsers();
   }, []);
 
-  /* A reveal for a path under no open root.
-   * The store already resolved the owning root — a `root: null` means every
-   * subtree will early-return and the ONLY visible effect would be the rail
-   * flipping to Files. Say so instead. Seen-once by token, the same
-   * adjust-state-during-render pattern the inner listing uses for `rootCreate`;
-   * a later reveal that DOES land clears the note. */
+  /* A reveal under no open root would only flip the rail to Files, so say so instead. Seen-once by
+   * token, adjusted during render; a later reveal that lands clears the note. */
   const fileReveal = useAppStore((s) => s.fileReveal);
   const [seenReveal, setSeenReveal] = useState(0);
   const [unrootedReveal, setUnrootedReveal] = useState<string | null>(null);
@@ -467,17 +346,8 @@ export function WorkspaceTree(): React.JSX.Element {
 
   return (
     <div className="workspace-tree" data-testid="workspace-tree">
-      {/* Panel toolbar: the reveal-active-file crosshair. Disabled
-          only when NO file tab is open anywhere — see `activeFilePath`, which is
-          also what the highlight follows. The empty state above has no toolbar:
-          with zero roots there is no tree to reveal into.
-
-          The reason rides on a WRAPPER's `title`, not only the button's: a
-          disabled button is inert to the pointer, and the one thing worse than a
-          greyed-out button is a greyed-out button that will not say why. The
-          wrapper is not disabled, so the tooltip resolves from it in either
-          state, while the button keeps the same string as its own accessible
-          description — one `revealHint`, so the two can never disagree. */}
+      {/* The crosshair is disabled only with no file tab open (`activeFilePath`). Its reason
+          rides on a never-disabled wrapper's `title`; one `revealHint` serves both. */}
       <div className="workspace-tree__toolbar">
         <span className="workspace-tree__tool-slot" title={revealHint}>
           <button
@@ -624,47 +494,26 @@ function WorkspaceTreeView({
   const [children, setChildren] = useState<Record<string, FsEntry[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [failed, setFailed] = useState<Set<string>>(new Set());
-  /* The highlighted row — DERIVED from the store, never local state.
-   * As `useState` it was per-root component state, and
-   * `<WorkspaceTreeView key={root}>` unmounts on root collapse, so the highlight
-   * was dropped by collapsing a folder and was never rail-wide across the several
-   * roots the panel puts side by side. Deriving it also makes it FOLLOW the active
-   * file tab for free, and deletes every bespoke re-point: a rename/move closes
-   * and reopens the editor tab at the new path (`reconcileTabs`), and a delete
-   * closes it — so the highlight tracks all three with no code of its own. */
+  /* The highlight is DERIVED from the store, never local state (per-root state died on collapse).
+   * It follows the active file tab, so rename, move and delete need no code of their own. */
   const selected = useAppStore((s) => activeFilePath(s));
-  // Mutation UI state: the inline create row (`{ parent, kind }`), the
-  // path currently being renamed, the entry awaiting a destructive confirm, the
-  // entry-move drop target, and the calm inline error note.
-  //
-  // `confirming` carries a KIND as well as a path: delete and revert are both
-  // irreversible, both confirm the same way, and both swap the same row — so they
-  // share one mechanism with a discriminator rather than growing a second,
-  // near-identical one that could be open at the same time as the first.
+  // Mutation UI state. `confirming` carries a KIND: delete and revert share one confirm mechanism,
+  // so two near-identical prompts can never be open at once.
   const [creating, setCreating] = useState<{ parent: string; kind: "file" | "dir" } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<ConfirmRequest | null>(null);
   const [entryDrop, setEntryDrop] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // The open right-click menu for a row or the root's empty space:
-  // `entry` is the right-clicked file/dir, or `null` for the root listing itself.
-  // Its items reuse the SAME begin-create/rename/delete handlers the hover
-  // buttons + double-click use — nothing is reimplemented.
+  // Row (or root-space, `entry` null) context menu; items reuse the hover buttons' handlers.
   const [menu, setMenu] = useState<{ x: number; y: number; entry: FsEntry | null } | null>(null);
 
-  // Git decoration: subscribe THIS subtree — not the outer
-  // shell, whose headers don't use git — to the working-tree status and derive
-  // the two row lookups once per snapshot. Paths in both are absolute, exactly
-  // matching each row's `data-path`/`entry.path`.
+  // Git decoration for THIS subtree (headers don't use it); both lookups use absolute paths,
+  // matching each row's `data-path`.
   const gitStatus = useGitStore((s) => s.status);
   const gitFiles = useMemo(() => fileStatusMap(gitStatus), [gitStatus]);
   const gitDirs = useMemo(() => dirsWithChanges(gitStatus), [gitStatus]);
-  /**
-   * Is THIS root a git repo? `not-a-repo` is the poller's stable, expected answer
-   * for a plain folder (gitStore rule 4), so it is the one code that means "there
-   * is no git here" rather than "git failed this cycle" — a transient `git` error
-   * keeps the last good changes beside it and must NOT grey out the menu.
-   */
+  /** Only `not-a-repo` means "no git here"; a transient git error keeps the last good changes and
+   * must NOT grey out the menu. */
   const notARepo = gitStatus[root]?.error?.code === "not-a-repo";
 
   // Clicking a file highlights it here AND opens it in the center editor.
@@ -673,16 +522,12 @@ function WorkspaceTreeView({
   // Git ▸ Compare with HEAD. Deduped by path in the store, so comparing the same
   // file twice re-focuses the one diff tab.
   const openDiffTab = useAppStore((s) => s.layoutActions.openDiffTab);
-  // Keeping an OPEN editor tab consistent as paths change: close the stale tab and
-  // (for a rename/move) reopen it at the new path so its `ref.path` — what the
-  // editor reads by — is correct. `renameTab` only relabels; it can't re-point the
-  // ref, so close+reopen is the simplest correct thing.
+  // Rename/move closes the stale tab and reopens it at the new path: `renameTab` only relabels and
+  // cannot re-point `ref.path`.
   const closeTab = useAppStore((s) => s.layoutActions.closeTab);
 
-  /** Read `path` into the children cache — the lazy first-expand load AND the
-   *  forced refresh after a mutation. Resolves true when the listing landed,
-   *  false when the read failed (the path joins `failed`); most callers are
-   *  fire-and-forget, but the reveal walk awaits it per ancestor. */
+  /** Reads `path` into the children cache (first expand and post-mutation refresh); true when the
+   * listing landed, false when it failed (joins `failed`). The reveal walk awaits it. */
   const load = useCallback(async (path: string): Promise<boolean> => {
     try {
       const entries = await readDir(path);
@@ -694,11 +539,8 @@ function WorkspaceTreeView({
     }
   }, []);
 
-  // Root loads on mount (root is fixed per instance — the component is keyed by
-  // it, so a re-root remounts rather than mutating in place). Unlike a nested
-  // read, the root read RETRIES on failure (see ROOT_READ_TRIES): it can briefly
-  // lose a race with the folder being registered into read_dir's scope, and must
-  // not stick on "Can't read this folder." while the scope is about to widen.
+  // Root loads on mount (keyed by root, so a re-root remounts) and RETRIES (see ROOT_READ_TRIES);
+  // nested reads do not.
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -723,14 +565,9 @@ function WorkspaceTreeView({
     };
   }, [root]);
 
-  // Refresh from the header: re-read the root and every folder that is EXPANDED,
-  // in place, so the user keeps their expand state. Collapsed-but-cached folders
-  // are dropped from the cache instead of re-read — they read fresh on their next
-  // expand, which costs nothing now. A folder that vanished on disk just fails its
-  // read and is dropped (its parent's fresh listing no longer shows it anyway);
-  // previously-failed reads get another chance. The token seen at MOUNT counts as
-  // handled — a fresh mount has just read everything — and the ref (not state)
-  // makes StrictMode's re-run a no-op while the first run's reads still land.
+  // Header refresh: re-read the root and EXPANDED folders in place; drop collapsed ones from the
+  // cache. The mount token counts as handled, and a ref (not state) makes StrictMode's re-run a
+  // no-op.
   const refreshSeenRef = useRef(refreshToken);
   const expandedRef = useRef(expanded);
   useEffect(() => {
@@ -755,12 +592,8 @@ function WorkspaceTreeView({
     });
   }, [refreshToken, root]);
 
-  // React to a create-at-root signal from the header (the token bumps per click, so
-  // the same `kind` re-fires). The root listing is always shown while this inner
-  // component is mounted, so "create at root" is just an inline row under `root`.
-  // This is React's "store information from previous renders" pattern — compare the
-  // signal's token against a piece of STATE during render (no effect, no ref) and
-  // adjust immediately. React re-renders before painting; no cascading effect.
+  // A create-at-root signal (token bumps per click) opens an inline row under `root`; handled
+  // during render by comparing the token to state (React's previous-render pattern), no effect.
   const [seenToken, setSeenToken] = useState<number | undefined>(undefined);
   if (createSignal && createSignal.token !== seenToken) {
     setSeenToken(createSignal.token);
@@ -768,17 +601,9 @@ function WorkspaceTreeView({
     setError(null);
   }
 
-  /* ── reveal active file ────────────────────────────────────────────────────
-   * Consume the store's one-shot `fileReveal` when the path is under THIS root:
-   * walk the ancestor chain outermost → innermost (loading each dir through the
-   * same `load`/cache click-expand uses, expanding as we go), then scroll the
-   * file's row into view. Selecting it is not this effect's job: the highlight is
-   * derived from `activeFilePath`. The token is seen-once per subtree — the
-   * same discipline as `rootCreate` above — claimed up front so a failed walk
-   * never retries, and handed BACK if the walk is torn down before it finished
-   * (the StrictMode note in the effect). A fresh mount starts at token 0, which
-   * is what lets a just-un-collapsed root (revealActiveFile expands it) consume
-   * the request that caused its own mount. */
+  /* ── reveal active file ── Consume the one-shot `fileReveal` under THIS root: expand the
+   * ancestors via the shared `load` cache, then scroll (the highlight is derived). Token claimed
+   * up front; a fresh mount starts at 0 so an un-collapsed root takes its own reveal. */
   const fileReveal = useAppStore((s) => s.fileReveal);
   // A ref, not state: consuming a token must not itself re-render.
   const revealSeenRef = useRef(0);
@@ -799,17 +624,9 @@ function WorkspaceTreeView({
 
   useEffect(() => {
     if (fileReveal === null || fileReveal.token === revealSeenRef.current) return;
-    // Claim the token up front, so a walk that FINISHES — successfully or not —
-    // never runs twice. But remember what it was: a walk that is torn down before
-    // it finishes has not handled anything, and must hand the token back.
-    //
-    // 🔴 That is what makes this survive React StrictMode, which double-invokes
-    // every effect in dev (setup → cleanup → setup) against the SAME component
-    // instance, so the ref above is not reset in between. Without the hand-back,
-    // setup #1 claimed the token and was immediately cancelled, setup #2 saw the
-    // token as already handled, and a reveal into a freshly-mounted subtree that
-    // needed an uncached `read_dir` silently did nothing in `tauri dev` — while
-    // working perfectly in the production build, which does not double-invoke.
+    // Claim the token up front so a finished walk never re-runs, but hand it back if torn down
+    // early: StrictMode's setup → cleanup → setup keeps this ref, and a lost token made the reveal
+    // a no-op in `tauri dev` only.
     const previousToken = revealSeenRef.current;
     revealSeenRef.current = fileReveal.token;
     let walked = false;
@@ -828,33 +645,24 @@ function WorkspaceTreeView({
         if (!ok || cancelled) return;
         setExpanded((prev) => (prev.has(dir) ? prev : new Set(prev).add(dir)));
       }
-      // No post-loop `cancelled` check: every await above is followed by its own
-      // `!ok || cancelled` bail-out, and nothing suspends after the last one, so
-      // cancellation cannot land between the loop and here (a guard would be an
-      // untestable dead branch). Nothing selects the file here: the highlight is
-      // derived from `activeFilePath`, which is the very value `revealActiveFile`
-      // computed its target from — so the row is already lit. Hand off to the
-      // scroll effect, which runs after the expansion above has committed.
+      // Every await above has its own `!ok || cancelled` bail-out and nothing suspends after the
+      // last, so no guard here. The row is already lit (derived highlight); the scroll effect takes
+      // over.
       walked = true;
       setRevealDone({ path: target, token: fileReveal.token });
     })();
     return () => {
       cancelled = true; // a newer reveal (or unmount) supersedes this walk
-      // A walk that never reached its end handled nothing, so hand the token
-      // back — see the claim above. Only a re-run of THIS effect can pick it up
-      // again (the deps are the request object itself), which in practice means
-      // StrictMode's double-invoke; a genuine remount gets a fresh ref at 0.
+      // An unfinished walk handled nothing: hand the token back for StrictMode's re-run (a genuine
+      // remount gets a fresh ref at 0).
       if (!walked) revealSeenRef.current = previousToken;
     };
   }, [fileReveal, root, load]);
 
   useEffect(() => {
     if (revealDone === null) return;
-    // The <ul> mounts unconditionally with this subtree (the root-error note
-    // renders INSIDE it), and an effect only runs while mounted — so the ref is
-    // always attached here. The cast records that invariant instead of a
-    // null-guard, which would be an untestable dead branch; if the <ul> ever
-    // becomes conditional, every reveal test fails loudly right here.
+    // The <ul> always mounts with this subtree, so the ref is attached; the cast records that (if
+    // the <ul> ever becomes conditional, every reveal test fails here).
     const list = listRef.current as HTMLUListElement;
     for (const el of Array.from(list.querySelectorAll("[data-path]"))) {
       if (el.getAttribute("data-path") === revealDone.path) {
@@ -942,21 +750,9 @@ function WorkspaceTreeView({
       .catch((e) => setError(errMsg(e)));
   };
 
-  /**
-   * Throw away a file's working-tree changes (Git ▸ Revert changes…), AFTER the
-   * inline confirm has been answered — `commitDelete`'s shape, and for the same
-   * reason: by the time this runs, the destructive question has been asked.
-   *
-   * Three surfaces can be stale afterwards and all three are refreshed:
-   *  - the folder listing (`load`) — size/mtime, and a reverted-away new file;
-   *  - the git status (`refreshGitStatus`) — the row's color and the Git panel;
-   *  - the open editor's BUFFER (`reloadFromDisk`) — otherwise the editor keeps
-   *    showing the edits that no longer exist on disk, and its next save would
-   *    put them straight back.
-   * A rejection ("file is not tracked — there is nothing to revert to") lands in
-   * the same calm inline note every other mutation uses. Never swallowed: a
-   * revert that quietly did nothing is a lie about the user's file.
-   */
+  /** Discards a file's working-tree changes after the inline confirm, then refreshes the listing,
+   * git status and the open buffer (else its next save would restore the edits). A rejection shows
+   * in the inline note, never swallowed. */
   const commitRevert = (path: string): void => {
     setConfirming(null);
     setError(null);
@@ -1000,11 +796,9 @@ function WorkspaceTreeView({
     moveEntry(e.dataTransfer.getData(ENTRY_DND_MIME), dest);
   };
 
-  /** Move `dragged` into `destDir`, guarding the clearly-no-op cases before any
-   *  IPC (already there / onto itself / into its own subtree). Rust rejects these
-   *  too — a rejection is surfaced calmly, never a crash. Compared as paths, not
-   *  strings: the root list's drop target is the root as the UI spells it (`c:\w`),
-   *  the dragged row the tree's canonical `C:\w\a.ts`. */
+  /** Moves `dragged` into `destDir`, skipping no-ops (already there, onto itself, into its own
+   * subtree) before any IPC. Compared as paths, not strings: a drop target may be spelled `c:\w`.
+   */
   const moveEntry = (dragged: string, destDir: string): void => {
     if (!dragged) return;
     if (samePath(destDir, parentPath(dragged))) return; // already in this folder
@@ -1080,35 +874,17 @@ function WorkspaceTreeView({
     </span>
   );
 
-  /** Open the right-click menu at the cursor. A ROW click carries its entry and
-   *  stops propagation so the root-list handler underneath does not also fire; the
-   *  root-list (empty-space) click passes `null`. `preventDefault` suppresses the
-   *  OS/webview menu in both cases. */
+  /** Opens the context menu at the cursor: a row passes its entry and stops propagation, empty
+   * space passes `null`; `preventDefault` suppresses the webview menu. */
   const openMenu = (e: MouseEvent, entry: FsEntry | null): void => {
     e.preventDefault();
     if (entry !== null) e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, entry });
   };
 
-  /**
-   * The **Git** submenu for one FILE row. Folders get none —
-   * the submenu is per-file, and "revert this whole directory" is a much bigger
-   * promise than the one command behind it.
-   *
-   * Both `disabled` decisions are read off the status the tree ALREADY holds for
-   * its row colors, so opening a menu fires no IPC:
-   *  - not a repo → the whole submenu is disabled; neither command has an answer.
-   *  - nothing to go back to → **Revert** alone is disabled. That means no
-   *    recorded working-tree change, and also `untracked`: a file git has never
-   *    seen has no HEAD side, so a revert could only mean "delete it", which is
-   *    Delete's job and not something a menu item called *Revert* should do.
-   *    Compare stays enabled — comparing a clean file is a legitimate way to ask
-   *    "am I sure this is clean?", and it answers "No changes".
-   *
-   * The ellipsis on *Revert changes…* is the standard signal that a confirm step
-   * follows; the item itself only ARMS the inline confirm (`commitRevert` runs
-   * when that is answered).
-   */
+  /** A FILE row's Git submenu (folders get none), gated on the status the tree already holds, so no
+   * IPC: not a repo disables it all; nothing to revert to (incl. `untracked`) disables Revert
+   * only. Revert only ARMS the inline confirm. */
   const gitSubmenu = (entry: FsEntry): ContextMenuItem => {
     const status = gitFiles[entry.path];
     const nothingToRevert = status === undefined || status === "untracked";
@@ -1130,13 +906,8 @@ function WorkspaceTreeView({
     };
   };
 
-  /**
-   * Hand one file to an external browser. The rejection is Rust's stable
-   * `"<code>[: detail]"` string, and it lands in the SAME calm inline note every
-   * other failed action from this tree uses, plus a Logs line carrying the code —
-   * never swallowed. A launch that quietly did nothing is indistinguishable from
-   * a browser that opened behind the window.
-   */
+  /** Hands a file to an external browser; Rust's coded rejection goes to the inline note plus a
+   * Logs line, never swallowed (a silent no-op looks like a window opened behind). */
   const openInBrowserFrom = (path: string, browserId?: string): void => {
     setError(null);
     openInBrowser(path, browserId).catch((e: unknown) => {
@@ -1146,26 +917,9 @@ function WorkspaceTreeView({
     });
   };
 
-  /**
-   * The **Open in Browser** group for one `.html`/`.htm` row.
-   *
-   * 🔴 `cachedBrowsers()` is read SYNCHRONOUSLY, never awaited. `ContextMenu`
-   * clamps on `[x, y, anchor]` and focuses on `[activeIndex, openSub]`, so a
-   * submenu that opens as "Loading…" and gains rows later is never re-measured
-   * (it can run off the bottom of the screen) and never gains a focus ring. The
-   * list is primed once on mount instead — the Git submenu's rule, *"no IPC fires
-   * just to open a menu"*.
-   *
-   * Nothing primed yet (or enumeration failed, or an OS we cannot enumerate) is
-   * **not** an error state: it collapses to a single leaf that opens the system
-   * default, which is an accepted fallback (opening in the default browser is
-   * acceptable). Losing the gesture because a list did
-   * not arrive would be the worse failure by far.
-   *
-   * The default appears TWICE on purpose when it is known — once as *System
-   * default (Chrome)* and once by name — because they are different requests:
-   * the first follows whatever the OS default becomes, the second pins Chrome.
-   */
+  /** Open in Browser for an `.html`/`.htm` row. `cachedBrowsers()` is read SYNCHRONOUSLY (see
+   * `browserIpc.ts`); with no list, a single system-default leaf. The default appears twice when
+   * known: "System default" follows the OS, the named one pins that browser. */
   const browserGroup = (entry: FsEntry): ContextMenuItem[] => {
     const list: BrowserChoice[] | null = cachedBrowsers();
     if (list === null || list.length === 0) {
@@ -1191,20 +945,9 @@ function WorkspaceTreeView({
     ];
   };
 
-  /** The menu items for a right-clicked target, all routed through the EXISTING
-   *  begin-create / begin-rename / begin-delete flows (same as the hover buttons).
-   *  - root listing (`entry === null`): New File / New Folder at the root top level.
-   *  - a directory: New File / New Folder INSIDE it, then Rename / Delete.
-   *  - a file: New File / New Folder in its PARENT (VS Code-style), then the Git
-   *    submenu, then Rename / Delete.
-   *  - an `.html`/`.htm` file: **Open in Browser** first of all, then the above.
-   *
-   *  Git sits between the create group and the rename/delete group so that Delete
-   *  stays last — the danger item at the bottom is the convention every menu in
-   *  this app follows, and burying a new submenu under it would hide it. Open in
-   *  Browser goes at the TOP for the mirror-image reason: on an HTML file it is
-   *  the thing you came to the menu for, and the create group is the thing you
-   *  did not. */
+  /** Context-menu items via the existing create/rename/delete flows: root (create), dir (create
+   * inside, Rename, Delete), file (create in parent, Git, Rename, Delete); HTML files lead with
+   * Open in Browser. Delete stays last. */
   const menuItems = (entry: FsEntry | null): ContextMenuItem[] => {
     const dir = entry === null ? root : entry.isDir ? entry.path : parentPath(entry.path);
     const create: ContextMenuItem[] = [
@@ -1304,13 +1047,9 @@ function WorkspaceTreeView({
   const renderNode = (entry: FsEntry, depth: number): React.JSX.Element => {
     const pad = { paddingLeft: depth * INDENT + 8 };
 
-    // A destructive confirm swaps the whole row for an inline two-step prompt (NO
-    // native dialog — banned in this app). role="alert" so it is announced.
-    //
-    // ONE prompt for both irreversible acts, distinguished by `confirming.kind`:
-    // delete removes the file, revert removes the edits to it. Each names the file
-    // in its question and in both buttons' labels, so a confirm can never be
-    // answered without knowing what it is about.
+    // One inline two-step prompt (no native dialog) for both irreversible acts, by
+    // `confirming.kind`; each names the file in its question and buttons. role="alert" so it is
+    // announced.
     const pending = confirming !== null && confirming.path === entry.path ? confirming : null;
     if (pending !== null) {
       const revert = pending.kind === "revert";
@@ -1374,10 +1113,8 @@ function WorkspaceTreeView({
 
     if (!entry.isDir) {
       const isSelected = selected === entry.path;
-      // Git status as a ROW-level overlay class (file-icons.md §8): composed
-      // with the icon via CSS, never part of icon resolution. `deleted` never
-      // occurs here — a deleted file has no tree row (it lives in the Git
-      // panel); live rows only ever carry added/modified/untracked.
+      // Git status is a ROW overlay class (file-icons.md §8), never icon resolution; live rows are
+      // only added/modified/untracked.
       const fileGit = gitFiles[entry.path];
       const gitClass = fileGit === undefined ? "" : ` workspace-node--git-${fileGit}`;
       return (
@@ -1406,11 +1143,8 @@ function WorkspaceTreeView({
     }
     const open = expanded.has(entry.path);
     const isDropInto = entryDrop === entry.path;
-    // Semantic folder role (IntelliJ-style): derived from the folder's NAME and
-    // its parent's name — the path never enters the table. When the folder ALSO
-    // contains git changes there is no conflict by construction: the role
-    // colors the name/icon, and the git signal is the separate dot after the
-    // name — two independent channels on one row.
+    // Folder role from its NAME and its parent's name, never the path; it colors name and icon
+    // while git is the separate dot, so they never conflict.
     const role = folderRole(entry.name, basename(parentPath(entry.path)));
     const roleClass = role === null ? "" : ` workspace-node--role-${role}`;
     const hasChangesDot = gitDirs.has(entry.path);

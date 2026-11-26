@@ -1,29 +1,6 @@
-/**
- * Agent Village — the panel's imperative core, kept out of React so it is testable
- * without a DOM: one `VillageView` owns the sim, the current world, the camera and
- * the sprite bank, and turns "a frame at time t" into ticks + a draw list + paint.
- *
- * Units: the camera and `view` are in DEVICE pixels (the renderer draws in device
- * px, no `ctx.scale(dpr)`); every method that takes a pointer position takes CSS px
- * relative to the canvas and multiplies by the DPR itself, so the React side never
- * has to know.
- *
- * One view per SCENE: the village (top-down houses) or the city (every project a building, every
- * console or root agent a floor — engine/city.ts). A city view's
- * sim keeps every leader at its desk, its rain covers the whole view (the sky has no edge)
- * and splashes only on the street and the roofs; the camera, the paint and the HUD are shared.
- *
- * The LANs' traffic (packets move only when agents communicate
- * with each other): each view diffs the agents it is handed (`setAgents`) against the last ones
- * and keeps a short log of `LanEvent`s for the draw list — a sub-agent given its TASK, a
- * sub-agent sending its RESULT back, an agent making TOOL calls. See `setAgents` for the rules.
- *
- * The city's commuters (engine/sim.ts): `setCapacity` hands the sim each seat
- * holder's lounge bench — its desk number in the capacity frame — and every frame the draw list gets
- * the benches the sim's characters claim (`VillageSim.loungeClaims`), where the lounge draws no waiter.
- *
- * Plus the HUD's pure helpers (counts, summary, activity wording, "3 min ago").
- */
+/** The panel's imperative core, outside React for DOM-free tests: one view per scene (village or
+ * city) owns sim, world, camera and sprites. Camera and `view` are DEVICE px; pointer methods take
+ * CSS px and apply the DPR. */
 
 import {
   buildCityWorld,
@@ -74,11 +51,8 @@ import {
 /** Tiles of air Fit keeps either side of a city's buildings, and of sky above the tallest (its sign). */
 const FIT_AIR = 1;
 const FIT_SKY = 2;
-/**
- * The village's Fit floor: the largest sixteenth down to ½ that shows it whole; a village too big
- * even at ½ is drawn at ½, framed on its civic row (at 1, Fit cut the capacity
- * houses in half in a ~720 px pane). Below ½ a character is too small to read.
- */
+/** The village's Fit floor: the largest sixteenth down to ½ that shows it whole; one too big even
+ * at ½ is framed on its civic row. Below ½ characters are unreadable. */
 const VILLAGE_MIN_FIT = 1 / 2;
 /** Tiles kept above a civic house's interior (wall + name board) and below it (wall + path). */
 const CIVIC_ABOVE = 2;
@@ -87,26 +61,17 @@ const CIVIC_BELOW = 2;
 /** Movement (CSS px) past which a mouse press is a drag, not a click. */
 export const DRAG_SLOP = 3;
 
-/**
- * Wheel distance (px) that makes one zoom step — about one mouse-wheel notch. A
- * trackpad (macOS) sends dozens of small-delta events per gesture; zooming a whole
- * integer step on each would leap from 1 to MAX_ZOOM in one flick.
- */
+/** Wheel px per zoom step (about one notch): a trackpad sends dozens of small deltas, and a step
+ * per event would leap to MAX_ZOOM in one flick. */
 export const WHEEL_STEP_PX = 50;
 /** A pause this long between wheel events starts a fresh gesture (drops the remainder). */
 export const WHEEL_IDLE_MS = 150;
 
-/**
- * Sim seconds a LAN event is kept: twice the engine's longest trip (`MAX_TRIP` — a round trip,
- * should one ever be drawn as two) plus a second of slack, so no packet an event can still be
- * drawing loses it. Older events are pruned.
- */
+/** Sim seconds a LAN event is kept: twice `MAX_TRIP` plus a second, so no packet still being drawn
+ * loses its event. */
 export const LAN_EVENT_TTL = 2 * MAX_TRIP + 1;
-/**
- * The most tool packets one agent has waiting at once. A count that jumps by 40 between two updates
- * (a burst of parallel calls, an external scan) sends this many, not 40: the LAN shows that calls are
- * being made — it is not a ledger of them.
- */
+/** Most tool packets one agent may have waiting: a jump of 40 calls sends this many, not 40 (the
+ * LAN shows activity, not a ledger). */
 export const TOOL_BURST = 5;
 /** Sim seconds between two tool packets of one agent, so they never overlap on its cable. */
 export const TOOL_GAP = 0.25;
@@ -126,10 +91,8 @@ export interface CapacityBox {
   h: number;
 }
 
-/**
- * A neon sign on screen (`VillageView.neonBoxes`): its building, its language and its art's box
- * (brackets + plate) in whole CSS px relative to the canvas.
- */
+/** A neon sign on screen: its building, language and art box in whole CSS px relative to the
+ * canvas. */
 export interface NeonBox {
   building: string;
   language: string;
@@ -151,11 +114,8 @@ export interface LandmarkBox {
 export class VillageView {
   readonly sim: VillageSim;
   readonly scene: Scene;
-  /**
-   * How far Fit may zoom out. The city may go below 1 (½, ¼, ⅛) so a tall or long city is
-   * seen whole — its sky and street fill the view around it. The village never does: it has
-   * nothing past its own tiles, so a shrunken village would float in dark margins.
-   */
+  /** How far Fit may zoom out: a city may go below 1 to be seen whole; a village never does (it
+   * would float in dark margins). */
   private readonly minZoom: number;
   private _world: World;
   private _cam: Camera = { zoom: 1, ox: 0, oy: 0 };
@@ -164,20 +124,15 @@ export class VillageView {
   private bank: SpriteBank | null = null;
   /** World size the camera was last fitted to; null = never fitted. */
   private fitted: { cols: number; rows: number } | null = null;
-  /**
-   * true until the user pans or zooms (and again after Fit): the camera then re-fits on
-   * every change of stage or world. See `autoFit` for why a one-shot fit is not enough.
-   */
+  /** True until the user pans or zooms (and again after Fit): the camera re-fits on every stage or
+   * world change (see `autoFit`). */
   private follow = true;
   private last: number | null = null;
   private chars: CharacterView[] = [];
   /** The character under the pointer: its label is always drawn, whatever the crowd. */
   private hovered: string | null = null;
-  /**
-   * The ground pre-painted for one (world, art bank) pair — repainted only when either
-   * changes, never per frame. `layer` null = the host could not make a canvas (the
-   * frame then paints tiles); kept, so that is not retried every frame.
-   */
+  /** Ground pre-painted per (world, art bank) pair, never per frame. `layer` null means the host
+   * has no canvas (tiles are painted per frame); kept so it is not retried. */
   private ground: { world: World; art: SpriteBank | null; layer: GroundLayer | null } | null = null;
   private readonly makeLayer: MakeLayer;
   /** The sky this frame (null = none yet: the frame is drawn without any grade). */
@@ -200,10 +155,8 @@ export class VillageView {
   private roster = new Map<string, VillageAgent>();
   /** The LANs' recent traffic, handed to the draw list each frame; pruned after LAN_EVENT_TTL. */
   private events: LanEvent[] = [];
-  /**
-   * A city with a lounge: the sub-agents given a task that have not sat at their desk yet — each
-   * one's task is stamped the moment it first does (`frame`; see `setAgents`).
-   */
+  /** A lounge city's sub-agents given a task but not yet at their desk; each task is stamped when
+   * it first sits. */
   private awaiting = new Set<string>();
 
   /** `makeLayer` = where the ground layer is painted (tests inject a fake canvas). */
@@ -256,11 +209,8 @@ export class VillageView {
     this.autoFit();
   }
 
-  /**
-   * What the capacity buildings and the desks' context bars are made from (cheap; the panel calls
-   * it whenever an input changes). The City's lounge holders keep their benches from one call to the
-   * next.
-   */
+  /** Inputs for the capacity buildings and desks' context bars (cheap; call on any change). Lounge
+   * holders keep their benches across calls. */
   setCapacity(input: CapacityInputs): void {
     this.capacity = capacityFrame(input, this.capacity);
     // The city's commuters: each holder's lounge bench (the sim ignores it without a lounge).
@@ -276,10 +226,7 @@ export class VillageView {
     return this.capacity;
   }
 
-  /**
-   * CSS px at the top of the stage that the HUD covers. Fit keeps the world below it (the HUD
-   * used to sit on the top-left house's name board); a following camera re-fits.
-   */
+  /** CSS px at the top of the stage that the HUD covers; Fit keeps the world below it. */
   setInset(topCss: number): void {
     this.insetCss = Math.max(0, topCss);
     this.insetTop = Math.round(this.insetCss * this.dpr);
@@ -300,10 +247,8 @@ export class VillageView {
     return this.amb;
   }
 
-  /**
-   * Where the weather falls this frame, in world px: the visible village, or — a city's sky
-   * running to every edge of the view — everything on screen above the far sidewalk.
-   */
+  /** Where weather falls this frame, world px: the visible village, or for a city everything on
+   * screen above the far sidewalk. */
   private weatherRect(): { x: number; y: number; w: number; h: number } {
     const city = this._world.city;
     if (!city) return this.visibleWorldRect();
@@ -324,31 +269,9 @@ export class VillageView {
     return { x, y, w: Math.max(0, r - x), h: Math.max(0, btm - y) };
   }
 
-  /**
-   * The agents to show (the city's ROSTER: every seated sub-agent under its floor's leader), and
-   * what changed since the last call as LAN events, stamped with the sim clock now:
-   *
-   *   - task: a sub-agent that was not there, under a parent that WAS — so the first roster (and a
-   *     whole tree arriving at once: the external scan's first report, the "outside" switch turned
-   *     on) shows what is already there, never a burst for it;
-   *   - result: a sub-agent whose activity turns done/error from anything else;
-   *   - tool: an agent's `toolCalls` rising (`toolPackets`); unknown before or after = none.
-   *
-   * An agent that vanishes sends nothing. While the view is off screen — paused, or not framed
-   * yet — changes only become the new baseline: nobody saw them happen, and replaying them when
-   * the view comes back would be a burst of stale traffic.
-   *
-   * In a city with a Seats LOUNGE a sub-agent first commutes from its bench to
-   * its desk (engine/sim.ts), and a room's LAN wires only agents SEATED at their desks
-   * (`VillageSim.seating`). So there a task is stamped when its sub-agent first SITS at its desk
-   * (`frame`), and its packet runs from the parent to that PC on arrival. A result or a tool call of an
-   * agent NOT seated at its desk when it is observed (on its bench, on its way) is DROPPED — not
-   * deferred, which would invent a time: the LAN does not show the tool calls a sub-agent makes while
-   * it is still travelling, nor the result of one that finishes before it ever reaches its desk (one
-   * that finishes AT its desk stays seated for its result's beat, `RESULT_BEAT`, so that one shows).
-   * A sub-agent removed before it sits never gets its task. Without a lounge (the Village, a city
-   * without capacity) every event is stamped when it is observed, as before.
-   */
+  /** Sets the roster, diffing it into LAN events: task (new sub-agent, known parent), result (turns
+   * done/error), tool (`toolCalls` up). Off screen, changes only rebase. With a lounge, a task
+   * stamps when its sub-agent first SITS; unseated results/tools are DROPPED. */
   setAgents(agents: VillageAgent[]): void {
     this.sim.setAgents(agents);
     this.chars = this.sim.characters();
@@ -375,10 +298,8 @@ export class VillageView {
     }
   }
 
-  /**
-   * `calls` new tool calls of `key` as packets: TOOL_GAP apart, after any of its packets still
-   * queued, and never more than TOOL_BURST of them waiting (sent now or later).
-   */
+  /** `calls` new tool calls of `key` as packets, TOOL_GAP apart after any still queued, never more
+   * than TOOL_BURST waiting. */
   private toolPackets(key: string, calls: number, now: number): void {
     let next = now;
     let waiting = 0;
@@ -400,15 +321,9 @@ export class VillageView {
     return this._view;
   }
 
-  /**
-   * Re-fit after the stage or the world changed. An untouched camera (`follow`) re-fits
-   * EVERY time: the first measurable size can be a sliver — a tab mounting into a pane
-   * that a fresh split is still laying out — and a camera fitted only to that sliver sat
-   * the whole village in the top-left corner, behind the HUD, on an otherwise empty
-   * canvas. Once the user has panned or zoomed, their
-   * camera is kept — except when the world grew (new houses must come into view) or
-   * none of it is on screen any more (a shrunk world must never leave a blank canvas).
-   */
+  /** Re-fit after a stage or world change. An untouched camera re-fits EVERY time (the first size
+   * can be a sliver of a pane still being laid out); a user's camera is kept unless the world grew
+   * or none of it is on screen. */
   private autoFit(): void {
     if (this._view.w <= 0 || this._view.h <= 0) return;
     const f = this.fitted;
@@ -418,12 +333,8 @@ export class VillageView {
     if (this.follow || grew || lost) this.fit();
   }
 
-  /**
-   * Largest zoom that shows the whole village (or city), centred — for the city, below 1
-   * when even zoom 1 would crop it (`minZoom`) — and from now on the camera follows the stage
-   * again. With nothing to fit into (a hidden, 0×0 stage) the camera is left alone; the
-   * first measurable size fits it.
-   */
+  /** Largest zoom that shows the whole village or city, centred (a city may go below 1); the camera
+   * then follows the stage again. A 0×0 stage leaves the camera alone. */
   fit(): void {
     this.follow = true;
     if (this._view.w <= 0 || this._view.h <= 0) return;
@@ -431,25 +342,9 @@ export class VillageView {
     this.fitted = { cols: this._world.cols, rows: this._world.rows };
   }
 
-  /**
-   * What Fit frames, world px: the whole village — or, for a city, its buildings and street with a
-   * little air (its sky and street run on past the world anyway), so a short street is not drawn
-   * tiny in a sea of empty ground.
-   *
-   * With the capacity HQ the frame is CENTRED ON THE HQ (the HQ is
-   * the centre): it reaches as far either side of the HQ's middle as the farther end of what is
-   * built — every building, and the lounge under the street, which is wider than the HQ — so
-   * the side with less built shows its empty street rather than pushing the HQ off the middle.
-   * engine/city.ts builds the world that way round the HQ (with a margin wider than the air), so this
-   * frame's width always lies inside it. render/landmarks.ts lays the skyline out on the same span,
-   * less its air (`framed` there repeats this rule; a test pins the two together): the landmarks'
-   * preferred places run across it and every crown stands inside it, so at Fit each one is in the frame.
-   * Upward the frame reaches `FIT_SKY` rows over the tallest roof — never above the world's top — AND
-   * a tile over the tallest landmark's tip, wherever that is: the Skytree stands up to 1.5× the tallest
-   * roof, and the world keeps only 4–5 sky rows over that roof, so its tip rises past the world's
-   * top — up to 5 tiles (render/landmarks.ts OVER_TOP) — into the open sky the City paints above it (on a short wide pane the roof rule alone cut a tip off
-   * the top of the view).
-   */
+  /** Fit's frame, world px: the whole village, or a city's buildings and street plus air, CENTRED
+   * ON THE HQ if any (render/landmarks.ts uses the same span; a test pins both). Up to `FIT_SKY`
+   * rows over the top roof and a tile over the tallest landmark's tip. */
   fitTarget(): { x: number; y: number; w: number; h: number } {
     const { cols, rows, city, houses } = this._world;
     const all = { x: 0, y: 0, w: cols * TILE, h: rows * TILE };
@@ -473,11 +368,8 @@ export class VillageView {
     return { x: (mid - half) * TILE, y: r0 * TILE, w: 2 * half * TILE, h };
   }
 
-  /**
-   * The camera that fits `fitTarget` in the view below the HUD's inset (never more than half the
-   * view), centred there; a target taller than that space starts right under the HUD instead (with
-   * no HUD inset it overflows symmetrically, as before).
-   */
+  /** Camera fitting `fitTarget` below the HUD inset (at most half the view), centred; a target
+   * taller than that space starts right under the HUD. */
   private fitView(): Camera {
     const r = this.fitTarget();
     const top = Math.min(this.insetTop, Math.floor(this._view.h / 2));
@@ -514,11 +406,8 @@ export class VillageView {
     this.follow = false;
   }
 
-  /**
-   * Zoom by `step` steps, keeping the world point under the anchor (CSS px; default the
-   * view centre) where it is. Zooming out stops at 1 — or, for a city that only fits the
-   * view below 1, at the zoom that shows all of it. Returns false when already at a limit.
-   */
+  /** Zoom by `step` steps keeping the world point under the anchor (CSS px; default the centre)
+   * fixed. Out stops at 1, or a city's whole-view zoom below 1. False when already at a limit. */
   zoomBy(step: number, anchorCss?: { x: number; y: number }): boolean {
     const c = this._cam;
     const floor = this._view.w > 0 && this._view.h > 0 ? Math.min(MIN_ZOOM, this.fitView().zoom) : MIN_ZOOM;
@@ -532,10 +421,8 @@ export class VillageView {
     return true;
   }
 
-  /**
-   * The capacity building under a pointer (CSS px relative to the canvas), or null: a village
-   * capacity house (walls, its board and the step outside its door included), or a city HQ floor.
-   */
+  /** The capacity building under a pointer (CSS px relative to the canvas), or null: a village
+   * capacity house (walls, board, doorstep) or a city HQ floor. */
   pickCapacity(xCss: number, yCss: number): CapacityKind | null {
     const p = screenToWorld(this._cam, xCss * this.dpr, yCss * this.dpr);
     const col = Math.floor(p.x / TILE);
@@ -555,12 +442,8 @@ export class VillageView {
       : { c0: h.col - 1, c1: h.col + h.w, r0: h.row - 2, r1: h.doorRow + 1 };
   }
 
-  /**
-   * Where each capacity building is on screen: its `pickCapacity` box in whole CSS px relative to the
-   * canvas, clipped to it; a building entirely off screen is left out. The panel publishes this as the
-   * canvas's `data-capacity-boxes`, so the E2E can find, hover and photograph a building that exists
-   * only as canvas pixels.
-   */
+  /** Each capacity building's `pickCapacity` box in whole CSS px, clipped to the canvas, off-screen
+   * ones left out. Published as `data-capacity-boxes` so the E2E can find canvas-only buildings. */
   capacityBoxes(): CapacityBox[] {
     const out: CapacityBox[] = [];
     for (const h of this._world.houses) {
@@ -572,12 +455,8 @@ export class VillageView {
     return out;
   }
 
-  /**
-   * Where each neon sign the draw list hangs (`neonSigns` — the very items it paints) is on screen:
-   * its art's box, clipped to the canvas; a sign entirely off screen, or one whose language has no
-   * style (it paints nothing), is left out. The panel publishes this as the canvas's
-   * `data-neon-boxes`, so the E2E proves a sign is DRAWN — not only that its building has a language —
-   * and can frame it.
+  /** On-screen art box of each neon sign the draw list paints, clipped to the canvas; off-screen or
+   * unstyled ones are left out. Published as `data-neon-boxes` so the E2E proves a sign is DRAWN.
    */
   neonBoxes(): NeonBox[] {
     const out: NeonBox[] = [];
@@ -591,14 +470,9 @@ export class VillageView {
     return out;
   }
 
-  /**
-   * Where each skyline landmark's CROWN is on screen (`landmarkCrown`: the Skytree's and Tokyo Tower's
-   * tip down to their lowest deck, Fuji's snow cap — the part no building may hide), clipped to the
-   * canvas; one entirely off screen is left out, and so is every temple (they show whole by rules of
-   * their own). Only a City in a zone with landmarks has any (Asia/Tokyo). The panel publishes this as
-   * the canvas's `data-landmark-boxes`, so the E2E can prove the crowns are drawn where no building
-   * stands in front of them, at Fit and zoomed in.
-   */
+  /** On-screen CROWN of each skyline landmark (the part no building may hide), clipped to the
+   * canvas; temples and off-screen ones are left out. Published as `data-landmark-boxes` for the
+   * E2E. */
   landmarkBoxes(): LandmarkBox[] {
     const city = this._world.city;
     if (!city) return [];
@@ -744,18 +618,13 @@ const SKY_WORD: Record<WeatherKind, string> = {
   storm: "Stormy",
 };
 
-/**
- * "Raining · afternoon" — the sky part of the canvas's accessible name. `weather` null
- * (no live report and no override) says only the time of day: "Afternoon".
- */
+/** The sky part of the canvas's accessible name ("Raining · afternoon"); `weather` null gives only
+ * the time of day. */
 export function skySummary(weather: WeatherKind | null, phase: DayPhase): string {
   return weather ? `${SKY_WORD[weather]} · ${phase}` : phase.charAt(0).toUpperCase() + phase.slice(1);
 }
 
-/**
- * A stable signature of the house (or city) plan: the world is rebuilt only when this
- * string changes (not on every agent update), so the scene doesn't jump.
- */
+/** Stable plan signature: the world is rebuilt only when it changes, so the scene doesn't jump. */
 export function planSignature(plans: readonly HousePlan[] | readonly CityPlan[]): string {
   return JSON.stringify(plans);
 }

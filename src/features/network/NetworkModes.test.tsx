@@ -1,8 +1,4 @@
-/**
- * The Network panel's two modes over mocked IPC seams (only `./netcapIpc` and
- * `./netmachineIpc` are replaced; stores, formatters and the shared AppPicker are real):
- * the mode switch, the Whole-computer table, and the Source picker in IDE traffic mode.
- */
+/** Only `./netcapIpc` and `./netmachineIpc` are mocked; stores, formatters, AppPicker are real. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { StrictMode } from "react";

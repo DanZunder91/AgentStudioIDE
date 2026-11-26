@@ -1,20 +1,5 @@
-/**
- * ScopeSelector — the shared "Workspace ▾ + Folder ▾" scope picker used by BOTH
- * find overlays. It narrows where a search looks — pin a search to
- * `workspace/folder` so it need not scan everything.
- *
- * Controlled (`{ value, onChange }`): the parent overlay owns the scope so it can
- * feed `scopeRootOf(value)` straight into its search. This component reads the
- * store only for its two dropdowns' OPTIONS — the workspace list and, via
- * `read_dir`, the selected workspace's immediate subfolders.
- *
- * The parent's scope wiring is the `useScope` hook below: it holds the local
- * scope, resolves the default workspace from what the user is LOOKING AT (the
- * focused tab's file / terminal cwd — `contextScope.ts`),
- * falling back to the primary root, and derives the effective value + its root —
- * so FindFiles and FindInFiles share one implementation of "which folder are we
- * searching".
- */
+/** The shared Workspace + Folder scope picker for both find overlays. Controlled: the parent owns
+ * the scope; the store only feeds the dropdown options. `useScope` below is the shared wiring. */
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -30,21 +15,13 @@ import {
   type TerminalCwdLookup,
 } from "./contextScope";
 
-/**
- * Sentinel workspace value for "All workspaces": search EVERY open
- * root at once. A leading space keeps it from ever colliding with a real path
- * (no filesystem root is `" all"`), so `scopeRootOf` / `read_dir` never treat it
- * as a directory. When it is the workspace, the Folder box is locked to "All"
- * (you cannot pick one subfolder across many repos).
- */
+/** "All workspaces": search every open root. The leading space keeps it from colliding with a
+ * real path; it locks the Folder box to "All". */
 export const ALL_WORKSPACES = " all";
 
 /** The scope the overlays search under: a workspace root + an optional subfolder. */
 export interface ScopeValue {
-  /**
-   * The absolute workspace root, `ALL_WORKSPACES` for the fan-out over every
-   * open root, or null until one is open.
-   */
+  /** Absolute workspace root, `ALL_WORKSPACES`, or null until one is open. */
   workspace: string | null;
   /** A subfolder NAME under `workspace`, or "" for the whole workspace. */
   folder: string;
@@ -56,11 +33,8 @@ export function folderName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-/**
- * The workspace dropdown's options: the primary root first, then the multi-root
- * list (`workspaceRoots`), deduped, nulls dropped. Including `workspaceRoot` (the
- * primary) is what lets a search work with no agents/browse roots open at all.
- */
+/** Primary root first, then `workspaceRoots`, deduped. The primary lets search work with no other
+ * roots open. */
 export function workspaceOptions(primary: string | null, roots: readonly string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -73,77 +47,35 @@ export function workspaceOptions(primary: string | null, roots: readonly string[
   return out;
 }
 
-/**
- * The absolute root a search runs against: the workspace itself for the "Whole
- * workspace" choice (`folder === ""`), else `workspace/folder` in the workspace's own
- * separator (`C:\repo\src` on Windows). Null when no workspace is open — the overlays
- * render "Open a folder to search." for that.
- */
+/** The workspace, or `workspace/folder` in its own separator; null with no workspace open. */
 export function scopeRootOf(value: ScopeValue): string | null {
   if (!value.workspace) return null;
   return value.folder === "" ? value.workspace : joinPath(value.workspace, value.folder);
 }
 
-/**
- * A plain terminal's cwd, for `contextPath`: the directory Rust actually opened
- * its PTY in (`TerminalMeta.cwd`), or null before the PTY has opened. The spawn
- * cwd, not a live `cd` — the shell's current directory is not tracked anywhere.
- */
+/** A plain terminal's PTY spawn cwd (`TerminalMeta.cwd`), null before it opens; a live `cd` is
+ * not tracked. */
 const terminalCwd: TerminalCwdLookup = (id) => {
   const meta = getTerminalMeta(id);
   return meta ? meta.cwd : null;
 };
 
-/**
- * The last focused tab that could name a folder (`ContextMemory`), kept current
- * by a module-level store subscription — it has to see focus moves made while
- * BOTH overlays are closed, which is exactly when no `useScope` selector runs.
- * Never written to the store; validated against the live tabs on every read.
- */
+/** Last focused tab that could name a folder. A module-level subscription, so it sees focus moves
+ * while both overlays are closed; validated against the live tabs on every read. */
 let contextMemory: ContextMemory | null = rememberContextTab(null, useAppStore.getState());
 useAppStore.subscribe((s) => {
   contextMemory = rememberContextTab(contextMemory, s);
 });
 
-/**
- * The scope state both overlays share. Holds the *user's* scope (workspace null
- * until they touch it), resolves the DEFAULT workspace from the store, and hands
- * back the effective value + its resolved root.
- *
- * The default is the CONTEXT workspace (from a gazelle file or a gazelle
- * terminal, the search should cover gazelle): the open root that
- * owns the focused tab's file / terminal cwd, else the last such tab, else the
- * last file tab (`contextRoot`), falling back to the first open root (the
- * primary) when none of them is inside an open root. The first `setScope` — which
- * always carries a concrete workspace, since `value` did — pins the user's choice
- * over it.
- *
- * `open` is the overlay's visibility. The context root is resolved ONCE per open,
- * on the closed → open edge, and held for as long as the overlay stays open: the
- * overlay has no backdrop, so clicking another pane (or an agent's cwd arriving)
- * while it is up must not silently switch the Workspace dropdown and restart the
- * search under a different root. The same edge drops the user's pinned choice, so
- * a FRESH open follows the context again — an explicit pick lasts until the
- * overlay closes, never into the next search from somewhere else. (Both overlays
- * stay mounted while closed, so without this a pick from an hour ago would still
- * win.) While closed the hook resolves nothing at all — its store selector is a
- * constant — so two hidden overlays cost nothing per store update. Callers that
- * are always visible pass nothing and resolve once, on mount.
- */
+/** Shared scope state. Defaults to the open root owning the focused tab (else the last such tab,
+ * else the primary), resolved once per closed→open edge so clicks elsewhere never switch it; that
+ * edge also drops the user's pick. Closed, it resolves nothing. Without `open`: once, on mount. */
 export interface Scope {
   scope: ScopeValue;
   effectiveScope: ScopeValue;
-  /**
-   * The single resolved root — kept for callers where one value is convenient.
-   * Null when no workspace is open OR when "All workspaces" is chosen (there is
-   * no single root to name then; the overlays iterate `scopeRoots` instead).
-   */
+  /** One resolved root; null with no workspace or under "All workspaces" (see `scopeRoots`). */
   scopeRoot: string | null;
-  /**
-   * The roots a search fans out over: every open root under "All workspaces",
-   * else the one resolved root (empty when none is open). The overlays run one
-   * search per entry in parallel and merge.
-   */
+  /** Roots a search fans out over (one search each, in parallel): all open roots, or the one. */
   scopeRoots: string[];
   /** True when the scope is `ALL_WORKSPACES` — search across every open root. */
   isAll: boolean;
@@ -175,10 +107,8 @@ export function useScope(open = true): Scope {
   const contextNow = useAppStore((s) =>
     resolving ? contextRoot(allRoots, s, terminalCwd, contextMemory) : null,
   );
-  // Snapshot + unpin on the closed → open edge, forget on close. Adjusting state
-  // while rendering (React's "storing information from previous renders"
-  // pattern) rather than in an effect, so the very first frame of the opened
-  // overlay already shows the context workspace instead of flashing a stale one.
+  // Adjusted during render, not in an effect, so the first open frame already shows the context
+  // workspace.
   if (resolving) {
     setOpened({ root: contextNow });
     setScope(UNPINNED);
@@ -227,11 +157,8 @@ export function ScopeSelector({
     [workspaceRoot, rootAgentIds, agents, browseRoots],
   );
 
-  // The selected workspace's immediate subfolders (the Folder dropdown). Reloaded
-  // whenever the workspace changes; a superseded/failed read (or no workspace)
-  // leaves it empty (a calm "Whole workspace only", never a crash), guarded by
-  // `cancelled`. No workspace reads no directory — it resolves to [] directly, so
-  // the state update stays on the async path (never synchronous in the effect).
+  // Reloaded per workspace; a superseded/failed read leaves it empty (guarded by `cancelled`). No
+  // workspace resolves [] asynchronously, so the effect never sets state synchronously.
   const [subdirs, setSubdirs] = useState<FsEntry[]>([]);
   useEffect(() => {
     // "All workspaces" reads no directory (its Folder box is locked to "All").

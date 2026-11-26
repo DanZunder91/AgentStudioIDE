@@ -1,12 +1,4 @@
-/**
- * The tunnel row and its detail card, in real Chromium — an encrypted tunnel must READ: the row's Status/Size/Path cells show their text whole, and the card
- * (why · what you can see · how to see the requests, with the long Cargo line) fits the pane
- * without being cut off or pushing the pane sideways, at a wide and at a narrow width.
- *
- * Browser tier because the claim is layout: jsdom has no text metrics.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/network/networkTunnel.browser.test.tsx`
- */
+/** Browser tier because the claim is layout: jsdom has no text metrics. */
 
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

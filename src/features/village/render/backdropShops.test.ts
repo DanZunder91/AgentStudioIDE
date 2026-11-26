@@ -1,20 +1,4 @@
-/**
- * The City's yokochō — the front of its backdrop in Tokyo (ramen shops or the like in the background,
- * with neon signs for ramen and soba in katakana and sushi in hiragana; then, on E, empty space left
- * between the clusters, and karaoke added): clusters of small food shops behind the street
- * (render/backdropShops.ts), against a recording fake.
- *
- * What it must hold, whatever the city: the row is WORLD-LOCKED (a pan or a zoom never re-rolls it, nor
- * does where the walk starts or a cache starting over); nothing stands in the backdrop's open stretches
- * (`airSpans`); `faceAt` is exactly the top of what `paint` paints, and solid below it; no roof rises into
- * a landmark's crown (`roofLimit`, over a sweep of cities of 1–12 floors); nothing is painted off the
- * view; no light by day, and every light at night through `fillLit`; the same frame twice is the same
- * picture. And the four featured words — ラーメン, ソバ, すし, カラオケ — hang on big signs in the open
- * street beyond the city's ends, out of the air, in view at Fit, clear of every building, temple, street
- * prop and project neon sign.
- *
- * Expectations are written by hand or are properties; the real pixels are the browser
- * tier's (backdropShops.browser.test.tsx). */
+/** Expectations are hand-written or properties; real pixels: backdropShops.browser.test.tsx. */
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -47,12 +31,8 @@ import { recorder, type RecordingTarget } from "./testRecorder";
 
 // ───────────────────────────── a synthetic crown ─────────────────────────────
 
-/**
- * A crown's cap the tests can place exactly (the towers grew, `towerReference`, and no shop
- * of the sweep stands exactly at a real cap any more). `roofLimit` passes straight through to
- * render/backdrop.ts — every other test sees the real landmarks — except over [x0, x1) of the one World a
- * test sets here, where it is `y`.
- */
+/** A crown cap tests can place: `roofLimit` passes through to render/backdrop.ts except over
+ * [x0, x1) of the one World a test sets here, where it is `y`. */
 const synthetic = vi.hoisted(() => ({ world: null as unknown, x0: 0, x1: 0, y: 0 }));
 vi.mock("./backdrop", async (importOriginal) => {
   const real = await importOriginal<typeof import("./backdrop")>();
@@ -506,11 +486,8 @@ describe("paint", () => {
 // ───────────────────────────── the face ─────────────────────────────
 
 describe("faceAt", () => {
-  /**
-   * The day pass rastered (whole zoom, whole offsets: every fill maps back to whole world px), and
-   * per column: nothing painted above the face, and everything from the face down to the street
-   * painted — or behind a building, where nothing of the row is drawn.
-   */
+  /** Rasters the day pass (whole zoom and offsets), then per column: nothing above the face, all
+   * painted from the face down to the street, unless behind a building. */
   function checkFace(world: World, a: Ambience | undefined, z: number, x0: number, x1: number): void {
     const horizon = horizonOf(world);
     const cam: Camera = { zoom: z, ox: -x0 * z, oy: 400 - horizon * z };

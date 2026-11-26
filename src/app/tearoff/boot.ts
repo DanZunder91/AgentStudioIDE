@@ -1,40 +1,6 @@
-/**
- * Tear-off wiring for each kind of window — the composition-root half of
- * docs/design/tab-tearoff.md. Plumbing, like `bridge.ts`: listeners and subscriptions that
- * hand each thing to `handoff.ts`, where the decisions live.
- *
- * ── The main window (`startTearoffHost`) ──────────────────────────────────────
- * Claims its mailbox (tabs coming home), keeps the holdings cache, routes the close of a
- * terminal another window holds to that window, and turns a rail click on an agent held
- * elsewhere into "bring that window forward" — as it does an open of a file or singleton
- * another window already shows (the store's open router). It also keeps what only it can
- * keep for the tabs it lent out: the layout file still lists the agents held elsewhere,
- * with their names, and a rename on either side reaches the other (`renamed` mail).
- *
- * ── A detached window (`startTearoffWindow`) ──────────────────────────────────
- * A minimal shell: NO layout prefs (it never loads them, and `saveLayoutPrefs` refuses
- * outside the main window), NO app-wide pollers (usage, git, metrics belong to the rails it
- * does not render; diskWatch runs, but over this window's own editors only — a partition,
- * not a duplicate), and NO terminal rebuild from the fleet snapshot (that would steal every
- * terminal in the app). What it does run:
- *   - a fleet MIRROR — the snapshot's agents plus `agent://event` — so agent tabs show their
- *     names and the Village has its villagers;
- *   - its mailbox: the first claim recovers what Rust says it holds (a page reload), and
- *     adopts its pending mail (the tabs it was opened for);
- *   - a holdings REPORT whenever its tabs change or an editor is edited (debounced), which is
- *     what Rust re-homes to the main window if this window dies without saying goodbye;
- *   - the close handshake: on `tearoff://closing`, every tab — unsaved text and undo stack
- *     included — goes to the main window, then the window closes itself;
- *   - closing itself when its last tab leaves (Chrome's behaviour), and telling the main
- *     window when an agent's tab was closed for good here, so its rail row and pin go too;
- *   - telling the main window when an agent is renamed here, since only the main window
- *     writes names to disk.
- *
- * Listeners that are addressed to ONE window are registered with this window's label as
- * the target. A JS listener on the default `Any` target receives every `emit_to`, whatever
- * label it names (tauri `event/listener.rs` `match_any_or_filter`) — so without the target,
- * every window would answer every doorbell.
- */
+/** Tear-off wiring per window kind (docs/design/tab-tearoff.md); decisions live in `handoff.ts`.
+ * A detached window runs NO layout prefs, app-wide pollers or terminal rebuild from the snapshot.
+ * One-window listeners target this window's label: an `Any` listener hears every `emit_to`. */
 
 import { listen, type EventTarget } from "@tauri-apps/api/event";
 
@@ -99,11 +65,8 @@ export function heldTerminals(): string[] {
     .sort();
 }
 
-/**
- * The main window's holdings update: replace the cache, and re-save the layout when the set
- * of terminals held elsewhere changed — the file lists those agents (with their names) for
- * as long as they are away, so it must hear when one leaves or comes back.
- */
+/** Replace the holdings cache; re-save the layout when the set of terminals held elsewhere
+ * changes (the file lists those agents, with names, while they are away). */
 export function syncHoldings(holdings: readonly Holding[]): void {
   const before = heldTerminals().join("\n");
   setHoldings(holdings);
@@ -112,11 +75,8 @@ export function syncHoldings(holdings: readonly Holding[]): void {
 
 /* ────────────────────────── routing to the holder ────────────────────────── */
 
-/**
- * The window to bring forward for an agent selected here, or `null` when its terminal is
- * in this window (or nowhere). From a detached window, "not held by any detached window"
- * means the main window has it.
- */
+/** Window to bring forward for an agent selected here, or `null` if its terminal is here (or
+ * nowhere). From a detached window, "held by no detached window" means the main window. */
 export function windowShowing(agentId: AgentId): string | null {
   const s = useAppStore.getState();
   // A sub-agent has no PTY anywhere: `selectAgent` has just opened (or found) its activity
@@ -139,11 +99,8 @@ export function forwardSelection(agentId: AgentId): void {
   if (to) void tearoffSend(to, { t: "focus", key: `${TERMINAL_KEY}${agentId}` }).catch(noop);
 }
 
-/**
- * `TerminalRegistry.setRemoteDisposer`: the close of a terminal this window has never shown
- * goes to the detached window holding it (the rail ✕ on an agent moved to another window).
- * The user already confirmed in this window, so that window closes it without asking.
- */
+/** `TerminalRegistry.setRemoteDisposer`: closing a terminal held by a detached window is sent to
+ * it, which closes without asking (the user already confirmed here). */
 export function disposeRemote(terminalId: TerminalId): boolean {
   const key = `${TERMINAL_KEY}${terminalId}`;
   const holder = holderOf(key);
@@ -152,12 +109,8 @@ export function disposeRemote(terminalId: TerminalId): boolean {
   return true;
 }
 
-/**
- * The store's open router (`routeOpensElsewhere`): a tab another window holds is brought
- * forward there instead of opened again here. Never while this window is adopting a tab
- * (the holdings broadcast can trail the mail that brings it), and if the holder turns out
- * to be gone, the tab opens here after all — a click must never do nothing.
- */
+/** Open router (`routeOpensElsewhere`): bring a tab held elsewhere forward. Never while adopting
+ * (holdings can trail the mail); if the holder is gone it opens here (a click never no-ops). */
 export function routeOpen(key: string, fallback: () => void): boolean {
   if (isOpeningHere()) return false;
   const holder = holderOf(key);
@@ -182,11 +135,8 @@ export function renamedAgents(
 
 /* ───────────────────────────── the main window ───────────────────────────── */
 
-/**
- * Wire tear-off into the main window. Run AFTER `startBridge` settles: adopting a tab is a
- * `rebuildTerminalTabs`, and one run before the boot restore has placed the persisted
- * layout would consume `pendingRestore` and dump every restored terminal in one pane.
- */
+/** Wire tear-off into the main window. Run AFTER `startBridge` settles: an earlier adoption's
+ * `rebuildTerminalTabs` eats `pendingRestore` and dumps all restored terminals in one pane. */
 export async function startTearoffHost(): Promise<() => void> {
   const target: EventTarget = { kind: "WebviewWindow", label: MAIN_WINDOW };
   setRemoteDisposer(disposeRemote);
@@ -229,12 +179,8 @@ let reportTimer: ReturnType<typeof setTimeout> | null = null;
 /** The running `watchDetachedWindow`'s unsubscribe, so a closing window can silence it. */
 let stopWatching: (() => void) | null = null;
 
-/**
- * Stop reporting: cancel a pending report and the watcher that schedules them. Once the
- * hand-back is posted, Rust has already released this window's tabs — a report landing
- * after it would put them all back in the ledger, and the destroy path would then post them
- * to the main window a second time (resurrecting any the user closed there meanwhile).
- */
+/** Stop reporting. After the hand-back Rust has released this window's tabs; a later report would
+ * re-add them, and the destroy path would post them to main twice (resurrecting closed ones). */
 function quiesce(): void {
   if (reportTimer !== null) clearTimeout(reportTimer);
   reportTimer = null;
@@ -254,11 +200,8 @@ export function scheduleReport(): void {
   reportTimer = setTimeout(reportNow, REPORT_DEBOUNCE_MS);
 }
 
-/**
- * The close handshake: every tab, fully described, to the main window — then close. If the
- * send fails, close anyway: Rust re-homes this window's last report when it is destroyed,
- * so the terminals still come home (only the newest unsaved keystrokes are at risk).
- */
+/** Close handshake: every tab, fully described, to the main window, then close. Close even if
+ * the send fails: Rust re-homes this window's last report (only the newest keystrokes at risk). */
 export async function handBackAndClose(): Promise<void> {
   quiesce();
   const tabs = describeAll({ history: true });
@@ -270,11 +213,8 @@ export async function handBackAndClose(): Promise<void> {
   await tearoffClose().catch(noop);
 }
 
-/**
- * Mirror the fleet: the snapshot's agents, then live telemetry, in bridge.ts's order.
- * Each event also reaches this window's terminals (`onTerminalSideOf`): a killed agent
- * whose tab lives HERE must un-stick here — the main window's registry has no entry for it.
- */
+/** Mirror the fleet (snapshot, then telemetry, in bridge.ts's order). Events also reach this
+ * window's terminals (`onTerminalSideOf`): the main registry has no entry for tabs living HERE. */
 async function startFleetMirror(): Promise<void> {
   const { agentActions } = useAppStore.getState();
   let ready = false;
@@ -300,10 +240,7 @@ async function startFleetMirror(): Promise<void> {
 
 const isEmpty = (): boolean => Object.keys(useAppStore.getState().tabs).length === 0;
 
-/**
- * Close this window if it is (still) empty once every move in flight has landed — a move
- * that failed puts its tab back, and the window must still be here to show it.
- */
+/** Close if still empty once moves in flight land: a failed move puts its tab back here. */
 export async function closeIfEmpty(): Promise<void> {
   await movesSettled();
   if (!isEmpty()) return;
@@ -311,11 +248,8 @@ export async function closeIfEmpty(): Promise<void> {
   await tearoffClose().catch(noop);
 }
 
-/**
- * React to this window's own store: report holdings when the tabs change, tell the main
- * window when an agent was closed for good here, and close the window once it is empty.
- * Returns the unsubscribe.
- */
+/** Report holdings when tabs change, tell main when an agent closed for good here, close once
+ * empty. Returns the unsubscribe. */
 export function watchDetachedWindow(): () => void {
   const offTabs = useAppStore.subscribe(
     (s) => s.tabs,
@@ -324,14 +258,9 @@ export function watchDetachedWindow(): () => void {
       else scheduleReport();
     },
   );
-  // An agent leaves this window's mirror only through a removal — `closeTab` on its tab,
-  // or a `close` posted from the main rail — never through a move (`releaseTab` leaves the
-  // fleet alone). So a vanished agent is a dismissal, and the main window's rail and pin
-  // registry must hear of it. A redundant one (the main window started it) is a no-op there.
-  //
-  // A rename here goes to the main window too — the only one that writes names to disk —
-  // unless the main window sent it; and either way the next report carries it, so a re-home
-  // after a crash brings back the newest name rather than the one the tab arrived with.
+  // A vanished agent is a dismissal (moves never remove it), so main's rail and pin registry hear
+  // of it. Renames go to main too (the only disk writer) unless main sent them; every report
+  // carries the name so a crash re-home brings back the newest one.
   const offAgents = useAppStore.subscribe(
     (s) => s.agents,
     (agents, prev) => {
@@ -358,11 +287,8 @@ export function watchDetachedWindow(): () => void {
   return stop;
 }
 
-/**
- * Boot a detached window. See the module header for what runs and what never does.
- * Resolves the watcher's unsubscribe (a no-op when the window closed at once) — the page
- * never calls it, its realm's end is the teardown; tests do.
- */
+/** Boot a detached window (see the module header). Resolves the watcher's unsubscribe; only
+ * tests call it, the page's teardown is its realm ending. */
 export async function startTearoffWindow(): Promise<() => void> {
   const label = currentWindowLabel();
   const target: EventTarget = { kind: "WebviewWindow", label };

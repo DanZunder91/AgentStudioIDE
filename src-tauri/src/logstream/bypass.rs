@@ -1,26 +1,12 @@
-//! Proxy-bypass detection on an agent's Bash commands (requirement: every `curl` an
-//! agent runs in the IDE must be logged in Network).
-//!
-//! The `curl` shim ([`crate::netcap::shim`]) undoes a curl's own bypass, but not
-//! `NO_PROXY='*' python3 x.py`, `unset HTTPS_PROXY; node …` or `env -u HTTP_PROXY …`. Those
-//! cannot be undone from outside the process — so they are **reported**: the transcript tool
-//! tail ([`crate::agent::tools`]) runs every Bash command through [`detect`], and a hit becomes
-//! a `bypass` row in Network ([`crate::netcap::Netcap::record_bypass`]). Nothing goes missing
-//! silently.
-//!
-//! Pure and quote-aware: the words come from the same small shell lexer the task tail uses
-//! ([`super::tasks::simple_command_words`]), so `-x ''` is `-x` + an empty word and a
-//! separator inside a string does not split a command. `$(…)` words and `sh -c '…'` bodies
-//! are looked into (depth-capped).
+//! Reports proxy bypasses the curl shim can't undo (`NO_PROXY='*' python3 …`, `unset
+//! HTTPS_PROXY`) as `bypass` rows in Network, so no agent request goes missing silently. Pure,
+//! quote-aware via [`super::tasks::simple_command_words`]; looks into `$(…)` and `sh -c` bodies.
 
 use super::tasks::simple_command_words;
 
-/// Where a detected bypass was going — what the Network row shows in its Method / Host / Path
-/// columns. Read from a curl's own arguments ([`curl_target`]) when the command has a curl; else
-/// from the first `http(s)://` URL anywhere in the command ([`url_target`]: `python3 -c
-/// 'urlopen("http://…")'`, `node -e "fetch('https://…')"`, `wget --no-proxy http://…`) —
-/// without it a python bypass row would read `—` / `—` in Method and Host. The name
-/// stays `CurlTarget` because the wire and `netcap` already carry it as `curl`.
+/// Where a bypass was going, for the Network row's Method/Host/Path: from a curl's arguments
+/// ([`curl_target`]), else the first `http(s)://` URL ([`url_target`]). Named `CurlTarget`
+/// because the wire and `netcap` already call it `curl`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurlTarget {
     pub method: String,
@@ -54,10 +40,8 @@ pub const R_UNSET: &str = "unset *_proxy";
 pub const R_ENV_U: &str = "env -u *_proxy";
 pub const R_ENV_I: &str = "env -i";
 pub const R_WGET_NO_PROXY: &str = "--no-proxy";
-/// A PowerShell tool call that makes a web request with Windows PowerShell 5.1's own HTTP stack
-/// (`Invoke-WebRequest`, `Invoke-RestMethod`, `iwr`, `irm`, 5.1's `curl`/`wget` aliases, .NET's
-/// `WebClient` / `HttpClient` / `WebRequest`, `Start-BitsTransfer`), which ignores
-/// `HTTP(S)_PROXY` — see [`detect_powershell`].
+/// A PowerShell 5.1 web request (`Invoke-WebRequest`, `iwr`, .NET `WebClient`, …), which
+/// ignores `HTTP(S)_PROXY`; see [`detect_powershell`].
 pub const R_PS51_WEB: &str = "PowerShell 5.1 web cmdlet";
 /// PowerShell 7's `Invoke-WebRequest -NoProxy` / `Invoke-RestMethod -NoProxy`.
 pub const R_PS_NOPROXY: &str = "-NoProxy";
@@ -98,26 +82,9 @@ pub fn detect(command: &str) -> Option<Detected> {
     })
 }
 
-/// Proxy-bypass detection on a **PowerShell** tool call (Claude Code on Windows has a
-/// `PowerShell` tool beside `Bash`; input `{command, description, timeout, run_in_background}`,
-/// read from real transcripts).
-///
-/// That tool is not an IDE terminal: it is a fresh `powershell.exe` / `pwsh.exe -NoProfile` the
-/// agent starts, so neither the curl shim nor the terminal's startup command
-/// (`pty::POWERSHELL_WEB_PROXY`) reaches it. Its environment does carry the capture proxy, and:
-///
-/// * **Windows PowerShell 5.1** (`desktop`): the web cmdlets and .NET Framework's `WebClient` /
-///   `HttpClient` / `WebRequest` ignore `HTTP(S)_PROXY` (they use the system proxy settings),
-///   so every such request bypasses capture → [`R_PS51_WEB`]. In 5.1 `curl` and `wget` are
-///   aliases of `Invoke-WebRequest`; `curl.exe` is the real curl and is captured.
-/// * **PowerShell 7** reads the proxy variables, so its cmdlets are captured — unless they pass
-///   `-NoProxy` → [`R_PS_NOPROXY`].
-///
-/// Which edition the tool runs is not in the transcript; the caller passes what this machine
-/// would run ([`powershell_tool_is_desktop`]). Also reported, on either edition: `$env:NO_PROXY
-/// = '*'` (and other values), a `*_PROXY` variable set to empty / `$null`, and `Remove-Item
-/// Env:*_PROXY` — and everything [`detect`] finds in the text (`curl.exe --noproxy '*' …`).
-/// Never `shim_covers`: no shim runs in that shell.
+/// Bypass detection on Claude Code's Windows `PowerShell` tool (a fresh shell: no curl shim).
+/// 5.1 (`desktop`) web cmdlets ignore proxy vars → [`R_PS51_WEB`]; PS 7 only with `-NoProxy`.
+/// Also reports `NO_PROXY`/emptied `*_PROXY` changes and whatever [`detect`] finds.
 pub fn detect_powershell(command: &str, desktop: bool) -> Option<Detected> {
     let mut reasons: Vec<&'static str> = Vec::new();
     let mut push = |r: &'static str| {
@@ -272,11 +239,8 @@ fn ps_tokens(command: &str) -> Vec<String> {
     out
 }
 
-/// Whether Claude Code's PowerShell tool runs **Windows PowerShell 5.1** on this machine.
-/// Measured in the CLI (2.1.328): it takes the first of `%ProgramFiles%\PowerShell\7\pwsh.exe`,
-/// `…\7-preview\pwsh.exe`, `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` that
-/// exists. So: Windows, and no stock PowerShell 7. Always `false` elsewhere (the tool runs
-/// `pwsh` there, which reads the proxy variables). Decided once.
+/// Whether Claude Code's PowerShell tool runs Windows PowerShell 5.1 here: the CLI (2.1.328)
+/// takes the first existing of pwsh 7, 7-preview, then 5.1. Always `false` off Windows.
 pub fn powershell_tool_is_desktop() -> bool {
     static DESKTOP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *DESKTOP.get_or_init(|| {
@@ -596,10 +560,8 @@ fn url_target(command: &str) -> Option<CurlTarget> {
 /// HTTP methods a command may name explicitly.
 const METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
-/// The method a non-curl command makes evident, else `GET`: an explicit one (`-X POST`,
-/// `--method=PUT`, `method='POST'`, `method: "DELETE"`, `requests.post(`), else `POST` when it
-/// sends a body (`data=`, `json=`, `--post-data`, `-d `, `body:`). Heuristic by design — the
-/// command is shown verbatim beside it, so a wrong guess is visible, never hidden.
+/// The method a non-curl command makes evident (`-X POST`, `method=`, `requests.post(`), else
+/// `POST` if it sends a body, else `GET`. Heuristic: the verbatim command is shown beside it.
 fn evident_method(command: &str) -> String {
     let lower = command.to_ascii_lowercase();
     // `-X POST` / `-XPOST` / `--request POST` (wget's `--method=POST`, httpie-style spellings).

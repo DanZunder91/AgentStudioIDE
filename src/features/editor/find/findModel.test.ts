@@ -1,8 +1,3 @@
-/**
- * findModel — exhaustive pure tests for the find bar's counting/indexing
- * logic. No DOM, no view: strings in, numbers out.
- */
-
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 

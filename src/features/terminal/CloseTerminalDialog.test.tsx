@@ -1,30 +1,6 @@
-/**
- * CloseTerminalDialog — the confirm in front of closing a busy terminal
- * (closing a terminal that is running claude must first ask for
- * confirmation).
- *
- * ── Driven through the REAL store, not a mock ────────────────────────────────
- * Every test below sets `pendingTerminalClose` on the real Zustand store and
- * resolves it through the real `cancelTerminalClose` / `proceedTerminalClose`.
- * A mocked store would prove the buttons call the functions this file passed
- * them — which is a tautology, not wiring. The one thing mocked is the Tauri
- * IPC boundary (there is no Rust process here), and `layout_prefs_save` is the
- * only command any of this reaches.
- *
- * ── 🔴 The two-sided pair ────────────────────────────────────────────────────
- * "Cancel leaves the terminal alive" is satisfied by a build whose Cancel
- * button is wired to NOTHING — and so is "Escape leaves it alive", and so is
- * every backdrop/other-key assertion in this file. Each of them is therefore
- * paired with its opposite: **Close anyway must actually close the tab**. The
- * pending record here carries a REAL tab id from a REAL terminal tab, so the
- * proceed assertions read `state.tabs[tabId]` after the click — the tab is gone
- * or it is not. A dialog that resolved nothing would pass every "still alive"
- * test in this file and fail every one of those.
- *
- * The Enter pair under "keys" is the same shape applied to a key rather than a
- * button: "Enter cancels" alone is satisfied by a build that intercepts Enter
- * dialog-wide, so it is paired with "Enter on the focused Close anyway closes".
- */
+/** Real store; only Tauri IPC is mocked. Each "stays alive" assertion is paired with "Close
+ * anyway really closes" on a real tab, since a Cancel wired to nothing passes them all; likewise
+ * "Enter cancels" pairs with "Enter on Close anyway closes". */
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -73,11 +49,7 @@ function hold(pending: PendingTerminalClose): void {
   });
 }
 
-/**
- * A real terminal tab in a real pane, plus a pending close that names it.
- * This is what makes "Close anyway" falsifiable: the replay runs the store's
- * own `closeTab`, so the tab either survives or it does not.
- */
+/** The replay runs the store's own `closeTab`, so "Close anyway" is falsifiable. */
 function holdRealTabClose(terminals: BusyTerminal[]): TabId {
   let tabId!: TabId;
   act(() => {
@@ -224,23 +196,9 @@ describe("keys — every cheap reflex is the safe one", () => {
     expect(state().tabs[tabId]).toBeDefined();
   });
 
-  /**
-   * 🔴 The Enter pair. The safety property is NOT "Enter is neutralised" — it is
-   * "Cancel holds initial focus", and only these two tests together say so:
-   *
-   *   - untouched focus + Enter → cancels (the reflex is safe)
-   *   - Tab to `Close anyway` + Enter → closes (the key still works)
-   *
-   * The first alone is satisfied by a build that `preventDefault`s Enter
-   * dialog-wide — which is exactly the build this pair exists to rule out,
-   * because it leaves the destructive button unactivatable from the keyboard.
-   *
-   * `userEvent` rather than `fireEvent` on purpose: jsdom does not turn a
-   * keydown into a button activation, so `fireEvent.keyDown` could never tell
-   * the two builds apart. user-event models the real sequence (keydown →
-   * keypress → click, and no click if the keydown was default-prevented), which
-   * is the only thing that makes the second half of the pair falsifiable.
-   */
+  /** The property is "Cancel holds initial focus", not "Enter is neutralised": this pair rules
+   * out a dialog-wide Enter `preventDefault`. `userEvent`, not `fireEvent`: jsdom turns no
+   * keydown into a click. */
   it("Enter with focus untouched cancels — Cancel is where focus starts", async () => {
     const user = userEvent.setup();
     render(<CloseTerminalDialog />);

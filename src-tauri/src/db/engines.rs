@@ -1,41 +1,6 @@
-//! **The** per-engine descriptor registry, and the validator that has to agree with it.
-//!
-//! The requirement is that the connection form matches the engine it is
-//! for — a Mongo form grows `replicaSet`/`readPreference`, a Redis form is a host and a db
-//! index. That is a **data** problem, so it is a table here and not a pile of conditionals in
-//! a form component. `src/features/db/ConnectionDialog.tsx` renders whatever
-//! `db_engines()` hands it and owns no per-engine knowledge at all; adding ClickHouse to the
-//! dialog was already done the moment its row below existed.
-//!
-//! Shape borrowed from `lsp/registry.rs`'s `spec_for(language_id) -> Option<LspServerSpec>`,
-//! with **one deliberate difference**: the descriptor is *served over IPC* rather than
-//! mirrored on the frontend. The LSP mirror works because the frontend needs only a name
-//! set; here it needs the whole form spec — labels, placeholders, kinds, defaults,
-//! requiredness, help text — and any duplicate of that would drift from the validator that
-//! has to agree with it. `src/features/db/engineFields.ts` therefore keeps only what Rust has
-//! no business knowing.
-//!
-//! ## Two safety properties are structural here, not enforced by code
-//!
-//! * **A descriptor cannot ask for a secret.** `DbFieldKind` has no `password` variant,
-//!   because every `DbFieldSpec` value lands in `DbConnection.options`, which is *persisted
-//!   to disk* — a password-kind field would write a credential into a plaintext file, the
-//!   exact failure the Vault exists to prevent. (`types.ts` removed the variant after the
-//!   dialog had to defensively refuse it. A type that cannot express the mistake is
-//!   a better defence than code that can be deleted.)
-//! * **A descriptor cannot weaken read-only.** [`EngineDefaults`] has no `read_only` field.
-//!   A new connection is read-only *unconditionally*; letting a data row say `false`
-//!   would make the single most important safety default weakenable by data. An engine that
-//!   cannot *enforce* read-only server-side says so through
-//!   [`EngineSpec::server_enforced_read_only`], which changes what the UI **promises**, not
-//!   what it **defaults to**.
-//!
-//! ## Testing: never read an expectation from the table under test
-//!
-//! A **routing** loop (every engine has a spec; ids are unique; field keys are unique; ports
-//! are non-zero; the default SSL mode is one the engine offers) plus a committed **golden
-//! snapshot** of the serialised `db_engines()` output. The loop's comment states that it does
-//! not pin values; the snapshot is what makes a changed default a named line in a diff.
+//! The per-engine descriptor registry, served over IPC so the connection dialog holds no per-engine
+//! knowledge, plus the validator that must agree with it. No field kind can hold a secret and no
+//! row can default read-only off. Tests: a routing loop plus a golden snapshot of `db_engines()`.
 
 use std::collections::BTreeMap;
 
@@ -100,29 +65,11 @@ pub struct EngineSpec {
     pub id: DbEngineId,
     pub family: DbFamily,
     pub label: &'static str,
-    /// The engine's standard port. **Two jobs, and they are deliberately the
-    /// same number:**
-    ///
-    /// 1. The **placeholder the dialog shows** in an empty port box. It is no longer pre-filled
-    ///    into the record — `DbConnection::port` is `Option<u16>` and an empty box stays empty,
-    ///    because a value silently injected into a record is a value the user never typed.
-    /// 2. The port an **empty** port field actually dials
-    ///    ([`crate::db::engine::ResolvedConfig::port_or_default`]).
-    ///
-    /// They must be one number: if the connect path used something else — sqlx-postgres's own
-    /// default, say, which is `$PGPORT` or 5432 — the placeholder would be a lie on any machine
-    /// where the two disagree, and the app's behaviour would depend on the shell that launched it.
-    ///
-    /// ⚠️ It cannot express a *per-TLS-mode* default, and ClickHouse is where that bites: this
-    /// says 8123 (the plaintext HTTP interface) while a TLS ClickHouse conventionally listens on
-    /// 8443, so an SSL-enabled ClickHouse connection with an empty port dials 8123 and fails.
-    /// Recorded rather than papered over with a second invented number — see
-    /// [`crate::db::clickhouse::ClickhouseEngine`].
+    /// The dialog's empty-port placeholder and the port an empty field dials: one number, so the
+    /// placeholder never lies. It cannot vary by TLS mode (ClickHouse: 8123, not 8443).
     pub default_port: u16,
-    /// URI scheme(s) this engine's connection strings use; **first is canonical**, and it is
-    /// what [`crate::db::url::build`] emits. For the Redis family the second entry is the TLS
-    /// scheme (`rediss`), which `url.rs` selects on; a routing test below asserts that every
-    /// scheme `build` can emit appears in this list, so the two cannot drift.
+    /// URI schemes; the first is canonical and what [`crate::db::url::build`] emits. For Redis the
+    /// second is the TLS scheme (`rediss`); a routing test keeps `build` and this list in sync.
     pub url_schemes: &'static [&'static str],
     /// Whether `database` is meaningful, and what to call it in the UI.
     pub database_label: Option<&'static str>,
@@ -130,10 +77,8 @@ pub struct EngineSpec {
     pub ssl_modes: &'static [SslMode],
     pub extra_fields: &'static [DbFieldSpec],
     pub defaults: EngineDefaults,
-    /// Whether **server-enforced** read-only exists here. `false` means the flag is a
-    /// client-side speed bump and the UI must say so rather than implying a guarantee it
-    /// cannot make. A control that pretends to be stronger than it is, is worse than
-    /// no control.
+    /// Whether read-only is server-enforced. `false` = a client-side speed bump, and the UI must
+    /// say so.
     pub server_enforced_read_only: bool,
     pub query_language: QueryLanguage,
 }
@@ -288,13 +233,9 @@ const MONGO_FIELDS: &[DbFieldSpec] = &[
     },
 ];
 
-/// DynamoDB's fields, and every one of them is here because the engine has no connection string
-/// to carry it.
-///
-/// `region` is REQUIRED and has no default: guessing `us-east-1` would silently point a query at
-/// the wrong continent's tables, and an empty table list is indistinguishable from "you are in the
-/// wrong region". The endpoint override is what addresses DynamoDB Local, and it is the only
-/// reason `host`/`port` mean anything for this engine.
+/// DynamoDB has no connection string, so these fields carry everything. `region` is required with
+/// no default (a wrong guess looks like an empty account); `host`/`port` only address DynamoDB
+/// Local.
 const DYNAMODB_FIELDS: &[DbFieldSpec] = &[
     DbFieldSpec {
         key: "region",
@@ -368,11 +309,8 @@ pub const MAX_TIMEOUT_MS: u32 = 600_000;
 
 /* ───────────────────────────────── the rows ───────────────────────────────── */
 
-/// Every engine, in the order the dialog's driver picker shows them.
-///
-/// `db_engines()` drives the whole dialog from this table, so a new engine is a driver module
-/// plus (for Aurora) *nothing at all*. See [`crate::db::engine::engine_for`] for the honest
-/// error an unwired row would give.
+/// Every engine, in the dialog's driver-picker order. A new engine is a driver module plus a row
+/// (an unwired row errors in [`crate::db::engine::engine_for`]).
 pub const ENGINES: &[EngineSpec] = &[
     EngineSpec {
         id: DbEngineId::Postgres,
@@ -430,10 +368,8 @@ pub const ENGINES: &[EngineSpec] = &[
             row_limit: DEFAULT_ROW_LIMIT,
             timeout_ms: DEFAULT_TIMEOUT_MS,
             allow_multi_statement: false,
-            // NOT a style choice: `mysql-rsa` cannot be enabled because
-            // `rsa 0.10.0-rc.18` carries RUSTSEC-2023-0071 with no fixed version, so MySQL 8's
-            // default `caching_sha2_password` can only complete full authentication inside a
-            // TLS tunnel. Defaulting to `prefer` here would ship a first-run failure.
+            // Not style: `mysql-rsa` is off (RUSTSEC-2023-0071, no fix), so MySQL 8's default
+            // `caching_sha2_password` needs TLS for full auth; `prefer` would fail on first run.
             ssl_mode: SslMode::Require,
         },
         server_enforced_read_only: true,
@@ -593,25 +529,9 @@ pub fn require_spec(id: DbEngineId) -> Result<&'static EngineSpec, DbError> {
 
 /* ──────────────────────────────── validation ──────────────────────────────── */
 
-/// Validate an input against its descriptor, **server-authoritatively**.
-///
-/// This deliberately re-checks what `validateDraft` in `engineFields.ts` already checks. The
-/// frontend's copy exists to put a message next to the field the user is looking at; this one
-/// exists because the backend never trusts the client to have sanitised something that matters, and `port`, `row_limit` and `timeout_ms`
-/// all reach a real driver.
-///
-/// ## What is deliberately NOT an error
-///
-/// **An option key the descriptor does not declare.** Refusing an "unknown option key" and
-/// *preserving* unknown query parameters cannot both hold, and preservation wins — dropping `?target_session_attrs=read-write`
-/// simply breaks the connection, and the dialog already surfaces unmodelled keys as a
-/// non-blocking warning. So an undeclared key passes through to the driver, exactly as the
-/// dialog told the user it would.
-///
-/// The keys that *are* refused are the two that would defeat a guarantee: a key colliding
-/// with the family's own TLS parameter (which would let the query string quietly contradict
-/// the SSL control) and a key on the credential denylist (which would put a secret in a
-/// plaintext file).
+/// Server-authoritative validation (re-checks `engineFields.ts`'s `validateDraft`). Undeclared
+/// option keys pass through to the driver; refused are keys colliding with the family's TLS
+/// parameter and keys on the credential denylist.
 pub fn validate(spec: &EngineSpec, input: &DbConnectionInput) -> Result<(), DbError> {
     if input.name.trim().is_empty() {
         return Err(DbError::invalid_config("Name is required."));
@@ -619,11 +539,8 @@ pub fn validate(spec: &EngineSpec, input: &DbConnectionInput) -> Result<(), DbEr
     if input.host.trim().is_empty() {
         return Err(DbError::invalid_config("Host is required."));
     }
-    // 🔴 **An empty port is valid** and means "the engine's default" (see `EngineSpec::default_port`
-    // and `DbConnection::port`). It used to be mandatory, so a port was always stored and always
-    // rendered into the connection string — pasting an Atlas host with no port gave
-    // `mongodb://…:27017/` back. `Some(0)` is still refused: serde already rejects a negative or
-    // >65535 value for a `u16`, so 0 is the only unusable number that can reach here.
+    // An empty port is valid (the engine's default). serde already rejects negative or >65535 for a
+    // `u16`, so 0 is the only unusable value that can reach here.
     if input.port == Some(0) {
         return Err(DbError::invalid_config(
             "Port must be a whole number from 1 to 65535, or empty for the default.",
@@ -749,12 +666,8 @@ pub fn ssl_mode_from_name(s: &str) -> Option<SslMode> {
 mod tests {
     use super::*;
 
-    /// The **routing** half. It proves every row is reachable, internally
-    /// consistent and non-degenerate.
-    ///
-    /// It deliberately **does not pin any value** — a row's label, port or default could be
-    /// rewritten and this test would stay green. That is what the golden snapshot below is
-    /// for, and separating the two is the whole lesson.
+    /// The routing half: every row reachable and consistent. It pins no values; the golden snapshot
+    /// below does.
     #[test]
     fn routing_every_row_is_reachable_unique_and_internally_consistent() {
         assert_eq!(
@@ -773,11 +686,8 @@ mod tests {
 
             assert!(!spec.label.is_empty(), "{:?} has no label", spec.id);
             assert_ne!(spec.default_port, 0, "{:?} has port 0", spec.id);
-            // 🔴 **Exactly one engine may declare no scheme, and it is a property of the engine
-            // rather than an exemption.** DynamoDB has no connection string at all: a
-            // `dynamodb://` URI exists nowhere, so `build`/`parse` are never called for it and the
-            // dialog hides its URL box. Every other row MUST declare a scheme, or `build` could not
-            // name one.
+            // Only DynamoDB may declare no scheme: it has no connection string, so `build`/`parse`
+            // never run for it. Every other row must declare one for `build` to name.
             if spec.family == DbFamily::Dynamodb {
                 assert!(
                     spec.url_schemes.is_empty(),
@@ -794,11 +704,8 @@ mod tests {
                     spec.id
                 );
             }
-            // 🔴 The TLS control is a property of how the engine is ADDRESSED, not a blanket rule.
-            // A host-and-port engine must offer a ladder and default to a rung on it. A
-            // URL-addressed one must offer NONE: `https://` vs `http://` in the address already IS
-            // the choice, and a second control free to contradict the first is the most important
-            // divergence to rule out.
+            // Host-and-port engines must offer an SSL ladder and default to a rung on it;
+            // URL-addressed ones must offer none, since the URL scheme already is the choice.
             assert!(
                 !spec.ssl_modes.is_empty(),
                 "{:?} offers no SSL mode at all",
@@ -860,18 +767,9 @@ mod tests {
                         f.default
                     );
                 }
-                // A required field with no default would make a fresh form invalid before the
-                // user has typed anything, which is the bug `default` was added for — allowed,
-                // but only when the descriptor genuinely cannot know the value.
-                //
-                // 🔴 **DynamoDB's `region` is that case, and the comment above already anticipated
-                // it.** A region is the engine's *address* — it plays exactly the role `host` plays
-                // for every other engine, and `host` is a required top-level field with no default
-                // too, so a fresh DynamoDB form starts invalid for the same honest reason a fresh
-                // Postgres form does. Defaulting it to `us-east-1` would point queries at the wrong
-                // continent's tables and look like an empty account, which is what the field's own
-                // hint says. The exception is therefore named for the one field it applies to,
-                // rather than the rule being weakened for everybody.
+                // A required field needs a default, or a fresh form starts invalid. DynamoDB's
+                // `region` is the one exception: it is the engine's address, like `host`, which has
+                // no default either.
                 let is_the_engines_address = spec.family == DbFamily::Dynamodb && f.key == "region";
                 if f.required && !is_the_engines_address {
                     assert!(
@@ -903,10 +801,8 @@ mod tests {
     /// stated fact rather than an implication of the loop above.
     #[test]
     fn every_engine_the_registry_offers_has_a_driver_behind_it() {
-        // 🔴 The point of this test is that the dialog cannot offer an engine the app cannot dial.
-        // It used to list the wired ids by hand and assert the remaining ones FAILED;
-        // now it walks the registry, so adding a descriptor row without a driver turns it red
-        // instead of shipping a dropdown entry that errors on Test Connection.
+        // Walks the registry so a descriptor row without a driver turns this red, instead of
+        // shipping a dropdown entry that fails Test Connection.
         for spec in ENGINES {
             assert!(
                 crate::db::engine::engine_for(spec.id).is_ok(),
@@ -918,17 +814,9 @@ mod tests {
         assert_eq!(ENGINES.len(), 9);
     }
 
-    /// The **values** half: a committed golden snapshot of exactly what
-    /// `db_engines()` puts on the wire.
-    ///
-    /// It fails on any row change, names the exact line in the diff, and needs no
-    /// hand-maintenance — and unlike the routing loop it *cannot* pass when a default is
-    /// wrong. **Read the diff** before regenerating: this file is where "Postgres now defaults
-    /// to read-write TLS-less" would show up as one reviewable line.
-    ///
-    /// To regenerate deliberately:
-    /// `cargo test --manifest-path src-tauri/Cargo.toml db_engines_snapshot -- --nocapture`
-    /// prints the actual JSON on failure; paste it into `engines.golden.json`.
+    /// The values half: a golden snapshot of what `db_engines()` sends. Read the diff before
+    /// regenerating: run `cargo test … db_engines_snapshot -- --nocapture` and paste the printed
+    /// JSON into `engines.golden.json`.
     #[test]
     fn db_engines_snapshot_matches_the_committed_golden_file() {
         let actual = serde_json::to_string_pretty(ENGINES).expect("the registry serialises");
@@ -945,10 +833,8 @@ mod tests {
 
     #[test]
     fn the_snapshot_is_the_shape_the_frontend_contract_declares() {
-        // A guard on the snapshot itself: it is only a useful golden if it is camelCase and
-        // carries no `readOnly` default (the safety property from the module doc). Cheap, and
-        // it means a serde attribute cannot regress unnoticed even if someone regenerates the
-        // golden without reading it.
+        // Guards the snapshot itself: camelCase and no `readOnly` default, so a serde attribute
+        // cannot regress through a careless regenerate.
         let json = serde_json::to_string(ENGINES).unwrap();
         for key in [
             "defaultPort",
@@ -1112,11 +998,6 @@ mod tests {
         }
     }
 
-    /// 🔴 **An empty port validates.** It used to be mandatory, and the dialog
-    /// pre-filled the descriptor's default, so a port was always stored and always rendered into
-    /// the built string. This is the assertion that an empty box is now a legal record — remove the
-    /// `Some(0)` narrowing in `validate` and put `input.port.is_none()` back into the refusal, and
-    /// this test is what goes red.
     #[test]
     fn an_empty_port_is_valid_and_means_the_engines_default() {
         let mut input = pg_input();

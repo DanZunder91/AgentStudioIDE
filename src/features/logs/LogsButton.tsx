@@ -1,10 +1,5 @@
-/**
- * LogsButton — the titlebar affordance that toggles the diagnostics-log overlay.
- *
- * Mirrors `<ShortcutsButton/>`: a self-contained titlebar button with its own
- * class, reflecting open state via `aria-pressed`. Deliberately badge-free — an
- * ever-climbing entry count is noise, not signal.
- */
+/** Titlebar toggle for the log overlay (like `<ShortcutsButton/>`); no entry-count badge, which
+ * would be noise. */
 
 import { useLogStore } from "./logStore";
 import "./logs.css";

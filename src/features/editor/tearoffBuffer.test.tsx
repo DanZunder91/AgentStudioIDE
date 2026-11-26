@@ -1,15 +1,6 @@
-/**
- * The editor half of tab tear-off (docs/design/tab-tearoff.md §3): an editor moving to
- * another window must carry its BUFFER. Re-reading the file over there — the obvious thing
- * a fresh window would do — silently drops every unsaved edit.
- *
- * Drives the REAL registry, the REAL store, a REAL CodeMirror view and the REAL hand-off
- * (`describeTab` → `releaseTab` → JSON → `adoptTornTabs`), with only the Tauri IPC mocked —
- * the `reloadFromDisk.test.tsx` harness, for the same reason: a mocked registry would mock
- * away the thing under test. Both windows are this one realm here; what crosses is exactly
- * what crosses the IPC boundary (the JSON round trip), and the source's buffer is gone
- * before the destination's is built.
- */
+/** A torn-off editor must carry its buffer: re-reading the file in the new window drops unsaved
+ * edits (docs/design/tab-tearoff.md §3). Real registry, store, view and JSON hand-off; only IPC
+ * is mocked, and the source buffer is gone before the destination's is built. */
 
 import { render, waitFor } from "@testing-library/react";
 import { act } from "react";

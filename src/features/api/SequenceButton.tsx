@@ -1,8 +1,4 @@
-/**
- * SequenceButton — the titlebar affordance that opens a new request-sequence tab.
- * Twin of `<ApiRequestButton/>`: one icon button driving
- * one store action, sitting beside it in `App.tsx`.
- */
+/** Twin of <ApiRequestButton/>, beside it in App.tsx. */
 
 import { useAppStore } from "../../app/store";
 

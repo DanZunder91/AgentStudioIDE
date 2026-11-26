@@ -105,12 +105,9 @@
 
 .net-table {
   width: 100%;
-  /* With `table-layout: fixed` the auto-width Path column gets only what the fixed columns
-     leave — and in a 720px pane (default window, both rails open) that was 0px: Host → Status
-     with no Path at all. The floor is
-     an inline `min-width` computed from the visible columns (networkColumns.ts
-     `tableMinWidth`), so it follows resizes and hidden columns; narrower panes scroll sideways
-     instead of losing a column. Column widths are inline `<col style>` from the shared layout. */
+  /* `table-layout: fixed` leaves the auto-width Path column only leftovers (0px in a 720px pane).
+     Floor: an inline `min-width` from the visible columns (`tableMinWidth`); narrower panes scroll
+     sideways. Column widths are inline `<col style>` from the shared layout. */
   table-layout: fixed;
   border-collapse: collapse;
   white-space: nowrap;
@@ -435,13 +432,9 @@
   flex: 1 1 auto;
   min-height: 0;
 }
-/* The toolbar never clips a control (the bug: with the Apps sidebar the Source / Process /
-   Host pickers fell off the right edge). Two rules: the bar wraps (`.net-bar` above —
-   flex-wrap, no overflow: hidden, the filter shrinks to its min-width), and the main column's
-   width is the space LEFT by the sidebar, never its content's: the table's column floor
-   (`tableMinWidth`) is wider than a narrow pane, and without `contain: inline-size` that floor
-   became the column's min-content, the column outgrew the pane and the bar laid its controls out
-   past the visible edge. The table scrolls inside `.net-scroll` instead. */
+/* The toolbar must never clip a control: the bar wraps (`.net-bar`), and `contain: inline-size`
+   keeps this column the width the sidebar leaves; without it the table's `tableMinWidth` floor
+   becomes its min-content and controls overflow. The table scrolls inside `.net-scroll`. */
 .net-ide {
   min-width: 0;
 }

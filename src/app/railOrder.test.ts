@@ -1,13 +1,5 @@
-/**
- * Rail folder ordering + per-rail collapse persistence (features 1–3).
- *
- * Covers the store contract the two rails consume: `workspaceRoots` ordering by the
- * shared `folderOrder`, the reorder actions (`moveFolder`, `moveRootAgent`,
- * `syncFolderOrder`), the persisted collapse toggles (`toggleFolderCollapsed`,
- * `toggleRootCollapsed`), and the boot seed (`applyLayoutPrefs`). The persistence
- * EFFECT is asserted through a mocked `layoutPrefsIpc`, exactly how `store.test.ts`
- * proves the api-store / history saves.
- */
+/** Rail folder ordering and per-rail collapse persistence: the store contract both rails consume.
+ * The persistence effect is asserted through a mocked `layoutPrefsIpc`. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

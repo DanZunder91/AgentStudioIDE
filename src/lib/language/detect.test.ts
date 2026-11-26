@@ -1,11 +1,4 @@
-/**
- * Tests for the pure language-detection module (docs/design/language-detection.md).
- *
- * Goal: 100% lines + functions and every branch of the pipeline stages, the
- * shebang/first-line parser, and EVERY ambiguous-extension resolver arm. The
- * module is added to the coverage gate, so each `? :` arm in tables.ts and each
- * `if` in detect.ts must be exercised.
- */
+/** In the coverage gate: every `? :` arm in tables.ts and every `if` in detect.ts must be hit. */
 
 import { describe, expect, it } from 'vitest';
 
@@ -116,10 +109,7 @@ describe('detectLanguage — unambiguous extensions (stage 2b)', () => {
   });
 });
 
-/**
- * For EVERY ambiguous extension: (a) the deterministic default with no firstLine,
- * and (b) each resolver arm driven by a representative first line.
- */
+/** Every ambiguous extension: its default with no firstLine, and each resolver arm. */
 describe('detectLanguage — ambiguous extensions: defaults (no firstLine)', () => {
   const defaults: Array<[string, LanguageId]> = [
     ['a.h', 'c'],
@@ -362,22 +352,9 @@ describe('table integrity', () => {
   });
 });
 
-/**
- * ── Mutation-hardening ─────────────────────────────────────────────────────
- *
- * StrykerJS found 133 surviving mutants in `tables.ts` (mutation score 71.76%)
- * and 116 in `ids.ts` (0.85%) — behaviour changes that broke NO test. The tests
- * above pin every resolver's HEADLINE case (the input that selects each arm);
- * what they never pinned is the near-MISS — the inputs each regex exists to
- * REJECT. That is the difference between "this regex fires when it should" and
- * "this regex does not fire when it shouldn't", and only the second one catches
- * a loosened anchor, a dropped `\b`, or a widened quantifier.
- *
- * Concretely: `^\s*%` in the `.m` resolver identifies a MATLAB comment. Delete
- * the `^` and it matches a `%` anywhere — so `int x = y % z;`, ordinary
- * Objective-C, becomes MATLAB. Every test above still passed. Each assertion
- * below is a witness that kills at least one such mutant.
- */
+/** ── Mutation-hardening ── The near-misses each regex exists to REJECT: only these catch a
+ * loosened anchor, a dropped `\b` or a widened quantifier (no `^` in the `.m` resolver makes
+ * `y % z` MATLAB). Each assertion kills at least one mutant. */
 describe('resolver near-misses — the inputs each regex exists to REJECT', () => {
   it('.m: a modulo operator is not a MATLAB comment (the ^ anchor)', () => {
     expect(detectLanguage('a.m', 'int x = y % z;')).toBe('objective-c');
@@ -475,19 +452,8 @@ describe('resolver near-misses — the inputs each regex exists to REJECT', () =
   });
 });
 
-/**
- * Drives EVERY table row through the real pipeline.
- *
- * ⚠️ **What this does and does NOT pin.** These loops read the expected id FROM
- * the table under test, so they are deliberately self-referential: they prove
- * that each table is *consulted*, in the right *precedence*, with the right
- * *key normalization* — a row can never be silently unreachable. They CANNOT
- * catch a wrong row VALUE, because corrupting the row corrupts the expectation
- * with it. (Verified, not assumed: rewriting `wish: 'tcl'` to
- * `wish: 'plaintext'` leaves this whole block green.) The row values are pinned
- * by the golden snapshot in the next block; the two are complementary and
- * neither is sufficient alone.
- */
+/** Self-referential on purpose: proves each row is reachable with the right precedence and key
+ * normalization, but cannot catch a wrong VALUE; the golden snapshot below pins values. */
 describe('table routing — every row is reachable through detectLanguage', () => {
   it('EXACT_FILENAMES: each basename resolves to its declared id', () => {
     for (const [name, id] of Object.entries(EXACT_FILENAMES)) {
@@ -529,10 +495,8 @@ describe('table routing — every row is reachable through detectLanguage', () =
   });
 
   it('`perl6` means Raku, not Perl (regression)', () => {
-    // The version-strip (`python3.11` -> `python`) used to run BEFORE the table
-    // lookup, rewriting `perl6` to `perl` and making the `perl6: raku` row
-    // unreachable — dead data no test could ever reach, which is exactly why
-    // its mutant survived. Exact match now wins over version-stripping.
+    // Exact match must win over version-stripping, or `perl6` becomes `perl` and the raku row is
+    // unreachable.
     expect(detectByFirstLine('#!/usr/bin/env perl6')).toBe('raku');
     expect(detectByFirstLine('#!/usr/bin/perl6')).toBe('raku');
     // Version-stripping still applies to everything that is a real version.
@@ -544,25 +508,9 @@ describe('table routing — every row is reachable through detectLanguage', () =
   });
 });
 
-/**
- * The 82 surviving `StringLiteral` mutants in `tables.ts` were individual table
- * ROWS: any single mapping's value could be rewritten and nothing failed. The
- * routing loops above cannot catch that (see their note), and asserting ~330
- * rows by hand would be an unmaintainable wall that rots on every table edit.
- *
- * A **golden snapshot** is the proportionate tool for pinning pure data: it
- * fails on ANY value change, the failure diff names the exact row, and it costs
- * no hand-maintenance. This is the repo's FIRST use of vitest snapshots — a
- * deliberate, narrow exception for the detection tables, not a new general
- * habit. Behaviour still gets explicit assertions everywhere else; a snapshot
- * asserts nothing about *correctness*, only that the data has not drifted
- * unnoticed. When a row legitimately changes, review the diff and re-record it
- * with `npx vitest run -u src/lib/language/detect.test.ts` — the diff IS the
- * review, so read it rather than reflexively updating.
- *
- * `vitest run` fails on a MISSING snapshot rather than writing one, so a newly
- * added table row cannot slip in un-pinned.
- */
+/** Golden snapshot of pure table data: any row change fails and names the row. A narrow exception
+ * (snapshots are not a habit here): read the diff before `npx vitest run -u <this file>`. A
+ * MISSING snapshot fails `vitest run`, so a new row cannot slip in un-pinned. */
 describe('table data — golden snapshot of every row value', () => {
   it('EXACT_FILENAMES', () => {
     expect(EXACT_FILENAMES).toMatchSnapshot();
@@ -592,14 +540,8 @@ describe('table data — golden snapshot of every row value', () => {
   });
 });
 
-/**
- * `ids.ts` scored 0.85% (116/117 mutants survived): every value in
- * `LANGUAGE_LABELS` could be blanked or corrupted and no test failed, because
- * nothing asserted the labels at all. `Record<LanguageId, string>` enforces
- * COMPLETENESS at compile time but says nothing about the contents — `'Pyton'`
- * or `''` type-checks fine. These are user-facing strings (the editor's language
- * indicator), so a blank one is a visible bug.
- */
+/** `Record<LanguageId, string>` enforces completeness, not contents: `''` type-checks, and these
+ * labels are user-facing. */
 describe('LANGUAGE_LABELS — the user-facing display names', () => {
   it('no label is empty or untrimmed', () => {
     for (const [id, label] of Object.entries(LANGUAGE_LABELS)) {

@@ -1,80 +1,19 @@
-/**
- * Claude metrics — the wire contract between Rust's `claude_metrics` command and the
- * metrics dashboard tab.
- *
- * Mirror of `src-tauri/src/metrics.rs`. Structs are camelCase on the wire, enums
- * snake_case (ARCHITECTURE §2.5). If a shape changes, change it in BOTH files — the
- * Rust side is the source of truth and its unit tests pin the serialized strings.
- *
- * ── 🔴 There is deliberately NO `total` on {@link TokenClasses} ───────────────
- *
- * Not "we don't display it": it does not exist, so no future UI can render it by
- * accident. In a typical 24 h window of agent work, fresh input is well under 1% of
- * all tokens, output under 1%, cache writes about 2% and **cache reads about 98%**. A
- * summed headline would be ~98% cache reads, which cost ~0.1× fresh input — so one
- * summed number is not a simplification, it is a wrong answer. The honest headline that replaces it is
- * {@link MetricsTotals.avgContextPerRequest}, which averages a quantity that
- * genuinely *is* the context size and is the one the CLI itself thresholds at >150k.
- *
- * `MetricsPanel.test.tsx` asserts no rendered element contains a summed total — the
- * trap encoded as a gate, so a future "helpful" simplification fails CI.
- *
- * ── Everything here is derived from LOCAL transcripts ────────────────────────
- *
- * This machine only. It is not the account's usage (that is `features/usage`, which
- * asks the CLI and is account-wide across devices). The panel renders BOTH, in two
- * visually separate blocks with two mandatory labels — **"All devices · from your Claude
- * account"** for `features/usage`, **"This machine"** for everything on this contract —
- * because this is a truth condition, not styling: *a number may never be labelled "all
- * my usage" unless it came from the account*.
- *
- * ── What this contract does NOT carry, and why the fields are absent rather than 0 ──
- *
- * Fan-out attribution (a turn's sub-agents, their tokens and requests), the S1–S7
- * efficiency signals, and compaction rows are not implemented. They are **not** on this
- * contract yet, deliberately: `subagents: 0` on a turn that really spawned 17 children is
- * a false statement, and the same reasoning that removes `total` removes a placeholder
- * zero. A field appears here when it becomes true — which is also why the multi-root
- * bookkeeping an earlier version reserved (`duplicateSessionIds`, `conflictingSessionIds`) is
- * now **gone**: additional transcript roots are out of scope (`~/.claude` is not synced
- * between machines), so those lists would be permanently empty.
- */
+/** Mirrors `src-tauri/src/metrics.rs` (source of truth; change both): camelCase structs, snake_case
+ * enums. This machine's transcripts only. No token `total` on purpose (~98% is cheap cache reads);
+ * unimplemented fields are absent, never a fake 0. */
 
 /** Which window the report covers. Defaults to 24 h; both are supported. */
 export type MetricsWindowKind = "last_24h" | "last_7d";
 
-/**
- * Which sessions the report covers.
- *
- * **`"all"` is the default** — every project directory on this machine. The
- * dashboard is about total usage on the machine or account,
- * with everything that can be collected, not about one project. `"project"` is the
- * narrowing you opt into, and it is only meaningful with a cwd: **a `"project"` request with a `null` cwd resolves to
- * `"all"`** and sets {@link MetricsCoverage.scopeFellBackToAll}, rather than failing the
- * way an earlier version did.
- *
- * The privacy rules that `"all"` costs, implemented Rust-side and asserted on the
- * serialized report:
- *   - **no prompt text** — {@link TurnRow.label} is `null` by rule, and the UI identifies
- *     a turn by {@link TurnRow.projectLabel} plus its time. Rendering another project's
- *     prompt beside this project's numbers would be a cross-workspace leak;
- *   - **no absolute paths** — basenames only, and `scope.cwd` is `null` in `"all"` scope
- *     even when one was passed;
- *   - **no `toolUseResult` content**, in any scope — tool results are counted, never
- *     quoted.
- */
+/** `"all"` (default) is every project on this machine; `"project"` with a null cwd falls back to
+ * `"all"`. `"all"` privacy, enforced in Rust: no prompt text, basenames only; tool results never
+ * quoted. */
 export type MetricsScopeKind = "all" | "project";
 
-/**
- * Where a turn's duration came from. Rendered as a visible marker, because "the CLI
- * measured this" and "we subtracted two timestamps" are different claims.
- */
+/** Shown as a marker: "the CLI measured this" and "we subtracted timestamps" differ. */
 export type DurationSource = "cli" | "derived";
 
-/**
- * Tokens in the four classes the API reports — and no fifth. See the docblock above
- * before considering a `total`.
- */
+/** The four token classes the API reports, and no fifth (see the module doc before adding one). */
 export interface TokenClasses {
   /** `usage.input_tokens` — context that was neither cached nor read from cache. */
   freshInput: number;
@@ -93,27 +32,15 @@ export interface TurnRow {
   sessionId: string;
   /** Always `"local"`: additional transcript roots are out of scope (see the docblock). */
   rootId: string;
-  /**
-   * The **basename** of the transcript's cwd — never the mangled dir name (PII), never a
-   * path. In `"all"` scope this is the only thing identifying where a turn came from,
-   * which is why it is genuinely useful there and not just bookkeeping.
-   */
+  /** Basename of the transcript's cwd: never the mangled dir name (PII), never a path. */
   projectLabel: string;
-  /**
-   * The turn's first line, collapsed and capped at 120 chars — **`null` always in
-   * `"all"` scope** (the no-prompt-text rule), and `null` in `"project"` scope for a turn
-   * with no user text. `turnLabel()` composes `projectLabel` + the turn's clock time when
-   * it is absent, so a row is still identifiable without quoting anybody's prompt.
-   */
+  /** First line, collapsed, capped at 120 chars. `null` in `"all"` scope (no prompt text) and
+   * for a turn with no user text; `turnLabel()` then composes a label. */
   label: string | null;
   startedAtMs: number;
   endedAtMs: number | null;
-  /**
-   * `null` — **never 0** — when the turn has no terminal assistant message
-   * (interrupted, or still running), and such turns are excluded from
-   * {@link MetricsTotals.timeInTurnsMs}. A zero standing in for an unknown states a
-   * fact nobody observed, and the panel must render "—", never 0.
-   */
+  /** `null`, never 0, for a turn with no terminal assistant message (interrupted or running);
+   * such turns are excluded from {@link MetricsTotals.timeInTurnsMs}. */
   durationMs: number | null;
   durationSource: DurationSource | null;
   /** Distinct `requestId`s — deduped Rust-side before any counter was touched. */
@@ -156,24 +83,15 @@ export interface MetricsTotals {
   humanTurns: number;
   requests: number;
   tokens: TokenClasses;
-  /**
-   * `(freshInput + cacheWrite + cacheRead) / requests`. **`null` when there were no
-   * requests** — an average of nothing is not 0, and the panel renders "—".
-   */
+  /** `(freshInput + cacheWrite + cacheRead) / requests`; `null` with no requests, never 0. */
   avgContextPerRequest: number | null;
   /** Fraction 0..1 of requests at ≥150 k context — the CLI's own threshold. */
   highContextRequestShare: number | null;
   toolCalls: number;
   toolErrors: number;
-  /**
-   * **Distinct** paths edited across the window — a union, not the sum of the
-   * per-turn counts (a file edited in three turns is one file changed).
-   */
+  /** Distinct paths edited across the window (a union, not a sum of per-turn counts). */
   filesChanged: number;
-  /**
-   * Σ of the turns whose duration is KNOWN. Not wall-clock: concurrent agents make
-   * turns overlap, so this can exceed elapsed time — hence the label "time in turns".
-   */
+  /** Sum of known turn durations. Concurrent turns overlap, so it can exceed elapsed time. */
   timeInTurnsMs: number;
   /** How many turns contributed to {@link timeInTurnsMs}, of {@link turns}. */
   turnsWithDuration: number;
@@ -191,13 +109,8 @@ export interface MetricsCoverage {
   linesUnparseable: number;
   turnsWithoutCliDuration: number;
   turnsWithoutPromptId: number;
-  /**
-   * `"project"` scope was requested with a `null` cwd, so the report covers **everything**
-   * instead. This field replaced an earlier `Err("scan-failed: project scope requires a
-   * cwd")` — an error users saw. Reported rather than silent because the report's
-   * scope then differs from the request, and the panel says so. **Not** `partial`:
-   * nothing was missed, more was seen.
-   */
+  /** `"project"` was requested with a null cwd, so the report covers everything; stated because the
+   * scope differs from the request. Not `partial`: nothing was missed. */
   scopeFellBackToAll: boolean;
   /** True when a byte ceiling was hit or a root was unavailable — the numbers are a floor. */
   partial: boolean;
@@ -205,11 +118,7 @@ export interface MetricsCoverage {
 
 export interface MetricsReport {
   window: { kind: MetricsWindowKind; fromMs: number; toMs: number };
-  /**
-   * The **effective** scope, which is not always the one requested — see
-   * {@link MetricsCoverage.scopeFellBackToAll}. `cwd` is non-null only for
-   * `kind: "project"`.
-   */
+  /** Effective scope (see {@link MetricsCoverage.scopeFellBackToAll}); `cwd` only for project. */
   scope: { kind: MetricsScopeKind; cwd: string | null };
   totals: MetricsTotals;
   perRoot: RootTotals[];
@@ -220,20 +129,9 @@ export interface MetricsReport {
   scannedAtMs: number;
 }
 
-/**
- * Stable error codes from `claude_metrics`. Rust returns `Err(String)` shaped as
- * `"<code>"` or `"<code>: <detail>"`, and the detail never carries file contents.
- *
- * Two codes are in the union and **never returned**, and both absences are decisions
- * rather than oversights:
- *   - `"no-transcripts"` — no Claude sessions in the window is a normal case that returns
- *     an empty report, and the panel says so in words;
- *   - `"scan-failed"` — this was an earlier answer to "project scope with no cwd", i.e. the
- *     no-selection bug. Rust now widens to `"all"` instead, so **nothing returns it**.
- *     It stays in the union because a frontend union must tolerate a code the backend
- *     could reintroduce, and because naming it here records that its removal was
- *     deliberate.
- */
+/** Codes from `claude_metrics`, as `"<code>"` or `"<code>: <detail>"` (no file contents).
+ * `no-transcripts` and `scan-failed` are never returned (empty window = empty report; null-cwd
+ * project widens to all) but stay so the union tolerates the backend reintroducing them. */
 export type MetricsErrorCode =
   /** No home directory could be resolved, so there is nowhere to read from. */
   | "home-unresolved"

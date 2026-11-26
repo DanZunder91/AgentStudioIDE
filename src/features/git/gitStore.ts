@@ -1,44 +1,6 @@
-/**
- * Git feature store — feature-local zustand `create()` (a decoupled feature gets
- * its own store, off `store.ts`).
- *
- * ⚠️ API FROZEN — the workspace feature builds against this exact
- * surface. Do not rename or re-shape:
- *   - `useGitStore` state: { status, prs, prAuthorFilter } + the four actions
- *   - `startGitPolling(): () => void`  (refcounted; returns an idempotent stop)
- *   - `fileStatusMap` / `dirsWithChanges` — pure (the tree decoration tests run
- *     against them; keep semantics, hardening is fine)
- *
- * Paths are absolute, native-separator, exactly as the tree's `data-path` — `/`
- * on macOS/Linux, `\` on Windows (`C:\repo\src\a.ts`). Every split and prefix test
- * goes through `lib/paths`, never a literal "/".
- *
- * The refreshers follow `usageStore.ts`'s four hard rules (see its module doc
- * for the full reasoning; only the deltas are noted here):
- *
- * 1. **Never blank.** A failed `git_status`/`gh_prs` keeps that root's last
- *    good branch/changes/items and records `{ code, detail }` beside them.
- *    Never-blank is PER ROOT: one broken repo must not blank its neighbours.
- * 2. **Single-flight, and never reject.** One gate per refresher (status and
- *    PRs are independent round trips, so they do not share one). A joiner
- *    awaits the outstanding promise; a rejection cannot escape — the browser
- *    tier renders the whole App under a default-throw IPC mock, and an escaped
- *    rejection fails that tier (testing-strategy anti-pattern #11).
- * 3. **Visibility-aware polling** — STATUS only. PRs are on-demand (the
- *    metricsStore precedent: a network fetch against a rate-limited CLI is
- *    never on a timer).
- * 4. **Back off on failure**, per {@link GIT_BACKOFF_MS}, reset on success.
- *    A cycle counts as failed when any root rejected with a code other than
- *    `not-a-repo`: a non-repo folder is a stable, EXPECTED answer (the panel
- *    renders it as a calm note), and letting it escalate the cadence would
- *    permanently degrade the tree decoration of every real repo beside it.
- *
- * Which roots to ask about is `workspaceRoots(useAppStore.getState())` — the
- * multi-root answer (the roots follow the fleet's folders); a root that leaves
- * that list is pruned on the next refresh. The polling lifecycle (ref count, timer, failure streak)
- * lives in module scope, not in the store: plumbing, not rendered state, so no
- * reducer ever performs a side effect.
- */
+/** Feature-local git store with an API frozen for the workspace feature. Paths are absolute and
+ * native-separator, split only via `lib/paths`. `usageStore.ts` rules apply per root (never blank,
+ * single-flight, never reject); only status polls, and `not-a-repo` never escalates backoff. */
 import { create } from "zustand";
 
 import { useAppStore, workspaceRoots } from "../../app/store";
@@ -133,11 +95,7 @@ export const useGitStore = create<GitState>((set) => ({
 /** Auto-refresh cadence on the happy path, ms. One constant so tests advance the clock by exactly this. */
 export const GIT_POLL_MS = 5000;
 
-/**
- * Delay before the next AUTOMATIC status attempt, indexed by the consecutive
- * failed cycles: 5s, 15s, 30s, then held at 60s. Exported so the curve is
- * assertable rather than buried in arithmetic.
- */
+/** Delay before the next automatic status attempt, by consecutive failed cycles. */
 export const GIT_BACKOFF_MS: readonly number[] = [GIT_POLL_MS, 15_000, 30_000, 60_000];
 
 /* ── the single-flight status refresh ─────────────────────────────────────── */
@@ -146,11 +104,7 @@ type StatusOutcome =
   | { root: string; ok: true; repo: RepoStatus }
   | { root: string; ok: false; error: { code: GitStatusErrorCode; detail: string | null } };
 
-/**
- * One `git_status` per current root, folded into the store. Resolves in every
- * case — per-root failures are caught per root, so one broken repo neither
- * rejects the cycle nor blanks its neighbours.
- */
+/** One `git_status` per root; failures are caught per root, so one broken repo blanks nothing. */
 async function fetchStatusOnce(): Promise<void> {
   const roots = workspaceRoots(useAppStore.getState());
   const results: StatusOutcome[] = await Promise.all(
@@ -325,11 +279,8 @@ function detachPolling(): void {
   unbindVisibility = null;
 }
 
-/**
- * Start the status poll (usageStore pattern: refcounted, visibility-aware,
- * failure backoff). Both `WorkspaceTree` (tree colors) and `GitPanel` call this
- * on mount; the returned stop is idempotent (StrictMode double-cleanup).
- */
+/** Refcounted, visibility-aware status poll with failure backoff; the stop is idempotent
+ * (StrictMode double-cleanup). */
 export function startGitPolling(): () => void {
   consumers += 1;
   if (consumers === 1) attachPolling();
@@ -352,17 +303,8 @@ export function fileStatusMap(status: Record<string, RootGitState>): Record<stri
   return out;
 }
 
-/**
- * Every directory that contains a change, at any depth — the tree's "this
- * subtree has edits" dot. Ancestors stop BELOW the root: root headers carry
- * no badge, so the root itself is never in the set. Each entry is sliced from
- * the change's own path, so it is spelled exactly like the tree's `data-path`.
- *
- * Used to walk up with `lastIndexOf("/")` and a bare `startsWith(root)`: on
- * Windows the first cut found nothing, so no folder ever got its dot, and the
- * second let a sibling that merely shares a prefix (`/w/ab` for root `/w/a`)
- * count as inside.
- */
+/** Every directory containing a change, below the root (root headers carry no badge). Entries are
+ * sliced from each change's own path, so they match the tree's `data-path` on every OS. */
 export function dirsWithChanges(status: Record<string, RootGitState>): Set<string> {
   const out = new Set<string>();
   for (const root of Object.keys(status)) {

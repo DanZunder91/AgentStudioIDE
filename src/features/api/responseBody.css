@@ -44,17 +44,9 @@
   font-style: italic;
 }
 
-/* The Formatted (tree) view reuses the response box chrome, minus two claims
-   that belong to somebody else:
-   - `overflow-x`: `.jsonview` scrolls itself in the single panel, and inside a
-     compare pane `.compare-pane__body` owns BOTH axes (compare.css overrides
-     `.jsonview` there for exactly that reason). A second scroll container here
-     would trap the bar at the bottom of the tree — the failure shape
-     `compare.browser.test.tsx` already pins in numbers.
-   - `word-break`: the tree's rows are `white-space: pre` and must not be
-     re-broken by an inherited value.
-   Two class selectors so this wins over `.api-response__body` (one class)
-   whatever order the stylesheets happen to load in. */
+/* No overflow-x: .jsonview / .compare-pane__body own scrolling, and a second container traps the
+   bar (compare.browser.test.tsx). No word-break: rows are `white-space: pre`. Two classes so this
+   beats .api-response__body whatever the stylesheet load order. */
 .response-body .response-body__formatted {
   overflow-x: visible;
   word-break: normal;

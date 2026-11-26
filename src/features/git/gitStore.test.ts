@@ -1,26 +1,6 @@
-/**
- * gitStore — the per-root git status/PR store and its status poll.
- *
- * Covers: per-root success/failure shapes (never-blank per root, `{code,
- * detail}` recorded via the real `lib/wireCode` parser), pruning of roots that
- * left `workspaceRoots`, single-flight per refresher (asserted on IPC call
- * counts) and their independence from each other, never-reject, the 5s
- * cadence, the failure backoff curve and its `not-a-repo` carve-out, reference
- * counting + idempotent stop, visibility pause/resume, listener cleanup, the
- * non-DOM guard, PRs being on-demand only, and the two pure tree-decoration
- * selectors.
- *
- * Hermetic per the usage suite's recipe: `vi.mock("./gitIpc")` so no Tauri IPC
- * is touched, `vi.resetModules()` + per-test dynamic import so
- * the module-scope polling plumbing (ref count, timer, failure streak) starts
- * fresh every test. The app store is imported from the SAME fresh registry —
- * a statically imported `useAppStore` would be a different module instance
- * than the one the freshly imported gitStore reads its roots from.
- *
- * Unlike the usage suite, the wire-code parser is NOT stubbed: `lib/wireCode`
- * is shared library code with its own suite, and asserting the stored
- * `{code, detail}` against real parses pins the store's whole error contract.
- */
+/** Hermetic like the usage suite: `gitIpc` mocked; `vi.resetModules()` + a dynamic import per
+ * test, with the app store from the same fresh registry (else gitStore reads another instance).
+ * The real `lib/wireCode` parser pins the stored `{code, detail}` contract. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -79,11 +59,7 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
-/**
- * Drain the microtask queue — fake timers do not advance microtasks, and the
- * refresh chain (`Promise.all` → per-root await → setState → `.finally` →
- * re-arm) is several links deep.
- */
+/** Drain microtasks: fake timers don't, and the refresh chain is several awaits deep. */
 async function flush(): Promise<void> {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }

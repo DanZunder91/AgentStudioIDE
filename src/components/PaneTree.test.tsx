@@ -1,16 +1,6 @@
-/**
- * PaneTree + SplitContainer — the recursive render of the layout tree onto
- * `allotment` (ARCHITECTURE §4).
- *
- * Note on jsdom: allotment mounts and renders its full DOM here (split-view
- * container, views, sashes), but jsdom has **no layout engine**, so every
- * element measures 0x0 and allotment computes no pixel sizes. The *structure*
- * contract is therefore testable here and the *pixel* contract is not — the
- * store→allotment direction is asserted on the props SplitContainer passes, and
- * the allotment→`onChange`→`resizePane` direction is asserted in `store.test.ts`
- * against the pixel arrays allotment emits. Real-drag behaviour belongs to the
- * in-app tier.
- */
+/** PaneTree + SplitContainer onto `allotment` (ARCHITECTURE §4). jsdom has no layout: structure
+ * is tested here, store→allotment via the props passed, allotment→`resizePane` in `store.test.ts`
+ * against emitted pixel arrays. Real drags belong to the in-app tier. */
 
 import { Children, type ComponentProps, type ReactElement, type ReactNode } from "react";
 import { act, render, screen } from "@testing-library/react";
@@ -29,12 +19,8 @@ vi.mock("../features/terminal/TerminalView", () => ({
   ),
 }));
 
-/**
- * Spy on what <SplitContainer> hands allotment, while still rendering the real
- * thing. allotment consumes `defaultSizes`/`minSize` internally and — having no
- * layout to apply them to — never reflects them into the jsdom DOM, so the
- * props are the only observable surface for that half of the contract.
- */
+/** Spy on SplitContainer's allotment props: with no layout, `defaultSizes`/`minSize` never reach
+ * the jsdom DOM, so props are the only observable surface. */
 const allotmentProps = vi.hoisted(() => ({ calls: [] as Record<string, unknown>[] }));
 
 vi.mock("allotment", async (importOriginal) => {
@@ -205,14 +191,8 @@ describe("SplitContainer — sizes", () => {
     expect(lastDefaultSizes()).toEqual([1000, 1]);
   });
 
-  /**
-   * The other half of the contract: allotment → store. A real sash drag needs
-   * layout, which jsdom has none of, so allotment never emits `onChange` here.
-   * We invoke the handler with the pixel array allotment would have emitted —
-   * that is precisely the boundary this suite mocks, and it pins the wiring
-   * (right split id, pixels normalized, no-ops dropped) that a silent typo in
-   * SplitContainer would otherwise break with no test noticing.
-   */
+  /** jsdom never emits `onChange`, so call it with the pixels allotment would emit; pins the
+   * wiring (split id, normalization, no-ops dropped). */
   it("writes a sash drag back to the store, normalizing pixels to fractions", () => {
     const origin = leaf().id;
     actions().splitPane(origin, "row");
@@ -242,13 +222,8 @@ describe("SplitContainer — sizes", () => {
 });
 
 describe("PaneTree — reconciliation", () => {
-  /**
-   * The load-bearing detail from SplitContainer's header: allotment reads
-   * `defaultSizes` on mount ONLY. <PaneTree> keys the container by the split's
-   * *structure*, so structural edits remount it (re-seeding sizes from the
-   * store) while sizes-only edits must NOT — a remount mid-drag would kill the
-   * drag and tear down every terminal's DOM host.
-   */
+  /** allotment reads `defaultSizes` on mount ONLY; the container is keyed by structure, and a
+   * sizes-only remount mid-drag would kill the drag and every terminal's DOM host. */
   it("a sizes-only change does not remount the split or its panes", () => {
     const origin = leaf().id;
     actions().splitPane(origin, "row");
@@ -318,25 +293,8 @@ describe("PaneTree — reconciliation", () => {
 });
 
 /* ═════════════════════════════ drop preview ═════════════════════════════
- * The preview is owned by <PaneTreeRoot>, not <Pane>, and that is the fix for
- * this bug:
- *
- *   With the screen split vertically or horizontally, dragging a terminal toward
- *   any edge previewed only half of the screen. It happened only when exactly
- *   two terminals were open.
- *
- * A drop prunes the source leaf when it empties, which collapses the now
- * single-child split, which lets the survivor expand to fill the whole
- * container. Drawn inside the hovered pane, the preview could never show that —
- * it showed half. With 3+ panes nothing collapses, so the lie went unnoticed.
- *
- * These assertions are NOT vacuous under jsdom, and that is the point of the
- * design: the preview's rect is computed from the TREE (a split's `sizes` are
- * its children's shares, recursively), not measured from the DOM. So the
- * percentages are fully checkable here with no layout engine. What still needs
- * real Chromium is that those percentages land on the same pixels allotment
- * lays out — `dropPreview.browser.test.tsx` owns that.
- */
+ * Owned by <PaneTreeRoot> and computed from the TREE (sizes are shares), so the post-prune
+ * collapse is shown and checkable under jsdom; `dropPreview.browser.test.tsx` checks pixels. */
 
 describe("PaneTree — drop preview", () => {
   /** The target pane's body rect, as if laid out: 400x300 below a 34px strip. */
@@ -352,11 +310,8 @@ describe("PaneTree — drop preview", () => {
     tabBar: [200, 10], // above the body — over the tab strip
   } as const;
 
-  /**
-   * The failing setup: two panes side by side, one terminal each. We drag
-   * `dragged` (alone in the RIGHT pane) onto the LEFT pane — so the right pane
-   * empties, is pruned, and the root split collapses.
-   */
+  /** Two panes, one terminal each; dragging the RIGHT one onto the LEFT prunes it and collapses
+   * the root split. */
   function twoPanes() {
     const targetPaneId = leaf().id;
     const stay = actions().openTerminalTab({ paneId: targetPaneId, cwd: "/w/gazelle" });
@@ -369,10 +324,8 @@ describe("PaneTree — drop preview", () => {
     stubRect(targetPane.querySelector(".pane__body") as HTMLElement, BODY_RECT);
 
     const dataTransfer = makeDataTransfer({ [TAB_DND_MIME]: dragged });
-    // Start the drag for real. The preview cannot read the tab id off
-    // `dataTransfer` during dragover (the drag data store is in protected mode
-    // until the drop), so the SOURCE publishes it on dragstart — and a dragover
-    // without a preceding dragstart is not a state a browser can produce.
+    // dataTransfer is protected until drop, so the source publishes the tab id on dragstart; a
+    // dragover with no dragstart is not a real browser state.
     const draggedTab = [...view.container.querySelectorAll<HTMLElement>(".pane-tab")].find(
       (t) => t.title === "api",
     ) as HTMLElement;
@@ -496,19 +449,8 @@ describe("PaneTree — drop preview", () => {
     expect(zoneShown(second.container)).toBeNull();
   });
 
-  /**
-   * A pane's only tab dropped on its OWN edge no-ops in the store (it would
-   * split, empty, prune and collapse straight back). Two wrong answers here,
-   * and this repo has now shipped both:
-   *
-   *   - a SPLIT preview — promises something the drop will not deliver;
-   *   - NO preview — reads as a dead app, and since the cursor crosses the
-   *     dragged tab's own pane first, it blanks the first half of every drag
-   *     (the blue drop highlight went missing mid-drag).
-   *
-   * The right answer is the honest one: the terminal ends up where it already
-   * is, so preview that box.
-   */
+  /** A self-edge drop no-ops in the store; the honest preview is the box the tab already holds
+   * (not a split, and not nothing: the cursor crosses this pane first in every drag). */
   it.each(["left", "center"] as const)(
     "previews a no-op %s drop as the box the tab already occupies",
     (zone) => {
@@ -530,12 +472,8 @@ describe("PaneTree — drop preview", () => {
     },
   );
 
-  /**
-   * The dragged tab can genuinely vanish mid-gesture: `closeTab` is driven from
-   * Rust event callbacks (bridge.ts), so an agent terminal whose PTY exits is
-   * closed under the user's hand while they are still dragging it. There is
-   * nothing left to preview then — and, more importantly, nothing to crash on.
-   */
+  /** `closeTab` runs from Rust event callbacks (bridge.ts), so a PTY exit can close the tab under
+   * the user's drag: nothing to preview, and nothing to crash on. */
   it("survives the dragged tab being closed mid-drag", () => {
     const { container, dragged } = twoPanes();
     const targetPane = [...container.querySelectorAll<HTMLElement>(".pane")][0];
@@ -555,10 +493,8 @@ describe("PaneTree — drop preview", () => {
   });
 
   it("is inert: the overlay carries no pointer target and no a11y noise", () => {
-    // It sits under the cursor mid-drag — if it could receive events it would
-    // fire dragleave on the pane and flicker itself out of existence. (The
-    // pointer-events:none itself lives in CSS, which jsdom does not load; what
-    // is assertable here is that it is not a focusable/labelled thing.)
+    // Under the cursor it must not receive events (it would dragleave itself away). pointer-events
+    // lives in CSS, which jsdom lacks, so assert it is not focusable/labelled.
     const { container, targetPane, dataTransfer } = twoPanes();
     fireDragAt(targetPane, "dragOver", AT.center, dataTransfer);
 
@@ -581,12 +517,7 @@ describe("PaneTree — drop preview", () => {
     expect(targetPane).not.toHaveClass("pane--drop-target");
   });
 
-  /**
-   * The invariant, end to end and in one test: the box the preview drew is the
-   * box the tab lands in. The browser tier asserts this in real pixels; here it
-   * is asserted against the tree, which is the thing the preview is derived
-   * from — so a fix that broke the derivation would fail here first.
-   */
+  /** End to end against the tree the preview is derived from (pixels: the browser tier). */
   it.each(["left", "right", "top", "bottom", "center"] as const)(
     "the %s drop lands exactly where the preview said it would",
     (zone) => {

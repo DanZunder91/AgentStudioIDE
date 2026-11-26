@@ -1,17 +1,5 @@
-//! Persisted "recently-used project folders" list.
-//!
-//! Feeds the rail's ⚡ "launch in last project" button and by-folder grouping, so it
-//! must survive app restarts. Stored as a JSON array of **absolute** directory
-//! paths, **most-recent-first**, deduped by path, capped at [`CAP`].
-//!
-//! **Robustness over correctness of the file:** a missing, unreadable, or corrupt
-//! store is treated as an empty list, never an error — reading recent projects must
-//! not be able to break UI startup.
-//!
-//! The list logic ([`load`], [`push`], [`merge_front`]) operates on an explicit file
-//! path so it is unit-testable against a temp dir, with no dependency on the real
-//! app config dir. The `#[tauri::command]`s are the thin glue that resolves that
-//! path from the `AppHandle`.
+//! Persisted recent project folders: absolute paths, most-recent-first, deduped, capped at [`CAP`].
+//! A missing or corrupt store reads as empty, never an error: it must not break UI startup.
 
 use std::path::{Path, PathBuf};
 
@@ -31,10 +19,8 @@ pub fn load(path: &Path) -> Vec<String> {
     clean(serde_json::from_str::<Vec<String>>(&text).unwrap_or_default())
 }
 
-/// Entries written by older builds on Windows hold the verbatim `\\?\C:\…` spelling
-/// (`std::fs::canonicalize`'s), which then showed as an agent's cwd in quick-launch and never
-/// matched a plain `C:\…` path. Read them back plain, and drop the duplicate a plain re-push
-/// of the same folder would otherwise sit beside — keeping the first (most recent) position.
+/// Stored Windows entries may hold the verbatim `\\?\C:\…` spelling, which never matches `C:\…`:
+/// read them back plain and drop the resulting duplicate, keeping the first (most recent).
 fn clean(list: Vec<String>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     list.into_iter()
@@ -47,13 +33,8 @@ fn clean(list: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-/// Validate `raw` is an **existing directory**, canonicalize it to an absolute
-/// path, move-or-insert it at the front, persist to `path`, and return the updated
-/// list.
-///
-/// A path that does not exist (or is a file, not a directory) returns the current
-/// list **unchanged** — not an error. Canonicalization resolves symlinks, so two
-/// spellings of the same directory dedup correctly.
+/// Canonicalize `raw` (symlinks resolved), move it to the front, persist, and return the list.
+/// A path that is not an existing directory returns the list unchanged, not an error.
 pub fn push(path: &Path, raw: &str) -> Vec<String> {
     // Load → merge → save under the file's lock: two pushes at once must not drop one.
     let _guard = crate::store_file::lock(path);
@@ -124,9 +105,7 @@ pub fn recent_projects(app: tauri::AppHandle) -> Vec<String> {
     load(&store_path(&app))
 }
 
-/// Record `path` as the most recent project and return the updated list. A path
-/// that is not an existing directory leaves the list unchanged.
-///
+/// Record `path` as the most recent project; see [`push`].
 /// Frontend contract: `invoke<string[]>('push_recent_project', { path })`.
 #[tauri::command]
 pub fn push_recent_project(app: tauri::AppHandle, path: String) -> Vec<String> {

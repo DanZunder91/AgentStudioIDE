@@ -1,17 +1,6 @@
-/**
- * The Logs view's ⌘F bar — presentational
- * only: the panel owns the matches, the reveal and the focus; the store owns the query.
- *
- * It borrows the editor bar's look (`editor/find/find.css` — the `find-bar__*` input,
- * toggles, count and nav buttons), so a find reads the same wherever the user presses
- * ⌘F, and it counts the same way (`formatCount`: `3/57`, `0 results`).
- *
- *   [ Find in logs…      ] Aa .*   3/57   ▲ ▼ ✕
- *
- * The `in detail` tag appears when the bar searches the detail drawer instead of the
- * stream (⌘F pressed inside the drawer). An invalid regex replaces the count with the
- * engine's message, inline — the bar never throws and never goes blank.
- */
+/** The Logs ⌘F bar, presentational: the panel owns matches, reveal and focus; the store owns
+ * the query. Borrows the editor bar's look and `formatCount`. `in detail` marks a drawer search;
+ * an invalid regex shows its message in place of the count. */
 
 import type { RefObject } from "react";
 

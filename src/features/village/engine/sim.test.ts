@@ -1081,12 +1081,7 @@ describe("the commute — a city with a Seats lounge", () => {
   /** Feet px of a tile, the sim's convention — and of one sitting there (drawn SIT_OFFSET lower). */
   const feet = (col: number, row: number) => ({ x: col * TILE + 8, y: (row + 1) * TILE });
   const sitting = (col: number, row: number) => ({ x: col * TILE + 8, y: (row + 1) * TILE + SIT_OFFSET });
-  /**
-   * The commute's waypoints read off the World CONTRACT (the specified route): its bench (or the lounge
-   * lift's lowest stop), the aisle below it, the lounge's lift there, up to the far sidewalk, across
-   * the road to the near sidewalk, along it to its building's lift column, in at the door, up to the
-   * seat's row, along it to the seat.
-   */
+  /** The commute's waypoints read off the World CONTRACT (the specified route), bench to seat. */
   function contractRoute(world: World, benchIdx: number | null, seat: Seat): { x: number; y: number }[] {
     const city = world.city!;
     const down = city.lounge!.lift;
@@ -1126,11 +1121,8 @@ describe("the commute — a city with a Seats lounge", () => {
     v: CharacterView;
     seg: number;
   }
-  /**
-   * Tick 1/60 s at a time until `key` gets up and sits down again (or `maxSec`), checking every frame
-   * in between lies on `pts`, segment by segment in order; returns the samples from the first frame
-   * it is up (seg −1 = sitting down at the end).
-   */
+  /** Tick 1/60 s until `key` gets up and sits again (or `maxSec`), checking each frame lies on
+   * `pts` in order; returns samples from its first frame up (seg −1 = sitting down at the end). */
   function follow(sim: VillageSim, key: string, pts: { x: number; y: number }[], maxSec: number): Sample[] {
     const out: Sample[] = [];
     let seg = 0;

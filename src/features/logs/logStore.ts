@@ -1,16 +1,6 @@
-/**
- * The DIAGNOSTICS LOG store — a dedicated, decoupled Zustand store.
- *
- * Deliberately its OWN `create(...)`, NOT the main app store (`src/app/store.ts`):
- * a debug feed must never entangle itself with the fleet/layout reducers, and the
- * bridge (the sanctioned imperative plumbing) must be able to append
- * to it from a non-React path with `getState()` and no hooks.
- *
- * State is a ring buffer capped at {@link LOG_CAP} entries (oldest dropped past the
- * cap) so a chatty telemetry stream can never grow it without bound. Filtering is a
- * pure function (`filterEntries`) so the panel and the "Copy" action agree on what
- * "visible" means, and so it is testable without a DOM.
- */
+/** Diagnostics log in its own zustand store, so the bridge appends via `getState()` without
+ * touching app reducers. A ring buffer capped at {@link LOG_CAP}; `filterEntries` defines
+ * "visible" for both the panel and Copy. */
 
 import { create } from "zustand";
 
@@ -76,11 +66,8 @@ export const useLogStore = create<LogStore>()((set) => ({
   setTextFilter: (text) => set({ textFilter: text }),
 }));
 
-/**
- * Filter entries by level + a free-text query (case-insensitive over
- * source/message/detail). Pure — the panel derives its visible list from this,
- * and "Copy" copies exactly what it returns, so the two can never diverge.
- */
+/** Level + case-insensitive text filter over source/message/detail; the panel and "Copy" both
+ * use it, so they never diverge. */
 export function filterEntries(
   entries: LogEntry[],
   level: LevelFilter,
@@ -109,20 +96,8 @@ export const logEvent = appendAt("event");
 export const logWarn = appendAt("warn");
 export const logError = appendAt("error");
 
-/**
- * Translate one telemetry `AgentEvent` into a diagnostics-log line. Called from
- * the bridge for every event it dispatches, so the user can SEE the event/
- * status stream — e.g. exactly when (and why) a pill flips to "waiting_input".
- *
- * Status transitions are `level:"event"` (`"<agentId> → <status>"`); lifecycle
- * events (started/spawned/exited) are `event` too; the high-frequency ones
- * (activity, title) are `info` so the level filter can quiet them.
- *
- * Lines are keyed by the agent's **id** (the ULID), not by its display name: the
- * id is the stable handle that correlates a line with telemetry, hooks and the
- * transcript, and it survives a rename. (A by-name variant was tried and
- * reverted.)
- */
+/** One telemetry event as a log line, so the status stream is visible. Status and lifecycle lines
+ * are `event`; activity/title are `info`. Keyed by agent id (stable across renames), not name. */
 export function logAgentEvent(e: AgentEvent): void {
   switch (e.t) {
     case "agent_started":

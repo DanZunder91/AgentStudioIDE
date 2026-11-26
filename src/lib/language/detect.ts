@@ -5,24 +5,15 @@ import {
   EXTENSIONS, AMBIGUOUS_EXTENSIONS, SHEBANG_INTERPRETERS,
 } from './tables';
 
-/**
- * Detect a file's language for grammar loading and icon selection.
- *
- * @param path      Absolute or relative path (only the basename is used).
- * @param firstLine Optional first line of the file. When omitted (e.g. the file
- *                  tree), ambiguous extensions fall back to their deterministic
- *                  default and shebang resolution is skipped. When provided
- *                  (e.g. the editor after loading the buffer), it refines
- *                  ambiguous extensions and resolves extensionless scripts.
- * @returns A LanguageId — always defined; 'plaintext' when nothing matches.
- */
-/** Last path/interpreter segment. `split` never yields an empty array, so the
- * last index is always a string — no fallback needed (keeps branches honest). */
+/** Last path/interpreter segment; `split` never yields an empty array, so no fallback is needed. */
 function lastSegment(s: string): string {
   const parts = s.split(/[\\/]/);
   return parts[parts.length - 1];
 }
 
+/** Language from the basename for grammars and icons; 'plaintext' when nothing matches. Without
+ * `firstLine` (file tree) ambiguous extensions take their default and shebangs are skipped; with
+ * it (editor) it refines ambiguous extensions and resolves extensionless scripts. */
 export function detectLanguage(path: string, firstLine?: string): LanguageId {
   const basename = lastSegment(path);
   const lower = basename.toLowerCase();
@@ -70,12 +61,8 @@ export function detectByFirstLine(firstLine: string): LanguageId | null {
     // this fallback — unlike the ones above — is a live guard, not dead defense.
     if (interp === 'env') interp = lastSegment(tokens[1] ?? '');
     const lower = interp.toLowerCase();
-    // EXACT name first: for a few interpreters a trailing digit is part of the
-    // name, not a version — `perl6` is Raku, not "Perl 6.x". Version-stripping
-    // first rewrote it to `perl`, which made the `perl6` table row unreachable
-    // and silently highlighted Raku scripts as Perl. (Found by mutation testing:
-    // the row's value could be changed to anything and no test
-    // noticed, because no input could reach it.)
+    // EXACT name first: for some interpreters a trailing digit is part of the name (`perl6` is
+    // Raku, not Perl 6.x); stripping the version first made the `perl6` row unreachable.
     const exact = SHEBANG_INTERPRETERS[lower];
     if (exact) return exact;
     // Otherwise a trailing version is noise: python3.11 -> python, php8 -> php.

@@ -1,41 +1,6 @@
-/**
- * DbTree — one connected connection's object tree, plus its saved queries.
- *
- * The join between Rust's `db_children` and the rail. Each half can be 100% covered on its own
- * and still not add up to a feature, which is why the seam between them is what gets tested.
- *
- * ── The shape is `WorkspaceTree`'s, on purpose ───────────────────────────────
- * `tree.rs` says so in its own header: `db_children` is deliberately modelled on
- * `read_dir`/`FsEntry` so the frontend's lazy-expand, cache and error-note behaviour is a
- * pattern that already exists here. So: one call per first expand, a `Loading…` note while a
- * level lands, cached across collapse, and **a failed expand is a calm inline note on that
- * node with a Retry** — never a panel-level error, because a dropped VPN must not take the rail
- * down. The one deliberate divergence from `WorkspaceTree` is where the cache lives (the store,
- * not `useState`) and it is argued in `DbState.dbTrees`.
- *
- * ── Nothing about the hierarchy is hardcoded ─────────────────────────────────
- * There is no "database → schema → tables" anywhere in this file. `tree.rs` explains why there
- * cannot be: PostgreSQL shows only its connected database (a connection cannot read another's
- * catalog), MySQL and ClickHouse list every database on the server, and MySQL has no schema
- * level at all because its schemata ARE its databases. The tree renders whatever `db_children`
- * returns and asks again wherever `expandable` is true. An engine whose shape changes needs no
- * change here — which is also why the icon map switches on `DbNode.kind` rather than on depth.
- *
- * ── Double-click a table → a browse query ────────────────────────────────────
- * 🔴 The statement is INVENTED. There is no "`browse_template` query": `EngineSpec` has no
- * such field on either side of the wire — see `dbTreeFormat.ts`'s header
- * for what was written instead and why it is conservative about the row limit and quoting.
- *
- * ── Drag a table to sort it ─────────────────────────────────────────────────
- * Tables can be moved into any order the user chooses, for example turning A,B,C into
- * C,B,A. A table row is a drag handle; dropping it on a sibling puts it
- * immediately BEFORE that sibling, and the resulting order is persisted per connection by the
- * store. Everything that is not "a table-ish child of a Tables/Views/Collections group" is
- * neither a source nor a target, and the two halves of that gate are argued on
- * `isReorderableLevel`. The DnD mechanics are the fleet rail's, copied deliberately rather
- * than re-invented — see `AgentRow.tsx`'s `agentCwdType` for the protected-mode trick the
- * marker types below exist for.
- */
+/** One connection's object tree plus saved queries, modelled on `WorkspaceTree`: lazy expand,
+ * cached, a failed level is an inline note with Retry. No hierarchy is hardcoded; it renders what
+ * `db_children` returns. Drag-to-reorder reuses the fleet rail's DnD (`AgentRow.tsx`). */
 
 import { useEffect, useState, type DragEvent } from "react";
 
@@ -63,40 +28,18 @@ const INDENT = 12;
 
 /* ───────────────────────── drag-to-reorder: the wire ───────────────────────── */
 
-/**
- * Drag payload for reordering a table row. The VALUE is the dragged node's **label**, which is
- * this feature's whole notion of child identity: `nodeRef` is not one (every column of a table
- * carries the table's ref — `dbIpc.ts`), and a table name is unique among its siblings by the
- * database's own rules. The drop target reads it back and calls `moveDbTreeNode`.
- *
- * A DB-specific MIME so a table drag, an agent-row drag (`AGENT_DND_MIME`), a saved-request
- * drag and a centre-pane tab drag never accept one another.
- */
+/** The value is the node's label (unique among siblings; `nodeRef` is not an identity). A DB-only
+ * MIME so table, agent-row, saved-request and tab drags never accept one another. */
 export const DB_NODE_DND_MIME = "application/x-agentstudio-db-node";
 
-/**
- * A `dragover`-readable marker encoding the dragged row's **parent level**.
- *
- * `dataTransfer` VALUES are unreadable during `dragover` (protected mode until the drop), but
- * the TYPE list is — so every fact the gate needs is smuggled into a type name. This one is
- * what makes a reorder stay inside one level: dragging `tracks` out of `public` and into
- * `legacy` is not a sort, it is a `ALTER TABLE … SET SCHEMA` we have no business implying.
- *
- * Lowercased because the HTML5 DnD spec lowercases every format string. ⚠️ The known cost:
- * two sibling schemas differing only in case (`Public` / `public` — PostgreSQL allows it) fold
- * to one marker, so a cross-level drag between exactly those two would be accepted. The damage
- * is bounded to nothing: the store's `moveBefore` returns the order unchanged for a key that
- * is not in the level, so the drop is a no-op rather than a corrupted order.
- */
+/** `dragover` can read only type names, so the parent level is encoded in one to keep a reorder
+ * inside its level. Lowercased per the DnD spec; case-only sibling names fold together, but the
+ * store's `moveBefore` makes such a drop a no-op. */
 export function dbParentType(parentKey: string): string {
   return `${DB_NODE_DND_MIME}-parent:${parentKey}`.toLowerCase();
 }
 
-/**
- * A marker encoding the dragged row's own label — read on `dragover` to suppress the
- * self-drop cue, because dropping a row on itself is a click, not a move. Same protected-mode
- * rationale as `dbParentType`.
- */
+/** The dragged row's own label, read on `dragover` to suppress the self-drop cue. */
 export function dbLabelType(label: string): string {
   return `${DB_NODE_DND_MIME}-label:${label}`.toLowerCase();
 }
@@ -104,22 +47,8 @@ export function dbLabelType(label: string): string {
 /** The groups whose children a user may sort. See `isReorderableLevel`. */
 const REORDERABLE_GROUPS: readonly DbGroupId[] = ["tables", "views", "collections"];
 
-/**
- * May the children of `parentRef` be dragged into a user-chosen order?
- *
- * Only the children of a `tables` / `views` / `collections` group, and the exclusions are the
- * argued part:
- *
- * * **Columns** — their order IS data. It is the ordinal position the server returns, it is
- *   what `SELECT *` and `INSERT … VALUES` use, and a UI that let someone "sort" it would be
- *   showing a lie about the table.
- * * **Databases and schemas** — a level whose children are containers, not the wall of 400
- *   names the feature is about; and on PostgreSQL the database level has exactly one
- *   row in it.
- * * **Redis `keys`** — dynamic and truncated (`tree.rs` caps the SCAN), so a saved order would
- *   be a snapshot of a keyspace that has already changed, most of whose entries `applyOrder`
- *   would be skipping by the next expand.
- */
+/** Only children of a tables/views/collections group: column order is data, databases/schemas
+ * are containers, and Redis keys are a truncated, changing SCAN. */
 function isReorderableLevel(parentRef: DbNodeRefWire): boolean {
   return parentRef.kind === "group" && REORDERABLE_GROUPS.includes(parentRef.group);
 }
@@ -133,16 +62,7 @@ function rowId(parentKey: string, label: string): string {
  *  garbage a tree with 400 tables in it does not need to make. */
 const NO_ORDER: readonly string[] = [];
 
-/**
- * The glyph per `DbNode.kind`.
- *
- * Reuses `components/icons.tsx` rather than drawing nine more SVGs: those exports are shared
- * chrome (unlike `DbConsole`'s Run/Stop triangles, which are feature-specific and were kept
- * local so the shared icon file stays generic). The mapping is intentionally coarse
- * — a table and a view get the same file glyph — because inventing five near-identical
- * cylinder variants would cost a reader more than it tells them; the `subLabel` and the group
- * they sit under are what distinguish a view from a table.
- */
+/** Deliberately coarse (tables and views share a glyph); the group and `subLabel` differ. */
 function NodeIcon({ kind }: { kind: DbNodeKindWire }): React.JSX.Element {
   switch (kind) {
     case "database":
@@ -162,12 +82,7 @@ function NodeIcon({ kind }: { kind: DbNodeKindWire }): React.JSX.Element {
   }
 }
 
-/**
- * The note a level shows while it has nothing to show yet.
- *
- * "Never read" and "being read" deliberately look identical: the fetch IS about to happen, and
- * a separate "not read yet" note would flash for one tick and say something less true.
- */
+/** "Never read" and "being read" look the same on purpose: the fetch is about to happen. */
 function LoadingNote(): React.JSX.Element {
   return (
     <li className="db-tree__note" role="none" data-testid="db-tree-note" data-note="loading">
@@ -176,26 +91,9 @@ function LoadingNote(): React.JSX.Element {
   );
 }
 
-/**
- * An `idle` level — and the thing that goes and reads it.
- *
- * 🔴 **This is where "idle means fetch it" became true everywhere**, and it is half of the fix
- * for the stale-tree bug. Before that fix, the only thing that ever kicked a
- * `db_children` was `<DbTree/>`'s ROOT mount effect plus `toggleDbNode`'s first expand — so a
- * level whose cache `refreshDbTree` had just dropped would have sat on "Loading…" for ever,
- * because nothing remounts and nothing re-toggles. Making the *renderer* own the lazy read
- * removes that gap and, incidentally, removes the reverse lookup the fix seemed to need:
- * `dbTreeFormat.ts` documents at length that there is no `refForKey`, and there does not need
- * to be — `renderLevel` already holds the ref of the level it is rendering.
- *
- * It is a component rather than a call in `renderLevel` because **a render must not have side
- * effects**. `nodeRef` sits in the dependency list even though the parent rebuilds that object
- * on every render, which would normally be a re-run-for-ever smell: it is safe and cheap here
- * because `loadDbChildren` marks the level `loading` synchronously, which takes it out of
- * `idle` and unmounts this component on the very next render — and because a call that finds
- * the level already in flight or already cached returns without touching the store, so it
- * cannot feed itself.
- */
+/** Starts the read for an `idle` level, so a level `refreshDbTree` dropped reloads. A component
+ * because a render must not have side effects. `nodeRef` in deps is safe: `loadDbChildren` marks
+ * the level loading synchronously, which unmounts this. */
 function IdleLevel({
   connectionId,
   sessionId,
@@ -224,11 +122,7 @@ export interface DbTreeProps {
   family: DbFamily;
   /** The connection's row limit — the cap it promises, used in the browse statement. */
   rowLimit: number;
-  /**
-   * The live session, or `null` when the row is expanded but not connected (opening, or
-   * failed). Server-answered levels need one; the saved queries do NOT, which is why they
-   * render either way — the saved queries must survive an unreachable database.
-   */
+  /** `null` while opening or after a failed connect; saved queries render either way. */
   sessionId: string | null;
 }
 
@@ -261,26 +155,16 @@ export function DbTree({
   const [dragRow, setDragRow] = useState<string | null>(null);
   const [dropRow, setDropRow] = useState<string | null>(null);
 
-  // The ROOT level loads as soon as there is a session, because expanding the connection row
-  // IS the first expand — the disclosure in `<DbPanel/>` is the connect gesture, so
-  // making the user click a second chevron to see anything would be a level of the tree with
-  // no name. That used to be a mount effect here; it is now `<IdleLevel/>`, because the root
-  // is simply the first level that is `idle` and one mechanism that handles every level beats
-  // two that handle one each (the mount effect could not re-read an invalidated level — see
-  // `IdleLevel`'s note). `loadDbChildren` is idempotent, so a re-render (or a rail-tab remount
-  // over a warm cache) still issues no second call.
+  // The root loads via `<IdleLevel/>` once there is a session (expanding the row is the first
+  // expand). `loadDbChildren` is idempotent, so a re-render issues no second call.
 
   // The saved queries load once per mount and need no session at all.
   useEffect(() => {
     void loadDbSavedQueries(connectionId);
   }, [connectionId, loadDbSavedQueries]);
 
-  // 🔴 And so does the saved ARRANGEMENT, for exactly the same reason and with the same
-  // shape. Without this read the feature works perfectly all afternoon and comes back
-  // alphabetical after a relaunch — `dbTreeOrders` would only ever hold what this session's
-  // own drags put there, which is the failure a user finds and no test does. It is a
-  // separate effect from the queries' so a rejection in either cannot take the other with it
-  // (neither rejects today; that is the store's promise, not this component's).
+  // Load the saved arrangement too, or it comes back alphabetical after a relaunch. A separate
+  // effect so a rejection in either load cannot take the other with it.
   useEffect(() => {
     void loadDbTreeOrder(connectionId);
   }, [connectionId, loadDbTreeOrder]);
@@ -288,25 +172,16 @@ export function DbTree({
   const savedOpen = tree.expanded[SAVED_QUERIES_KEY] === true;
   const queries = savedList?.queries ?? [];
 
-  /**
-   * Expand/collapse a node.
-   *
-   * `session` is threaded explicitly rather than read from the closure because
-   * `renderLevel`/`renderNode` are only ever reached with a live one — see `renderLevel`'s
-   * note. The `Saved queries` node is the one caller that passes a possibly-`null` session,
-   * and the store is where that is handled (`isServerAnswered`).
-   */
+  /** `session` is passed explicitly: only the `Saved queries` node passes `null`, which the store
+   * handles (`isServerAnswered`). */
   const toggle = (ref: DbNodeRefWire, session: string | null): void => {
     toggleDbNode(connectionId, session, ref);
   };
 
   /** Double-click a table/view/collection: put a browse statement in the console. */
   const browse = (node: DbTreeNode): void => {
-    // Two checks, and neither is redundant. `isBrowsable` is what stops a double-click on a
-    // COLUMN browsing: a column node carries its table's `nodeRef` (`tree.rs`), so the ref
-    // check alone would pass. The ref check is what stops a malformed wire node — the two
-    // fields are independent by design, so a `collection` kind arriving on a `database` ref is
-    // expressible, and building `SELECT * FROM …` from it would produce nonsense SQL.
+    // Both checks matter: a column carries its table's `nodeRef`, and a malformed wire node could
+    // pair a browsable kind with a non-table ref.
     if (!isBrowsable(node.kind)) return;
     if (node.nodeRef.kind !== "table") return;
     const sql = browseQuery(family, node.nodeRef, rowLimit);
@@ -317,12 +192,8 @@ export function DbTree({
     openDbQueryInConsole(connectionId, sql);
   };
 
-  /* ──────────────────────── drag-to-reorder: the handlers ──────────────────────
-     The fleet rail's shape (`AgentRow.tsx`), with `parentKey` where it has a folder: a table
-     may only land among the tables it was already among. Every handler takes `reorderable`
-     and returns early when it is false, so an ineligible row is inert as a SOURCE and as a
-     TARGET — a column that refuses to be dragged but happily accepts a drop would be half a
-     gate, and the half nobody notices is the one that reorders the wrong level. */
+  /* Drag-to-reorder: a table lands only among its siblings. Every handler returns early unless
+   * `reorderable`, so an ineligible row is inert as source and as target. */
 
   const onDragStart = (e: DragEvent, parentKey: string, label: string, reorderable: boolean) => {
     if (!reorderable) return;
@@ -366,21 +237,12 @@ export function DbTree({
     // fast drag, or a synthetic event), and this is the check that cannot be skipped that way.
     if (!dragged || dragged === label) return;
     if (!e.dataTransfer.types.includes(dbParentType(parentKey))) return;
-    // `before` is always a label here — a row is what one drops ON, and the dragged table
-    // lands immediately above it. The contract's `null` ("put it last") has no gesture in this
-    // tree yet: it would need an empty strip below the last row, which is a different design
-    // question from the one this answers.
+    // The dragged table lands above the row it was dropped on; "put it last" has no gesture yet.
     moveDbTreeNode(connectionId, parentKey, dragged, label);
   };
 
-  /**
-   * One level's rows, or the note that stands in for them.
-   *
-   * Takes the session as an argument because every path into it has already established that
-   * there is one (the `sessionId === null` arm below renders a note instead). Threading it
-   * beats a `null` check inside Retry that no click could ever reach — an untestable dead
-   * branch is what the coverage ratchet is for.
-   */
+  /** Takes the session as an argument: every path here already has one, and a null check in Retry
+   * would be an unreachable branch. */
   const renderLevel = (
     parentRef: DbNodeRefWire,
     depth: number,
@@ -391,11 +253,8 @@ export function DbTree({
     // a `null` branch no click could reach.
     const parentKey = nodeKey(parentRef);
     const status = levelStatus(tree, parentKey);
-    // `idle` = never read, or read and then invalidated by `refreshDbTree`. It renders the
-    // same note as `loading` on purpose (the fetch IS about to happen) and it also STARTS that
-    // fetch — see `<IdleLevel/>`. Originally only the root could be idle, because only
-    // the root had an effect behind it; now any level can be, which is what makes a refresh
-    // that preserves the user's expanded shape possible at all.
+    // `idle` = never read, or invalidated by `refreshDbTree`: same note as `loading`, and
+    // `<IdleLevel/>` starts the fetch, so a refresh keeps the user's expanded shape.
     if (status === "idle") {
       return (
         <IdleLevel
@@ -438,12 +297,8 @@ export function DbTree({
         </li>
       );
     }
-    // 🔴 The ONE place a sibling list becomes rows, which is why the user's order is applied
-    // exactly here and nowhere else. Applied unconditionally rather than only on a reorderable
-    // level: an order can only ever have been WRITTEN for one (the drag gate above is what
-    // decides that), and honouring whatever is saved keeps the renderer from having a second,
-    // subtly different opinion about eligibility. `applyOrder` appends anything the order does
-    // not name — a table created since the drag lands at the bottom rather than vanishing.
+    // The one place siblings become rows, so the user's order is applied here, unconditionally:
+    // only reorderable levels ever get one. Unnamed tables land at the bottom.
     const ordered = applyOrder(nodes, (n) => n.label, orders?.[parentKey] ?? NO_ORDER);
     const reorderable = isReorderableLevel(parentRef);
     return (
@@ -517,16 +372,8 @@ export function DbTree({
               {node.subLabel}
             </span>
           )}
-          {/* Back to alphabetical. A BUTTON, not a right-click item, because that is this
-              panel's stated house style (`DbPanel.tsx`: "a control that needs a right-click is
-              a control half this rail's users will never find") and because the DB tree has no
-              context menu at all to hang one on. Last in the row (pushed right by
-              `margin-left: auto`, like the saved query's ✕) so it never displaces the label or
-              the count the user is actually reading.
-              It appears only once the level has been arranged, which makes it two affordances
-              in one: the way out, and the only on-screen sign that this level is no longer in
-              the server's order. `stopPropagation` because the group row's click is its
-              disclosure — resetting must not also collapse the thing you were looking at. */}
+          {/* Shown only once a level is arranged, as the way back and the sign of a custom order.
+              `stopPropagation`: the group row's click is its disclosure. */}
           {resettable && (
             <button
               type="button"
@@ -563,10 +410,8 @@ export function DbTree({
           renderLevel({ kind: "root" }, 0, sessionId)
         )}
 
-        {/* The `Saved queries` node. Synthetic — it is not a row
-            `db_children` returned — and OPEN by default, because the requirement is
-            that double-clicking a database shows its list of queries, and a node that
-            needs one more click to reveal them does not satisfy that requirement. */}
+        {/* Synthetic, and open by default: double-clicking a database must show its
+            saved queries. */}
         <li role="treeitem" aria-expanded={!savedOpen}>
           <div
             className="db-tree__row"

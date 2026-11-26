@@ -1,42 +1,6 @@
-/**
- * Shared harness for the browser-tier smoke-core E2E suite (the primary E2E
- * tier). Renders the REAL `<App/>` in real Chromium (Playwright) with a fully
- * mocked Tauri backend, so the 8 smoke-core flows (docs/design/e2e-flow-catalog
- * §4.1) can be driven through real DOM interaction and asserted on the real
- * selectors — the frontend-wiring layer that jsdom can't reach.
- *
- * ── What this installs ────────────────────────────────────────────────────────
- * `installTauriMock()` (src/test/tauri-mock.ts) fakes `invoke()`; every command
- * on the Rust surface (`src-tauri/src/lib.rs`) is registered here so any code
- * path the app exercises is satisfied — an un-stubbed command throws loudly
- * rather than resolving `undefined` (the mock's contract). The command surface
- * and the "what each flow invokes" table are §5 of the flow catalog.
- *
- *   - control:    fleet_snapshot, default_workspace, recent_projects,
- *                 push_recent_project, ensure_agent_hooks, subagent_activity
- *   - terminals:  terminal_open / _write / _resize / _close / _reattach,
- *                 agent_spawn  (each captures its hot-plane Channel via a driver)
- *   - workspace:  read_dir (a fixture tree), read_file (fixture contents),
- *                 write_file
- *   - search:     find_in_files (fixture matches)
- *   - http:       http_send (a canned response; the last request is recorded)
- *   - api store:  api_store_load (empty store), api_store_save (noop) — the API
- *                 view hydrates its collections/environments on first mount
- *   - lsp:        lsp_start (→ "unavailable" — the fixture files are markdown,
- *                 which has no server, so this is only insurance), lsp_send/_stop
- *   - context:    context_usage({ agentId }) (a canned `/context` reading —
- *                 the Metrics panel's per-agent "Context window" card)
- *
- * ── Boot seeding ──────────────────────────────────────────────────────────────
- * `<App/>` is pure — the cold-plane bridge (`startBridge`, which resolves
- * `default_workspace` → `setWorkspaceRoot` and subscribes to `agent://event`)
- * lives in `main.tsx`, NOT in the component tree, so rendering `<App/>` never
- * boots it (that is exactly what keeps App renderable in this tier). So the
- * harness seeds `workspaceRoot` directly to the fixture root — the same write
- * the bridge would make from `default_workspace` — which is all the smoke-core
- * flows depend on. This mirrors how the existing full-App browser specs
- * (`terminalFit`, `reattachFlow`) seed the store rather than driving the bridge.
- */
+/** Browser-tier smoke-core harness: the REAL `<App/>` in Chromium over a mocked Tauri backend
+ * (flows: docs/design/e2e-flow-catalog §4.1, commands §5). Every command is stubbed (an unstubbed
+ * one throws); `workspaceRoot` is seeded directly since `<App/>` never boots the bridge. */
 
 import { act } from "@testing-library/react";
 
@@ -81,14 +45,8 @@ export const FIXTURE_NOTES_CONTENT =
 /** The query the Find flow types; the mock returns a match regardless of value. */
 export const FIND_QUERY = "find me";
 
-/** The canned GET/POST response `http_send` resolves with. */
-/**
- * A canned usage reading (the usage strip) — the three windows the real CLI prints, with
- * percentages chosen to land one in each colour band (ok / warn / danger) so a
- * browser-tier test can measure all three at once. `resetsAtMs` is a fixed epoch,
- * not `Date.now()`-relative: the strip's reset text is only shown on hover, and a
- * moving target would make any assertion about it time-dependent.
- */
+/** Canned usage: one window per colour band (ok / warn / danger); a fixed `resetsAtMs` keeps
+ * assertions time-independent. */
 export const CANNED_USAGE = {
   windows: [
     { key: "current-session", label: "Current session", usedPct: 41, resetsAtMs: 1_785_243_600_000 },
@@ -98,12 +56,8 @@ export const CANNED_USAGE = {
   fetchedAtMs: 1_785_200_000_000,
 };
 
-/**
- * The `context_usage` reading (Metrics → "Context window" card): a realistic
- * reading, 290.7k of a 1m window, with free space and the autocompact
- * buffer printed as the CLI prints them. Fixed `measuredAtMs` for the same reason as
- * {@link CANNED_USAGE}: a moving timestamp would make any assertion time-dependent.
- */
+/** Canned `context_usage` (Metrics → "Context window"): 290.7k of a 1m window; fixed
+ * `measuredAtMs` like {@link CANNED_USAGE}. */
 export const CANNED_CONTEXT_USAGE: ContextUsage = {
   model: "claude-opus-5-5",
   usedTokens: 290_700,
@@ -181,10 +135,8 @@ function terminalMeta(
   };
 }
 
-/**
- * Install the mock backend, register the whole command surface, and seed the
- * workspace root. Call from `beforeEach` after {@link resetE2E}.
- */
+/** Install the mock backend, register the command surface, seed the workspace root.
+ * Call from `beforeEach` after {@link resetE2E}. */
 export function installE2EHarness(): E2EHarness {
   const ipc = installTauriMock();
   const ptys: ChannelDriver[] = [];
@@ -261,13 +213,8 @@ export function installE2EHarness(): E2EHarness {
       files: [{ path: "README.md", name: "README.md" }],
       truncated: false,
     }))
-    // Cancellation. Inert on purpose: both find panels stop their
-    // in-flight walk on EVERY exit — superseding the query, and closing the
-    // overlay — so any flow that types in Find and then leaves fires this. The
-    // mocked searches resolve instantly, so there is never a live walk to stop;
-    // `false` ("no such search") is the honest answer, and the point of the stub
-    // is that a background best-effort cancel must not throw the loud
-    // "unmocked command" that would fail the tier.
+    // Inert: find panels cancel on every exit and mocked searches finish instantly, so `false`
+    // ("no such search") is honest and keeps the cancel from throwing "unmocked command".
     .handle("find_cancel", (): boolean => false)
 
     // ── http (canned; the last request is inspectable via lastHttpRequest) ──
@@ -289,10 +236,8 @@ export function installE2EHarness(): E2EHarness {
     .handle("api_history_load", () => ({ entries: [] }))
     .handle("api_history_save", () => null)
 
-    // ── websocket console: complete the surface so nothing throws ──
-    // The smoke-core does not drive the WS console; these just satisfy the
-    // command surface. `ws_connect` returns a fake id and pushes an `open` event
-    // on the channel (a JSON string frame), mirroring the real relay.
+    // ── websocket console: surface only; `ws_connect` returns a fake id and pushes an `open`
+    // event (a JSON string frame), mirroring the real relay. ──
     .handle("ws_connect", (args) => {
       ipc
         .channel()
@@ -315,12 +260,8 @@ export function installE2EHarness(): E2EHarness {
       error: null,
     }))
 
-    // ── git: WorkspaceTree mounts `startGitPolling()`, so EVERY
-    // full-App render issues `git_status` per workspace root. A clean empty repo
-    // keeps the tree undecorated and the poll on the happy path — without this
-    // stub every render leaned on gitStore's reject-then-catch (code "unknown",
-    // backoff), which passed but was standing noise. `gh_prs` and `url_open` are
-    // surface-completion: the smoke never drives the PR list. ──
+    // ── git: every full-App render polls `git_status` per root; a clean empty repo keeps the
+    // tree undecorated. `gh_prs` and `url_open` only complete the surface. ──
     .handle("git_status", (args) => ({
       root: String(args.root),
       branch: "main",
@@ -328,12 +269,8 @@ export function installE2EHarness(): E2EHarness {
     }))
     .handle("gh_prs", () => [])
     .handle("url_open", () => null)
-    // Compare/revert. Inert on purpose: no smoke flow drives the
-    // tree's Git submenu, so these exist so that a stray Compare (or a future
-    // flow that opens a diff tab) meets a well-formed answer instead of the
-    // "unmocked command" throw. `unchanged: true` is the calm end state — the
-    // diff tab renders "No changes" and mounts no MergeView. `git_file_restore`
-    // is a no-op: this tier has no working tree to put anything back into.
+    // Compare/revert: no smoke flow drives them; inert well-formed answers (`unchanged: true`
+    // renders "No changes") instead of the "unmocked command" throw.
     .handle("git_file_diff", (args) => ({
       path: String(args.path),
       relative: String(args.path),
@@ -355,17 +292,11 @@ export function installE2EHarness(): E2EHarness {
     .handle("lsp_stop", () => null)
 
     // ── usage strip ──
-    // The rail's footer polls this on mount, so EVERY <App/> render in this tier
-    // reaches it. Handled with a canned reading rather than left to reject: an
-    // unhandled command would put the strip in its error state, which is a
-    // perfectly valid state but not the one a layout assertion wants to measure.
+    // Polled on every <App/> render; canned so layout tests measure the normal, not error, state.
     .handle("claude_usage", () => CANNED_USAGE)
 
     // ── context window (Metrics card) ──
-    // Read when the Metrics tab is open with a root agent selected; args are
-    // `{ agentId }` (Rust resolves the session + cwd). Canned for the same
-    // reason as `claude_usage`: the error state is valid but not what a layout
-    // assertion wants to measure.
+    // Args `{ agentId }` (Rust resolves session + cwd); canned like `claude_usage`.
     .handle("context_usage", () => CANNED_CONTEXT_USAGE);
 
   // Seed the workspace root — the write `startBridge` would make from
@@ -385,10 +316,8 @@ export function installE2EHarness(): E2EHarness {
   };
 }
 
-/**
- * Reset every module-level singleton this tier touches, so each `it` starts from
- * the app's boot state. Call from `beforeEach` BEFORE {@link installE2EHarness}.
- */
+/** Reset every module-level singleton this tier touches so each `it` starts at boot state.
+ * Call from `beforeEach` BEFORE {@link installE2EHarness}. */
 export function resetE2E(): void {
   disposeTerminals(); // tear down xterm instances + their (mocked) PTYs
   disposeEditors(); // tear down CodeMirror views
@@ -406,12 +335,8 @@ export function teardownE2E(ipc: TauriMock): void {
   ipc.reset();
 }
 
-/**
- * Let the terminal lifecycle settle: xterm's `scheduleOpen` fires on a
- * `setTimeout(0)` and its auto-focus on a `requestAnimationFrame`, so a
- * terminal-spawning click needs one macrotask + one frame before the PTY
- * command has been dispatched. Wrapped in `act` so React flushes cleanly.
- */
+/** Let terminals settle: xterm opens on `setTimeout(0)` and focuses on a rAF, so a spawning
+ * click needs a macrotask + a frame before the PTY command is dispatched. Wrapped in `act`. */
 export async function settle(ms = 120): Promise<void> {
   await act(async () => {
     const deadline = performance.now() + ms;

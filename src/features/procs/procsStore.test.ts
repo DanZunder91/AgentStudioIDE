@@ -1,7 +1,5 @@
-/**
- * procsStore — the poll lifecycle, streams and the restart flow, through the REAL IPC seam
- * (`installTauriMock`), so every assertion is on the exact command + args Rust receives.
- */
+/** Through the real IPC seam (`installTauriMock`), so assertions are on the exact command + args
+ * Rust receives. */
 
 import { act, renderHook } from "@testing-library/react";
 import { StrictMode, createElement, type ReactNode } from "react";

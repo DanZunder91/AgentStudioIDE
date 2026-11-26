@@ -1,13 +1,4 @@
-/**
- * Layer 5 — the City's passers-by against a REAL 2D context in Chromium (render/streetLife.ts,
- * render/umbrella.ts, engine/streetLife.ts): a passer-by is a real sprite with no agent marker, its
- * umbrella really covers its head (the clear one lets the sky through), on the subway stairs nothing of it
- * shows below the sidewalk, a purchase really lights the machine's button and lands a can in its tray —
- * and the whole street (its walk and its paint) costs well under a millisecond a frame in the reference
- * city, at Fit and zoomed, by day and at night, in the rain.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/streetLife.browser.test.tsx`
- */
+/** Browser tier: `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 

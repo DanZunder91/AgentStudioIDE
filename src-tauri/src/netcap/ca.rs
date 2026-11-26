@@ -1,18 +1,6 @@
-//! The capture CA (decrypt mode). Generated once with `rcgen` on the `ring` backend (the
-//! crate's single crypto provider) into the app config dir — `netcap/ca.pem` +
-//! `netcap/ca-key.pem` (0600). Never the OS keychain (no OS permission may be required), never
-//! `~/.claude` (the app must never write there).
-//!
-//! Only processes WE spawn trust it: [`write_bundle`] writes `ca-bundle.pem` (the OS trust
-//! anchors, the bundled Mozilla set and our CA), and `pty_env` points `SSL_CERT_FILE` & co. at
-//! it — so a corporate root keeps working inside our terminals.
-//!
-//! **Reloading without parsing.** rcgen 0.13 signs with an issuer `Certificate`, and rebuilding
-//! one from `ca.pem` would need its `x509-parser` feature (+13 locked packages, see Cargo.toml).
-//! A leaf's link to its issuer is only the issuer DN and the authority key id — and both are
-//! functions of our constant DN and the stored key. So on reload we re-self-sign the same
-//! params with the same key and sign leaves with that; they chain to the `ca.pem` on disk
-//! (asserted by `a_reloaded_ca_signs_leaves_that_chain_to_the_ca_on_disk`).
+//! The capture CA (decrypt mode), generated once with `rcgen`/`ring` into the app config dir
+//! (never the OS keychain or `~/.claude`). Only our processes trust it, via `ca-bundle.pem`.
+//! On reload the same params are re-self-signed with the stored key (no `x509-parser` needed).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -328,23 +316,9 @@ fn rsa_bits(rsa_public_key: &[u8]) -> Option<usize> {
     Some(n.len() * 8 - lead.leading_zeros() as usize)
 }
 
-/// Whether a native trust anchor may go into `ca-bundle.pem`: `Ok(())`, or why not.
-///
-/// Why: the Windows root store still holds
-/// "VeriSign Class 3 Public Primary Certification Authority" signed with **md2WithRSA**, and
-/// Claude Code warned about the bundle at every start (a long warning) — its
-/// runtime cannot load such a certificate. A bundle every client of every OS reads must hold
-/// only certificates every client can load, so this applies on every OS:
-/// - not DER we can walk → out;
-/// - signed with MD2, MD4 or MD5 → out (no TLS stack accepts those digests any more);
-/// - **self-issued** (issuer = subject) with an algorithm `ring` can check (RSA PKCS #1 with
-///   SHA-1/256/384/512, ECDSA P-256/P-384 with SHA-256/384) whose own signature does not
-///   verify → out. Anything we cannot judge (RSA-PSS, P-521, Ed25519, a cross-signed root,
-///   an RSA key outside 1024–8192 bits) is KEPT — dropping a root a client needs would break
-///   it, which is worse than keeping one it ignores.
-///
-/// Our upstream trust (rustls) is unaffected: it reads the anchors directly and skips what it
-/// cannot parse.
+/// Whether a native trust anchor may go in `ca-bundle.pem` (read by every client): out if not
+/// walkable DER, MD2/4/5-signed, or a self-issued root whose `ring`-checkable signature fails.
+/// Anything we can't judge is KEPT: dropping a needed root breaks a client.
 pub fn bundle_verdict(der: &[u8]) -> Result<(), Excluded> {
     use ring::signature as sig;
     let bad = Excluded::Unparseable;

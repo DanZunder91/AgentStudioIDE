@@ -1,23 +1,8 @@
-/**
- * The ONE folder-ordering primitive, shared by both rails.
- *
- * Dragging a folder up/down must keep the left (Agents) rail
- * and the right (Files) rail in the *same* sort. That only holds if both sides order
- * folders by a single source of truth — the persisted `folderOrder` list — through
- * the same pure function. This is that function (and the generic list-move the drag
- * gestures reduce to), kept dependency-free so it is trivially testable and cannot
- * disagree with itself between the two rails.
- */
+/** The one folder-ordering primitive: both rails sort folders through it by the persisted
+ * `folderOrder`, so a drag keeps them in the same order. Dependency-free on purpose. */
 
-/**
- * Stable-sort `paths` by their index in `order`. A path present in `order` sorts to
- * that rank; a path NOT in `order` keeps its original relative position, after every
- * ordered one (Array.prototype.sort is stable, so equal ranks preserve input order).
- *
- * In practice every visible folder is kept in `order` (see the store's
- * `syncFolderOrder`), so the "not in order" tail is only a transient — a folder that
- * has just appeared and not yet been reconciled — never a permanent divergence.
- */
+/** Stable-sort `paths` by their index in `order`; unlisted paths keep their relative order after
+ * the listed ones. That tail is transient: `syncFolderOrder` keeps every visible folder listed. */
 export function orderFolders(
   paths: readonly string[],
   order: readonly string[],
@@ -28,17 +13,8 @@ export function orderFolders(
   );
 }
 
-/**
- * Move `item` so it sits immediately BEFORE `before` in a fresh copy of `list`
- * (or at the END when `before` is null). The standard list-reorder a drag reduces
- * to: "drop A onto B" → A lands just above B.
- *
- * Robust to inputs a drag can produce:
- *   - `item` absent from `list` → it is INSERTED (a drag can seed a not-yet-listed
- *     path); `moveFolder` relies on this so it need not pre-check membership.
- *   - `before` absent (or === `item`) → `item` goes to the end.
- * Never mutates `list`.
- */
+/** Copy of `list` with `item` just before `before` (at the end if `before` is null, absent or
+ * `item`). An absent `item` is inserted, which `moveFolder` relies on. Never mutates `list`. */
 export function moveBefore<T>(list: readonly T[], item: T, before: T | null): T[] {
   const without = list.filter((x) => x !== item);
   if (before === null || before === item) return [...without, item];
@@ -47,12 +23,8 @@ export function moveBefore<T>(list: readonly T[], item: T, before: T | null): T[
   return [...without.slice(0, i), item, ...without.slice(i)];
 }
 
-/**
- * Append any of `paths` not already in `order`, preserving both `order` and the
- * incoming order of the new ones. Returns the SAME array reference when nothing was
- * added, so a caller can cheaply skip a persist/re-render when discovery changed
- * nothing (the store leans on this to avoid a write per telemetry tick).
- */
+/** Append the `paths` missing from `order`, in order. Returns the SAME reference when nothing was
+ * added, so the store can skip a persist per telemetry tick. */
 export function appendMissing(
   order: readonly string[],
   paths: readonly string[],

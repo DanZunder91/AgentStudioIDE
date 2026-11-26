@@ -1,21 +1,6 @@
-//! Network capture — the in-process capture proxy behind the Network tab.
-//!
-//! One proxy on `127.0.0.1:<port>`, started from `setup` ([`start`]) and living as long
-//! as the app. The port is stable across launches ([`bind_listener`]): the saved one,
-//! else [`PREFERRED_PORT`], else an ephemeral one — saved in `prefs.json` either way. Every
-//! PTY the supervisor spawns gets [`pty_env`] — proxy variables whose
-//! userinfo names the terminal (`t-<id>:x@`, attribution not auth), a `NO_PROXY` that keeps
-//! local traffic local, and CA-bundle variables for decrypt mode. Zero install, no OS
-//! permission: nothing touches the system proxy settings or keychain.
-//!
-//! Layout: [`proxy`] (the wire), [`store`] (the 5 000-flow ring), [`ca`] (rcgen CA + leaves),
-//! [`env`] (pure `pty_env` logic), [`headers`] (verbatim capture — nothing is redacted),
-//! [`body`] (tee + decode), [`wsframe`], [`prefs`], [`types`] (the serde wire types), and
-//! [`record`] — the tap the IDE's own API client (`http_send`, `ws_*`, `grpc_send`) reports
-//! to, since its traffic runs in this process and never crosses the proxy.
-//!
-//! [`Netcap`] is an instance, not a singleton, so the end-to-end tests run many proxies in
-//! parallel with no global state; the app keeps exactly one in [`GLOBAL`].
+//! The in-process capture proxy behind the Network tab, on a stable `127.0.0.1` port. Every PTY
+//! gets [`pty_env`] (proxy vars with the terminal id as userinfo, `NO_PROXY`, CA vars); no system
+//! proxy or keychain is touched. [`record`] is the tap for the IDE's own in-process API client.
 
 pub mod body;
 pub mod ca;
@@ -117,10 +102,8 @@ pub(crate) struct Inner {
     refreshed: OnceLock<()>,
     pub(crate) plain: proxy::PlainClient,
     skipped_reason: Option<String>,
-    /// The proxy-related variables of `config.user_env` (`*_proxy` / `no_proxy` /
-    /// `NODE_OPTIONS`, any case) — all [`env::compute`] reads — so the global [`pty_env`] and
-    /// [`Netcap::injecting_port`] judge against the environment this instance was started
-    /// with. Nothing else of the user's env is kept.
+    /// Only the proxy-related vars of `config.user_env` (`*_proxy`, `no_proxy`, `NODE_OPTIONS`,
+    /// any case), so [`pty_env`] and [`Netcap::injecting_port`] judge against this start env.
     proxy_env: Vec<(String, String)>,
     /// `<dir>/bin` holding the `curl` shim ([`shim`]); `None` = no shim (no dir, or it could
     /// not be written). On Windows it is for agents' Git Bash only, never a terminal's `PATH`.
@@ -281,26 +264,16 @@ fn bind_loopback(port: u16) -> std::io::Result<std::net::TcpListener> {
     std::net::TcpListener::bind(("127.0.0.1", port))
 }
 
-/// Something already accepts on `127.0.0.1:port`. Checked BEFORE binding a fixed port because
-/// a failed bind is not enough on macOS: std sets `SO_REUSEADDR`, and BSD then lets a
-/// specific-address bind (`127.0.0.1:8877`) succeed over another process's wildcard listener
-/// (`0.0.0.0:8877`, or a dual-stack `[::]:8877`) — silently stealing that service's loopback
-/// traffic (verified on macOS 26). No listener = an instant refusal, so the probe
-/// costs nothing on the normal path.
+/// Probe before binding a fixed port: on macOS `SO_REUSEADDR` lets a `127.0.0.1` bind succeed
+/// over another process's wildcard listener, silently stealing its loopback traffic.
 fn someone_listens_on(port: u16) -> bool {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
 }
 
-/// The listener for this launch, and whether it moved off the saved port.
-///
-/// * saved port → bind it; taken → `preferred` (if it differs), else ephemeral, and report
-///   `PortChange { from: saved, to: new }` so the UI can tell the user to update their app;
-/// * no saved port (first launch) → `preferred`, else ephemeral — not a change: no app was
-///   configured with anything yet.
-///
-/// Any bind error on the saved/preferred port counts as "taken" (EADDRINUSE, or EACCES for a
-/// privileged port someone hand-wrote into the file): the proxy must start regardless.
+/// This launch's listener: saved port, else `preferred`, else ephemeral. Any bind error counts
+/// as "taken" (the proxy must start). Moving off a saved port returns a `PortChange` for the UI;
+/// a first launch is not a change.
 pub fn bind_listener(
     saved: Option<u16>,
     preferred: Option<u16>,
@@ -481,10 +454,8 @@ impl Netcap {
         self.inner.shim_dir.clone()
     }
 
-    /// Put a **bypass** row in the flow ring (and so on `netcap://flow`): an agent command
-    /// that routed around the proxy, read off its transcript ([`crate::logstream::bypass`]).
-    /// `neutralized` is decided here — the detector says whether the shim *could* undo it
-    /// (`shim_covers`), this proxy knows whether the shim is installed and strict is on.
+    /// Record a bypass row. `neutralized` is decided here: the detector knows if the shim could
+    /// undo it (`shim_covers`), this proxy whether the shim is installed and strict is on.
     pub fn record_bypass(&self, b: BypassInput) -> u64 {
         let strict = lock(&self.inner.prefs).strict_agent_capture;
         let neutralized = b.shim_covers && strict && self.inner.shim_dir.is_some();
@@ -513,11 +484,8 @@ impl Netcap {
         self.inner.insert(s, |_| {})
     }
 
-    /// The per-app decrypt opt-in — the user says `app` does (`on`) / does not trust the IDE's
-    /// CA. Persisted; live for the next `CONNECT`. Idempotent; entries keep the order they were
-    /// added in.
-    /// `app` is trimmed; an empty name or one containing `/` is refused (it could never be
-    /// matched safely — [`client::user_opted_in`]).
+    /// Per-app decrypt opt-in (`on` = `app` trusts our CA); persisted, live from the next
+    /// `CONNECT`. `app` is trimmed; empty or `/`-containing names are refused.
     pub fn set_app_decrypt(&self, app: &str, on: bool) -> Result<NetcapStatus, String> {
         let app = app.trim();
         if !client::valid_app_entry(app) {
@@ -711,10 +679,8 @@ pub fn start(app: &tauri::AppHandle) {
     }
 }
 
-/// The env every PTY the IDE spawns gets so its traffic flows through the capture
-/// proxy (proxy vars with the terminal id as userinfo, `NO_PROXY`, CA-bundle vars).
-/// Empty when the proxy is not running, capture is disabled, or the user's own
-/// environment already names a proxy.
+/// The env every IDE PTY gets so its traffic flows through the proxy. Empty when the proxy is
+/// down, capture is off, or the user's own environment already names a proxy.
 pub fn pty_env(terminal_id: &str) -> Vec<(String, String)> {
     match GLOBAL.get() {
         // The instance's start-time env (`start` passes the process env), not a fresh read:
@@ -900,10 +866,8 @@ mod tests {
         assert_eq!(states, [FlowState::Pending, FlowState::Done]);
     }
 
-    /// Strict agent capture end to end inside the proxy: the shim is written into the config
-    /// dir, new PTYs get it first on `PATH` plus `AGENTSTUDIO_PROXY_STRICT`, the toggle persists,
-    /// and a bypass row lands in the ring — neutralised only when strict is on and the shim
-    /// could undo it.
+    /// The shim lands in the config dir and first on new PTYs' `PATH`, the toggle persists, and a
+    /// bypass row is neutralised only when strict is on and the shim could undo it.
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn strict_capture_shim_env_toggle_and_bypass_rows() {
@@ -1047,10 +1011,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// The CA bundle exists before any PTY is spawned. Right after `start` returns — no
-    /// `ready()`, no waiting — the CA variables are present and name a file that exists (so a
-    /// terminal restored at boot gets them); a relaunch reuses the bundle; and if the file
-    /// vanishes, `pty_env` stops naming it rather than handing every client a path to nothing.
+    /// Right after `start` (no `ready()`), the CA vars name an existing file, so boot-restored
+    /// terminals get them; if the file vanishes, `pty_env` stops naming it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_ca_bundle_exists_before_start_returns_and_pty_env_never_names_a_missing_file() {
         let dir = std::env::temp_dir().join(format!("netcap-ca-first-{}", ulid::Ulid::new()));

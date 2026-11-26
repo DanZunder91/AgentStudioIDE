@@ -1,10 +1,5 @@
-/**
- * Pure formatting for the session picker's rows ("Recover session"): dates and sizes.
- *
- * Deliberately locale-free and deterministic — `toLocaleString` output varies
- * by ICU build and machine locale, which makes row text untestable (a test
- * that depends on the runner's locale is a test that lies in CI).
- */
+/** Session picker row formatting, locale-free on purpose: `toLocaleString` varies by ICU build
+ * and machine locale, which makes row text untestable. */
 
 const MONTHS = [
   "Jan",
@@ -21,12 +16,7 @@ const MONTHS = [
   "Dec",
 ] as const;
 
-/**
- * "Jul 24, 16:02" — the design sketch's row date. The year appears only when it
- * is not the current one ("Jul 24 2025, 16:02"): most recovering targets are
- * recent, so the common case stays short. `now` is injectable for tests; the
- * picker calls it with the default.
- */
+/** "Jul 24, 16:02"; the year only when it is not the current one ("Jul 24 2025, 16:02"). */
 export function formatSessionDate(mtimeMs: number, now: Date = new Date()): string {
   const d = new Date(mtimeMs);
   const hh = String(d.getHours()).padStart(2, "0");
@@ -37,11 +27,7 @@ export function formatSessionDate(mtimeMs: number, now: Date = new Date()): stri
 
 const UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
 
-/**
- * "11 MB" — binary units, one decimal below 10 of a unit ("1.5 KB"), whole
- * numbers above ("532 KB"). Bytes are always whole. Negative input clamps to
- * 0 B rather than rendering nonsense for a corrupt size.
- */
+/** Binary units: one decimal below 10 ("1.5 KB"), whole above ("532 KB"); negative clamps to 0. */
 export function formatSize(bytes: number): string {
   let value = Math.max(0, bytes);
   let unit = 0;

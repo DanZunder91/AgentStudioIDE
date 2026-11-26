@@ -1,50 +1,6 @@
-/**
- * Layer 5 (testing-strategy §1, §7.5) — the drop preview, in real pixels.
- *
- * ── The bug ─────────────────────────────────────────────────────────────────
- *
- *   With the screen split vertically or horizontally, dragging a terminal toward
- *   any edge previewed only half of the screen. It happened only when exactly
- *   two terminals were open; with more, the preview was fine.
- *
- * The drop RESULT was always correct — verified exhaustively in real Chromium
- * across both orientations, all four edges, 2 and 3 panes, six container sizes,
- * the WebGL renderer, StrictMode, and both synthetic and native drags. What lied
- * was the **preview**: it drew the naive "split the hovered pane in half"
- * rectangle, while the real mutation also prunes the emptied source leaf, which
- * collapses the now-single-child parent, so the survivor expands to fill the
- * whole container.
- *
- * ── Why exactly 2 panes ─────────────────────────────────────────────────────
- *
- *   | panes | after pruning the source        | preview vs result       |
- *   |-------|---------------------------------|-------------------------|
- *   | 2     | parent has ONE child → collapse | mismatch (preview half) |
- *   | 3+    | parent keeps ≥2 → no collapse   | close enough to pass    |
- *
- * The 2→1 collapse is the only case where the survivor escapes the hovered
- * pane's bounds entirely — hence the half-screen preview, and hence only with two panes.
- *
- * ── Why this test must live here ────────────────────────────────────────────
- *
- * The assertion is "two rectangles are equal in CSS pixels". jsdom has no
- * layout engine: every `getBoundingClientRect()` is 0x0, so both rectangles are
- * 0x0 and the assertion is vacuously true — it would pass just as happily
- * against the bug. Real Chromium is the only place this fact exists.
- *
- * ── And the bug THIS suite shipped ──────────────────────────────────────────
- *
- * The first version of the fix made every no-op drop preview nothing, and the
- * first version of this suite only ever hovered the TARGET pane — so it was
- * 12/12 green while, in the real app, the overlay never appeared: the blue drop
- * highlight no longer showed while dragging.
- *
- * A real hand crosses the dragged tab's OWN pane before reaching the target,
- * and over there every drop is a no-op. Being in a real browser bought nothing;
- * the gesture was simply never driven through the state the user is actually in.
- * Hence `keeps the preview alive across the WHOLE drag` below: assert the path,
- * not just the destination.
- */
+/** Drop preview in real pixels (testing-strategy §1, §7.5): the preview must equal the landing box,
+ * which prunes the emptied source (with 2 panes the survivor fills the container). jsdom measures
+ * 0x0, so only real Chromium can assert it; drive the whole drag path, not just the target. */
 
 import { act, render } from "@testing-library/react";
 import { StrictMode } from "react";
@@ -69,11 +25,8 @@ import {
 } from "../test/layout-browser";
 import { resetStore } from "../test/store-harness";
 
-/**
- * Let the browser lay out and let every async consequence land: rAF (style +
- * layout) → ResizeObserver delivery → allotment's `layout()` → the terminal
- * registry's own RO → its 50ms fit debounce.
- */
+/** Let layout and async effects land: rAF → ResizeObserver → allotment `layout()` → the terminal
+ * registry's RO → its 50ms fit debounce. */
 async function settle(ms = 250): Promise<void> {
   await act(async () => {
     const deadline = performance.now() + ms;
@@ -172,16 +125,8 @@ describe("drop preview — what you see is what you get", () => {
     return tabs;
   }
 
-  /**
-   * THE INVARIANT: the rectangle the user is shown mid-drag is exactly the
-   * rectangle the dragged terminal lands in.
-   *
-   * Asserted for 2 AND 3 panes, and for every edge. 2 is the broken case;
-   * 3 is the case that looked fine — and it is only *approximately* fine, since
-   * pruning the source still redistributes its share among the survivors, so
-   * the target grows there too. Pinning both stops a fix that special-cases the
-   * collapse and leaves the 3-pane stretch wrong.
-   */
+  /** 2 panes (the collapse) and 3 (pruning still redistributes shares), so a fix that only
+   * special-cases the collapse fails. */
   describe.each([2, 3])("%i panes", (n) => {
     describe.each<Edge>(["left", "right", "top", "bottom"])("drop on the %s edge", (edge) => {
       it("previews exactly the box the tab lands in", async () => {
@@ -208,11 +153,7 @@ describe("drop preview — what you see is what you get", () => {
     });
   });
 
-  /**
-   * The exact failing case, spelled out in absolute numbers rather than a
-   * relation — so the failure message names the bug instead of just "not
-   * equal", and so a fix cannot satisfy the test by making BOTH wrong.
-   */
+  /** Absolute numbers, not a relation: the failure names the bug; making BOTH wrong can't pass. */
   it("2 panes, drop on the bottom edge: the preview spans the FULL width, not the hovered pane's half", async () => {
     const [dragged, target] = await build(2);
 
@@ -242,11 +183,7 @@ describe("drop preview — what you see is what you get", () => {
     expectSameBox(previewBox, geometryOf(paneOfTab(dragged)), "2-pane bottom-edge case");
   });
 
-  /**
-   * A centre drop collapses the tree the same way, so it has the same bug: with
-   * 2 panes the survivor fills the container, and `inset: 0` on the hovered pane
-   * is half of it.
-   */
+  /** A centre drop collapses the tree too: with 2 panes the hovered pane's `inset: 0` is half. */
   it("2 panes, centre drop: the preview spans the full container", async () => {
     const [dragged, target] = await build(2);
 
@@ -261,19 +198,8 @@ describe("drop preview — what you see is what you get", () => {
     expect(previewBox.height).toBeCloseTo(container.height, 0);
   });
 
-  /**
-   * THE REGRESSION TEST.
-   *
-   * A hand does not teleport the cursor onto the target pane: it crosses the
-   * dragged tab's OWN pane first, and with two panes holding one tab each that
-   * is half the screen and the first half of every gesture. Over there every
-   * drop is a no-op — and previewing a no-op as "nothing" made the box vanish
-   * for that whole stretch, which showed as the blue drop highlight missing
-   * mid-drag.
-   *
-   * The first version of this suite only ever hovered the TARGET pane, so it
-   * was green while the app was visibly broken. Assert the whole path.
-   */
+  /** A hand crosses the dragged tab's own pane (all no-op drops) before the target; the preview
+   * must not vanish there, so assert the whole path. */
   it("keeps the preview alive across the WHOLE drag, including over the source pane", async () => {
     const [dragged, target] = await build(2);
 
@@ -310,13 +236,8 @@ describe("drop preview — what you see is what you get", () => {
     }
   });
 
-  /**
-   * Dropping a pane's only tab on its own edge changes nothing in the store (it
-   * would split, empty, prune and collapse straight back). The preview must
-   * still answer the question honestly: the terminal ends up exactly where it
-   * already is. Showing a SPLIT there would promise something the drop will not
-   * deliver; showing NOTHING reads as a dead app mid-drag.
-   */
+  /** A no-op self-edge drop: the terminal stays put, so preview its current box (a split promises
+   * too much; nothing reads as a dead app). */
   it("previews a no-op drop as the box the tab already occupies", async () => {
     const [dragged] = await build(2);
 

@@ -1,17 +1,6 @@
-/**
- * Layer 5 (testing-strategy §1) — the REAL `@codemirror/merge` view, in Chromium.
- *
- * `DiffView.test.tsx` mocks the package, so it can prove what configuration this
- * component asks for and nothing at all about what the user sees. A `MergeView`
- * needs a layout engine: under jsdom it constructs, computes no geometry, and
- * every claim about changed lines, collapsed regions or contenteditable would be
- * vacuously true. This tier is where those claims are made.
- *
- * What is proved here: the two panes exist with HEAD on the left and the working
- * tree on the right, the changed lines are actually marked, a long identical
- * stretch really does collapse, NEITHER side is editable and neither carries a
- * revert control, and unmounting takes the whole view out of the DOM.
- */
+/** The real `MergeView` in Chromium (jsdom computes no geometry): HEAD left, working tree right,
+ * changes marked, long identical runs collapsed, neither side editable or revertible, and unmount
+ * removes it. */
 
 import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

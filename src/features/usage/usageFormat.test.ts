@@ -1,26 +1,6 @@
-/**
- * usageFormat — every string the usage panel renders.
- *
- * Covers: `usageTone`'s two thresholds (each probed on both sides), the percent
- * formatters' half-up rounding and clamping, `formatResetsAt`'s five branches
- * (null / now / minutes / hours+minutes / absolute weekday-clock), the absolute
- * branch's 12-hour edge cases and all seven weekdays, `formatFetchedAt`'s four
- * buckets plus clock skew, `parseUsageError`'s parsing of strings / `Error`s /
- * junk, and `describeUsageError`'s six sentences.
- *
- * Two rules this file follows deliberately:
- *
- * 1. **Every expectation is a literal.** Nothing here derives an
- *    expected string from the module under test (no `expect(f(c)).toBe(MAP[c])`)
- *    — an expectation computed from the same source as the actual can only catch
- *    plumbing, never content. The wordings below are hand-typed, so changing a
- *    sentence or a threshold in the source fails a test by name.
- * 2. **No real clock.** Both relative formatters take `nowMs`, so every case here
- *    is a pair of fixed numbers. No `Date.now()`, no fake timers. Absolute-time
- *    cases build their timestamp with `new Date(y, m, d, h, min)` (local), so the
- *    expected weekday and wall-clock are the same on every machine and in every
- *    timezone.
- */
+/** Every expectation is a hand-typed literal, never derived from the module under test. No real
+ * clock: relative formatters take `nowMs`; absolute cases use local `new Date(y, m, d, h, min)`,
+ * so weekday and wall-clock match in every timezone. */
 
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
@@ -289,11 +269,8 @@ describe("parseUsageError", () => {
     expect(parseUsageError("teapot: 418")).toBe("unknown");
   });
 
-  // The v1 vocabulary described an HTTP call to Anthropic that no longer exists —
-  // the numbers now come from `claude -p "/usage"`. If a stale Rust
-  // build (or a cached frontend) still emits one of those words, it must degrade
-  // to "unknown" and get the honest generic sentence, NOT be quietly accepted and
-  // rendered as a diagnosis about a network we never touched.
+  // The numbers come from `claude -p "/usage"`; a stale build emitting a v1 word must degrade to
+  // "unknown", not be rendered as a diagnosis about a network we never touched.
   it("rejects the retired v1 error vocabulary", () => {
     expect(parseUsageError("no-credentials")).toBe("unknown");
     expect(parseUsageError("unauthorized: 401")).toBe("unknown");
@@ -345,11 +322,8 @@ describe("describeUsageError", () => {
     );
   });
 
-  // The numbers come from the user's own CLI — this app makes no request and reads
-  // no credential. So a sentence mentioning a network, an API, a token
-  // or a keychain would be a claim about a code path that does not exist, and
-  // would send the user to check something that was never involved. The v1 strings
-  // said exactly that, which is why this guard is here and not left to review.
+  // The numbers come from the user's own CLI (no request, no credential): naming a network, API or
+  // keychain would send the user to check something never involved.
   it("never names a network, an API, or a credential store", () => {
     const forbidden = /anthropic|api|network|internet|offline|connection|token|credential|keychain/i;
     for (const code of CODES) {
@@ -378,10 +352,7 @@ describe("describeUsageError", () => {
   });
 });
 
-/* ── properties ───────────────────────────────────────────────────────────────
-   Where an invariant is cheaper to state than to enumerate. The severity ranking
-   below is declared HERE, not imported: the property must be able to fail if the
-   source's band order is wrong. */
+/* ── properties ── severity is declared HERE, not imported, so a wrong band order fails. */
 
 const SEVERITY: Record<UsageTone, number> = { ok: 0, warn: 1, danger: 2 };
 

@@ -1,9 +1,3 @@
-/**
- * `useVillageAmbience` — the fetch cadence (mount + every 10 min while visible, stale-only
- * refetch on return), the 30 s clock, error coding with the last good report kept, the
- * persisted override (wrapped storage) and timer cleanup.
- */
-
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

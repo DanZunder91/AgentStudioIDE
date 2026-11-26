@@ -1,12 +1,5 @@
-/**
- * `substitute` — the `{{var}}` splicer that keeps secrets off disk.
- *
- * The whole security property of the API client rides on this being right: a
- * saved collection holds `{{TOKEN}}`, and the real token is spliced in HERE, at
- * send time, so it exists only on the wire. So the cases below pin present/absent
- * keys, whitespace inside the braces, multiples, and — decisively — that a
- * malformed lone `{{` is left ALONE rather than eaten.
- */
+/** Secret safety rides on this: collections hold {{TOKEN}}, the value exists only on the wire.
+ * A malformed lone `{{` must be left alone, not eaten. */
 
 import { describe, expect, it } from "vitest";
 

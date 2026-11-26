@@ -1,40 +1,6 @@
-//! Drag-reordered tree levels — `db-tree-order.json`.
-//!
-//! Tables can be dragged into a new order — A, B, C becoming C, B, A — and that order must
-//! persist. The second half of that requirement is the whole reason this file exists:
-//! a server has no opinion about the order of its tables beyond alphabetical, so a user-defined
-//! order is state that lives **only** here. Losing it loses work that cannot be recomputed from
-//! anything, which is why this is a sibling of `db-connections.json` and `db-queries.json` and
-//! takes the identical crash-safe write path (temp → `fsync` → atomic `rename` → `0600`).
-//!
-//! ## What a "level" is, and why the key is opaque
-//!
-//! One entry is one *parent* in the tree — the `tables` group of `gazelle.public`, say — plus the
-//! display order of its children. The parent is addressed by the frontend's `nodeKey(ref)` string
-//! (`["group","gazelle","public","tables"]`), stored verbatim. Rust deliberately does **not** parse
-//! or re-derive it: that key is already a canonical, stable identifier, and a second implementation
-//! here would be free to disagree with the first one — at which point a saved order silently stops
-//! matching the level it was saved for, and the user's drag "does not stick" with nothing in any
-//! log to say why.
-//!
-//! Children are named by **label** (the table name), not by index or by any synthetic id. A name is
-//! what survives a reconnect, a refresh, and a table being added in the middle; an index does not.
-//! It also means a rename or a drop degrades gracefully — the applier, which is not in this file,
-//! intersects the saved order with what the server actually returned, so an unknown name is skipped
-//! and a new table falls in at the end rather than vanishing.
-//!
-//! ## Keyed by `connection_id`, and deleted with it
-//!
-//! An order belongs to the connection whose tree it describes, so `db_connection_delete` cascades
-//! through [`remove_for_connection`] exactly as it does for saved queries. An orphan here is
-//! invisible rather than merely useless — dead weight that would be re-applied if the connection id
-//! were ever reused.
-//!
-//! ## No secrets, and still `0600`
-//!
-//! Nothing here is a credential: it is a list of table names and a tree path. It still gets `0600`
-//! for the same reason `db-queries.json` does — those names describe someone's schema, and that is
-//! nobody else's business on a shared machine. It is NOT encrypted, and says so.
+//! Drag-reordered tree levels in `db-tree-order.json` (crash-safe, `0600`, unencrypted). Keyed by
+//! the frontend's opaque `nodeKey` (stored verbatim, never re-derived), children named by label;
+//! cascaded on connection delete. The applier skips unknown names and appends new ones.
 
 use std::path::{Path, PathBuf};
 
@@ -51,11 +17,9 @@ pub const FILE_NAME: &str = "db-tree-order.json";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LevelOrder {
-    /// Which connection's tree this level belongs to.
-    ///
-    /// 🔴 `#[serde(default)]` is PERMANENT on every field of this struct. [`load`]
-    /// ends in `unwrap_or_default()`, so a field without it turns every existing file into a parse
-    /// error, which loads as empty and is then written back as emptiness on the next save.
+    /// Which connection's tree this level belongs to. `#[serde(default)]` is permanent on every
+    /// field: [`load`] defaults on a parse error, and the next save would write that emptiness
+    /// back.
     #[serde(default)]
     pub connection_id: String,
     /// The frontend's `nodeKey(ref)` string, e.g. `["group","gazelle","public","tables"]`.
@@ -102,10 +66,8 @@ pub fn save(path: &Path, store: &TreeOrderStore) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(&stamped).unwrap_or_else(|_| "{}".to_string());
-    // The temp name is the target's file name + a fresh ULID: distinct from the two sibling
-    // stores' and from a concurrent save of this same file.
-    // `store_file`: locked, a unique temp per write (born 0600 on unix), the temp
-    // removed on failure, and on Windows a retried rename over a briefly-held file.
+    // `store_file`: locked, a unique 0600 temp per write (removed on failure), retried rename on
+    // Windows.
     let _guard = crate::store_file::lock(path);
     crate::store_file::write_atomic(path, json.as_bytes(), true)?;
     restrict_permissions(path);
@@ -121,12 +83,8 @@ fn restrict_permissions(path: &Path) {
 #[cfg(not(unix))]
 fn restrict_permissions(_path: &Path) {}
 
-/// Every level saved for one connection.
-///
-/// Returned in **stored order**, which is insertion order: unlike saved queries there is no
-/// meaningful ranking *between* levels — the caller looks each one up by `parent_key` when it
-/// renders that level — so imposing a sort here would be invented meaning. What matters is that the
-/// order is deterministic, and [`set_level`] replacing in place is what keeps it so.
+/// Every level saved for one connection, in stored order (deterministic: [`set_level`] replaces
+/// in place).
 pub fn for_connection(store: &TreeOrderStore, connection_id: &str) -> Vec<LevelOrder> {
     store
         .levels
@@ -136,16 +94,8 @@ pub fn for_connection(store: &TreeOrderStore, connection_id: &str) -> Vec<LevelO
         .collect()
 }
 
-/// Replace (or insert) one level's order. An EMPTY `keys` removes the entry entirely —
-/// "no custom order" and "an order of nothing" must not be two different states on disk.
-///
-/// That collapse is not tidiness. If they were two states, a level dragged back to alphabetical (or
-/// a level whose children all disappeared) would leave behind an entry that reads as "the user
-/// wants this order: nothing", and every later reader would have to remember which emptiness meant
-/// which. Removing it makes "absent" the single, unambiguous way to say *use the server's order*.
-///
-/// Pure over the in-memory store, exactly as `queries::upsert` is: the caller does the
-/// [`load`]/[`save`], so the whole decision is testable without a filesystem.
+/// Replace or insert one level's order; an empty `keys` removes the entry, so absence is the only
+/// way to say use the server's order. Pure; the caller does [`load`]/[`save`].
 pub fn set_level(
     store: &mut TreeOrderStore,
     connection_id: &str,
@@ -172,11 +122,8 @@ pub fn set_level(
     }
 }
 
-/// Forget one level's order (back to the server's alphabetical order). Returns whether it existed.
-///
-/// `false` is not an error — it means there was no custom order to forget, which is the normal
-/// outcome of a "reset" on a level nobody had dragged. Reported rather than swallowed for the same
-/// reason `queries::remove` reports it: a stale caller and a successful clear must not look alike.
+/// Forget one level's order. `false` = nothing to forget, reported so a stale caller and a
+/// successful clear differ.
 pub fn clear_level(store: &mut TreeOrderStore, connection_id: &str, parent_key: &str) -> bool {
     let before = store.levels.len();
     store
@@ -185,11 +132,7 @@ pub fn clear_level(store: &mut TreeOrderStore, connection_id: &str, parent_key: 
     store.levels.len() != before
 }
 
-/// The delete cascade: drop every level of a connection. Returns how many were removed.
-///
-/// The count exists so `db_connection_delete` can report what it discarded alongside the saved
-/// queries it cascades over, and so a test can prove the cascade is *scoped* — that deleting
-/// one connection did not sweep another's orders away with it.
+/// The delete cascade: drop every level of a connection, returning the count for the report.
 pub fn remove_for_connection(store: &mut TreeOrderStore, connection_id: &str) -> usize {
     let before = store.levels.len();
     store.levels.retain(|l| l.connection_id != connection_id);
@@ -374,11 +317,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The reason `#[serde(default)]` is permanent on every field here: a file
-    /// written by an older build — JSON built BY HAND, never serialized from today's struct, so the
-    /// expectation cannot be derived from the code under test — must load with its orders intact,
-    /// and must still have them after a save→reload, because the second half of the hazard is the
-    /// write-back, not the read.
+    /// The older-build JSON is hand-written, not serialized from today's struct, and must keep its
+    /// orders through a save→reload (the write-back is half the hazard).
     #[test]
     fn a_file_missing_a_field_still_loads_its_orders_and_survives_a_write_back() {
         let dir = temp_dir("legacy");

@@ -1,47 +1,6 @@
-/**
- * Reusable mock of the Tauri IPC boundary.
- *
- * There is no Rust process behind a Vitest run, so `invoke()` would reject with
- * "window.__TAURI_INTERNALS__ is undefined". `@tauri-apps/api/mocks` solves the
- * *control* plane by installing a fake `__TAURI_INTERNALS__` — it works fine on
- * v2 under jsdom (verified; it only needs `window.crypto.getRandomValues`).
- *
- * The *hot* plane needs more. Our PTY bytes do not come back as a command's
- * return value: they stream in over a `tauri::ipc::Channel` (ARCHITECTURE §2.4,
- * `src/app/ipc.ts`). The JS `Channel` is constructed client-side, registers a
- * callback in `__TAURI_INTERNALS__.callbacks`, and serializes into the invoke
- * args as the string `"__CHANNEL__:<id>"`. Rust later pushes frames by invoking
- * that callback id. `mockIPC` alone gives you no way to drive that — hence
- * `ChannelDriver` below.
- *
- * ── Usage: control plane ─────────────────────────────────────────────────────
- *
- *   const ipc = installTauriMock();
- *   ipc.handle("terminal_open", (args) => ({ id: args.terminalId, ... }));
- *   afterEach(() => ipc.reset());
- *
- *   expect(ipc.calls("terminal_write")).toHaveLength(1);
- *
- * ── Usage: streaming Channel (the PTY firehose) ──────────────────────────────
- *
- *   const ipc = installTauriMock();
- *   const pty = ipc.channel();                 // captures the next Channel
- *   ipc.handle("terminal_open", (args) => {
- *     pty.capture(args.onOutput);              // "__CHANNEL__:<id>"
- *     return meta;
- *   });
- *
- *   await openTerminal({ ..., onOutput: new Channel<ArrayBuffer>() });
- *   pty.send(new TextEncoder().encode("hello\r\n"));  // → xterm.write()
- *   pty.close();                                       // Rust dropped the tx
- *
- * `send()` accepts bytes and delivers a real `ArrayBuffer`, matching what
- * `InvokeResponseBody::Raw` surfaces as (see `toBytes()` in `app/ipc.ts` for
- * the number[] fallback the postMessage path can produce — `sendRaw()` lets a
- * test exercise that branch too). Frame ordering is handled: `Channel` only
- * dispatches a message when its index matches the next expected one, so the
- * driver tracks and increments the index for you.
- */
+/** IPC mock: `@tauri-apps/api/mocks` covers commands; `ChannelDriver` drives the hot plane, where
+ * PTY bytes stream over a `Channel` sent as `"__CHANNEL__:<id>"` (ARCHITECTURE §2.4). `send()`
+ * delivers a real `ArrayBuffer`; `sendRaw()` covers `toBytes()`'s number[] branch. */
 
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
@@ -54,10 +13,7 @@ export interface IpcCall {
 /** What a mocked command returns. May be a value or a promise. */
 export type IpcHandler = (args: Record<string, unknown>) => unknown;
 
-/**
- * Minimal shape of the mock internals we reach into. Not exported by the Tauri
- * API's public types (they describe the real bridge), so declared here.
- */
+/** The mock internals we reach into; the public types describe the real bridge. */
 interface TauriMockInternals {
   runCallback?: (id: number, data: unknown) => void;
   callbacks?: Map<number, (data: unknown) => void>;
@@ -92,13 +48,8 @@ export function channelIdOf(serialized: unknown): number {
   );
 }
 
-/**
- * Drives one streaming `Channel` from the "Rust" side.
- *
- * Owns the message index so frames arrive in order — `Channel` buffers any
- * frame whose index runs ahead of what it expects, so a driver that always sent
- * index 0 would deliver exactly one message and silently queue the rest.
- */
+/** Drives one `Channel` from the "Rust" side and owns the message index: `Channel` buffers a frame
+ * whose index runs ahead, so always sending 0 would deliver one message and queue the rest. */
 export class ChannelDriver {
   private id: number | null = null;
   private index = 0;
@@ -129,10 +80,7 @@ export class ChannelDriver {
     return this;
   }
 
-  /**
-   * Push PTY bytes. Delivered as a real `ArrayBuffer` — what
-   * `InvokeResponseBody::Raw` surfaces as on the happy path.
-   */
+  /** Pushes PTY bytes as a real `ArrayBuffer`, as `InvokeResponseBody::Raw` surfaces them. */
   send(bytes: Uint8Array | ArrayBuffer | string): this {
     const buf =
       typeof bytes === "string"
@@ -168,11 +116,7 @@ export interface TauriMock {
   reset(): void;
 }
 
-/**
- * Install the IPC mock. Unhandled commands reject with a loud error rather than
- * resolving `undefined` — a silent `undefined` from an un-stubbed command is
- * how you get a test that passes for the wrong reason.
- */
+/** Unhandled commands reject loudly: a silent `undefined` passes tests for the wrong reason. */
 export function installTauriMock(): TauriMock {
   const handlers = new Map<string, IpcHandler>();
   const recorded: IpcCall[] = [];

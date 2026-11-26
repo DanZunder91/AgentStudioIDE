@@ -1,11 +1,6 @@
-//! LOCAL INTEGRATION (`#[ignore]`): the real macOS unified log, end to end.
-//!
-//! Runs `/usr/bin/log stream` through the production `Syslog` manager with a filter for the
-//! `logger` process, emits a unique marker with `/usr/bin/logger` (a built-in, writes to the
-//! unified log, needs no permission), and asserts the marker lands in the `LogHub` ring as a
-//! `machine` line. Never touches `simctl`. Registered in `npm run verify`.
-//!
-//!   cargo test --test syslog_live -- --ignored
+//! Local integration (`#[ignore]`, run by `npm run verify`): real `/usr/bin/log stream` through the
+//! production `Syslog` manager; a `/usr/bin/logger` marker (no permission needed) must reach the
+//! `LogHub` ring as a `machine` line. Never touches `simctl`.
 
 #![cfg(target_os = "macos")]
 

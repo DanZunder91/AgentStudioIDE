@@ -1,38 +1,13 @@
-//! The workspace file tree + file read/write backend (M4).
-//!
-//! Three operations, one security model. [`read_dir`] lazily lists a folder's
-//! immediate children (the right-rail tree asks again on each expand); [`read_file`]
-//! reads a file's text for the syntax-highlighted editor; [`write_file`] saves the
-//! editor's changes back atomically.
-//!
-//! **Security scope.** An XSS in the
-//! webview must not be able to turn these into a whole-filesystem read/write. So every
-//! request is confined to an **allowed root** — the user's recent projects plus the
-//! default workspace — determined *server-side*, never from a client argument (a
-//! client-supplied allow-list would defeat the purpose). The requested path is
-//! **canonicalized** (resolving `..` and symlinks) and must land inside one of those
-//! roots ([`resolve_in_scope`], the single enforcement point); a symlink that escapes
-//! the root resolves to an outside target and is rejected. Anything out of scope,
-//! unreadable, the wrong type, oversized, or binary → `Err`, and the frontend shows a
-//! calm empty / "can't preview" state rather than crashing.
-//!
-//! The logic ([`list_dir`], [`read_file_scoped`], [`write_file_scoped`]) takes the
-//! allowed roots explicitly so it is unit-testable against a temp tree with no
-//! `AppHandle`; the `#[tauri::command]`s are thin glue resolving those roots from
-//! recent-projects + the workspace.
+//! Workspace file tree and file read/write backend. Every path is canonicalized (`..`, symlinks)
+//! and confined to server-side allowed roots by [`resolve_in_scope`], never a client list, so a
+//! webview XSS can't reach the whole filesystem. Commands are thin glue over root-explicit fns.
 
 use std::path::{Path, PathBuf};
 
 use crate::model::FsEntry;
 
-/// The directories `read_dir` is allowed to browse: the recent-projects list plus
-/// the default workspace root. Server-authoritative — the client cannot extend it.
-///
-/// The default workspace (the agent's default cwd) is included so the tree still
-/// works before the user has explicitly picked (and thus recorded) a project.
-/// Returned raw; [`list_dir`] canonicalizes each root before the prefix check.
-///
-/// `pub(crate)` so the `find` module confines `find_in_files` to the same roots.
+/// Roots `read_dir` may browse: recent projects plus the default workspace (so the tree works
+/// before a project is picked). Server-authoritative; returned raw, canonicalized by the caller.
 pub(crate) fn allowed_roots(app: &tauri::AppHandle) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = crate::recent_projects::recent_projects(app.clone())
         .into_iter()
@@ -42,20 +17,9 @@ pub(crate) fn allowed_roots(app: &tauri::AppHandle) -> Vec<PathBuf> {
     roots
 }
 
-/// Canonicalize `requested` and confirm it resolves to a path at or under one of
-/// `allowed_roots`. Returns the canonical path.
-///
-/// This is the **single enforcement point** for the security scope, shared by
-/// [`list_dir`] and [`read_file_scoped`]. Canonicalizing first resolves `..` and
-/// follows symlinks, so the prefix check is on the *real* target — a symlink that
-/// escapes the root resolves to an outside path and is rejected here. `starts_with`
-/// is component-wise, so `/a/bee` never matches the root `/a/b`. Scope is checked
-/// before the file/dir type, so an out-of-scope path never reveals what it is.
-///
-/// Errors: the path does not exist (`canonicalize` fails), or it is outside every
-/// allowed root.
-///
-/// `pub(crate)` so the `find` module reuses the exact same scope guard.
+/// Canonicalize `requested` and require it at/under an allowed root: THE single scope check.
+/// Canonicalizing first defeats `..` and escaping symlinks; `starts_with` is component-wise.
+/// Scope is checked before type, so an out-of-scope path never reveals what it is.
 pub(crate) fn resolve_in_scope(
     requested: &Path,
     allowed_roots: &[PathBuf],
@@ -74,12 +38,8 @@ pub(crate) fn resolve_in_scope(
     Ok(real)
 }
 
-/// List the immediate children of `requested`, confined to `allowed_roots`.
-///
-/// Order: directories first, then files, each case-insensitive alphabetical.
-/// Entries that cannot be stat'd (e.g. a broken symlink) are skipped rather than
-/// failing the whole call. Errors: the path does not exist, is outside every allowed
-/// root, is not a directory, or cannot be read.
+/// Children of `requested`: directories first, then files, case-insensitive. Entries that can't
+/// be stat'd (a broken symlink) are skipped rather than failing the call.
 fn list_dir(requested: &Path, allowed_roots: &[PathBuf]) -> Result<Vec<FsEntry>, String> {
     let real = resolve_in_scope(requested, allowed_roots)?;
     if !real.is_dir() {
@@ -91,10 +51,8 @@ fn list_dir(requested: &Path, allowed_roots: &[PathBuf]) -> Result<Vec<FsEntry>,
     for entry in read.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let child = real.join(entry.file_name());
-        // Follow symlinks for the is-dir hint, and skip anything we cannot stat (a
-        // broken symlink, a race-deleted entry). A symlink pointing OUT of the root
-        // is still listed, but expanding it re-enters `read_dir`, which canonicalizes
-        // and rejects it — so no escape, just a folder that refuses to open.
+        // Skip what can't be stat'd. An out-of-root symlink is listed, but expanding it
+        // re-enters `read_dir`, which rejects it.
         let Ok(meta) = std::fs::metadata(&child) else {
             continue;
         };
@@ -115,12 +73,8 @@ fn list_dir(requested: &Path, allowed_roots: &[PathBuf]) -> Result<Vec<FsEntry>,
     Ok(entries)
 }
 
-/// List the immediate children of `path` for the workspace file tree.
-///
-/// Frontend contract: `invoke<FsEntry[]>('read_dir', { path })`. `path` is an
-/// absolute directory (the agent/workspace cwd, or a folder path returned by a
-/// previous `read_dir`). Out-of-scope / unreadable / non-directory → `Err`, which
-/// the tree renders as "no children" rather than an error.
+/// Frontend: `invoke<FsEntry[]>('read_dir', { path })`, `path` absolute. Out-of-scope,
+/// unreadable or non-directory → `Err`, which the tree renders as "no children".
 #[tauri::command]
 pub fn read_dir(app: tauri::AppHandle, path: String) -> Result<Vec<FsEntry>, String> {
     list_dir(Path::new(&path), &allowed_roots(&app))
@@ -136,13 +90,8 @@ const MAX_PREVIEW_BYTES: u64 = 2 * 1024 * 1024;
 /// first few KB is a reliable binary tell, and valid-UTF-8 source never has one.
 const BINARY_SNIFF_BYTES: usize = 8192;
 
-/// Read a scoped UTF-8 text file's contents, for the editor preview.
-///
-/// Confined to `allowed_roots` exactly like [`list_dir`] (same [`resolve_in_scope`]
-/// guard). Refuses, as a distinct `Err`, anything the read-only editor should show a
-/// calm "can't preview" state for: a path that is not a regular file, a file over
-/// [`MAX_PREVIEW_BYTES`], or a binary file (a NUL byte in the head, or invalid
-/// UTF-8). Errors carry a short, stable message the frontend can branch on.
+/// Read a scoped UTF-8 text file. Distinct, stable `Err`s for non-files, files over
+/// [`MAX_PREVIEW_BYTES`], and binaries (a NUL in the head, or invalid UTF-8).
 fn read_file_scoped(requested: &Path, allowed_roots: &[PathBuf]) -> Result<String, String> {
     let real = resolve_in_scope(requested, allowed_roots)?;
 
@@ -166,19 +115,9 @@ fn read_file_scoped(requested: &Path, allowed_roots: &[PathBuf]) -> Result<Strin
     String::from_utf8(bytes).map_err(|_| "binary file".to_string())
 }
 
-/// Read a workspace file's text for the read-only editor preview.
-///
-/// Frontend contract: `invoke<string>('read_file', { path })`. `path` is an absolute
-/// file path (e.g. one returned by `read_dir`). Out-of-scope / nonexistent /
-/// directory / unreadable / oversized / binary → `Err(<short message>)`, which the
-/// editor renders as a "can't preview" state rather than crashing.
-///
-/// `async` + `spawn_blocking` for exactly the reason [`file_stamps`] is: a
-/// synchronous `#[tauri::command]` runs on the **main/event-loop thread**, and the
-/// `stat` + `fs::read` below are unbounded blocking syscalls. On an SMB/NFS mount or
-/// a spun-down disk one of them can block for seconds, during which the PTY hot path
-/// stutters and no other `invoke` can even be dispatched — the frozen-app bug, whose
-/// fix was this exact move.
+/// Frontend: `invoke<string>('read_file', { path })`; any failure is `Err(<short message>)`.
+/// `async` + `spawn_blocking`: a sync command runs on the event-loop thread, and a `stat`/read
+/// on a slow mount would freeze the whole app.
 #[tauri::command]
 pub async fn read_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
     let roots = allowed_roots(&app);
@@ -187,14 +126,8 @@ pub async fn read_file(app: tauri::AppHandle, path: String) -> Result<String, St
         .unwrap_or_else(|e| Err(format!("read task failed: {e}")))
 }
 
-/// One file's on-disk identity: how to tell it changed without reading it.
-///
-/// `(mtime, size)` rather than mtime alone, deliberately: several filesystems
-/// stamp mtime with 1-second granularity, so an agent that writes a file twice
-/// inside one second would look unchanged. The size almost always moves when the
-/// content does, and the pair is still one `stat` — the cheapest honest answer.
-/// `None` for a path that is gone, unreadable, or out of scope: the caller treats
-/// "cannot tell" and "unchanged" differently, so this must not collapse to a value.
+/// A file's on-disk identity `(mtime, size)`: some filesystems stamp mtime at 1 s granularity.
+/// `None` (gone, unreadable, out of scope) must stay distinct from "unchanged".
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileStamp {
@@ -223,16 +156,9 @@ pub fn file_stamp_scoped(requested: &Path, allowed_roots: &[PathBuf]) -> Option<
     })
 }
 
-/// Stamp several files at once — the open editors' change check.
-///
-/// Batched because the frontend asks about every open editor on a timer, and one
-/// IPC round trip for N files beats N round trips. `async` + `spawn_blocking`
-/// because a synchronous `#[tauri::command]` runs on the **main/event-loop
-/// thread** and a stat storm there would stutter the window (the same rule
-/// `portability` and `metrics` follow, and that `find` had to be taught).
-///
-/// Frontend contract: `invoke<(FileStamp | null)[]>('file_stamps', { paths })` —
-/// one answer per input, in order, so the caller can zip them without matching.
+/// Stamp the open editors' files in one IPC round trip, off the event-loop thread.
+/// Frontend: `invoke<(FileStamp | null)[]>('file_stamps', { paths })`, one answer per
+/// input, in order.
 #[tauri::command]
 pub async fn file_stamps(app: tauri::AppHandle, paths: Vec<String>) -> Vec<Option<FileStamp>> {
     let roots = allowed_roots(&app);
@@ -251,18 +177,9 @@ pub async fn file_stamps(app: tauri::AppHandle, paths: Vec<String>) -> Vec<Optio
 /// never base64'd into the webview. ~10 MiB.
 const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
 
-/// The `data:` MIME for a known image extension, or `None` for anything we won't
-/// serve as an image. Kept to real raster/vector image types the webview renders in
-/// an `<img>`; an SVG served here is inert (scripts do not run in image context).
-///
-/// **The argument is a filesystem path, never a URL** — deliberately. `logo.png?v=2`
-/// has the extension `png?v=2`, so it returns `None` and the read is refused. Do NOT
-/// "fix" that by stripping a `?…`/`#…` here: this is the last gate before a file's
-/// bytes are base64'd into the webview, and teaching it to accept URL-shaped input
-/// would widen a security-critical function to a syntax it is not written to reason
-/// about (`a.png?x=/../../etc/passwd`). URL parsing belongs entirely in the frontend,
-/// which resolves a Markdown/HTML `src` to a real path before it ever reaches this
-/// command. Pinned by `image_mime_never_parses_a_url_query_string`.
+/// `data:` MIME for a known image extension, else `None`; SVG is inert in `<img>`. Takes a
+/// filesystem path, never a URL: `logo.png?v=2` is refused on purpose. This is the last gate
+/// before bytes are base64'd into the webview; URL parsing belongs in the frontend.
 fn image_mime(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     Some(match ext.as_str() {
@@ -305,13 +222,8 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// Read a scoped image file and return it as a `data:` URL for an `<img src>`.
-///
-/// Confined to `allowed_roots` by the SAME [`resolve_in_scope`] guard as
-/// [`read_file_scoped`] (all fs access is server-authoritative) — so a
-/// Markdown preview can only inline images from folders the user already opened, and
-/// a crafted `../` path or an escaping symlink is rejected. Refuses non-files, files
-/// over [`MAX_IMAGE_BYTES`], and unknown/non-image extensions.
+/// Read a scoped image as a `data:` URL (same [`resolve_in_scope`] guard). Refuses non-files,
+/// files over [`MAX_IMAGE_BYTES`] and non-image extensions.
 fn read_image_scoped(requested: &Path, allowed_roots: &[PathBuf]) -> Result<String, String> {
     let real = resolve_in_scope(requested, allowed_roots)?;
     let meta = std::fs::metadata(&real).map_err(|e| format!("cannot stat file: {e}"))?;
@@ -326,19 +238,8 @@ fn read_image_scoped(requested: &Path, allowed_roots: &[PathBuf]) -> Result<Stri
     Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)))
 }
 
-/// A scoped image as a `data:` URL, for inlining into the Markdown preview.
-///
-/// Frontend contract: `invoke<string>('read_image_data_url', { path })`. `path` is an
-/// absolute image path (the preview resolves a Markdown `src` against the file's
-/// dir). Out-of-scope / nonexistent / non-image / oversized → `Err(<short message>)`,
-/// which the preview treats as "leave the `<img>` as-is" (a broken image, never a
-/// crash).
-///
-/// `async` + `spawn_blocking`, same as [`read_file`] and [`file_stamps`] — and it
-/// matters more here, because the payload is up to [`MAX_IMAGE_BYTES`] (10 MiB) and a
-/// Markdown page with a dozen images issues a dozen of these back to back. Running
-/// them on the event-loop thread is what froze the app during a search;
-/// `html_preview::handle` already moved the identical asset read off it.
+/// Frontend: `invoke<string>('read_image_data_url', { path })`; `Err` leaves the `<img>` as-is.
+/// `async` + `spawn_blocking` like [`read_file`]: up to 10 MiB per image, a dozen per page.
 #[tauri::command]
 pub async fn read_image_data_url(app: tauri::AppHandle, path: String) -> Result<String, String> {
     let roots = allowed_roots(&app);
@@ -347,19 +248,9 @@ pub async fn read_image_data_url(app: tauri::AppHandle, path: String) -> Result<
         .unwrap_or_else(|e| Err(format!("read task failed: {e}")))
 }
 
-/// Overwrite an existing scoped regular file with `content`, atomically.
-///
-/// Confined to `allowed_roots` exactly like [`read_file_scoped`] (same
-/// [`resolve_in_scope`] guard). The target **must already exist and be a regular
-/// file** — this command edits files opened from the tree, it does not create new ones,
-/// so a directory or nonexistent path is an `Err`.
-///
-/// The write is atomic: the content lands in a temp sibling in the *same* directory
-/// (so the final `rename` stays on one filesystem and cannot cross-device-copy), then
-/// the rename atomically replaces the target. A crash before the rename leaves the
-/// original file byte-for-byte intact — an editor save must never truncate the user's
-/// file into a half-written state. On any failure the temp is removed, so no litter
-/// is left behind and the target is untouched.
+/// Atomically overwrite an existing scoped regular file (never creates one): write a temp
+/// sibling in the same dir, then rename over the target. A crash or failure leaves the
+/// original intact and no temp behind.
 fn write_file_scoped(
     requested: &Path,
     content: &str,
@@ -407,26 +298,15 @@ fn atomic_write(
     std::fs::rename(tmp, target)
 }
 
-/// Save `content` to an existing workspace file (the editor's Save action).
-///
-/// Frontend contract: `invoke('write_file', { path, content })` → `Ok(())` on
-/// success, `Err(<short message>)` otherwise (out-of-scope / nonexistent / directory
-/// / permission denied / io error). Read-only viewer aside, this is the one mutating
-/// fs command; it never creates a new file and never escapes the allowed roots.
+/// Frontend: `invoke('write_file', { path, content })` → `Ok(())` or `Err(<short message>)`.
 #[tauri::command]
 pub fn write_file(app: tauri::AppHandle, path: String, content: String) -> Result<(), String> {
     write_file_scoped(Path::new(&path), &content, &allowed_roots(&app))
 }
 
 // ── Mutations: create dir / create file / rename-or-move / delete ─────────────
-//
-// Every mutation is confined to `allowed_roots` by the SAME server-authoritative
-// guard as the read/write commands: an existing path routes through
-// [`resolve_in_scope`], and a NOT-YET-existing target (create / rename destination)
-// routes through [`resolve_new_in_scope`], which resolves the *parent* through the
-// same guard so a `..` or escaping symlink in the destination still cannot leave the
-// scope. The client never supplies the allow-list. All four `#[tauri::command]`s are
-// thin glue over unit-testable free functions taking `allowed_roots` explicitly.
+// Existing paths go through [`resolve_in_scope`]; not-yet-existing targets through
+// [`resolve_new_in_scope`], which scope-checks the parent.
 
 /// Map an `io::Error` to a short, stable message, folding `PermissionDenied` to the
 /// same `"permission denied"` string [`write_file_scoped`] uses (so the frontend has
@@ -438,10 +318,8 @@ fn map_io_err(action: &str, e: &std::io::Error) -> String {
     }
 }
 
-/// Validate a single path component supplied by the client (the final name of a
-/// created / renamed target). Rejects empty, `.`/`..`, and anything that could
-/// escape the intended parent by embedding a separator — a name is one component,
-/// never a path.
+/// Validate a client-supplied final name: one component, never a path. Rejects empty, `.`,
+/// `..` and embedded separators.
 fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("name cannot be empty".to_string());
@@ -464,15 +342,9 @@ fn is_allowed_root(real: &Path, allowed_roots: &[PathBuf]) -> bool {
         .any(|root| root == real)
 }
 
-/// Resolve a target whose FINAL component may not exist yet (a create target, or a
-/// rename/move destination), keeping the scope guard server-authoritative.
-///
-/// [`resolve_in_scope`] canonicalizes, so it cannot resolve a path that does not
-/// exist. Instead we split off the final component, [`validate_name`] it, resolve the
-/// **parent** through [`resolve_in_scope`] (the parent must already exist AND be in
-/// scope — so a `..` or an escaping symlink in the destination is still rejected),
-/// confirm the resolved parent is a directory, and return `real_parent.join(name)`.
-/// The returned path itself is NOT required to exist.
+/// Resolve a target whose final component may not exist yet: validate the name, scope-check
+/// the existing parent via [`resolve_in_scope`] (so `..` or escaping symlinks still fail),
+/// require it be a directory, return `real_parent.join(name)`.
 fn resolve_new_in_scope(requested: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
     let parent = requested
         .parent()
@@ -517,11 +389,8 @@ fn create_file_scoped(requested: &Path, allowed_roots: &[PathBuf]) -> Result<(),
         .map_err(|e| map_io_err("create file", &e))
 }
 
-/// Rename `from` to `to`, serving both rename (same parent, new final component) and
-/// move (different parent, same basename). The source must exist and be in scope; the
-/// destination's parent must exist and be in scope; the destination must not already
-/// exist (never clobber). Refuses to move a workspace root itself, and refuses to move
-/// a directory into its own subtree (which would be a self-referential move).
+/// Rename or move `from` to `to`. Never clobbers an existing destination; refuses to move a
+/// workspace root or a directory into its own subtree.
 fn rename_scoped(from: &Path, to: &Path, allowed_roots: &[PathBuf]) -> Result<(), String> {
     let real_from = resolve_in_scope(from, allowed_roots)?;
     let real_to = resolve_new_in_scope(to, allowed_roots)?;
@@ -555,38 +424,25 @@ fn delete_scoped(path: &Path, allowed_roots: &[PathBuf]) -> Result<(), String> {
     }
 }
 
-/// Create a new directory in the workspace tree.
-///
-/// Frontend contract: `invoke('create_directory', { path })` → `Ok(())` or
-/// `Err(<short message>)` (out-of-scope / bad name / already exists / io error).
+/// Frontend: `invoke('create_directory', { path })` → `Ok(())` or `Err(<short message>)`.
 #[tauri::command]
 pub fn create_directory(app: tauri::AppHandle, path: String) -> Result<(), String> {
     create_directory_scoped(Path::new(&path), &allowed_roots(&app))
 }
 
-/// Create a new empty file in the workspace tree.
-///
-/// Frontend contract: `invoke('create_file', { path })` → `Ok(())` or
-/// `Err(<short message>)` (out-of-scope / bad name / already exists / io error).
+/// Create an empty file. Frontend: `invoke('create_file', { path })` → `Ok(())` or `Err(msg)`.
 #[tauri::command]
 pub fn create_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
     create_file_scoped(Path::new(&path), &allowed_roots(&app))
 }
 
-/// Rename or move a file/directory within the workspace tree (one command for both).
-///
-/// Frontend contract: `invoke('rename_path', { from, to })` → `Ok(())` or
-/// `Err(<short message>)` (out-of-scope / destination exists / move-root / move-into-
-/// self / io error).
+/// Rename or move. Frontend: `invoke('rename_path', { from, to })` → `Ok(())` or `Err(msg)`.
 #[tauri::command]
 pub fn rename_path(app: tauri::AppHandle, from: String, to: String) -> Result<(), String> {
     rename_scoped(Path::new(&from), Path::new(&to), &allowed_roots(&app))
 }
 
-/// Delete a file, or a directory recursively, from the workspace tree.
-///
-/// Frontend contract: `invoke('delete_path', { path })` → `Ok(())` or
-/// `Err(<short message>)` (out-of-scope / delete-root / nonexistent / io error).
+/// Delete a file, or a directory recursively. Frontend: `invoke('delete_path', { path })`.
 #[tauri::command]
 pub fn delete_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     delete_scoped(Path::new(&path), &allowed_roots(&app))
@@ -946,21 +802,8 @@ mod tests {
         assert_eq!(err, "binary file");
     }
 
-    /// The sniff looks at EXACTLY the first `BINARY_SNIFF_BYTES` bytes — no further.
-    ///
-    /// Two-sided, and the second half is the one that carries the test:
-    /// every other NUL test puts the byte in the head, so widening the window
-    /// (`.take(BINARY_SNIFF_BYTES)` → `.take(usize::MAX)`, or deleting the `.take`)
-    /// survives all of them. A NUL is *valid UTF-8*, so `from_utf8` waves a
-    /// past-the-window NUL straight through and the `.take` bound is the only thing
-    /// that decides — a file whose first NUL sits at index 8192 must therefore read
-    /// successfully. The first half pins the other side: a NUL at index 8191, the last
-    /// byte still inside the window, must be caught.
-    ///
-    /// Hardcoded 8191/8192 rather than the constant, matching the "NON-self-referential"
-    /// convention below: a mutated `BINARY_SNIFF_BYTES` would otherwise move the payload
-    /// with the window and hide the change. The constant itself is pinned by
-    /// `size_cap_constants_are_the_expected_literals`.
+    /// A NUL is valid UTF-8, so only the `.take` bound catches it: at 8191 it is binary, at 8192
+    /// it reads fine. Literals, not the constant, so a mutated constant can't move the payload.
     #[test]
     fn the_binary_sniff_window_ends_at_exactly_8192_bytes() {
         let t = TempTree::new("rf-window");
@@ -1092,11 +935,8 @@ mod tests {
         assert_eq!(err, "path is not a file");
     }
 
-    /// **Atomicity (root-proof).** When the write step fails, the target must be left
-    /// byte-for-byte intact — a non-atomic `write(target, …)` would truncate it. We
-    /// force the failure by pointing the temp at a nonexistent parent directory, which
-    /// makes `std::fs::write` fail with `ENOENT` for *everyone*, root included (unlike
-    /// a read-only dir, which root ignores). This runs on every platform / uid.
+    /// The temp's parent doesn't exist, so the write fails with ENOENT even under root (which
+    /// ignores read-only dirs); the target must stay byte-for-byte intact.
     #[test]
     fn atomic_write_failure_leaves_the_target_intact() {
         let t = TempTree::new("wf-atomic-core");
@@ -1113,11 +953,8 @@ mod tests {
         assert!(!bogus_tmp.exists(), "no temp was created");
     }
 
-    /// **Atomicity (full path).** With the target's directory made read-only, an
-    /// *existing* file can still be modified in place (the naive-write footgun) but a
-    /// NEW temp sibling cannot be created — so the atomic write fails at temp creation
-    /// and must leave the target byte-for-byte intact, with no temp litter, and report
-    /// `"permission denied"`. Skips under root (which ignores the dir permission).
+    /// A read-only dir allows in-place edits but not a new temp, so the atomic write fails at
+    /// temp creation: target intact, no litter, "permission denied". Skipped under root.
     #[cfg(unix)]
     #[test]
     fn write_is_atomic_a_failed_write_leaves_the_target_intact() {
@@ -1133,10 +970,8 @@ mod tests {
         // created (so an atomic temp+rename cannot even start).
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
 
-        // Root ignores directory permission bits (common in CI containers), so this
-        // failure injection is a no-op there. Probe first and skip cleanly if we
-        // cannot actually be blocked — the cross-platform guarantee is covered
-        // root-proof by `atomic_write_failure_leaves_the_target_intact`.
+        // Root ignores dir permission bits (CI containers), so probe and skip if we can't be
+        // blocked; `atomic_write_failure_leaves_the_target_intact` covers that case.
         let probe = locked.join(".root-probe");
         let cannot_block = std::fs::write(&probe, b"x").is_ok();
         let _ = std::fs::remove_file(&probe);
@@ -1591,10 +1426,7 @@ mod tests {
     }
 
     // ── size-cap constants + boundaries (mutation-hardening) ──────────────────
-    //
-    // These are NON-self-referential: they pin each constant to a hardcoded literal
-    // so a mutation of the arithmetic (`2 * 1024 * 1024` → `2 + 1024 * 1024`, etc.)
-    // is caught even though the size-limit tests build their payload FROM the const.
+    // Pinned to literals: the size-limit tests build their payloads FROM the consts.
 
     /// The preview / image caps are exactly the intended byte counts. Hardcoded
     /// literals, so a mutated `*`→`+`/`/` in the const definition is caught here even
@@ -1625,11 +1457,8 @@ mod tests {
         assert!(read_file_scoped(&t.root.join("under.log"), &roots).is_ok());
     }
 
-    /// The oversized-IMAGE refusal boundary in `read_image_scoped` — there was no
-    /// oversized-image test at all. A file one byte over the cap is refused with the
-    /// exact "image too large" message; a file exactly AT the cap is accepted (so the
-    /// boundary is `>`, not `>=` or `==`). Uses a fixed literal so the threshold is
-    /// pinned to 10 MiB regardless of the constant's arithmetic.
+    /// One byte over the cap is refused ("image too large"); exactly at the cap is accepted.
+    /// A literal 10 MiB pins the threshold regardless of the constant's arithmetic.
     #[test]
     fn read_image_rejects_oversized_and_accepts_at_cap() {
         let t = TempTree::new("img-cap");
@@ -1681,14 +1510,8 @@ mod tests {
         }
     }
 
-    /// A URL-shaped name is `None`, and that is the INTENDED answer — this test exists
-    /// to stop someone "fixing" it.
-    ///
-    /// `image_mime` takes a filesystem path, so `logo.png?v=2` has the extension
-    /// `png?v=2` and is refused. Stripping a `?…`/`#…` here would teach the last gate
-    /// before a file is base64'd into the webview to accept a syntax it is not written
-    /// to reason about; URL parsing belongs in the frontend, which resolves a `src` to
-    /// a real path first. Any such change turns this red, on purpose.
+    /// `None` is INTENDED; this test stops a "fix". `image_mime` takes a path, and the last gate
+    /// before the webview must not learn URL syntax; the frontend resolves `src` to a path first.
     #[test]
     fn image_mime_never_parses_a_url_query_string() {
         assert_eq!(image_mime(Path::new("logo.png?v=2")), None);
@@ -1701,18 +1524,8 @@ mod tests {
 
     // ── the file-reading commands must not run on the event-loop thread ───────
 
-    /// `read_file` and `read_image_data_url` must be `async`.
-    ///
-    /// A synchronous `#[tauri::command]` is dispatched inline on the main/event-loop
-    /// thread, so its `fs::read` — unbounded, and up to 10 MiB for an image — holds
-    /// the whole UI on a slow mount: the PTY hot path stutters and no other `invoke`
-    /// can be dispatched. That is the frozen-search bug, and the
-    /// fix here is the same `async` + `spawn_blocking` shape as [`file_stamps`].
-    ///
-    /// Pinned at COMPILE time, which is the only place the property is observable:
-    /// dropping the `async` makes these fn items stop returning a `Future` and this
-    /// test stops building. The `Send` bound is part of it — a future that is not
-    /// `Send` cannot be spawned onto the blocking pool at all.
+    /// A sync command runs inline on the event-loop thread, so a slow `fs::read` freezes the UI.
+    /// Pinned at compile time: without `async` (and a `Send` future) this test stops building.
     #[test]
     fn the_file_reading_commands_are_async_and_never_block_the_event_loop() {
         fn assert_async<A, B, R: std::future::Future + Send>(_command: fn(A, B) -> R) {}
@@ -1722,10 +1535,8 @@ mod tests {
 
     // ── map_io_err: exact strings + PermissionDenied folding ──────────────────
 
-    /// `map_io_err` folds `PermissionDenied` to the exact shared string and formats
-    /// every other kind as `cannot {action}: {e}`. Pins both the literal strings
-    /// (mutated to `""`/`"xyzzy"`) and the `PermissionDenied` arm (whose deletion would
-    /// let a perm error fall through to the generic branch).
+    /// Pins the literal strings and the `PermissionDenied` arm (deleting it would fall through
+    /// to the generic `cannot {action}: {e}` branch).
     #[test]
     fn map_io_err_folds_permission_denied_and_formats_others() {
         use std::io::{Error, ErrorKind};

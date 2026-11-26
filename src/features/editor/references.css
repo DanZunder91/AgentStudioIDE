@@ -1,7 +1,4 @@
-/* ── Find Usages (references tool window) ────────────────────────────────────
-   The IntelliJ/VS Code "Find Usages" placement: docked to the BOTTOM of the
-   editor area (distinct from the top-docked Find-in-Files overlay), so the code
-   stays visible above it. Theme variables from App.css. */
+/* ── Find Usages: docked at the bottom of the editor so the code stays visible above it ── */
 
 .refs-panel {
   position: fixed;

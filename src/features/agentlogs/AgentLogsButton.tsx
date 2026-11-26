@@ -1,8 +1,5 @@
-/**
- * AgentLogsButton — the titlebar affordance that opens the fleet-wide log stream.
- * Mirrors `<MetricsButton/>`:
- * one store action, the destination is a singleton TAB.
- */
+/** Titlebar button opening the fleet log stream; like `<MetricsButton/>`, one store action to a
+ * singleton TAB. */
 
 import { useAppStore } from "../../app/store";
 import { LogStreamIcon } from "../../components/icons";

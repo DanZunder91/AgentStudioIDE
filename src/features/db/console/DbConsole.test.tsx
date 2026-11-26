@@ -1,22 +1,5 @@
-/**
- * DbConsole tests.
- *
- * ── Nothing is mocked except Shiki ───────────────────────────────────────────
- * Every action is a prop, so the doubles are plain `vi.fn()`s — no store, no IPC, no
- * `invoke`. The one `vi.mock` is `../../editor/shiki`, stubbed to "no grammar
- * available": the console mounts a real CodeMirror view, and a real grammar import
- * per test would track a few hundred milliseconds for nothing this file asserts.
- * `QueryEditor.test.tsx` owns the highlighting claims.
- *
- * ── What is claimed here, and what is deferred to the browser tier ───────────
- * jsdom has no layout engine, so the divider's *geometry* cannot be asserted here:
- * `getBoundingClientRect().height` is 0, which is why the component bails out of a
- * drag it cannot measure — and that bail-out is itself tested below, unstubbed. The
- * drag arithmetic is then tested with the height stubbed, and the comment says
- * plainly that this proves the maths, not the layout. **The real claim — dragging
- * changes the two panes' pixel heights — is in `DbConsole.browser.test.tsx`, and it
- * was falsified before being trusted** (see that file's header).
- */
+/** Only Shiki is mocked (QueryEditor.test.tsx owns highlighting). jsdom has no layout, so the drag
+ * tests prove the maths only; DbConsole.browser.test.tsx proves the pixels. */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -32,15 +15,8 @@ import {
   TRUNCATED_RESULT,
 } from "./consoleFixtures";
 
-/**
- * Every grammar id the console's editor actually asked Shiki for, in order.
- *
- * This is the seam between `shikiIdForText` — 100% covered next door in
- * `consoleFormat.test.ts` — and the editor that has to be *given* its answer. Neither
- * half's tests can see the prop between them, which is exactly the join that ships broken.
- * `applyShikiHighlight` calls `ensureLang(shikiId)` synchronously with the id it was
- * handed, so recording that argument records the grammar the editor was given.
- */
+/** Grammar ids the editor asked Shiki for: the prop seam between shikiIdForText and the editor.
+ * ensureLang is called synchronously with the id it was given. */
 const asked = vi.hoisted(() => ({ langs: [] as string[] }));
 
 // No grammar for anything: `applyShikiHighlight` returns before it tokenises, so the
@@ -376,10 +352,7 @@ describe("DbConsole — ⌘/Ctrl+⏎", () => {
 
 describe("DbConsole — the grammar the editor is GIVEN (the seam)", () => {
   it("switches the MongoDB console from json to sql when SQL is typed, and back", async () => {
-    // 🔴 The bug: SQL in a MongoDB console had no keyword colour, because
-    // the grammar was picked from the engine once. `shikiIdForText` is unit-tested next
-    // door; what nothing could see until now is whether its answer REACHES the editor —
-    // and re-reaches it on every keystroke.
+    // shikiIdForText's answer must REACH the editor, and again on every keystroke.
     const mongo = { ...base, queryLanguage: "json" as const, engineLabel: "MongoDB" };
     const { rerender } = render(<DbConsole {...mongo} text='{"find": "tracks", "limit": 10}' />);
     await waitFor(() => expect(asked.langs).toEqual(["json"]));
@@ -539,10 +512,7 @@ describe("DbConsole — a failed CALL is the other thing entirely", () => {
     render(<DbConsole {...base} error={dbFailure("timeout")} />);
     const alert = screen.getByTestId("db-console-error");
     expect(alert).toHaveAttribute("role", "alert");
-    // The sentence comes from `../dbErrors.ts`, the app's one error mapper. This file used
-    // to expect a SECOND copy's wording ("ran past this connection's timeout and was
-    // stopped") — the two tables had already drifted on this very code while both suites
-    // were green, which is why the duplicate is gone.
+    // The sentence comes from ../dbErrors.ts, the app's one error mapper.
     expect(alert).toHaveTextContent("The database did not answer within this connection's timeout.");
     // No results, and no "nothing has run yet" either — something ran and failed.
     expect(screen.queryByTestId("db-console-idle")).toBeNull();

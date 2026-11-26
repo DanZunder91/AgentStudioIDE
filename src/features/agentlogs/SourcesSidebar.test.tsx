@@ -1,10 +1,5 @@
-/**
- * The Sources sidebar, rendered inside the real AgentLogsPanel over the
- * real store; only the Tauri seam and the xterm-owning terminal module are mocked (the
- * AgentLogsPanel.test.tsx harness). Lines are driven through the captured `listen` handler,
- * exactly as Rust would. Successor of the Running strip's tests: derivation, click-to-solo,
- * dismiss, empty state — plus the grouping, the match counts and the error badge.
- */
+/** Sources sidebar inside the real AgentLogsPanel and store (`AgentLogsPanel.test.tsx` harness);
+ * lines arrive through the captured `listen` handler, as from Rust. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

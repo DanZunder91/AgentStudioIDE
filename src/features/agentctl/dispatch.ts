@@ -1,7 +1,5 @@
-/**
- * Routes each agent-control event to the handler for its `kind`. Each area of the app keeps its
- * handlers in its own file under `handlers/`, so adding a tool never edits another area's code.
- */
+/** Routes each agent-control event by `kind`; each area keeps its handlers in its own file under
+ * `handlers/`, so adding a tool never edits another area's code. */
 import type { AgentCtlEvent } from "./agentCtlIpc";
 import { DB_HANDLERS } from "./handlers/db";
 import { HTTP_HANDLERS } from "./handlers/http";

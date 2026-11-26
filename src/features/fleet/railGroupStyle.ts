@@ -1,16 +1,6 @@
-/**
- * How the agent rail draws a project (a folder group): the header and the agents under it.
- *
- * A setting under Settings → Interface. Every style draws the same rows; only CSS changes,
- * keyed on one class on the tree (`fleet-tree--groups-<style>`). The rail is a flat list
- * (see `flatten.ts`), so no style wraps a project in an element of its own: the shape is
- * drawn across the header and the rows, using the first/last-row markers `flattenFleet`
- * puts on each project's agents.
- *
- * Persisted in `layout-prefs.json` as a plain string. Anything this build does not know
- * (a newer build's style, a hand-edited file) reads as the default rather than failing,
- * so a downgrade never leaves the rail unstyled.
- */
+/** How the rail draws a project (Settings → Interface): CSS only, via `fleet-tree--groups-<style>`
+ * on the flat list. Persisted in `layout-prefs.json`; an unknown value reads as the default, so a
+ * downgrade never leaves the rail unstyled. */
 
 export const RAIL_GROUP_STYLES = ["card", "well", "divider", "pinned"] as const;
 

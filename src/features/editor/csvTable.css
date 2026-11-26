@@ -1,9 +1,5 @@
-/* ── CSV table view ────────────────────────────────────────────
-   Theme-aware read-only table. Builds on the app's design tokens (defined in
-   App.css: --bg-app/-surface/-elev, --text, --text-dim, --border, --accent,
-   --mono). Those are declared for the dark theme; the light fallback below
-   redefines the handful this component uses so it stays legible if the view is
-   ever mounted under a light color scheme (standalone or a future light mode). */
+/* CSV table view. The App.css tokens are dark-theme; the light fallback below redefines the ones
+ * this view uses so it stays legible under a light color scheme. */
 
 .csv-table {
   --csv-bg: var(--bg-app, #0d1117);

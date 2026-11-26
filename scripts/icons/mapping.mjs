@@ -1,41 +1,6 @@
-/**
- * The hand-curated file-icon mapping — the SINGLE human-authored source the
- * generator (`scripts/icons/generate.mjs`) compiles into
- * `src/lib/fileIcons/iconMap.generated.ts` + `sprite.generated.ts`.
- *
- * Design: docs/design/file-icons.md (§2 vendored Material subset, §3 ladder,
- * §4 inline sprite); the icons are the Material Icon Theme (MIT).
- *
- * RULES (enforced by the generator, tested in generate.test.mjs):
- *  - Every VALUE is an icon id and must equal a vendored
- *    `src/assets/file-icons/svg/<id>.svg` basename.
- *  - Every KEY is pre-lowercased (the resolver lowercases at lookup time, so
- *    an uppercase key here would be dead).
- *  - `fileExtensions` keys carry NO leading dot; compound extensions such as
- *    "d.ts" are allowed (the resolver probes longest-dotted-suffix first).
- *  - `languageIds` keys must be members of the LanguageId union
- *    (src/lib/language/ids.ts). The table is deliberately PARTIAL: an id
- *    without a vendored icon falls through the ladder — do not vendor icons
- *    outside the curated scope just to fill it.
- *
- * CURATION SCOPE: Rust, Kotlin/JVM (Gradle + Maven), web
- * projects, and common infra. Every icon id below was verified against
- * upstream's own association source (`src/core/icons/fileIcons.ts` at the
- * pinned tag) — the id names are upstream's, not invented.
- *
- * Documented deviations from upstream's associations (never from its ids):
- *  - `cargo.toml` / `cargo.lock` / `rust-toolchain(.toml)` → "rust".
- *    Upstream v5.37.0 has NO cargo association at all (they would render as
- *    generic toml/lock). The Rust-first scope wants Cargo files
- *    instantly recognizable, so they get the Rust logo.
- *  - "gradle.kts" compound extension → "gradle". Upstream maps only the bare
- *    `gradle` extension, so `build.gradle.kts` falls to the Kotlin icon there;
- *    in a Gradle-first JVM tree the build files should read as Gradle.
- *  - `mvnw` / `mvnw.cmd` → "maven", by symmetry with upstream's own
- *    `gradlew` / `gradlew.bat` → "gradle".
- *  - `.env` → "tune" as an exact fileName (upstream reaches it via the `env`
- *    extension; our resolver treats `.env` as a bare basename).
- */
+/** Hand-curated icon mapping compiled by generate.mjs (docs/design/file-icons.md). Values are
+ * vendored SVG ids (upstream's names); keys are lowercase, extensions without a dot. Deviations
+ * from upstream associations: Cargo files → rust, gradle.kts, mvnw → maven, `.env` by name. */
 
 /** The pinned upstream release everything is vendored from. */
 export const UPSTREAM = {
@@ -257,12 +222,8 @@ export const MAPPING = {
     wasm: "webassembly",
   },
 
-  /**
-   * LanguageId (src/lib/language/ids.ts) → icon id. Partial by design: ids
-   * outside the curated scope (python, go, cpp, …) fall through to the
-   * extension tier / default. `plaintext` is deliberately absent so unknown
-   * text files keep the generic file glyph instead of the .txt document icon.
-   */
+  /** Partial: ids outside the curated scope fall through; `plaintext` is absent so unknown text
+   * files keep the generic file glyph. */
   languageIds: {
     javascript: "javascript",
     jsx: "react",
@@ -306,11 +267,7 @@ export const MAPPING = {
     mdx: "mdx",
   },
 
-  /**
-   * The total-function fallback (file-icons.md §3 tier 7). `file.svg` is
-   * authored by us in the Material style with `fill="currentColor"` (§5:
-   * structural glyphs inherit the tree's foreground token) — upstream v5.37.0
-   * ships no `icons/file.svg` despite naming "file" its default.
-   */
+  /** Ours (file-icons.md §5, `fill="currentColor"`): upstream v5.37.0 names "file" its default
+   * but ships no file.svg. */
   defaultFile: "file",
 };

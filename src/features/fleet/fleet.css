@@ -1,19 +1,8 @@
-/* The fleet rail. Owned by src/features/fleet/**.
-   Reuses only the CSS vars declared in src/App.css — no palette of its own, so
-   theming stays in one place. Class names are `fleet`-prefixed: App.css still
-   carries the M0 placeholder's `.agent`/`.pill` rules, and a collision would
-   silently restyle this rail the day those are removed. */
+/* The fleet rail: only App.css vars, no palette of its own. `fleet`-prefixed names avoid
+ * App.css's leftover `.agent`/`.pill` rules. */
 
-/* The left rail is a flex COLUMN so the usage strip can be a real footer.
-   Without this the strip would merely be the last thing in a scrolling block —
-   it would sit directly under the last agent row and drift up the rail as rows
-   are dismissed. As a column, the tree takes the slack (`flex: 1`) and the strip
-   is pinned to the bottom (`margin-top: auto`), which is what "footer" means.
-   `overflow-y` moves from the rail to the TREE: the strip must stay visible while
-   a long agent list scrolls behind it, and a scrollbar spanning both would hide
-   it. `min-height: 0` is required — a flex item's default `min-height: auto`
-   refuses to shrink below its content, so the tree would push the strip off the
-   bottom instead of scrolling (the classic flexbox overflow trap). */
+/* A flex column so the usage strip is a real footer (`margin-top: auto`). The tree scrolls, not
+ * the rail, and `min-height: 0` lets it shrink rather than push the strip off. */
 .rail--left {
   display: flex;
   flex-direction: column;
@@ -74,11 +63,8 @@
   opacity: 0.6;
 }
 
-/* ── drag-to-reorder (feature: sortable rail) ─────────────────────────────────
-   A dragged row fades; a valid drop target shows a calm accent bar on its TOP
-   edge — the dragged row lands immediately ABOVE it (moveRootAgent/moveFolder
-   insert "before"). Reuses --accent/--accent-soft, so it tracks the theme like
-   the rest of the rail. */
+/* ── drag-to-reorder ──
+ * A valid target shows an accent bar on its top edge: the dragged row lands just above it. */
 .fleet-row--dragging,
 .folder-group--dragging {
   opacity: 0.45;
@@ -160,12 +146,8 @@
   text-overflow: ellipsis;
 }
 
-/* "Resumed after restart" (open_agents.rs): small, accent-tinted, next to the pill —
-   present until the agent's next turn. Its words are short enough to fit beside the pill at
-   the default rail width (restoredMarker.ts); in a narrower rail it moves under the pill,
-   whole, and only a line of its own too short for it ends it in an ellipsis (the sentence is
-   on hover). The `↻` is the tab's glyph, drawn here as generated content so the element's
-   text stays exactly the label the tab's glyph is named by. */
+/* "Resumed after restart" marker (open_agents.rs), until the agent's next turn; wraps under the
+ * pill in a narrow rail. The `↻` is generated content so the text is exactly the label. */
 .fleet-row__restored {
   color: var(--accent);
   font-size: 10px;
@@ -298,10 +280,7 @@
 
 .fleet-row__status {
   margin-top: 4px;
-  /* Pill, roll-up, restored marker — wrapping as whole items, as the inline flow did, but
-     as FLEX items so a marker wider than a whole line shrinks to an ellipsis. Inline, it was
-     cut mid-word at the rail's edge: `text-overflow` never applied,
-     because an inline box has no width of its own to overflow. */
+  /* Flex items, not inline: only a box with its own width can ellipsize an over-long marker. */
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -310,10 +289,8 @@
   gap: 2px 8px;
 }
 
-/* "branch • cwd". The branch keeps its full width (capped, so a monster branch name
-   cannot push the path out entirely) and only the PATH is clipped — at its head, so
-   the folder name at its tail stays visible. One right-to-left box around both used
-   to clip the branch instead ("…tive • C:\Users\…" on Windows). */
+/* "branch • cwd": the branch keeps its (capped) width and only the path clips, at its head, so
+ * the folder name stays visible. */
 .fleet-row__meta {
   display: flex;
   min-width: 0;
@@ -410,10 +387,8 @@
   background: var(--bg-elev, #1c2128);
 }
 
-/* ── folder-group header ────────────────────────────────────────────────────
-   Two lines: the project name on the first (with the +), the counts per status on
-   the second. The counts used to share the name's line, which cut "AgentStudioIDE"
-   down to "AgentSt…" at the default rail width. */
+/* ── folder-group header ──
+ * Two lines (name, then status counts) so the project name is not cut at the default width. */
 .folder-group {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -526,15 +501,9 @@
   background: var(--bg-hover, rgba(255, 255, 255, 0.06));
 }
 
-/* ── project styles (Settings → Interface → Project groups) ───────────────────
-   One class on the tree picks the style: `fleet-tree--groups-<style>`. The rail is a
-   flat list, so nothing wraps a project; each style draws the project's shape across
-   its header and rows. A project's first row is the one right after its header
-   (`.folder-group + .fleet-row`); its last is the one right before the next header, or
-   the last row of all (`.fleet-row:has(+ .folder-group)`, `.fleet-row:last-child`).
-   Selectors rather than markers on the rows on purpose: a marker would make adding an
-   agent re-render the row that used to be last, and the rail's render budget allows
-   only the new one. */
+/* ── project styles (Settings → Interface → Project groups): `fleet-tree--groups-<style>` ──
+ * First/last rows come from sibling selectors, not row markers: a marker would make adding an
+ * agent re-render the old last row, beyond the rail's render budget. */
 
 /* Framed card (the default): one bordered card per project, the header a lighter
    band with the project's monogram, a divider under it. */
@@ -567,10 +536,8 @@
   border: solid var(--group-border);
   border-width: 0 1px;
   border-radius: 0;
-  /* The two side borders take 2px; the right padding gives them back, so a row's
-     content is exactly as wide as in an unframed rail and the status line still fits
-     the widest pill plus the restored marker (restoredRow.browser.test.tsx). The left
-     padding is the depth indent, set inline, so it is left alone. */
+  /* Gives back the 2px of side borders so the status line still fits the widest pill + marker
+   * (restoredRow.browser.test.tsx); the left padding is the inline depth indent. */
   padding-right: 8px;
 }
 .fleet-tree--groups-card .fleet-row:has(+ .folder-group),
@@ -680,10 +647,8 @@
   margin-left: 8px;
 }
 
-/* State colours win over a style's row and header backgrounds and shadows. Restated
-   after the styles, one class more specific than the most specific style rule (the
-   well's first row), in the order of precedence they have at the top of this file:
-   hover over selected, as today, and a drop target over both while dragging. */
+/* State colours beat style backgrounds: restated after the styles, one class more specific than
+ * the most specific style rule (hover over selected; a drop target over both). */
 .fleet-tree .fleet-row.fleet-row--selected {
   background: var(--accent-soft);
   box-shadow: inset 2px 0 0 var(--accent);

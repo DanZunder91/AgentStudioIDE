@@ -1,26 +1,6 @@
-//! Result-set wire types, and the one piece of shaping they need.
-//!
-//! ## Why there is no per-type decoder here
-//!
-//! This is the decision the whole feature rests on: **every value comes back as
-//! `Option<String>`**, read out of the driver's *text* protocol. `None` is SQL NULL,
-//! `Some("")` is the empty string, and the two are distinguished *by construction* rather
-//! than by a sentinel a value could collide with. The consequence is that this module has no
-//! `match` on type OIDs, no `chrono`/`uuid`/`rust_decimal` feature flags, and no
-//! `<unsupported type>` cell — a Postgres enum, an `int[]`, a PostGIS geometry and a type an
-//! extension invented this morning all arrive as exactly the string `psql` would print.
-//!
-//! ## So what is [`DbCellKind`] for?
-//!
-//! Alignment and rendering, and it comes from the **column**, never from the value.
-//! That distinction is load-bearing and the fixture proves it: `tracks` row 5 has a `text`
-//! column whose *value* is the literal `\x4142`, sitting next to a real `bytea` column. Sniff
-//! the value and the app renders that text cell as binary — i.e. lies about the data. Read the
-//! declared type name and it cannot.
-//!
-//! Unrecognised type names map to [`DbCellKind::Unknown`], which renders as plain text. That
-//! is the honest default: the grid does not need to know what a `tsrange` is to show what the
-//! server said it was.
+//! Result-set wire types. Every value is `Option<String>` from the text protocol (`None` = NULL,
+//! `Some("")` = empty), so there is no per-type decoder. [`DbCellKind`] drives alignment only and
+//! comes from the column's declared type, never the value; unknown names render as plain text.
 
 use serde::Serialize;
 
@@ -79,21 +59,9 @@ pub struct DbResultSet {
     pub duration_ms: u64,
     /// Server notices/warnings.
     pub notice: Option<String>,
-    /// Which cells are **absent** rather than null.
-    ///
-    /// A cell has two states (`Some(text)` and `None`) and two engines have three: MongoDB documents
-    /// and DynamoDB items can *omit* a field entirely, which is a different fact from holding null.
-    /// The engine reported the loss in `notice` and painted those cells as NULL, which is the app
-    /// stating something the data does not say.
-    ///
-    /// So: a parallel mask, `absent[row][col] == true` where the field was missing. Same shape as
-    /// `rows`, `None` for every engine that cannot produce the state (all six SQL/Redis rows), which
-    /// keeps it off the wire entirely for them (`skip_serializing_if`). Truncating the row array
-    /// instead was **not** an option — an absent field is usually interior, with real values after it.
-    ///
-    /// The frontend needed no new rendering for this: `renderCell(undefined)` has always produced a
-    /// `missing` display distinct from `null`, so the mask's only job is to turn a masked cell into
-    /// `undefined` before it reaches that function.
+    /// Cells that are absent rather than null (MongoDB/DynamoDB can omit a field), parallel to
+    /// `rows`. `None`, and off the wire, for engines without that state; the frontend renders a
+    /// masked cell as `undefined` (`missing`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub absent: Option<Vec<Vec<bool>>>,
 }
@@ -116,32 +84,20 @@ impl DbResultSet {
     }
 }
 
-/// Map a server type name onto a render kind.
-///
-/// Deliberately a **prefix/contains** match on the lower-cased name rather than an exact
-/// table: Postgres reports `varchar`, `_int4`, `numeric`, `timestamptz`; a domain or an
-/// extension type reports something we have never seen. An exact table would put the long
-/// tail in `Unknown` *and* need editing for every new engine; this puts the long tail in
-/// `Unknown` and gets the common cases right for the whole postgres/mysql family at once.
-///
-/// Arrays are **text**, not their element's kind: `{1,2,3}` right-aligned as a number would
-/// be a lie about a value that is not one.
+/// Map a server type name onto a render kind by prefix/contains on the lower-cased name, so
+/// unseen domain or extension types fall to `Unknown`. Arrays are text, not their element kind.
 pub fn cell_kind(type_name: &str) -> DbCellKind {
     let t = type_name.trim().to_ascii_lowercase();
 
-    // ── ClickHouse type names, handled first because they WRAP ────────────────────────
-    // `Nullable(String)` and `LowCardinality(String)` are decorations around the type that
-    // decides the kind; nullability is carried by the cell being `None`, never by the kind.
-    // Unwrapped before anything else so `Nullable(Decimal(20, 8))` is a number, not text.
+    // ── ClickHouse wrappers first: `Nullable(…)`/`LowCardinality(…)` are unwrapped (nullability is
+    // the cell being `None`), so `Nullable(Decimal(20, 8))` is a number.
     for wrapper in ["nullable(", "lowcardinality("] {
         if let Some(inner) = t.strip_prefix(wrapper).and_then(|r| r.strip_suffix(')')) {
             return cell_kind(inner);
         }
     }
-    // `SimpleAggregateFunction(sum, UInt64)` puts the function first and the type last, so this
-    // one — and ONLY this one — splits on the comma. An earlier version applied the split to every
-    // wrapper, which turned `Nullable(Decimal(20, 8))` into ` 8)` and made a decimal column
-    // Unknown; the type-name test caught it with `left: Unknown, right: Number`.
+    // Only `SimpleAggregateFunction(fn, Type)` splits on the comma: splitting other wrappers would
+    // break `Decimal(20, 8)`.
     if let Some(inner) = t
         .strip_prefix("simpleaggregatefunction(")
         .and_then(|r| r.strip_suffix(')'))
@@ -241,25 +197,15 @@ pub fn cell_kind(type_name: &str) -> DbCellKind {
     // them describes how a COLUMN renders, and a column whose only observed type is `null` has
     // told us nothing about the values that will arrive next.
 
-    // 🔴 A HETEROGENEOUS column, which only MongoDB produces: `mongo.rs` spells a field seen
-    // with more than one BSON type as `"int | string"`. That must be `Unknown`, and it very
-    // nearly was not — the `starts_with("int")` arm below matched it and returned `Number`, so a
-    // column of mixed ints and strings would have been right-aligned as numeric. Found by the
-    // MongoDB engine's author while pinning this function's behaviour, not by a failing feature.
-    // Checked here rather than at the call site because any future engine that spells a union
-    // this way inherits the fix.
+    // A heterogeneous column (`mongo.rs` spells it `"int | string"`) is `Unknown`; checked before
+    // the `starts_with("int")` arm below would call it a number.
     if t.contains(" | ") {
         return DbCellKind::Unknown;
     }
 
-    // ── ClickHouse's parameterised spellings, LAST on purpose ─────────────────────────
-    // These are prefix matches, because the exact-match tables above cannot enumerate
-    // `Decimal(20, 8)` / `Decimal64(3)` / `FixedString(16)` / `Enum8('duo' = 1, …)`.
-    //
-    // ⚠️ They must stay *after* every table above. An earlier version put them first and
-    // `starts_with("int")` swallowed Postgres's `int4[]` — an array became a right-aligned
-    // Number, caught immediately by `an_array_is_text_because_its_cell_holds_a_brace_literal`.
-    // Order is load-bearing here, so the array/binary/datetime checks get to answer first.
+    // ── ClickHouse's parameterised spellings (`Decimal(20, 8)`, `FixedString(16)`, `Enum8(…)`),
+    // LAST on purpose: before the tables above, `starts_with("int")` would swallow Postgres's
+    // `int4[]`.
     if t.starts_with("decimal") || t.starts_with("uint") || t.starts_with("int") {
         return DbCellKind::Number;
     }
@@ -341,10 +287,7 @@ mod tests {
         }
     }
 
-    /// MongoDB's BSON type names, and the two traps in them.
-    ///
-    /// Written from what `mongo.rs` actually puts in a column's `type_name`, not from a summary
-    /// table — such a table names only `binData` and `object`, and the engine produces eight more.
+    /// Written from the names `mongo.rs` actually emits, not a summary table (which omits eight).
     #[test]
     fn mongo_bson_type_names_map_and_a_heterogeneous_column_stays_unknown() {
         for (name, want) in [
@@ -369,11 +312,7 @@ mod tests {
         }
     }
 
-    /// 🔴 The bug this arm exists for. `mongo.rs` spells a field seen with more than one BSON
-    /// type as `"int | string"`, and the ClickHouse prefix arm matched `starts_with("int")` and
-    /// returned `Number` — so a column of mixed ints and strings was right-aligned as numeric.
-    /// Latent: the MongoDB engine guards against it at its own call site too, so no feature was
-    /// visibly broken, which is exactly why it needed a test here rather than a comment there.
+    /// `mongo.rs` also guards this at its call site, so the arm needs its own test here.
     #[test]
     fn a_heterogeneous_column_is_never_typed_by_its_first_alternative() {
         for name in [

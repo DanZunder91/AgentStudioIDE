@@ -1,13 +1,3 @@
-/**
- * VaultPanel — the right rail's secrets / environment manager.
- *
- * `apiStoreIpc` is mocked at the module boundary (same as `ApiRequestView.test`):
- * the durable store crosses Tauri, which does not belong in a jsdom unit test.
- * What is under test is the panel — the calm secure-storage note, hydrate-on-mount
- * (and its skip + cancelled guards), and full environment + variable CRUD driven
- * through the shared `apiActions`, asserted by reading the store back.
- */
-
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

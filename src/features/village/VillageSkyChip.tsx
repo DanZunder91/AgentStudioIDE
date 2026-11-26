@@ -1,19 +1,6 @@
-/**
- * `VillageSkyChip` — the HUD chip that says what the sky is doing ("Rain · 16:20 ·
- * Afternoon · 18°C · Tokyo") and opens a small popover to override it.
- *
- * Glyphs are tiny inline SVGs, never emoji: the app ships no emoji in its chrome (see
- * `components/icons.tsx` — inline, `currentColor`, `aria-hidden`, a `data-icon` hook for
- * tests). The chip's text is the accessible name; the glyph is decoration.
- *
- * Presentational only: state comes from `useVillageAmbience` through props, and the phase
- * shown is the one the host resolved (`Ambience.phase`). When `phase` is omitted the
- * chip falls back to the override, then to a coarse local-hour bucket, so it is never blank.
- *
- * Styling hooks for the host: the root carries `data-weather` / `data-phase` (the
- * EFFECTIVE values) and `village-sky--override` when either selector is not Live; the CSS
- * exposes `--village-sky-accent` per weather (village.css).
- */
+/** HUD sky chip ("Rain · 16:20 · Afternoon · 18°C · Tokyo") with an override popover; props only.
+ * Glyphs are inline SVGs, never emoji (`components/icons.tsx`). No `phase`: the override, then the
+ * local hour. Root carries EFFECTIVE `data-weather` / `data-phase` and `village-sky--override`. */
 
 import { useEffect, useId, useRef, useState } from "react";
 

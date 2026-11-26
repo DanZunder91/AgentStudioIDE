@@ -1,44 +1,6 @@
-//! Persisted "pinned agents".
-//!
-//! A pinned **root** agent survives a full app quit: on next launch the supervisor
-//! re-spawns its `claude` in the same cwd, **resuming the same conversation** when
-//! the CLI can (`claude --resume <session-id>`). It then surfaces through the
-//! existing `fleet_snapshot()` + re-attach path with ~zero new frontend
-//! happy-path, and its sub-agent subtree re-materialises for free from the
-//! transcript.
-//!
-//! **Every open root comes back** (`open_agents.rs`), so a pin no
-//! longer decides WHETHER an agent returns after a quit — it decides that it returns
-//! even after its own process ended (`/exit`, a crash), which an unpinned agent does
-//! not. The one boot restore lives in `open_agents::restore_on_boot` and reads this
-//! store too.
-//!
-//! **WHERE it lives.** One JSON array, `pinned-agents.json`, in the OS **app-config
-//! dir** — the SAME place `recent_projects.rs` / `api_store.rs` use. **NEVER the
-//! repo** (it would get committed) and **NEVER `~/.claude`** (a write there can corrupt
-//! the user's global Claude config). Session ids and paths are not secrets, but
-//! the config-dir rule is uniform and non-negotiable.
-//!
-//! **Robustness over correctness of the file.** A missing / unreadable / corrupt /
-//! wrong-shape store loads as an empty list, never an error — a bad store must not
-//! break startup or lose the whole fleet. (Same contract as the sibling stores.)
-//!
-//! **Crash-safe writer.** Writes go through [`save`], which serialises to a sibling
-//! temp file, `fsync`s, and atomically `rename`s over the target — a crash leaves
-//! EITHER the old file or the new one, never a half-written / concatenated blob (the
-//! `~/.claude` corruption class). `recent_projects.rs` uses a plain `fs::write`;
-//! pinning uses the atomic path prophylactically because a corrupt fleet file is a
-//! worse failure than a corrupt recents list.
-//!
-//! **Testability.** [`load`] / [`save`] / [`upsert`] / [`remove`] take an EXPLICIT
-//! path so the unit tests hit a temp dir, never the real config dir — exactly like
-//! the three existing stores. The `#[tauri::command]`s are the thin glue that
-//! resolves the real path from the `AppHandle`; no writer sits in a code path
-//! `cargo test` exercises with a real path.
-//!
-//! Only ROOT agents are pinnable. Sub-agents are transcript-derived (no process to
-//! re-spawn); the supervisor's `describe_pinnable` enforces this before a pin is
-//! ever written.
+//! Pinned root agents: a pin returns even after its own process ended (restore lives in
+//! `open_agents::restore_on_boot`). `pinned-agents.json` in the app config dir, never the repo
+//! or `~/.claude`; a corrupt store loads as empty; writes are atomic. Roots only.
 
 use std::path::{Path, PathBuf};
 
@@ -119,10 +81,8 @@ pub fn load(path: &Path) -> Vec<PinnedAgent> {
     list
 }
 
-/// Insert-or-refresh `entry` by `agent_id` and persist (atomic). A re-pin of an
-/// existing id refreshes its mutable fields (cwd / runtime / session id / title) but
-/// **keeps its original `order`** so its rail position is stable; a new id is
-/// appended after the current maximum order. Returns the updated, ordered list.
+/// Insert-or-refresh by `agent_id` and persist atomically. A re-pin keeps its original `order`
+/// (stable rail position); a new id goes after the max. Returns the updated, ordered list.
 pub fn upsert(path: &Path, mut entry: PinnedAgent) -> Vec<PinnedAgent> {
     let _guard = crate::store_file::lock(path); // load → edit → save, one transaction
     let mut list = load(path);
@@ -161,18 +121,14 @@ fn dedupe(list: &mut Vec<PinnedAgent>) {
     list.retain(|p| seen.insert(p.agent_id.clone()));
 }
 
-/// CRASH-SAFE write: serialize → write a sibling temp → `fsync` → atomic `rename`
-/// over the target. A crash leaves EITHER the old file or the new one, never a
-/// half-written / concatenated blob. The temp lives in the same dir so
-/// the rename stays on one filesystem.
+/// Crash-safe write (sibling temp → `fsync` → atomic `rename`): a crash leaves the old file or
+/// the new one, never a half-written blob.
 pub fn save(path: &Path, list: &[PinnedAgent]) -> std::io::Result<()> {
     write_json_atomic(path, list)
 }
 
-/// The crash-safe JSON writer both agent registries share (this one and
-/// `open_agents.rs`): serialize → sibling temp → `fsync` → atomic `rename`. One copy,
-/// because the second registry is exactly where a hand-rolled variant would drift (a
-/// missing `sync_all`, a temp in another dir and a cross-device rename).
+/// The crash-safe JSON writer both agent registries share, so neither drifts (a missing
+/// `sync_all`, a temp in another dir).
 pub(crate) fn write_json_atomic<T: Serialize + ?Sized>(
     path: &Path,
     value: &T,
@@ -191,10 +147,8 @@ pub(crate) fn store_path(app: &tauri::AppHandle) -> PathBuf {
     config_file(app, FILE_NAME)
 }
 
-/// `<app config dir>/<name>`, or `~/.config/agent-studio/<name>` when the Tauri config
-/// dir can't be resolved — the resolution every agent registry uses (pins here,
-/// open agents in `open_agents.rs`). Reuses `claude::home_dir`, the same fallback the
-/// sibling stores use.
+/// `<app config dir>/<name>`, else `~/.config/agent-studio/<name>`: the path every agent
+/// registry uses.
 pub(crate) fn config_file(app: &tauri::AppHandle, name: &str) -> PathBuf {
     use tauri::Manager;
     if let Ok(dir) = app.path().app_config_dir() {
@@ -208,14 +162,9 @@ pub(crate) fn config_file(app: &tauri::AppHandle, name: &str) -> PathBuf {
 }
 
 // ── Tauri command surface ────────────────────────────────────────────────────
-//
-// Thin glue over the pure functions above, resolving `store_path(app)` exactly like
-// `recent_projects` / `api_store`. The session id is read from live supervisor state
-// in-process and never crosses the JS wire.
+// The session id is read from live supervisor state and never crosses the JS wire.
 
-/// The persisted pinned-agent list as the frontend's restore/reconcile view — no
-/// session ids. Missing/corrupt store → `[]`.
-///
+/// Pinned agents without session ids; missing/corrupt store → `[]`.
 /// Frontend contract: `invoke<PinnedAgentView[]>('pinned_agents')`.
 #[tauri::command]
 pub fn pinned_agents(app: tauri::AppHandle) -> Vec<PinnedAgentView> {
@@ -225,12 +174,8 @@ pub fn pinned_agents(app: tauri::AppHandle) -> Vec<PinnedAgentView> {
         .collect()
 }
 
-/// Pin a live **root** agent: look up its cwd / session id / runtime / title from
-/// supervisor state (so the session id stays in-process), upsert into the store, and
-/// atomic-save. An unknown id or a non-root (sub-agent) is an error, not a silent
-/// no-op.
-///
-/// Frontend contract: `invoke('pin_agent', { agentId })`.
+/// Pin a live ROOT agent from supervisor state (the session id stays in-process). An unknown id
+/// or a sub-agent is an error. Frontend contract: `invoke('pin_agent', { agentId })`.
 #[tauri::command]
 pub async fn pin_agent(
     supervisor: tauri::State<'_, SupervisorHandle>,
@@ -255,9 +200,7 @@ pub async fn pin_agent(
     Ok(())
 }
 
-/// Unpin by id and persist. The live agent is untouched — it keeps running; it just
-/// won't be restored next launch. An unknown id is a no-op.
-///
+/// Unpin and persist; the live agent keeps running, just isn't restored. Unknown id → no-op.
 /// Frontend contract: `invoke('unpin_agent', { agentId })`.
 #[tauri::command]
 pub fn unpin_agent(app: tauri::AppHandle, agent_id: String) -> Result<(), String> {
@@ -266,13 +209,7 @@ pub fn unpin_agent(app: tauri::AppHandle, agent_id: String) -> Result<(), String
 }
 
 // ── Boot restore ──────────────────────────────────────────────────────────────
-//
-// Moved to `open_agents::restore_on_boot` (the app reopens with every agent that was
-// working before). Every open root now comes back, pinned or
-// not, so there is ONE restore that reads both registries, de-duplicates by agent id
-// and walks the restore ladder (resume → fresh in the cwd → dormant row) for each — not
-// two restores that could spawn the same agent twice. A pin still means what it meant:
-// that agent comes back even after its own process ended, and dismissing it unpins it.
+// Lives in `open_agents::restore_on_boot`: ONE restore over both registries, deduped by id.
 
 #[cfg(test)]
 mod tests {

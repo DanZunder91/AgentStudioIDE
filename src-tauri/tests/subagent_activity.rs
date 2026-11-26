@@ -1,10 +1,6 @@
-//! The sub-agent activity parser, tested against a committed structural
-//! fixture. A sub-agent has no PTY, so selecting it shows this feed
-//! parsed from its `agent-<id>.jsonl`.
-//!
-//! The fixture is hand-built structural JSONL — synthetic roles/tools, no prose, no
-//! secrets — and covered by the `fixtures_no_secrets` scan. Parsing takes an
-//! explicit path, so no `~/.claude` or real `claude` is involved here.
+//! The sub-agent activity parser (a sub-agent has no PTY; selecting it shows this feed) against a
+//! hand-built structural fixture: synthetic, no prose or secrets, covered by `fixtures_no_secrets`.
+//! Parsing takes an explicit path, so no `~/.claude` or real `claude` is involved.
 
 use std::path::PathBuf;
 

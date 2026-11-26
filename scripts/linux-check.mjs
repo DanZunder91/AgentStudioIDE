@@ -1,16 +1,6 @@
 #!/usr/bin/env node
-/**
- * Ubuntu check — compile, lint and test the Rust core on real Linux, in Docker.
- *
- * Why: the app ships for macOS, Ubuntu and Windows, and `cfg(target_os = "linux")` code
- * written on a Mac is otherwise never compiled, let alone tested.
- * The Linux target dir lives in a named volume so it never collides with the host's.
- *
- *   node scripts/linux-check.mjs            # clippy --all-targets + cargo test (lib + tests)
- *   node scripts/linux-check.mjs test foo   # extra args are passed to `cargo`
- *
- * LINUX_TARGET_VOLUME=<name> gives a parallel run its own target dir (one cargo lock each).
- */
+/** Compile, lint and test the Rust core on Linux in Docker; extra args go to `cargo`.
+ * LINUX_TARGET_VOLUME=<name> gives a parallel run its own target volume (one cargo lock each). */
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";

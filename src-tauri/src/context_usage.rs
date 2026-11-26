@@ -1,38 +1,6 @@
-//! Context window: one agent session's `/context` breakdown, for the
-//! Metrics panel's "Context window" card. Wire contract:
-//! `src/features/context/contextTypes.ts`.
-//!
-//! ## Where the numbers come from — we ask the CLI, read-only
-//!
-//! ```text
-//! claude -p --resume <session-id> --no-session-persistence "/context"
-//! ```
-//!
-//! run in the agent's cwd, which prints (measured with claude 2.1.289):
-//!
-//! ```text
-//! ## Context Usage
-//!
-//! **Model:** claude-opus-5-5
-//! **Tokens:** 21k / 1m (2%)
-//!
-//! ### Estimated usage by category
-//!
-//! | Category | Tokens | Percentage |
-//! |----------|--------|------------|
-//! | System prompt | 2.1k | 0.2% |
-//! | Messages | 8.6k | 0.9% |
-//! | Free space | 946k | 94.6% |
-//! | Autocompact buffer | 33k | 3.3% |
-//! ```
-//!
-//! Same posture as the usage strip: the process that owns `~/.claude`
-//! answers, we never read or write it ourselves for this. `--no-session-persistence`
-//! is **load-bearing** here too — measured: with it, the resumed session's transcript
-//! keeps its size and mtime and no new transcript appears. `/context` is
-//! a local command, so no model call and no tokens are spent.
-//!
-//! [`parse_context_output`] is the risky half and is pure (no I/O, no clock).
+//! One agent session's `/context` breakdown for the Metrics "Context window" card (wire contract:
+//! `src/features/context/contextTypes.ts`), asked of the CLI with `--resume`. Never touches
+//! `~/.claude`; `--no-session-persistence` is load-bearing: it leaves the transcript untouched.
 
 use std::process::Stdio;
 use std::sync::LazyLock;
@@ -73,14 +41,8 @@ pub struct ContextUsage {
     pub measured_at_ms: i64,
 }
 
-/// The `/context` breakdown of one live root agent's session.
-///
-/// Frontend contract: `invoke('context_usage', { agentId })`. The session id and cwd
-/// are looked up **in-process** from the supervisor — the minted `--session-id` never
-/// crosses the JS wire (same as `pin_agent`), and the webview cannot point
-/// the CLI at an arbitrary folder.
-///
-/// `Err` is `"<code>"` or `"<code>: <detail>"`, codes as `ContextErrorCode` in TS.
+/// `invoke('context_usage', { agentId })`. Session id and cwd are looked up in-process so the
+/// webview cannot supply them. `Err` is `"<code>"` or `"<code>: <detail>"` (`ContextErrorCode`).
 #[tauri::command]
 pub async fn context_usage(
     supervisor: tauri::State<'_, crate::supervisor::SupervisorHandle>,
@@ -349,15 +311,9 @@ mod tests {
         );
     }
 
-    /// LOCAL INTEGRATION (run by `npm run verify`): the real CLI answers `/context` for
-    /// a real saved session, and the read leaves that session's transcript untouched
-    /// (size + mtime) — the no-write promise, measured rather than assumed. Picks the
-    /// most recently modified transcript under `~/.claude/projects` that has been QUIET
-    /// for 10+ minutes and is not the session running this test (read-only): a live
-    /// session grows on its own and would fail the unchanged check. A short quiet window is
-    /// not enough: a Claude Code session driving `npm run verify` can sit idle waiting on it,
-    /// get picked, and write its own `away_summary` mid-read — so that session is excluded by
-    /// its id, which Claude Code exports.
+    /// LOCAL INTEGRATION: `/context` on a real saved session leaves its transcript's size and mtime
+    /// unchanged. Picks a transcript quiet for 10+ minutes and excludes this test's own session id,
+    /// since a live or waiting session writes on its own.
     #[tokio::test]
     #[ignore = "needs a signed-in claude CLI and at least one saved session"]
     async fn live_context_reads_a_real_session_without_writing_it() {

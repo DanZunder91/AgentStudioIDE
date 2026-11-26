@@ -1,8 +1,4 @@
-/**
- * The detached-window shell (tab tear-off): its own pane tree and the global pieces its tabs
- * can raise — and none of the main window's chrome, whose components are what start the
- * app-wide pollers (usage, git, metrics) a second window must not duplicate.
- */
+/** No main-window chrome here: those components start app-wide pollers a second window must not. */
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

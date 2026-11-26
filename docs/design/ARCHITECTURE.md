@@ -792,7 +792,6 @@ Agent Studio/
 ├─ tsconfig.json
 ├─ src/                  # React app (main.tsx, App.tsx) — replace with §4 structure incrementally
 ├─ src-tauri/            # Rust crate (Cargo.toml, tauri.conf.json, src/main.rs, src/lib.rs)
-├─ public/
 └─ docs/                 # untouched (design/*)
 ```
 

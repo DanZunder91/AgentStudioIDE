@@ -1,33 +1,6 @@
-//! **Restart in the IDE**: a dev app whose console is a
-//! terminal or pipe the IDE cannot read is stopped and started again in an IDE terminal —
-//! same cwd, same argv, same environment — so its output and its HTTP land in the IDE.
-//!
-//! Two steps, so the confirm the user sees names exactly what will be killed:
-//! 1. [`super::Procs::prepare_restart`] reads the pid's argv, cwd, start time and
-//!    **environment** into Rust memory under a random token ([`RestartTokens`], single use,
-//!    [`TOKEN_TTL`]) and returns only `{ token, summary: { name, cwd, argv (masked) } }`.
-//!    An environment the OS hides (macOS, Apple's own binaries) refuses the restart.
-//! 2. [`RestartTokens::take`] redeems it; [`stop`] sends **SIGTERM** (same uid only, the
-//!    same process — its start time must match, so a reused pid is never signalled) and
-//!    waits up to [`STOP_WAIT`]. **Never SIGKILL**: a process that ignores SIGTERM is
-//!    reported and left alone — a second, harsher kill is a decision for the user, made
-//!    outside the IDE. Then the caller opens the terminal via the supervisor with the
-//!    captured env (the supervisor adds the usual IDE env on top: hook + capture proxy).
-//!    **Windows has no SIGTERM**: there the stop is `TerminateProcess`
-//!    (`super::winproc::terminate`) — immediate, no chance to clean up, the closest Windows
-//!    has to a polite stop for a console program the IDE does not share a console with. The
-//!    same guards run first (same user, same start time, the explicit confirm), and pid 0,
-//!    pid 4 and the IDE itself are refused.
-//!
-//! **Restart with capture**: the same two steps serve an
-//! `origin: "ide"` app whose `captured` is false (its proxy vars were stripped). Its captured
-//! env goes into the new terminal FIRST and the supervisor's hook + capture-proxy env is
-//! applied on top, so the relaunch points at the live proxy again whatever the old env said.
-//!
-//! 🔴 **The env never leaves Rust.** It is held in [`SecretEnv`], whose `Debug` prints only
-//! a count and which has no `Serialize`; nothing here logs it; the only place it goes is the
-//! child's environment. (In the spirit of never testing with real user credentials: an env
-//! is where credentials live.)
+//! Restart in the IDE: re-launch a dev app in an IDE terminal (same cwd, argv, env). Two steps
+//! under a single-use token so the confirm names what dies; stop is SIGTERM only, same uid and
+//! start time (Windows: `TerminateProcess`). The env never leaves Rust ([`SecretEnv`]).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -76,12 +49,8 @@ impl std::fmt::Debug for SecretEnv {
 }
 
 impl SecretEnv {
-    /// The env to hand the new terminal: the captured one minus [`DROP_VARS`] and the IDE's
-    /// own `AGENTSTUDIO_*` (re-injected by the supervisor), with `PWD` set to the cwd. On
-    /// Windows ([`SecretEnv::for_terminal_with`]) names match without case (`Path` is
-    /// `PATH`), and there is no `PWD` to set: it is a POSIX shell's variable, the terminal's
-    /// cwd is given to `CreateProcess`, and a captured one (from a Git Bash parent) names the
-    /// OLD directory in MSYS spelling — it is dropped, not replaced.
+    /// Env for the new terminal: captured minus [`DROP_VARS`] and `AGENTSTUDIO_*` (re-injected),
+    /// `PWD` = cwd. Windows: names match without case, and a captured `PWD` is dropped, not set.
     pub fn for_terminal(&self, cwd: &str) -> Vec<(String, String)> {
         self.for_terminal_with(cwd, cfg!(windows))
     }
@@ -191,16 +160,8 @@ impl Prepared {
         }
     }
 
-    /// `(program, args)` for the new terminal: argv[0] when it is an absolute path that
-    /// exists (what the user ran — a `python3` symlink, not the framework binary behind
-    /// it), else the resolved executable, else argv[0] as written (PATH lookup). "Absolute"
-    /// is the host's rule (`C:\Program Files\nodejs\node.exe` on Windows, not only `/…`).
-    ///
-    /// **On Windows a batch file is never the program** (`.cmd`/`.bat`): Windows
-    /// runs one through `cmd.exe`, which expands `%VAR%` inside the arguments — the captured
-    /// argv would be re-read as a command. A process's image is always an `.exe`, so a batch
-    /// name can only come from what argv[0] says; then the image wins, and with neither usable
-    /// there is no program (`None`).
+    /// `(program, args)`: `argv[0]` if absolute and existing (what the user ran), else the resolved
+    /// exe, else `argv[0]` for PATH lookup. On Windows never a `.cmd`/`.bat` (cmd expands `%VAR%`).
     pub fn program(&self) -> Option<(String, Vec<String>)> {
         self.program_for(cfg!(windows))
     }
@@ -226,14 +187,8 @@ impl Prepared {
     }
 }
 
-/// The program a Windows restart runs: argv\[0\] when it is an absolute path to an existing
-/// `.exe`/`.com` (what the user ran), else the process's image (`QueryFullProcessImageNameW`,
-/// always a PE file). **Never a bare name, and never a batch file:** the terminal hands the
-/// program to `CreateProcess` through portable-pty, whose PATH search tries `PATHEXT` — which
-/// lists `.BAT` and `.CMD` — so `npm` could resolve to `npm.cmd`, and a batch file runs through
-/// `cmd.exe`, which re-reads the arguments (`%VAR%` expands even inside quotes).
-/// The arguments themselves are quoted by the Windows argv rules (`CommandLineToArgvW`), with
-/// no shell in between: no PowerShell or cmd syntax is involved at all.
+/// Windows: `argv[0]` if an absolute existing `.exe`/`.com`, else the process image. Never a
+/// bare name or batch file: `PATHEXT` could resolve `npm` to `npm.cmd`, and cmd re-reads `%VAR%`.
 fn windows_program(argv0: &str, exe: Option<&str>) -> Option<String> {
     let path = std::path::Path::new(argv0);
     let lower = argv0.to_ascii_lowercase();

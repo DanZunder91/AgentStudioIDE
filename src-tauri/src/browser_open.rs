@@ -1,81 +1,6 @@
-//! Open a local `.html` file in a **real browser** — the file tree's
-//! "Open in Browser" context-menu entry.
-//!
-//! Two commands, one wire contract with `src/features/workspace/browserIpc.ts`:
-//! [`list_browsers`] enumerates the browsers installed on this machine (default
-//! first, `[]` rather than an error on an OS we cannot enumerate) and
-//! [`open_in_browser`] launches one of them on a path.
-//!
-//! # Why this is not `url_open`
-//!
-//! [`crate::url_open`] is `https://`-only **by design**, asserted in its module
-//! doc and in two security tests. Widening it to
-//! `file://` would mean deleting those assertions. Its `REFUSED_CHARS` blocklist
-//! would also reject perfectly legitimate paths — any filename containing a space
-//! or an `&` — on every OS. So this is a separate, separately-shaped command.
-//!
-//! # The security shape, stated plainly
-//!
-//! The webview is the caller. A command that starts a program must therefore
-//! trust it with exactly two things and nothing else:
-//!
-//! 1. **The path is scope-checked FIRST, before anything is spawned**, through
-//!    [`resolve_in_scope`] — the single enforcement point `read_file`, the search
-//!    walker and the `preview://` handler already share. It
-//!    canonicalizes before the prefix check, so `..` and escaping symlinks are
-//!    resolved to their real target and rejected. The **canonical** path is what
-//!    is handed to the opener. Without this the command is arbitrary-local-file
-//!    exfiltration from the webview.
-//! 2. **`browser_id` is an opaque token we produced, never an executable path.**
-//!    It is re-resolved against our *own* enumeration ([`resolve_requested`]); an
-//!    id we do not recognise is `unknown-browser`. The frontend can never name a
-//!    binary for us to spawn — the launch recipe ([`Launch`]) is built here and
-//!    is not part of the wire type.
-//!
-//! A directory is refused (`not-a-file`), and so is a file that is not `.html` /
-//! `.htm`. That second check is **defence in depth, not the primary gate** — the
-//! frontend already only offers the menu entry when `previewKindOf(path) ===
-//! "html"`. It is two literals inlined in [`is_html_path`], deliberately *not* a
-//! second extension table, because a table here could drift out of step with
-//! `previewKinds.ts` and silently disagree with the menu.
-//!
-//! # The per-OS bargain (the `url_open.rs` bargain)
-//!
-//! Every per-OS **decision** is a pure function, compiled and unit-tested on
-//! every host — the argv shape ([`open_argv`]), the default-handler parse
-//! ([`parse_default_handler`]), the `.desktop` parse
-//! ([`browser_from_desktop_entry`]), the registry parse
-//! ([`browsers_from_reg_output`]). Only the subprocess/filesystem glue is
-//! untested. The enumerators take their directories as a parameter, so even the
-//! Linux directory walk is exercised from a macOS test against a temp tree.
-//!
-//! ## macOS — MEASURED
-//!
-//! 🔴 `/usr/bin/open <path>` does **not** mean "open a browser": LaunchServices
-//! resolves `public.html` by *content type*, which on a machine where `.html` is
-//! bound to an editor opens the editor. `open -u file://…` is worse — the default
-//! handler for the `file` scheme is `com.apple.finder`. The only correct argv is
-//! **`/usr/bin/open -b <bundle-id> <absolute path>`**, with a plain path and not a
-//! `file://` URL, so that `open` builds the URL itself and a `#` or `?` in a
-//! filename cannot be eaten as a fragment. A missing bundle id exits 1 with a
-//! clear `LSCopyApplicationURLsForBundleIdentifier` message on stderr (verified).
-//!
-//! Enumeration byte-scans each app's `Contents/Info.plist` for the literal
-//! `NSUserActivityTypeBrowsingWeb` (measured: a hundred-odd plists in a few ms, zero
-//! subprocesses). That marker returns exactly the real browsers and correctly
-//! **excludes** iTerm2 and cmux, which both register the `http:` scheme and are
-//! terminals — which is why `lsregister -dump` (2.5 s, 24 MB, undocumented) is
-//! not used. `plutil -convert json -o -` then reads the identity of the ~4 hits.
-//!
-//! ## Linux and Windows — REASONED, NOT MEASURED
-//!
-//! Neither path has been measured on a live desktop the way macOS was. A verification
-//! chain is platform-specific evidence, not a ritual — a macOS measurement must not
-//! stand in for Linux. Both paths are therefore built to fail **loudly**
-//! (`spawn-failed`) rather than degrade into "some program opened the file":
-//! notably, the Linux default-browser path does **not** fall back to `xdg-open`,
-//! because `xdg-open` on an `.html` file consults the `text/html` association and
-//! would reintroduce exactly the open-in-the-editor bug macOS taught us about.
+//! "Open in Browser" for a local `.html` file; not [`crate::url_open`], which is https-only by
+//! design. The webview is untrusted: the path is scope-checked and canonicalized FIRST, and
+//! `browser_id` is a token re-resolved against our own enumeration, never a program path.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -105,11 +30,8 @@ pub const ERROR_CODES: [&str; 5] = [
 // The wire type + the internal launch recipe
 // ---------------------------------------------------------------------------
 
-/// One browser the user can pick, as the frontend sees it.
-///
-/// 🔴 Carries **no** executable path. `id` is an opaque token (a macOS bundle id,
-/// a Linux `.desktop` id, a Windows `StartMenuInternet` key name) that only means
-/// something to [`resolve_requested`].
+/// No executable path: `id` is an opaque token (bundle id, `.desktop` id, registry key) that
+/// only [`resolve_requested`] understands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserChoice {
@@ -118,17 +40,12 @@ pub struct BrowserChoice {
     pub is_default: bool,
 }
 
-/// How to actually start a browser. **Internal — never serialized, never
-/// accepted from the webview.** Produced only by this module's enumerators.
-///
-/// The file path is *not* in here: [`open_argv`] appends it last, so "the path is
-/// the final argument and never a flag" is one rule in one place.
+/// Internal: never serialized or accepted from the webview. The path is not here: [`open_argv`]
+/// appends it last, so "path last, never a flag" is one rule in one place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
-    /// An absolute program path wherever we can resolve one (*binary
-    /// resolution is never a bare name* — a GUI-launched app has a minimal
-    /// `PATH`). A bare name survives only as a documented lenient fallback on
-    /// Linux, where a failure surfaces as `spawn-failed`, never silently.
+    /// Absolute wherever resolvable (a GUI-launched app has a minimal `PATH`); a bare name is only
+    /// a Linux fallback that fails loudly as `spawn-failed`.
     pub program: String,
     /// Fixed leading arguments — `["-b", "<bundle id>"]` on macOS, the `.desktop`
     /// `Exec` tail on Linux, empty on Windows.
@@ -142,21 +59,16 @@ pub struct Browser {
     pub launch: Launch,
 }
 
-/// The argv for opening `path` with `launch` — the path **always last**, always a
-/// plain filesystem path, never a URL and never a shell string.
-///
-/// This is the one place the final command line is built, on every OS.
+/// The one place the final argv is built, on every OS: the path always last, a plain path,
+/// never a URL or shell string.
 pub fn open_argv(launch: &Launch, path: &str) -> (String, Vec<String>) {
     let mut args = launch.args.clone();
     args.push(path.to_string());
     (launch.program.clone(), args)
 }
 
-/// Pick the browser the caller asked for, or the first of the list.
-///
-/// `Some(id)` must match an id **we** produced; anything else is
-/// `unknown-browser`. Pure, so "an unknown id is refused" is provable without a
-/// process anywhere near the test.
+/// `Some(id)` must match an id we produced, else `unknown-browser`. Pure, so that is provable
+/// without a process.
 pub fn resolve_requested(browsers: &[Browser], id: Option<&str>) -> Result<Launch, String> {
     match id {
         Some(id) => browsers
@@ -172,10 +84,7 @@ pub fn resolve_requested(browsers: &[Browser], id: Option<&str>) -> Result<Launc
     }
 }
 
-/// Order the menu: the default first, then case-insensitive alphabetical.
-///
-/// Sorting (rather than "whatever the directory walk returned") is what makes the
-/// menu stable between sessions and the tests deterministic.
+/// Default first, then case-insensitive alphabetical: a stable menu and deterministic tests.
 pub fn sort_default_first(browsers: &mut [Browser]) {
     browsers.sort_by(|a, b| {
         b.choice
@@ -191,27 +100,16 @@ pub fn sort_default_first(browsers: &mut [Browser]) {
     });
 }
 
-/// Is this a page this command exists to open? `.html` / `.htm`, ASCII-case
-/// insensitive.
-///
-/// Defence in depth only — see the module header. Two literals rather than a
-/// table, mirroring `HTML_EXTS` in `src/features/editor/previewKinds.ts`.
+/// Defence in depth only (the menu already filters). Two literals, not a table, mirroring
+/// `HTML_EXTS` in `src/features/editor/previewKinds.ts`.
 pub fn is_html_path(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"))
 }
 
-/// The spelling of a canonical path that a *third-party program* can open.
-///
-/// 🔴 On Windows `std::fs::canonicalize` returns the **verbatim** form
-/// (`\\?\C:\site\index.html`). Chrome, Firefox and Edge do not accept it — the
-/// page would 404 or the browser would treat it as a search term. The prefix is
-/// stripped here, *after* the scope check has already used the canonical path, so
-/// the guard still sees the real path and only the launch argument is rewritten.
-/// A verbatim **UNC** path (`\\?\UNC\server\share`) is left alone: rewriting it
-/// correctly means `\\server\share`, which is a different-enough beast that
-/// leaving it verbatim (and failing loudly) beats guessing.
+/// Windows canonicalize returns `\\?\C:\…`, which browsers reject; stripped only after the scope
+/// check. Verbatim UNC (`\\?\UNC\…`) is left alone: failing loudly beats guessing.
 pub fn launch_path_arg(path: &str) -> String {
     match path.strip_prefix(r"\\?\") {
         Some(rest) if !rest.starts_with("UNC\\") => rest.to_string(),
@@ -232,11 +130,8 @@ pub const MAC_BROWSER_MARKER: &[u8] = b"NSUserActivityTypeBrowsingWeb";
 /// picked a browser). Safari is part of macOS, so this can be assumed present.
 pub const MAC_DEFAULT_FALLBACK: &str = "com.apple.Safari";
 
-/// macOS launch recipe: `/usr/bin/open -b <bundle id> <path>`.
-///
-/// `-b` is the whole point — without it `open` picks by *content type*, which is
-/// an editor on a typical dev machine. `/usr/bin/open` is OS-shipped, so the
-/// absolute path is used (never a `PATH` lookup).
+/// `-b` is the point: without it `open` picks by content type (often an editor). `/usr/bin/open`
+/// is OS-shipped, so it is used by absolute path.
 pub fn macos_launch(bundle_id: &str) -> Launch {
     Launch {
         program: "/usr/bin/open".to_string(),
@@ -244,17 +139,8 @@ pub fn macos_launch(bundle_id: &str) -> Launch {
     }
 }
 
-/// The default browser's bundle id from the LaunchServices secure plist, as JSON.
-///
-/// 🔴 The stored id is **lowercased** (`com.google.chrome`, while the bundle
-/// itself says `com.google.Chrome`), so every comparison against it must be
-/// case-insensitive. `-b` is case-insensitive too, so the lowercased id launches
-/// correctly as-is.
-///
-/// The `http` URL-scheme handler is the authority. `com.apple.default-app.web-browser`
-/// is consulted second: recent macOS writes it alongside, and it is the more
-/// direct statement of the question we are asking. Returns `None` when neither is
-/// present so the caller can apply [`MAC_DEFAULT_FALLBACK`] and say why.
+/// The stored id is lowercased, so compare case-insensitively (`-b` is too). `http` handler
+/// first, then `com.apple.default-app.web-browser`; `None` → [`MAC_DEFAULT_FALLBACK`].
 pub fn parse_default_handler(json: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     let handlers = v.get("LSHandlers")?.as_array()?;
@@ -279,15 +165,8 @@ pub fn parse_default_handler(json: &str) -> Option<String> {
         })
 }
 
-/// A browser's `(bundle id, display name)` from `plutil -convert json` output.
-///
-/// 🔴 Name preference is `CFBundleDisplayName`, then the `.app` basename —
-/// **`CFBundleName` is deliberately not used**. Measured: Chrome's `CFBundleName`
-/// is `"Chrome"` while its `CFBundleDisplayName` and its bundle name are
-/// `"Google Chrome"`, and the menu has to read the way the Dock does. `CFBundleName`
-/// is documented as a *short* name (≤ 16 characters), which is the wrong thing to
-/// show. No bundle id → `None`: an app we cannot name to `open -b` is an app we
-/// cannot launch, so it must not appear in the menu.
+/// Name: `CFBundleDisplayName`, else the `.app` basename; never `CFBundleName` (a short name:
+/// Chrome's is "Chrome"). No bundle id → `None`: `open -b` could not launch it.
 pub fn browser_from_info_plist_json(json: &str, app_file_name: &str) -> Option<(String, String)> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     let id = v
@@ -324,13 +203,8 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
 /// exists so a pathological file cannot be slurped whole into memory.
 const MAX_PLIST_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Every `Contents/Info.plist` under `dirs` that carries [`MAC_BROWSER_MARKER`].
-///
-/// Scans each directory's `*.app` children **and** one level of plain
-/// subdirectories, because people file browsers into `/Applications/Web/` and a
-/// browser that is invisible to the menu looks like a bug in the feature. Pure
-/// filesystem work with the directories injected, so it is unit-tested against a
-/// temp tree on any host.
+/// Also one level of plain subdirectories (people file browsers into `/Applications/Web/`).
+/// Directories are injected, so it is unit-tested on a temp tree.
 pub fn scan_app_dirs_for_browser_plists(dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut hits = Vec::new();
     for dir in dirs {
@@ -414,11 +288,7 @@ fn plutil_json(path: &Path) -> Option<String> {
     String::from_utf8(out.stdout).ok()
 }
 
-/// The default browser bundle id on this Mac, or [`MAC_DEFAULT_FALLBACK`].
-///
-/// Reads `~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist`.
-/// That file is world-readable and outside every TCC-protected location, so this
-/// raises **no** permission prompt (a permission prompt is a design failure).
+/// Reads the LaunchServices secure plist: world-readable and outside TCC, so no permission prompt.
 fn macos_default_bundle_id() -> String {
     home_dir()
         .map(|h| {
@@ -473,13 +343,8 @@ pub fn macos_browsers() -> Vec<Browser> {
 /// The MIME type a `.desktop` entry must claim to be a browser.
 pub const LINUX_HTTP_HANDLER: &str = "x-scheme-handler/http";
 
-/// Where a browser binary lives when a `.desktop` `Exec` names it bare.
-///
-/// The house rule is *binary resolution is never a bare name* (`agent/claude.rs`:
-/// a GUI-launched process gets a minimal `PATH`). A `.desktop` `Exec=firefox` is
-/// the XDG-sanctioned spelling, so it is resolved against these first and only
-/// falls back to a bare name — the same lenient shape `url_open::linux_command`
-/// documents, where a failure surfaces as `spawn-failed`, never silently.
+/// Bare `.desktop` `Exec` names resolve against these first (GUI apps get a minimal `PATH`); a
+/// bare name is the lenient fallback, failing loudly as `spawn-failed`.
 const LINUX_BIN_DIRS: &[&str] = &[
     "/usr/bin",
     "/usr/local/bin",
@@ -571,10 +436,7 @@ pub fn exec_argv(exec: &str) -> Vec<String> {
         .collect()
 }
 
-/// Resolve a `.desktop` `Exec` program name to an absolute path where we can.
-///
-/// `probe` is injected (the glue passes `Path::is_file`) so both branches are
-/// unit-testable from any host.
+/// `probe` is injected (the glue passes `Path::is_file`) so both branches are testable anywhere.
 pub fn resolve_linux_program(argv0: &str, probe: &dyn Fn(&Path) -> bool) -> String {
     if argv0.contains('/') {
         return argv0.to_string();
@@ -601,14 +463,9 @@ pub fn resolve_linux_program(argv0: &str, probe: &dyn Fn(&Path) -> bool) -> Stri
     argv0.to_string()
 }
 
-/// One `.desktop` file → a [`Browser`], or `None` if it is not a browser we can
-/// launch.
-///
-/// Refuses: a non-`Application` `Type`, `NoDisplay`/`Hidden` (entries the desktop
-/// itself does not show), a `MimeType` without [`LINUX_HTTP_HANDLER`], an empty
-/// `Exec`. Only the `[Desktop Entry]` group is read — an action group
-/// (`[Desktop Action new-window]`) has its own `Exec`/`Name` and must not leak in.
-/// Localized keys (`Name[es]`) are ignored: the menu shows the unlocalized name.
+/// Refuses non-`Application` types, `NoDisplay`/`Hidden`, a MimeType without
+/// [`LINUX_HTTP_HANDLER`], and an empty `Exec`. Only `[Desktop Entry]` is read: action groups
+/// have their own `Exec`/`Name`.
 pub fn browser_from_desktop_entry(
     text: &str,
     desktop_id: &str,
@@ -665,14 +522,8 @@ pub fn browser_from_desktop_entry(
     })
 }
 
-/// Enumerate browsers from a precedence-ordered list of `applications`
-/// directories.
-///
-/// **Basename shadowing**: the desktop id is the filename, and the first
-/// directory that provides an id wins — `~/.local/share/applications/firefox.desktop`
-/// overrides `/usr/share/applications/firefox.desktop`, exactly as the XDG menu
-/// spec says. That is why the caller must pass the directories in precedence
-/// order and why the id (not the path) is the dedupe key.
+/// The first directory providing a desktop id wins (XDG basename shadowing), so pass `dirs` in
+/// precedence order; the id, not the path, is the dedupe key.
 pub fn browsers_from_desktop_dirs(dirs: &[PathBuf], probe: &dyn Fn(&Path) -> bool) -> Vec<Browser> {
     let mut out: Vec<Browser> = Vec::new();
     for dir in dirs {
@@ -736,10 +587,7 @@ fn linux_desktop_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// The desktop id `xdg-settings get default-web-browser` printed.
-///
-/// Refuses anything that is not a single `*.desktop` token, because the value is
-/// about to select which program we start.
+/// Only a single `*.desktop` token: the value selects which program we start.
 pub fn parse_xdg_default_browser(stdout: &str) -> Option<String> {
     let line = stdout.lines().find(|l| !l.trim().is_empty())?.trim();
     if !line.ends_with(".desktop") || line.contains(char::is_whitespace) || line.contains('/') {
@@ -811,11 +659,8 @@ const REG_TYPES: &[&str] = &[
     "REG_FULL_RESOURCE_DESCRIPTOR",
 ];
 
-/// One `reg query` output line split as `(name, type, data)`.
-///
-/// 🔴 Split on the type **token**, never on column positions: `reg.exe` pads with
-/// a variable number of spaces, and a value's data may itself contain runs of
-/// spaces (`C:\Program Files\…`) or the literal text `REG_SZ`.
+/// Split on the type token, never columns: `reg.exe` pads variably and data may hold spaces or
+/// the literal `REG_SZ`.
 pub fn split_reg_line(line: &str) -> Option<(String, String, String)> {
     for (i, _) in line.match_indices("REG_") {
         // The type is its own whitespace-delimited token.
@@ -839,10 +684,7 @@ pub fn split_reg_line(line: &str) -> Option<(String, String, String)> {
     None
 }
 
-/// A named value's data from a `reg query … /v <name>` (or `/ve`) block.
-///
-/// Accepts `REG_SZ` and `REG_EXPAND_SZ` — `shell\open\command` is written as
-/// either depending on the installer.
+/// `REG_SZ` or `REG_EXPAND_SZ`: installers write `shell\open\command` as either.
 pub fn parse_reg_value(stdout: &str, name: &str) -> Option<String> {
     stdout.lines().find_map(|line| {
         let (n, typ, data) = split_reg_line(line)?;
@@ -853,11 +695,7 @@ pub fn parse_reg_value(stdout: &str, name: &str) -> Option<String> {
     })
 }
 
-/// The **direct** child key names under `parent` in a `reg query <parent>` block.
-///
-/// `reg.exe` prints the queried key, its values, then one full path per subkey;
-/// grandchildren never appear, but the parent's own line does and must not be
-/// mistaken for a child.
+/// `reg.exe` also prints the parent's own line, which must not be mistaken for a child.
 pub fn parse_reg_subkeys(stdout: &str, parent: &str) -> Vec<String> {
     // `to_ascii_lowercase`, never `to_lowercase`: the latter can change a
     // string's BYTE length (İ → i̇), and the tail is sliced back out of the
@@ -874,12 +712,8 @@ pub fn parse_reg_subkeys(stdout: &str, parent: &str) -> Vec<String> {
         .collect()
 }
 
-/// The executable out of a `shell\open\command` value.
-///
-/// `"C:\Program Files\Google\Chrome\Application\chrome.exe" -- "%1"` → the quoted
-/// path. An unquoted value is taken whole (`StartMenuInternet`'s own command is
-/// usually a bare path), which is correct precisely *because* we never hand it to
-/// a shell: it is argv[0] of a direct spawn, so embedded spaces are not a split.
+/// The quoted path, or an unquoted value whole: it is argv[0] of a direct spawn, never a shell,
+/// so spaces don't split it.
 pub fn command_executable(command: &str) -> Option<String> {
     let command = command.trim();
     let exe = if let Some(rest) = command.strip_prefix('"') {
@@ -895,14 +729,8 @@ pub fn command_executable(command: &str) -> Option<String> {
     (!exe.is_empty()).then(|| exe.to_string())
 }
 
-/// One browser from its `StartMenuInternet` subkey name plus the two value
-/// blocks `reg query` returned for it.
-///
-/// 🔴 The launch is the browser `.exe` **directly**, never through `cmd`: Rust's
-/// `Command` quotes an argument only for space, tab or emptiness — not for `&` —
-/// so `cmd /c start "" C:\p\R&Dreport.html` would run `Dreport.html` as a second
-/// command. Avoiding `cmd` entirely is the rule: `url_open` uses `ShellExecuteW`, not
-/// `cmd /c start`, for the same reason (cmd expanded a link's `%VAR%`).
+/// The browser `.exe` directly, never `cmd`: Rust doesn't quote `&`, so `R&Dreport.html` through
+/// `cmd /c start` would run a second command.
 pub fn browser_from_reg_key(
     key_name: &str,
     name_block: &str,
@@ -924,15 +752,8 @@ pub fn browser_from_reg_key(
     })
 }
 
-/// Assemble the Windows list from already-captured `reg query` output.
-///
-/// `blocks` is `(subkey name, name block, command block)` per candidate, in the
-/// order they were queried (HKLM then HKCU); `default_exe` is what the
-/// `UserChoice` ProgId resolved to. Pure, so the whole Windows shape is tested
-/// from a Mac; only the `reg.exe` invocations are glue.
-///
-/// Dedupe is on the subkey name, case-insensitively: HKLM and HKCU routinely
-/// carry the same browser, and the two would otherwise appear twice in the menu.
+/// Pure (only `reg.exe` calls are glue). `blocks` are HKLM then HKCU; dedupe is on the subkey
+/// name, case-insensitively, since both hives routinely carry the same browser.
 pub fn browsers_from_reg_output(
     blocks: &[(String, String, String)],
     default_exe: Option<&str>,
@@ -1043,19 +864,12 @@ fn enumerate_browsers() -> Vec<Browser> {
     Vec::new()
 }
 
-/// The launch to use when the caller named no browser.
-///
-/// macOS can answer this **without** the enumeration — LaunchServices records the
-/// default directly — so "Open in Browser" keeps working even if the app scan
-/// finds nothing. Linux and Windows have no such independent route, so they fall
-/// back to the enumerated list's first entry and, failing that, to a loud
-/// `spawn-failed`.
+/// macOS reads the default from LaunchServices, so it works even if the scan finds nothing. Linux
+/// and Windows use the first enumerated entry, else a loud `spawn-failed`; never `xdg-open`, whose
+/// `text/html` association can be an editor.
 #[cfg(target_os = "macos")]
 fn default_launch(browsers: &[Browser]) -> Result<Launch, String> {
-    // The list is already default-first and already marked from LaunchServices,
-    // so the common path costs no extra subprocess. Asking LaunchServices again
-    // is the fallback for the case the enumeration came back empty — which is
-    // exactly when `browserIpc.ts` shows its single "system default" leaf.
+    // Already default-first; asking LaunchServices again covers an empty enumeration.
     resolve_requested(browsers, None).or_else(|_| Ok(macos_launch(&macos_default_bundle_id())))
 }
 
@@ -1071,11 +885,8 @@ fn default_launch(browsers: &[Browser]) -> Result<Launch, String> {
 // The commands
 // ---------------------------------------------------------------------------
 
-/// `list_browsers` — every browser installed on this machine, **default first**.
-///
-/// `async` + `spawn_blocking` because a synchronous `#[tauri::command]` runs on
-/// the **main/event-loop thread**, and this walks directories and starts small
-/// subprocesses (`fs_tree::read_file` carries the same note and the same fix).
+/// `async` + `spawn_blocking`: a sync command runs on the main thread, and this walks directories
+/// and starts subprocesses.
 #[tauri::command]
 pub async fn list_browsers() -> Result<Vec<BrowserChoice>, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -1105,15 +916,8 @@ pub async fn open_in_browser(
     .unwrap_or_else(|e| Err(format!("unknown: open task failed: {e}")))
 }
 
-/// Every decision `open_in_browser` makes, **with nothing spawned**: the scope
-/// check, the type checks, the id re-resolution and the final argv.
-///
-/// The order is the security property: **scope → type → browser → argv.** Every
-/// refusal happens before [`open_scoped`] has a program name to run, and because
-/// the browser list is a parameter, the whole chain — including the success path
-/// that produces a real command line — is unit-tested without a browser ever
-/// being launched. That seam is deliberate: the two halves (a correct argv, a
-/// correct enumeration) are each covered, and this is what proves they add up.
+/// Every decision with nothing spawned. The order is the security property: scope → type →
+/// browser → argv, every refusal before [`open_scoped`] has a program to run.
 pub(crate) fn plan_open(
     requested: &Path,
     browser_id: Option<&str>,
@@ -1184,10 +988,7 @@ mod tests {
 
     // ── fixtures ──────────────────────────────────────────────────────────────
 
-    /// The real shape of `plutil -convert json -o -` on
-    /// `com.apple.launchservices.secure.plist`, trimmed to the entries that matter.
-    /// Note `com.google.chrome`
-    /// is **lowercased** — that is what LaunchServices stores.
+    /// Real `plutil` output, trimmed; LaunchServices stores `com.google.chrome` lowercased.
     const LS_SECURE_JSON: &str = r#"{"LSHandlers":[
       {"LSHandlerContentType":"com.apple.ical.backup-package","LSHandlerRoleAll":"com.apple.ical"},
       {"LSHandlerContentType":"com.apple.default-app.web-browser","LSHandlerRoleAll":"com.google.chrome"},
@@ -1306,10 +1107,8 @@ HKEY_LOCAL_MACHINE\\SOFTWARE\\Clients\\StartMenuInternet\\Google Chrome\\Capabil
 
     // ── open_argv: the argv shape, pinned POSITIONALLY, per OS ────────────────
 
-    /// 🔴 macOS: `-b <bundle id>` must come BEFORE the path, and the path must be
-    /// a plain path — not `file://…`, whose default handler is the Finder, and not
-    /// a bare `open <path>`, which resolves `public.html` by content type (an
-    /// editor on a typical dev machine).
+    /// `-b <bundle id>` before a plain path: `file://` opens the Finder and a bare `open <path>`
+    /// picks by content type.
     #[test]
     fn macos_argv_is_open_dash_b_then_the_plain_path() {
         let launch = macos_launch("com.google.Chrome");
@@ -1353,10 +1152,7 @@ HKEY_LOCAL_MACHINE\\SOFTWARE\\Clients\\StartMenuInternet\\Google Chrome\\Capabil
         );
     }
 
-    /// 🔴 Windows: the browser `.exe` **directly**, never `cmd /c start`. Rust's
-    /// `Command` quotes an argument for space/tab/empty but NOT for `&`, so a path
-    /// like `C:\p\R&Dreport.html` through `cmd` would run `Dreport.html` as a
-    /// second command. Here it is argv[1] of the exe and nothing parses it.
+    /// `R&Dreport.html` through `cmd` would run a second command; here it is argv[1] of the exe.
     #[test]
     fn windows_argv_spawns_the_exe_directly_and_never_cmd() {
         let launch = Launch {
@@ -1495,10 +1291,8 @@ HKEY_LOCAL_MACHINE\\SOFTWARE\\Clients\\StartMenuInternet\\Google Chrome\\Capabil
         ]}"#;
         assert_eq!(parse_default_handler(json), None);
 
-        // 🔴 `http` and `https` are SEPARATE LaunchServices entries and a user can
-        // point them at different apps. On the captured Mac both happen to say
-        // Chrome, so the real fixture cannot tell the two arms apart — this
-        // constructed pair is what pins that we read the `http` one.
+        // `http` and `https` are separate entries a user can point apart; the captured Mac has both
+        // on Chrome, so this constructed pair pins that we read `http`.
         let split = r#"{"LSHandlers":[
           {"LSHandlerRoleAll":"org.mozilla.firefox","LSHandlerURLScheme":"https"},
           {"LSHandlerRoleAll":"com.google.chrome","LSHandlerURLScheme":"http"},
@@ -1996,12 +1790,7 @@ HKEY_LOCAL_MACHINE\\SOFTWARE\\Clients\\StartMenuInternet\\Google Chrome\\Capabil
         assert_eq!(reg_exe_path(Some("")), "reg.exe");
     }
 
-    // ── the command refuses BEFORE anything is spawned ────────────────────────
-    //
-    // These call `open_scoped` directly (no `AppHandle`), the way
-    // `url_open::url_open_refuses_a_bad_url_without_spawning` does. Each refusal
-    // returns before `enumerate_browsers`/`spawn_detached` is reached, so no
-    // browser can be launched by the suite.
+    // ── refusals BEFORE anything is spawned (no `AppHandle`, so no browser can launch) ──
 
     /// A file OUTSIDE every allowed root is refused — the clone of
     /// `fs_tree::read_file_rejects_a_path_outside_the_root` for this command.
@@ -2093,13 +1882,8 @@ HKEY_LOCAL_MACHINE\\SOFTWARE\\Clients\\StartMenuInternet\\Google Chrome\\Capabil
         }
     }
 
-    /// The SUCCESS path, end to end, with the browser list injected and nothing
-    /// spawned: an in-scope `.html` file plus an id the enumeration produced
-    /// yields the exact command line that would run.
-    ///
-    /// This is the seam test. Without it every refusal is proven
-    /// and the working case is not — and a `plan_open` that resolved nothing at
-    /// all would still pass every other test in this module.
+    /// The seam test: without it every refusal is proven but not the working case, and a
+    /// `plan_open` that resolved nothing would pass every other test.
     #[test]
     fn plan_open_builds_the_real_command_line_for_a_valid_request() {
         let t = TempTree::new("plan-ok");
@@ -2180,15 +1964,8 @@ HKEY_LOCAL_MACHINE\\SOFTWARE\\Clients\\StartMenuInternet\\Google Chrome\\Capabil
 
     // ── the live enumeration (ignored by design: `cargo test` stays hermetic) ──
 
-    /// Enumerates the browsers on THIS machine. 🔴 Launches nothing.
-    ///
-    /// `#[ignore]`d because it reads the real `/Applications` (or the real XDG
-    /// dirs): `cargo test` must stay hermetic. `npm run verify` runs it by name.
-    ///
-    /// A verification chain is platform-specific evidence: the
-    /// non-empty assertion is made only on macOS, where Safari is part of the OS.
-    /// On Linux the list is printed and not asserted, because a headless box with
-    /// no browser installed is a legitimate state, not a regression.
+    /// Reads the real installed apps and launches nothing; verify runs it by name. Non-empty
+    /// is asserted only on macOS, where Safari ships; a Linux box with no browser is legitimate.
     #[test]
     #[ignore = "reads the real machine's installed applications; run via npm run verify"]
     fn live_enumerates_the_browsers_installed_on_this_machine() {

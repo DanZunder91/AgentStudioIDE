@@ -1,22 +1,5 @@
-/**
- * ResultsGrid tests.
- *
- * Nothing is mocked: the component takes one `DbResultSet` and renders. The fixtures
- * are inputs and every expected string is written out here.
- *
- * ── What jsdom can and cannot be asked here ──────────────────────────────────
- * jsdom has no layout engine, so a width or a scroll *position* assertion in this
- * file would be vacuous. What IS real here is **structure**: how many cells exist,
- * which attributes distinguish a NULL from an empty string, that a 200-column row
- * lives inside exactly one overflow container, and that the windowing arithmetic
- * picks the right rows for a given scrollTop. The two claims that need real pixels —
- * the grid scrolls internally instead of widening its pane, and the divider actually
- * moves — are asserted in `DbConsole.browser.test.tsx`.
- *
- * The viewport-measurement tests stub `clientHeight` deliberately, and that stub is
- * honest about what it proves: it pins that we *feed the measurement into the window
- * maths*, not that jsdom measured anything.
- */
+/** Nothing is mocked. jsdom has no layout, so this asserts structure (cells, NULL vs empty
+ * attributes, one overflow container, window maths); pixels are in DbConsole.browser.test.tsx. */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -37,38 +20,22 @@ import {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  // The find bars live in the module-singleton store (that is the fix under
-  // test: they must outlive an unmount). Between TESTS that survival is a
-  // leak — a record left by one test would pre-open the bar, or pre-fill the
-  // query, in the next test's render.
+  // findBars outlive unmounts by design; between tests that is a leak.
   useAppStore.setState((s) => {
     s.findBars = {};
-    // …and the scroll offsets, for the same reason and with sharper teeth: a
-    // test that scrolls to row 992 and unmounts leaves an offset the NEXT
-    // test's mount restores, so the window renders rows nobody asked for and
-    // the failure lands in an unrelated test.
+    // Same for scroll offsets: a leftover offset would be restored by the next test's mount.
     s.scrollOffsets = {};
     s.gridViews = {};
   });
 });
 
-/**
- * The `<td>`s of one body row, by row index — the result's own cells only.
- *
- * `td[data-kind]` and not `td`: every row also ends in the aria-hidden filler cell that
- * absorbs leftover width (see `ResultsGrid.tsx`), and counting that as a column would
- * make "a ragged row has exactly 3 cells" mean nothing.
- */
+/** td[data-kind] only: every row also ends in the aria-hidden filler cell. */
 function cellsOfRow(index: number): HTMLElement[] {
   const row = document.querySelector(`tr[data-row="${index}"]`) as HTMLElement;
   return Array.from(row.querySelectorAll("td[data-kind]"));
 }
 
-/**
- * 100 rows whose ONLY "needle" is in the `note` column of row 90 — the shape every
- * "take me to the match" assertion needs: one unambiguous hit, far below any
- * viewport this tier can produce.
- */
+/** One unambiguous needle (row 90, note column), far below any viewport this tier produces. */
 const DEEP_RESULT: DbResultSet = {
   ...TRACKS_RESULT,
   rows: TRACKS_RESULT.rows.concat(
@@ -76,16 +43,7 @@ const DEEP_RESULT: DbResultSet = {
   ),
 };
 
-/**
- * Where revealing `DEEP_RESULT`'s needle must land the scroll box, written out
- * rather than imported: a constant read from the code under test cannot disagree
- * with it.
- *
- * Row 90 starts at `90 × ROW_HEIGHT_PX (24) = 2160`. `scrollToRow` then backs off
- * by the sticky header (44) plus one row (24) so the match does not sit half-hidden
- * under the column names: `2160 − 68 = 2092`. A change to the row height, the header
- * allowance or the landing rule reds every test using this, by design.
- */
+/** Written out, not imported: row 90 at 24px is 2160, minus header (44) and one row (24). */
 const NEEDLE_SCROLL_TOP = 2092;
 
 /* ══════════ the assertion that protects the backend's whole design ═════════ */
@@ -229,16 +187,8 @@ describe("ResultsGrid — a result with no rows", () => {
   });
 });
 
-/**
- * The filler column.
- *
- * `min-width: 100%` makes a narrow result look like a grid instead of a ragged strip, but
- * the slack it adds is handed to the *data* columns: a one-column result stretched `id`
- * across the whole pane and left its numbers 900px from their own header, and a column
- * dragged narrower gave its space straight back to itself. One trailing auto-width column
- * puts the leftover somewhere harmless. It must stay invisible to a11y and to anything
- * counting columns — that is what these assertions are for.
- */
+/** The trailing filler takes min-width: 100%'s slack so data columns keep their width; it must
+ * stay invisible to a11y and to column counts. */
 describe("ResultsGrid — the filler column is geometry, not a column", () => {
   it("adds exactly one filler to the header and to every row", () => {
     render(<ResultsGrid result={TRACKS_RESULT} />);
@@ -305,10 +255,7 @@ describe("ResultsGrid — a 200-column row", () => {
   });
 
   it("keeps the whole table inside ONE overflow container", () => {
-    // jsdom cannot measure, so the structural claim is what is asserted here: the
-    // table has exactly one scroll ancestor inside the grid, and it is the box that
-    // owns `overflow: auto`. The pixel claim (scrollWidth > clientWidth, and the
-    // pane not widening) is in the browser tier.
+    // jsdom can't measure, so assert structure: one scroll ancestor, the overflow: auto box.
     render(<ResultsGrid result={WIDE_RESULT} />);
     const scroll = screen.getByTestId("db-grid-scroll");
     const table = document.querySelector("table") as HTMLElement;
@@ -394,19 +341,8 @@ describe("ResultsGrid — large results are windowed", () => {
   });
 });
 
-/**
- * Resizable columns.
- *
- * 🔴 The motivating case, `SELECT * FROM widgets`: `id` is a 66-character hash, so the sampled
- * heuristic gave it the full 48ch cap and pushed `name` and `signing_code` off the right
- * edge. A heuristic cannot be right for every table, so the user gets the last word.
- *
- * jsdom has no layout engine, so a *drag* here would start from a 0px header and prove
- * nothing — `startWidthOf` bails on that on purpose. What is real in this tier is the
- * affordance and the state: the handles exist, they are reachable and named, and the
- * `<col>` a width lands on is the right one. The pixel claims (a drag really widens the
- * column, ←/→ really steps it) are in `DbConsole.browser.test.tsx`.
- */
+/** In jsdom a drag starts from a 0px header (startWidthOf bails), so this tier asserts the handles
+ * and which <col> a width lands on; the pixels are in DbConsole.browser.test.tsx. */
 describe("ResultsGrid — resizable columns", () => {
   it("gives every column a named, focusable resize handle", () => {
     render(<ResultsGrid result={TRACKS_RESULT} />);
@@ -555,14 +491,8 @@ describe("ResultsGrid — resizable columns", () => {
   });
 });
 
-/**
- * The presence mask: when the data has more states than the contract, say so in the output.
- *
- * Two engines — MongoDB and DynamoDB — can omit a field from a document entirely, which is a third
- * state a `string | null` cell cannot hold. Before this, both an explicit null and a missing field
- * rendered as the NULL chip, so the grid asserted something the data never said. The engines now
- * send `absent[row][col]`, and this is the half that has to read it.
- */
+/** MongoDB and DynamoDB can omit a field entirely: absent[row][col] must render as missing, not
+ * as the NULL chip. */
 describe("the absent mask — a missing field is not a NULL", () => {
   const THREE_STATES: DbResultSet = {
     kind: "rows",
@@ -883,12 +813,7 @@ describe("ResultsGrid — searching the result", () => {
 
 /* ═══════ the find bar survives a tab move ═══════════════════════════════ */
 
-/**
- * `Pane` renders only the active tab and a cross-pane drag re-parents the
- * subtree — both are an unmount of this component. The bar's open/query/cursor
- * live in `findBars[findKey]` precisely so they come back on the remount;
- * these tests drive that unmount/remount cycle directly, the way `Pane` does.
- */
+/** Pane's tab switch and cross-pane drag both unmount this; drive that cycle directly. */
 describe("ResultsGrid — the find bar survives unmount/remount", () => {
   const KEY = "grid:conn-a:0";
 
@@ -942,11 +867,8 @@ describe("ResultsGrid — the find bar survives unmount/remount", () => {
     await user.keyboard("{Meta>}f{/Meta}");
     await user.type(screen.getByTestId("db-grid-find-input"), "needle");
     expect(screen.getByTestId("db-grid-find-count")).toHaveTextContent("1 of 1");
-    // Scroll back to the top before leaving — typing the query has ALREADY
-    // revealed row 90 (that is the fix in `revealFirst`), and the offset is
-    // persisted on unmount, so without this the match would still be on screen
-    // after the remount and stepping to it would correctly move nothing. This
-    // is the user who found their match, scrolled away, and moved the tab.
+    // Scroll back to the top first: typing already revealed row 90 and the offset persists,
+    // so the match would otherwise still be on screen after the remount.
     screen.getByTestId("db-grid-scroll").scrollTop = 0;
     unmount();
 
@@ -995,18 +917,9 @@ describe("stepping with a MEASURED viewport", () => {
   });
 
   it("uses the real clientHeight when the layout engine reports one", async () => {
-    // jsdom reports 0 for every clientHeight, so the FALLBACK arm runs in every
-    // other test — this is the one place the real-measurement arm is pinned
-    // (the running app always takes it; a suite that never does is how a wrong
-    // fallback ships unnoticed).
-    //
-    // 🔴 The numbers are chosen so the two arms DISAGREE, which is the only way
-    // this test can see which one ran. Row 90 spans 2160–2184; from scrollTop
-    // 1500 the measured 800px viewport reaches 2300 and the row is visible, so
-    // the box must not move — while the 600px fallback would reach only 2100 and
-    // would scroll to 2092. Previously this asserted "0 stayed 0" on the OUTER
-    // `db-grid` div, which nothing ever scrolls: it was green under both arms,
-    // under a deleted reveal, and under an unconditional one.
+    // The one test of the measured-viewport arm (jsdom's clientHeight is 0 elsewhere). The
+    // numbers make the arms disagree: 800px from 1500 already shows row 90, so nothing moves,
+    // while the 600px fallback would scroll to 2092.
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(800);
     const user = userEvent.setup();
     render(<ResultsGrid result={DEEP_RESULT} />);
@@ -1022,61 +935,9 @@ describe("stepping with a MEASURED viewport", () => {
 
 /* ═══ find REVEALS the hit, on both axes ════════════════════════════════════ */
 
-/**
- * *"3 of 57"* is not an answer if the 3 is nine screens away. Every other find
- * surface in this app reveals its hit; this grid counted them and left the user to
- * go looking. Stepping already scrolled vertically — a **new query never did**, on
- * either the typed or the seeded path, and **neither did anything horizontally**,
- * so a match in an off-screen column stayed off-screen with the row perfectly
- * placed.
- *
- * ── What is honest to assert here, and what is not ───────────────────────────
- * jsdom has no layout engine, so nothing below is allowed to *depend* on one. Two
- * facts make these assertions real anyway, and they are different facts:
- *
- *  1. **`scrollTop` is genuine state in jsdom** — its setter stores what you write
- *     and the getter returns it. ("the scroll position survives a tab move" used
- *     to call the setter a no-op; this block is what proved otherwise, and that
- *     comment is corrected in place.) So a vertical reveal can be asserted at its exact
- *     arithmetic value — `NEEDLE_SCROLL_TOP`, spelled out above — rather than as
- *     "greater than zero", which would also pass for a reveal that scrolled to the
- *     wrong row.
- *
- *  2. **Nothing measures itself**, so the horizontal half has no geometry at all:
- *     every `getBoundingClientRect()` is zeros, both extents are zero-wide, and
- *     `scrollToColumn` correctly answers "already visible" to everything. That
- *     would make a horizontal test vacuously green, so `stubHorizontalLayout`
- *     INJECTS a layout — the scroll box 400px wide, each column 200px — and what
- *     is then pinned is that the component reads the right boxes and applies the
- *     answer. That the boxes are the right ones **in a real engine** is pinned
- *     in `ResultsGrid.browser.test.tsx`, where Chromium supplies them.
- *
- * Focus is real in jsdom, so "revealing must not steal the caret" is asserted
- * directly rather than modelled.
- *
- * ── Falsified before being trusted ───────────────────────────────────────────
- * Each rule was reverted in `ResultsGrid.tsx` / `gridReveal.ts`, the run observed,
- * and the source restored byte-identically (sha256). The mutants, and what caught
- * them here:
- *
- *   ✅ drop `box.scrollTop = top` from `revealHit`       → 6 reds, "expected +0 to
- *      be 2092" (and the seeded test's "expected 1920 to be +0").
- *   ✅ drop `box.scrollLeft = left`                      → "scrolls SIDEWAYS…":
- *      "expected +0 to be 200".
- *   ✅ drop `revealFirst(e.target.value)` from onChange  → 4 reds; the typed,
- *      caret, already-visible and sideways tests.
- *   ✅ drop `if (seeded !== null) revealFirst(seeded)`   → 1 red, and ONLY the
- *      seeded test: the seed path is genuinely separate from the typed one.
- *   ✅ drop `revealHit(hits[next])` from `stepHit`       → 2 reds, the stepping
- *      test and the pre-existing remount one.
- *   ✅ drop the `hit.col < columns.length` guard         → "reveals neither way…":
- *      "expected 400 to be +0" — it scrolls to the aria-hidden filler column.
- *   ✅ add `gridRef.current?.focus()` to `revealHit`     → "keeps the caret…":
- *      "expected <div class="db-grid" …> to be <input …>". The one mutation that is
- *      an ADDITION, because stealing focus is a thing done, not a thing omitted.
- *   ✅ drop `if (fitsLeft && fitsRight) return null`     → `gridReveal.test.ts`
- *      reds twice; the browser tier's `nearest` test catches it with real geometry.
- */
+/** jsdom's scrollTop is real state, so vertical reveals assert exact values; it has no geometry,
+ * so stubHorizontalLayout injects one (real boxes: ResultsGrid.browser.test.tsx). Each reveal
+ * rule was reverted and seen red. Focus is real, so caret theft is asserted directly. */
 describe("ResultsGrid — find reveals the hit", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -1199,24 +1060,8 @@ describe("ResultsGrid — find reveals the hit", () => {
       toJSON: () => "",
     }) as DOMRect;
 
-  /**
-   * Inject the layout jsdom will not compute: a 400px-wide scroll box at x=0, and
-   * header cells 200px each, so column *c* spans `[c*200, c*200+200]`.
-   *
-   * Column 2 therefore sits at 400–600 — entirely past the box's right edge — which
-   * is the whole point: with real zeros every extent is identical and
-   * `scrollToColumn` answers "already visible" to every input, so an unstubbed
-   * horizontal test cannot fail. The `<th>` is indexed through its own parent
-   * rather than a testid because the component finds it exactly that way.
-   *
-   * 🔴 The header rects are offset by the live `scrollLeft`, because that is the
-   * one property of `getBoundingClientRect` this arithmetic depends on: it is
-   * VIEWPORT-relative, so a column walks left as the box scrolls right. A static
-   * stub models a browser that does not exist — and it showed: `user.type` fires
-   * one reveal per keystroke, so four characters of "demo" accumulated 4 × 200px
-   * of scroll against rects that never moved. The component is right (a real
-   * engine re-measures); the first version of this stub was not.
-   */
+  /** A 400px box at x=0 and 200px columns, so column 2 is off-screen (zeros would make all
+   * visible). Rects shift with scrollLeft, as viewport-relative rects do in a real engine. */
   function stubHorizontalLayout(): void {
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
       this: Element,
@@ -1254,11 +1099,8 @@ describe("ResultsGrid — find reveals the hit", () => {
   });
 
   it("reveals neither way for a hit in a cell the grid does not draw", async () => {
-    // A row carrying a fourth value against three columns. `findCells` walks the
-    // whole row, so the hit is counted; `markMatch` only ever renders the three
-    // real columns, so there is nothing on screen to reveal. Without the guard the
-    // `<th>` at index 3 is the aria-hidden FILLER cell (600–800 under the stub),
-    // and the grid would scroll 400px sideways to show empty space.
+    // A fourth value against three columns: counted, never drawn. Without the guard the <th>
+    // at index 3 is the filler, and the grid would scroll to empty space.
     stubHorizontalLayout();
     const user = userEvent.setup();
     const overlong: DbResultSet = {
@@ -1279,23 +1121,8 @@ describe("ResultsGrid — find reveals the hit", () => {
 
 
 describe("the scroll position survives a tab move", () => {
-  /**
-   * Previously, after scrolling a database response, switching to another tab
-   * and coming back put the grid back at the top. `Pane` unmounts
-   * an inactive tab, so the offset — which lives in the DOM node, not in React —
-   * died with it.
-   */
-  /**
-   * ⚠️ Asserted through the WINDOW rather than through `box.scrollTop`.
-   *
-   * 🔴 An earlier version of this note said jsdom's `scrollTop` setter is a
-   * no-op. It is not — jsdom stores what you write and reads it straight back,
-   * which is why the reveal tests further up can assert an exact pixel landing.
-   * The real reason these tests inject the position with `defineProperty` is the
-   * one below: what they are pinning is that the restored offset **seeds the
-   * virtualiser**, so the rows rendered are the rows around the reader's place.
-   * Reading `scrollTop` back would only prove the assignment, not the effect.
-   */
+  /** Asserted via the rendered window, not box.scrollTop: the restored offset must seed the
+   * virtualiser (jsdom stores scrollTop, so reading it back proves only the assignment). */
   const tall = {
     ...TRUNCATED_RESULT,
     truncated: false,
@@ -1340,11 +1167,7 @@ describe("the scroll position survives a tab move", () => {
 });
 
 describe("the sort survives a tab move", () => {
-  /**
-   * The bug: after sorting a result and moving the tab, the rows
-   * went back to their original order. The sort lived in component state, so `Pane`
-   * unmounting the inactive tab threw the user's question away.
-   */
+  /** The sort must survive Pane unmounting the inactive tab. */
   it("restores the sorted order, and a NEW result still clears it", () => {
     const { unmount } = render(<ResultsGrid result={TRACKS_RESULT} findKey="grid:conn-a:0" />);
     const header = () => screen.getAllByRole("columnheader")[0];
@@ -1374,33 +1197,13 @@ describe("the sort survives a tab move", () => {
 
 /* ═══ Cmd/Ctrl+F seeds from the selection ══════════════════════════════════ */
 
-/**
- * Pressing Command+F with something selected searches for that selection.
- *
- * The rule is `features/editor/find/selectionSeed`, shared with the editor's own
- * bar and every other find surface, and the seed is written through the SAME
- * `patchFindBar({ query, cursor: 0 })` the input's onChange uses — so what is
- * asserted here is that the grid SEARCHED (the count, the marked cell), not that
- * the box has text in it.
- *
- * 🔴 Two jsdom facts shape every test below, and both would otherwise let a test
- * pass against nothing:
- *   1. `HTMLElement.focus()` ends with `getSelection().collapse(this, 0)` — no
- *      real browser does that for a non-editable element. So the selection is
- *      made AFTER the grid is focused, which is also the order the real gesture
- *      happens in (mousedown focuses, the drag selects).
- *   2. `Selection.toString()` is `Range.toString()`: it concatenates character
- *      data and does NOT insert the line breaks a real browser puts between
- *      block elements. The multi-line case is therefore a cell whose VALUE
- *      contains a newline — realistic for a text column, and it means the same
- *      thing in jsdom and in Chromium.
- */
+/** Asserts the grid SEARCHED (count, marked cell). jsdom's focus() collapses the selection, so
+ * select AFTER focusing; its Selection.toString() adds no block breaks, so the multi-line case
+ * uses a value containing a newline. */
 describe("ResultsGrid — Cmd/Ctrl+F seeds from the selection", () => {
   afterEach(() => {
-    // Restore FIRST: `selectAcrossRows` stubs `window.getSelection`, and a
-    // nested afterEach runs before the file-level one that calls
-    // `vi.restoreAllMocks()` — clearing ranges on the stub would throw and take
-    // the file's `cleanup()` with it.
+    // Restore FIRST: selectAcrossRows stubs getSelection, and this afterEach runs before the
+    // file's restoreAllMocks, so clearing ranges on the stub would throw.
     vi.restoreAllMocks();
     window.getSelection()?.removeAllRanges();
   });
@@ -1428,17 +1231,8 @@ describe("ResultsGrid — Cmd/Ctrl+F seeds from the selection", () => {
     throw new Error(`no text node in the grid contains ${JSON.stringify(text)}`);
   }
 
-  /**
-   * A selection spanning two ROWS, as a real browser reports it.
-   *
-   * jsdom cannot produce one, and neither can this grid's DOM: `Selection.
-   * toString()` is `Range.toString()`, which concatenates character data and
-   * never inserts the line breaks a browser puts between block elements — and
-   * `renderCell` collapses every value to ONE line, so no text node here carries
-   * a `\n` either. The RANGE is real, so the containment check is genuinely
-   * exercised; only the stringification is replaced with what Chromium returns
-   * for a drag across two rows.
-   */
+  /** A real range across two rows, with toString replaced by what Chromium returns: jsdom adds
+   * no block breaks, and renderCell keeps every value on one line. */
   function selectAcrossRows(anchorText: string, asTheBrowserSeesIt: string): void {
     selectInGrid(anchorText);
     const range = (window.getSelection() as Selection).getRangeAt(0);
@@ -1579,20 +1373,15 @@ describe("ResultsGrid — Cmd/Ctrl+F seeds from the selection", () => {
   });
 
   it("SCROLLS to the seeded query's first hit — and still hands the input the caret", async () => {
-    // The seed is the same query-change path as typing, so it owes the same
-    // reveal. This is the gesture that makes it visible: 100 rows with a `needle`
-    // at row 0 and another at row 90, scrolled to the bottom. You select the one
-    // you can see, press Cmd+F, and the FIRST hit — the one at the top, nine
-    // screens above — is what the bar now points at.
+    // Seeding owes the same reveal as typing: select the visible needle at row 90, and the
+    // bar points at hit 1, row 0, nine screens up.
     const rows = TRACKS_RESULT.rows
       .map((row, i) => (i === 0 ? [row[0], row[1], "needle"] : row))
       .concat(Array.from({ length: 97 }, (_, i) => [`r${i}`, String(i), i === 87 ? "needle" : "hay"]));
     render(<ResultsGrid result={{ ...TRACKS_RESULT, rows }} />);
     const box = screen.getByTestId("db-grid-scroll");
-    // Scroll to the end so row 90 is inside the window and therefore selectable.
-    // `visibleWindow` clamps 1920 to the 1800 maximum and renders rows 67–99;
-    // row 0 is NOT in the DOM, which is also why `scrollIntoView` could never
-    // have been the mechanism here.
+    // Scrolled to the end (clamped to 1800, rows 67-99): row 0 is not in the DOM, so
+    // scrollIntoView could never work here.
     box.scrollTop = 1920;
     fireEvent.scroll(box);
     expect(document.querySelector('tr[data-row="90"]')).toBeInTheDocument();

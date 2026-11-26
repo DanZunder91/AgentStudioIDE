@@ -1,64 +1,6 @@
-/**
- * AgentLogsPanel — the fleet's logs, read like an IDE reads them (logs must help the
- * reader, not confuse them). A
- * singleton center tab: a **Sources sidebar** on the left (Services · Terminals · Agents ·
- * Mac apps, All on top — `SourcesSidebar.tsx`) and the selected stream on the right.
- *
- * How a line renders depends on what produced it (`agentLogsStream.ts`):
- *   - a service / terminal / Mac-app line is RAW — `time  LEVEL  text`, like `tail -f`;
- *   - an agent's tool call and its result are ONE command block — `$ cargo test --lib`
- *     with the output nested under it, folded to 3 lines with "show N more";
- *   - a lifecycle line is a thin centred divider, not a log row.
- * The Source column is the user's choice alone (Columns ▾) — it is never hidden or shown by
- * the selection (its coming and going read as a new, empty column appearing). A solo selection is
- * announced by a STREAM HEADER above the list instead (`gazelle · service · ● running · 26
- * lines`), with an "All sources" way back.
- *
- * Layout: the panel is a definite-height flex column, the list is the one
- * `flex: 1 1 0; min-height: 0; overflow: auto` box, so its `clientHeight` is the pane's
- * share and the windowing actually windows. Every row — raw, divider, a block's header,
- * each of its output lines, its "more" row — is exactly ROW_H tall, so the scroll
- * arithmetic stays one multiplication over `stream.total` (the choice is argued in
- * `agentLogsStream.ts`). The sticky header is one row tall, so row i sits at `(i + 1) · ROW_H`.
- *
- * Columns: the header and every row are CSS grids on the same
- * `gridTemplate(visibleColumns(...))`, so Time · Level · Source keep the user's widths
- * whatever the text is. A block's output rows carry the block's time and source, DIMMED
- * (blank cells read as a broken column), and each line's OWN level (`agentLogsLevel.ts`);
- * only the fold row ("show N more"), which is a control
- * and not a line, keeps blank leading cells.
- *
- * ⌘F / Ctrl+F (`agentLogsFind.ts`): pressed anywhere inside this panel it
- * opens the Logs view's OWN find bar above the list — the key never reaches WebKit's
- * window-wide find or a Markdown preview's window fallback (both skip a `defaultPrevented`
- * keystroke). There is no global ⌘F owner in the app to route through: every find surface
- * (editor, terminal, preview, DB grid, API body) answers the key from its own container's
- * keydown, and this panel does the same, so "inside Logs → the Logs bar, outside → not" is
- * DOM containment, not a registry. The panel root is `tabIndex={-1}` so a click on any
- * non-focusable part of it (the count, a gap in the list) still puts focus inside it.
- * Pressed inside the detail drawer, the same bar searches the drawer's text (`in detail`).
- *
- * A block header reads description first, in bold, then the command dimmed on the same
- * line — a header can begin with 200 characters of `$ S=/private/tmp/…; cp …`. The
- * command ellipsises; the drawer has it whole. When the command or its output names a file
- * the IDE already tails as a service, the header ends in "→ open <service> stream"
- * (`agentLogsLinks.ts`), pinned to the right of the cell so a long command cannot push it
- * out of view.
- *
- * A dev app selected in the sidebar's Apps group shows its CARD
- * (`procs/DevAppCard`) between the stream header and the list: a stream started from it is
- * soloed, "Restart in the IDE" focuses the new terminal's tab, a port's "connections →" opens
- * Network › Whole Mac on that pid. While the app streams nothing, the list says "Pick a log to
- * stream" instead of looking empty for no reason (`agentLogsAppSelection.ts` has the rule
- * that deselects the app when anything else is picked).
- *
- * An app the IDE started gets "requests →" (Network › IDE traffic, its
- * Process picked), its `ide-terminal` console names the terminal by its tab's title and opens
- * it, and a file a Service already tails links to that stream (the ring's `servicePaths`,
- * matched on the exact path). While its console is an IDE terminal the empty-list hint says so
- * instead of "Pick a log". A soloed AGENT's stream header lists the apps that agent is running
- * as links; one selects the app (`selectAppInLogs`, exactly the sidebar row's click).
- */
+/** Fleet logs tab: Sources sidebar + the selected stream (row shapes: `agentLogsStream.ts`). Every
+ * row is exactly ROW_H tall and the sticky header is one row, so row i sits at `(i + 1) · ROW_H`.
+ * ⌘F opens this panel's own bar from its own keydown (DOM containment; root is `tabIndex={-1}`). */
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -160,12 +102,8 @@ let savedScrollTop = 0;
 
 const NO_MARKS: readonly Mark[] = [];
 
-/**
- * Highlighted text with the ⌘F matches painted over it: every match a
- * subtle `<mark>`, the current one hot. React children, never `innerHTML` — the marks are
- * rebuilt with the row, so no re-render can erase them (React re-assigning `innerHTML` on a
- * new prop object only erases Range-painted marks, so it does not apply).
- */
+/** Text with ⌘F matches as `<mark>` React children (never `innerHTML`), rebuilt with the row so
+ * no re-render can erase them; the current match is hot. */
 function Segments({ segs, marks = NO_MARKS, current = -1 }: { segs: Segment[]; marks?: readonly Mark[]; current?: number }): React.JSX.Element {
   return (
     <>
@@ -218,10 +156,7 @@ function ViaDetail(): React.JSX.Element {
   );
 }
 
-/**
- * Why a source label is plain text, led by the full (display) name — the cell ellipsizes a
- * long source, so the title is where the whole name lives. A system app never had an IDE tab.
- */
+/** Title saying why a source label is plain text, led by its full name (the cell ellipsizes). */
 function plainSourceTitle(line: LogLine, name: string): string {
   if (line.kind === "machine") {
     return line.detail === null ? `${name} — an app on this computer` : `${name} — ${line.detail}`;
@@ -276,13 +211,8 @@ function SourceCell({
   );
 }
 
-/**
- * The leading cells of a row (Time · Level · Source), in the visible columns' order. `dim`
- * is a block's output row: the time and source repeat the block's, faded, never linkable —
- * the header above is where the row's identity lives. Its Level is NOT
- * faded: it is the line's OWN level (`classifyLine`), not a repeat,
- * so a WARN line inside a block reads `W` in the warn colour like any stream line.
- */
+/** Time · Level · Source cells in visible-column order. `dim` (a block's output row) fades the
+ * repeated time and source, never linkable; Level is the line's OWN level, so it is not faded. */
 function LeadCells({
   columns, line, level, linkable, dim, onSource,
 }: {
@@ -355,11 +285,8 @@ interface RowProps {
   showSource: boolean;
   /** A head row only: the service whose streamed file this block's command or output names. */
   streamLink: string | null;
-  /**
-   * ⌘F marks on this row's text cell (a head row: on its command label), from one
-   * `marksByPart` map — the same array object while the matches are unchanged, so `memo`
-   * keeps an unmarked row cheap. Undefined when the row holds no match.
-   */
+  /** ⌘F marks on the text cell (head row: its command label); the same array object while matches
+   * are unchanged so `memo` keeps unmarked rows cheap. Undefined when the row has no match. */
   marks: readonly Mark[] | undefined;
   /** A head row only: the marks on its description. */
   descMarks: readonly Mark[] | undefined;
@@ -432,12 +359,8 @@ function DividerRow({ line, expanded, viaDetail, target, template, showSource, m
   );
 }
 
-/**
- * A command block's header: the description first and bold when the
- * call has one, then the command dimmed — `Run the unit tests · $ cargo test --lib`; without
- * a description the command alone, bold. Red when the result failed. The text cell is a
- * flex row so the command ellipsises while the description and the stream link stay whole.
- */
+/** A command block's header: bold description then the dimmed command, or the command alone in
+ * bold; red if the result failed. Flex text cell: the command ellipsises, the rest stays whole. */
 function HeadRow({ block, expanded, linkable, viaDetail, target, columns, template, streamLink, marks, descMarks, findCurrent, onToggle, onSource, onStreamLink }: RowProps & { block: ToolBlock }) {
   const a = block.anchor;
   const level: LogLevel = block.error ? "error" : a.level;
@@ -501,16 +424,9 @@ function HeadRow({ block, expanded, linkable, viaDetail, target, columns, templa
   );
 }
 
-/**
- * One line of a block's output, nested under its header; a query hit is marked. Its leading
- * cells repeat the block's time and source, dimmed — never blank — and its
- * Level is the LINE's own: `classifyLine`, the TS twin of Rust's
- * `classify_level`, so `WARN gazelle::db: …` is W and yellow, not the result's I. The
- * text is coloured by that level too. A failed result still reads as failed — its header is
- * red and every output row keeps the red rule down its left edge — but a plain
- * `Compiling foo` line under it is no longer painted red: red that means nothing teaches the
- * reader to ignore red (the reason Rust lets a logger's own level column win).
- */
+/** One output line under its header: dimmed time/source repeat the block's; Level is the line's
+ * own `classifyLine` (TS twin of Rust's `classify_level`), which also colours the text. A failed
+ * block keeps its red header and left rule, but its plain lines are not painted red. */
 function OutRow({ block, index, text, hit, columns, template, marks, findCurrent, onToggle, onSource }: RowProps & { block: ToolBlock; index: number; text: string; hit: boolean }) {
   const level = classifyLine(text);
   return (
@@ -580,10 +496,8 @@ function Header({
 
 /* ───────────────────────────── the panel ───────────────────────────── */
 
-/**
- * The `partKey` (agentLogsFind.ts) of a visual row's text cell — a head row's command
- * label; its description is `d:<key>`. The "show N more" row paints nothing.
- */
+/** The `partKey` (agentLogsFind.ts) of a row's text cell: a head row's command label (its
+ * description is `d:<key>`); the "show N more" row paints nothing. */
 function rowPartKey(row: VisualRow): string {
   if (row.kind === "raw" || row.kind === "divider") return `l:${row.line.id}`;
   if (row.kind === "head") return `h:${row.block.key}`;
@@ -673,10 +587,9 @@ export function AgentLogsPanel(): React.JSX.Element {
   const expandedResult = expanded !== undefined && expanded.kind === "tool" ? (pairing.resultOf.get(expanded.id) ?? null) : null;
   // A detail-scoped bar whose drawer has closed searches the stream again rather than nothing.
   const scope = find?.scope === "detail" && expanded !== undefined ? "detail" : "list";
-  // The matches are found over the stream the USER folded (every output line is searched,
-  // folded or not), then the blocks hiding a match are expanded for as long as the bar is
-  // open — an override passed to a rebuild, never written to `expandedBlocks`, so closing
-  // the bar gives back exactly the folds the user had.
+  // Matches are found over the user's folds (all output searched); blocks hiding a match expand
+  // via an override passed to the rebuild, never written to `expandedBlocks`, so closing the bar
+  // restores the user's folds exactly.
   const baseMatches = useMemo(
     () => (findRe === null || scope !== "list" ? [] : findInStream(baseStream, findRe)),
     [findRe, scope, baseStream],
@@ -816,15 +729,9 @@ export function AgentLogsPanel(): React.JSX.Element {
     st.resolveErrorJump({ source: jumpRequest.source, lineId: t.lineId });
   }, [jumpRequest, stream]);
 
-  /*
-   * ⌘F reveal: after a find GESTURE (`find.seq` moved — a query, a toggle, a step) bring the
-   * current match into view. The list is windowed, so the match's row may not be in the DOM
-   * at all: the scroll is index arithmetic on the real scroll box, declared
-   * AFTER the follow effect so a query that expands a block (and so grows `stream.total`)
-   * cannot have follow snap the list back to the tail over the reveal. A reveal that
-   * scrolls stops follow, as a hand scroll would. The drawer is not windowed, so there the
-   * current `<mark>` simply scrolls itself into view.
-   */
+  /* ⌘F reveal after a find gesture (`find.seq` moved). The list is windowed, so scroll by index
+   * arithmetic; declared AFTER the follow effect so follow cannot snap back over the reveal. A
+   * reveal that scrolls stops follow; the unwindowed drawer scrolls its `<mark>` into view. */
   useLayoutEffect(() => {
     if (find === null || find.seq === revealedSeq.current) return;
     revealedSeq.current = find.seq;
@@ -872,12 +779,8 @@ export function AgentLogsPanel(): React.JSX.Element {
 
   const win = rowWindow(scrollTop, viewport, ROW_H, stream.total);
   const visual = visualRowsIn(stream, win.start, win.end);
-  // The drawer shows a row you can SEE. When the filters (or Clear, or the ring's cap) take
-  // its row out of view, it closes — deliberately, rather than lingering over a list that
-  // no longer contains it (the bug: a drawer stuck on an old "agent started").
-  // A block's result counts as seen: its output is on screen under the header.
-  // (`expanded` is read from the base stream above: find's expansions add output rows,
-  // never lines, so `shown` is the same in both builds.)
+  // The drawer closes when filters, Clear or the ring cap take its row out of view; a block's
+  // result counts as seen. (`expanded` comes from the base stream: find adds rows, not lines.)
   useEffect(() => {
     if (expandedId !== null && expanded === undefined) useAgentLogsStore.getState().closeDetail();
   }, [expandedId, expanded]);

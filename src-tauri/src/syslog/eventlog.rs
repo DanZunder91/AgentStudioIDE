@@ -1,21 +1,6 @@
-//! Windows Event Log: filter → structured XML `QueryList`, rendered event XML → fields →
-//! [`LineDraft`], Event Log level → [`LogLevel`], and the provider list for the picker.
-//! Pure and compiled on **every** OS (the Mac and Linux run these tests too); only
-//! `winevt.rs` (`cfg(windows)`) calls the Event Log API.
-//!
-//! # Filter semantics on Windows
-//!
-//! - **`apps` = provider names** — the Event Viewer "Source" column. That IS the app on
-//!   Windows: an event's `Execution/@ProcessID` is whoever called the API — for most system
-//!   events a shared service host (`svchost.exe`) or a process long gone — so a process name
-//!   cannot tell the writers apart (a classic `ReportEventW` event records the writer's pid
-//!   with `ThreadID 0` on Windows 11).
-//! - **`subsystem` = one extra channel** to read besides `Application` and `System`
-//!   (e.g. `Microsoft-Windows-PowerShell/Operational`). Never `Security` by default.
-//! - **`minLevel`** → an XPath `Level` clause ([`level_clause`]).
-//!
-//! Every name reaches the query through [`xpath_literal`] and [`xml_escape`]: a quote, `&`
-//! or `<` in a provider or channel name can neither break the query nor add a clause to it.
+//! Windows Event Log logic (query XML, event fields, levels, providers), pure and tested on
+//! every OS; only `winevt.rs` calls the API. `apps` = provider names (an event's pid is often a
+//! shared host). Names pass [`xpath_literal`]/[`xml_escape`], so none can break a query.
 
 use std::collections::BTreeSet;
 
@@ -66,15 +51,9 @@ pub fn level_of(level: u8) -> LogLevel {
     }
 }
 
-/// The XPath `Level` clause for a floor; `None` = every level. It keeps exactly the levels
-/// [`level_of`] maps at or above the floor:
-///
-/// | floor | Event Log levels | why |
-/// |---|---|---|
-/// | `debug` | all | Verbose and custom levels map to debug |
-/// | `info` | 0–4 | hides Verbose (debug) |
-/// | `default` | 0–4 | Windows has no level between Information and Warning, and Information is its ordinary message (macOS's "Default"): hiding it would leave a machine that writes a few events a minute looking dead |
-/// | `error` | 1–2 | Critical and Error; LogAlways (0) maps to info |
+/// The XPath `Level` clause keeping what [`level_of`] maps at or above `min`; `None` = all.
+/// `default` keeps Information (0–4) like `info`: Windows has nothing between it and Warning,
+/// and hiding it makes a quiet machine look dead. `error` = 1–2 (LogAlways maps to info).
 pub fn level_clause(min: SyslogLevel) -> Option<&'static str> {
     match min {
         SyslogLevel::Debug => None,
@@ -110,10 +89,8 @@ pub fn xml_escape(s: &str) -> String {
     out
 }
 
-/// An XPath 1.0 string literal: `'…'`, or `"…"` when `s` holds a `'`. `None` when it holds
-/// both (XPath 1.0 has no escape inside a literal and the Event Log's XPath subset has no
-/// `concat()`), or a character XML cannot carry — such a name is unrepresentable, and
-/// dropping it is the only alternative to a broken or widened query.
+/// An XPath 1.0 literal, `'…'` or `"…"`. `None` when `s` holds both quotes (no escape, no
+/// `concat()` in the Event Log subset) or a char XML can't carry: dropping beats a widened query.
 pub fn xpath_literal(s: &str) -> Option<String> {
     if !xml_carries(s) {
         return None;
@@ -182,10 +159,8 @@ pub fn query_list(f: &SyslogFilter) -> Option<String> {
     Some(query_of(&channels(f.subsystem.as_deref()), &xp))
 }
 
-/// When channel `i` of `n` must stop reading, as an offset into `syslog_apps`' wall-time
-/// `budget`: the end of its equal share, so a slow `Application` or `System` can never leave
-/// the user's extra channel (read last) with nothing — while time a quick channel left over
-/// still passes on to the next.
+/// When channel `i` of `n` must stop, as an offset into `budget`: the end of its equal share, so
+/// a slow channel never starves the extra one (read last); time left over still carries on.
 pub fn channel_share_end(budget: std::time::Duration, i: usize, n: usize) -> std::time::Duration {
     let n = n.max(1) as u32;
     let i = (i as u32).min(n - 1);
@@ -605,11 +580,8 @@ pub fn group_providers<I: IntoIterator<Item = String>>(names: I) -> Vec<RunningA
 mod tests {
     use super::*;
 
-    /// Real `EvtRender(EvtRenderEventXml)` output from a Windows 11 machine, with every
-    /// machine-identifying value replaced by a placeholder: the machine name, user SIDs, the
-    /// WER `Bucket`, `HashedBucket` and `ReportId`, and the GUIDs in the WER temp-file names.
-    /// The provider, update and service GUIDs that remain are Microsoft's fixed, public ids;
-    /// the structure is not edited.
+    /// Real Windows 11 `EvtRender` output, machine-identifying values (names, SIDs, WER ids)
+    /// replaced by placeholders; remaining GUIDs are Microsoft's public ids; structure unedited.
     const WER: &str = include_str!("fixtures/eventlog/application-wer-1001.xml");
     const SPP: &str = include_str!("fixtures/eventlog/application-spp-16384.xml");
     const WU_ERROR: &str = include_str!("fixtures/eventlog/system-windowsupdate-error-20.xml");

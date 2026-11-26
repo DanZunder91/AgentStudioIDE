@@ -1,18 +1,6 @@
-/**
- * The Settings item's runs of Claude Code's `claude mcp`, kept across popover opens.
- *
- * The item ("Add Agent Studio to Claude Code") mounts only while the popover is open, but a run
- * outlives it: an add or a removal takes seconds, and `claude mcp get` starts this app's binary
- * for its health check. So the run in flight and the last answer live here, at module level:
- *
- * - One run at a time. Opening the menu while a run is going joins it instead of starting another,
- *   so a reopened popover shows "Adding…" rather than an old state with the button enabled.
- *   (Rust refuses a second add or removal as busy as well: `agent_ctl::mcp::Gate`.)
- * - The last answer is shown again for `FRESH_MS` without asking, so opening and closing the menu
- *   does not start a `claude mcp get` each time. An action's answer replaces it, since it says
- *   what Claude Code has now, and is shown on the next open even when it arrived after the menu
- *   closed. A failed status is not kept: the next open asks again.
- */
+/** Module-level `claude mcp` runs, outliving the popover (an add takes seconds). One run at a time:
+ * a reopen joins it (Rust's `agent_ctl::mcp::Gate` refuses a second too). The last answer is reused
+ * for `FRESH_MS`; an action's answer replaces it; a failed status is not kept. */
 import {
   claudeMcpInstall,
   claudeMcpStatus,

@@ -1,11 +1,5 @@
-/**
- * `sessionsIpc` — the past-sessions command ("Recover session") at the wire.
- *
- * A thin wrapper, and thin wrappers are exactly where the command *name* and
- * the arg *shape* are the whole contract: get either wrong and Rust rejects at
- * runtime with types none the wiser (the `fleetIpc` lesson). The picker's real
- * exercise lives in `SessionPicker.test.tsx`; this pins the marshalling.
- */
+/** Pins the command name and arg shape: get either wrong and Rust rejects at runtime with the
+ * types none the wiser. The picker's real exercise is in `SessionPicker.test.tsx`. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

@@ -1,13 +1,6 @@
-//! `agent-studio <command>` — the app binary in command mode.
-//!
-//! `main` asks [`run_if_cli`] first: when the first argument is one of our commands the binary
-//! acts as a small client of the running app and exits, and Tauri never starts. Being the app's
-//! own binary is what makes the name safe: on Linux the installed app *is* `agent-studio` on
-//! `PATH`, so whichever `agent-studio` a shell finds first does the same thing. Inside Agent
-//! Studio's terminals the script from [`super::tools`] puts it on `PATH` on every OS.
-//!
-//! The client talks to the hook listener over plain TCP to `127.0.0.1`. Not `reqwest`: it
-//! would honour the terminal's `HTTP_PROXY` and send the token through the capture proxy.
+//! `agent-studio <command>`: the app binary in command mode, a client of the running app (Tauri
+//! never starts). Plain TCP to 127.0.0.1, not `reqwest`: that would honour the terminal's
+//! `HTTP_PROXY` and send the token through the capture proxy.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};

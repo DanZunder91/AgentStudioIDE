@@ -1,12 +1,5 @@
-/**
- * Find usages (M5) — `textDocument/references` → the references panel.
- *
- * Cmd/Ctrl+Click on a symbol's DECLARATION (or Shift+F12 at the cursor) lists
- * every usage. Like go-to-definition, we wrap the raw request in a retry loop for
- * rust-analyzer's -32801 "content modified" (returned until indexing finishes,
- * ~5–9 s cold), then resolve each LSP location to a source line via the scoped
- * `read_file` so the panel shows the same light code context as Find-in-Files.
- */
+/** Find usages: `textDocument/references` with the same -32801 retry as go-to-definition; each
+ * location's line is read via the scoped `read_file` for the panel's context. */
 
 import type { EditorView } from "@codemirror/view";
 import { LSPPlugin } from "@codemirror/lsp-client";
@@ -67,21 +60,13 @@ async function requestReferences(
   }
 }
 
-/**
- * `display`: path relative to the workspace root when it is under it, else absolute.
- * Separator- and (Windows) case-agnostic: the old `root + "/"` prefix never matched a
- * `C:\repo\src\main.rs`, so on Windows every usage row showed its full path.
- */
+/** Relative to `root` when under it, else absolute; separator- and (Windows) case-agnostic. */
 export function displayPath(abs: string, root: string | null): string {
   const rel = root ? relativeTo(root, abs) : null;
   return rel ? rel : abs;
 }
 
-/**
- * Resolve LSP locations to panel rows, reading each file ONCE for its source
- * line. A location whose file is out of scope (a dependency, std) or unreadable
- * is dropped — its rows would have no context and the read is denied anyway.
- */
+/** Reads each file once; out-of-scope (dependency, std) or unreadable locations are dropped. */
 async function buildHits(locations: LspLocation[], root: string | null): Promise<ReferenceHit[]> {
   const linesByPath = new Map<string, string[] | null>();
   const hits: ReferenceHit[] = [];

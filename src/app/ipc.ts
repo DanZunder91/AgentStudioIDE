@@ -1,56 +1,27 @@
-/**
- * IPC — typed wrappers over the Rust command surface (ARCHITECTURE §2.4).
- *
- * This module is the ONLY place `invoke()` is called for the terminal
- * lifecycle. It carries the *control* plane (open/write/resize/close) and hands
- * the caller the *hot* plane handle (`Channel<ArrayBuffer>`), which Rust fills
- * with coalesced raw PTY bytes.
- *
- * Governing invariant (ARCHITECTURE §1): the bytes that arrive on `onOutput`
- * must never enter React state or the Zustand store — they go straight to
- * `xterm.write()`. See `features/terminal/TerminalRegistry.ts`, the single
- * landing site.
- */
+/** Typed wrappers over the terminal commands (ARCHITECTURE §2.4); the only `invoke()` site for
+ * the terminal lifecycle. Output bytes never enter React or the store: they go straight to
+ * `xterm.write()` in `features/terminal/TerminalRegistry.ts` (ARCHITECTURE §1). */
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { TerminalId, TerminalMeta } from "./types";
 
 export { Channel };
 
-/**
- * A raw-bytes frame as it can arrive from a Tauri `Channel`.
- *
- * Rust sends `InvokeResponseBody::Raw`, which normally surfaces as an
- * `ArrayBuffer`. Under the postMessage IPC fallback (and for very small
- * frames) Tauri may hand over a plain number array instead, so consumers must
- * normalize — see `toBytes()`.
- */
+/** A raw `Channel` frame: usually an `ArrayBuffer`, but the postMessage IPC fallback (and very
+ * small frames) may give a number array, so normalize with `toBytes()`. */
 export type RawFrame = ArrayBuffer | Uint8Array | number[];
 
-/**
- * Brand check rather than `instanceof`: this is an IPC boundary, and
- * `instanceof` compares against *this* realm's constructor. A buffer minted in
- * another realm is still an ArrayBuffer, and misreading one here would drop
- * terminal output.
- */
+/** Brand check, not `instanceof`: a buffer from another realm is still an ArrayBuffer, and
+ * misreading one would drop terminal output. */
 function isArrayBuffer(value: unknown): value is ArrayBuffer {
   return Object.prototype.toString.call(value) === "[object ArrayBuffer]";
 }
 
-/**
- * Normalize whatever a raw `Channel` frame arrived as into bytes.
- *
- * Ordered by likelihood, and deliberately total: an unrecognized shape throws
- * rather than degrading. The tempting `Uint8Array.from(frame)` catch-all is a
- * trap — handed an ArrayBuffer it returns an *empty* array instead of failing,
- * so a frame shape we did not anticipate would silently swallow PTY output
- * instead of surfacing a bug.
- */
+/** Normalize a raw `Channel` frame into bytes; an unknown shape throws. Never `Uint8Array.from`
+ * as a catch-all: given an ArrayBuffer it returns an empty array, silently dropping output. */
 export function toBytes(frame: RawFrame): Uint8Array {
-  // Widened to `unknown` on purpose. RawFrame describes what Tauri is *meant*
-  // to hand us, and narrowing against it would collapse the guards below to
-  // `never` — but the whole job of this function is to be right when the value
-  // does not match the declared type.
+  // `unknown` on purpose: narrowing against RawFrame would collapse the guards below to `never`,
+  // and this must be right when the value does not match the declared type.
   const value: unknown = frame;
 
   // `ArrayBuffer.isView` is a brand check, so it holds across realms and covers
@@ -97,14 +68,8 @@ export function openTerminal(opts: OpenTerminalOptions): Promise<TerminalMeta> {
   });
 }
 
-/**
- * `terminal_write` — keystrokes to the child's stdin.
- *
- * Tauri's IPC serializer turns a nested `Uint8Array` into a JSON number array,
- * which deserializes into Rust's `Vec<u8>`. Keystroke volume is tiny, so the
- * JSON path is fine here; the *output* firehose is the one that must be raw,
- * and it is (see `onOutput`).
- */
+/** `terminal_write`: Tauri serializes the `Uint8Array` to a JSON number array (Rust `Vec<u8>`);
+ * fine for keystroke volume, while output uses the raw channel (`onOutput`). */
 export function writeTerminal(terminalId: TerminalId, data: Uint8Array): Promise<void> {
   return invoke<void>("terminal_write", { terminalId, data });
 }
@@ -119,16 +84,9 @@ export function closeTerminal(terminalId: TerminalId): Promise<void> {
   return invoke<void>("terminal_close", { terminalId });
 }
 
-/**
- * `terminal_reattach` — re-subscribe to a PTY that outlived a webview reload.
- *
- * The Rust supervisor and its PTYs (with the running `claude`s) survive a
- * full webview reload; only the JS store is reset. This swaps in a fresh output
- * `Channel`, replays the scrollback ring, and resize-nudges so a TUI (claude /
- * Ink) repaints. Distinct from `terminal_open`, which *errors* on an id that is
- * already open. A live PTY returns `status: "live"`; one whose child already
- * exited returns `Ok` with `status: "exited"`; an unknown id rejects.
- */
+/** `terminal_reattach`: after a webview reload, swap in a fresh output Channel, replay scrollback,
+ * resize-nudge so a TUI repaints (`terminal_open` errors on an open id). Resolves `live` or
+ * `exited`; an unknown id rejects. */
 export function reattachTerminal(
   terminalId: TerminalId,
   onOutput: Channel<ArrayBuffer>,

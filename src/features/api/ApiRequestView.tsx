@@ -1,16 +1,6 @@
-/**
- * ApiRequestView — the built-in API client's request/response surface (M6).
- *
- * One tab = one request, keyed by `requestId`. The live request state lives in the
- * store's `api` slice; the DURABLE store (collections + environments) sits
- * alongside it. Environments hold live tokens and persist ONLY through the Rust
- * store (never a repo file); a saved collection keeps `{{VAR}}` placeholders
- * literal — the real secret is spliced in by `substituteVars` on send, so it
- * exists only on the wire (the hard secret-safety rule).
- *
- * The Send handler resolves `{{VAR}}` over the url, every enabled header value and
- * the body using the active environment, THEN builds the wire `HttpRequest`.
- */
+/** The API client's request/response tab (M6), keyed by `requestId` (state: the store's `api`
+ * slice). Secrets live only in Rust-persisted environments; `{{VAR}}` is resolved on Send over
+ * url, enabled header values and body, so the real secret exists only on the wire. */
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -80,12 +70,8 @@ export function ApiRequestView({
     };
   }, [hydrateApiStore]);
 
-  // "Copied" (the Copy-as-cURL badge) is a claim about the exact command built
-  // from THESE fields under THIS environment — so it is keyed to their
-  // identities (immer hands out a fresh `req`/`apiEnvironments` on every patch)
-  // and retires the moment any input to the command changes. Component state on
-  // purpose: transient, like ResponseBody's Copy badge. Declared BEFORE the
-  // early return below — hooks must run unconditionally.
+  // "Copied" (Copy-as-cURL) is keyed to the `req`/`apiEnvironments` identities (immer replaces
+  // them per patch), so it retires when any input changes. Declared BEFORE the early return.
   const [curlCopiedFor, setCurlCopiedFor] = useState<{
     req: ApiRequestState;
     envs: Environment[];
@@ -100,22 +86,9 @@ export function ApiRequestView({
   // Invoke-WebRequest); cleared by the next edit or a real import.
   const [pasteHint, setPasteHint] = useState<string | null>(null);
 
-  // Defensive: the tab is keyed by a live request, so this is unreachable through
-  // the UI — but keeps the view total rather than throwing on a stale id.
-  /**
-   * Keep the reader's place across a tab move.
-   *
-   * `.api-view` is the vertical scroller for the whole request view, and its
-   * offset lives in a DOM node that `Pane` destroys when the tab goes
-   * inactive. Saved on unmount and restored on mount — a layout effect, so the
-   * restore lands before the browser paints and the user never sees a jump
-   * to the top.
-   *
-   * ⚠️ Declared ABOVE `if (!req) return null;` — hooks must run in the same
-   * order on every render, and a request that vanished (deleted in another
-   * pane) takes that early exit. The ref is null on that path, so the effect
-   * is a no-op rather than a crash.
-   */
+  /** Keep the `.api-view` scroll across a tab move (`Pane` destroys inactive DOM): saved on
+   * unmount, restored in a layout effect before paint. Declared ABOVE `if (!req) return null;` for
+   * hook order; the ref is null on that path, so the effect is a no-op. */
   const viewRef = useRef<HTMLDivElement>(null);
   const setScrollOffset = useAppStore((s) => s.uiActions.setScrollOffset);
   useLayoutEffect(() => {
@@ -142,10 +115,8 @@ export function ApiRequestView({
   // the send path sends any non-empty body regardless of method.
   const showBody = methodHasBody(req.method) || req.body.trim() !== "";
 
-  // The whole send path — substitution, network, and record-to-history — lives in
-  // the shared `executeHttpRequest` / `executeCompareRequest` (the former also
-  // used by the History panel's re-run). Both re-check the send guard, so
-  // `canSend` here only drives the button's disabled state.
+  // Sending lives in `executeHttpRequest` / `executeCompareRequest` (also History's re-run); both
+  // re-check the send guard, so `canSend` only drives the button.
   const send = () =>
     req.compare.enabled
       ? executeCompareRequest(requestId)
@@ -162,14 +133,8 @@ export function ApiRequestView({
     setCompareEnabled(requestId, enabling);
   };
 
-  // Paste a `curl …` straight into the URL field and it auto-expands into the
-  // request (method/url/headers/body/all its -H headers), Postman-style — no
-  // separate import box. Returns true when `text` was a curl and got
-  // imported, so the caller suppresses the plain edit/paste.
-  //
-  // DevTools' "Copy as PowerShell" is caught here too: it is not a URL, and filling
-  // the field with `$session = New-Object …` helps nobody — the user is told which
-  // DevTools entry pastes instead, and the field keeps what it had.
+  // A pasted `curl …` expands into the request; returns true when imported so the caller drops
+  // the plain paste. DevTools' "Copy as PowerShell" is refused with a hint, the field kept.
   const tryImportCurl = (text: string): boolean => {
     if (isPowerShellWebRequest(text)) {
       setPasteHint(POWERSHELL_PASTE_HINT);
@@ -189,10 +154,8 @@ export function ApiRequestView({
     patchApiRequest(requestId, { url: value });
   };
 
-  // A multi-line curl MUST be read from the raw clipboard here: a single-line
-  // <input> strips/truncates newlines, which would drop every `\`-continued line
-  // (its headers + body) before `onChange` ever ran. On a real
-  // curl paste we take the raw text and preventDefault the mangled insert.
+  // Read a multi-line curl from the raw clipboard: the single-line <input> would drop every
+  // `\`-continued line before `onChange` runs.
   const onUrlPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     if (tryImportCurl(e.clipboardData.getData("text"))) e.preventDefault();
   };
@@ -229,11 +192,8 @@ export function ApiRequestView({
     curlCopiedFor.envId === activeEnvironmentId &&
     curlCopiedFor.shell === curlShell;
 
-  // Copy as cURL: the resolver is the SAME seam the send path uses —
-  // `activeVars` + `substituteVars` (see executeHttpRequest) — so the exported
-  // command is exactly what Send would put on the wire, `{{VAR}}` resolved from
-  // the active environment. The resolved secret goes to the CLIPBOARD only,
-  // never into the store or a file (the secret-safety rule stays intact).
+  // Resolves through the send path's own seam (`activeVars` + `substituteVars`), so it matches
+  // the wire exactly; the resolved secret goes to the CLIPBOARD only, never store or file.
   const curlCommand = (): string => {
     const vars = activeVars({ apiEnvironments, activeEnvironmentId });
     return buildCurl(
@@ -535,12 +495,8 @@ export function ApiRequestView({
   );
 }
 
-/**
- * The environments editor, opened from a "Manage environments" toggle. Add /
- * rename / delete environments and edit their key/value variable rows. Every
- * variable typed here holds a live token and persists ONLY through the Rust
- * store — this editor is the ONE place a secret is entered.
- */
+/** Environments editor: the ONE place a secret is entered; variables hold live tokens and
+ * persist only through the Rust store. */
 function EnvManager(): React.JSX.Element {
   const environments = useAppStore((s) => s.apiEnvironments);
   const addEnvironment = useAppStore((s) => s.apiActions.addEnvironment);
@@ -578,12 +534,8 @@ function EnvManager(): React.JSX.Element {
   );
 }
 
-/**
- * One environment's editor: its name, its variable rows, and an add-variable
- * form. Variables are keyed by `key` (the wire model), so a NEW variable is
- * added through the form and an existing one's VALUE is edited in place; editing
- * a key is delete-then-add, which the form + the ✕ cover.
- */
+/** One environment: name, variable rows, add form. Variables are keyed by `key` (wire model),
+ * so values edit in place and changing a key is delete-then-add. */
 function EnvEditor({ env }: { env: Environment }): React.JSX.Element {
   const renameEnvironment = useAppStore((s) => s.apiActions.renameEnvironment);
   const deleteEnvironment = useAppStore((s) => s.apiActions.deleteEnvironment);
@@ -673,11 +625,8 @@ function EnvEditor({ env }: { env: Environment }): React.JSX.Element {
   );
 }
 
-/**
- * The response surface: a calm error block, nothing yet, or the response itself
- * (status pill + stats + headers + body). Split out so each state is one `if`
- * rather than a nest of ternaries — and so `response` narrows non-null cleanly.
- */
+/** Response surface: error block, nothing yet, or the response; one `if` per state so
+ * `response` narrows non-null. */
 function ResponsePanel({
   requestId,
   req,

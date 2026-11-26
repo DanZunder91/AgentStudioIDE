@@ -1,24 +1,6 @@
-//! The coalescer — the second half of the hot byte plane.
-//!
-//! A chatty child emits thousands of tiny writes/sec; pushing each straight to
-//! the webview janks React and starves the compositor. Batch on **time + size**
-//! (whichever fires first) so one flush = one `send` = one `onmessage` = one
-//! `term.write`.
-//!
-//! Bytes go out as `InvokeResponseBody::Raw` — raw binary, so JS receives an
-//! `ArrayBuffer`. Terminal output is arbitrary bytes (UTF-8 mid-sequence, control
-//! codes); it is **never** JSON-encoded (ARCHITECTURE §1, hot plane).
-//!
-//! This task is the whole reason the supervisor is not in the byte path: reader
-//! thread → here → `Channel`, direct and lock-free per terminal.
-//!
-//! **Re-attach.** The webview can reload (Vite HMR, or a real user)
-//! while the PTY keeps running. When it does, the JS side of the `Channel` dies.
-//! The pump therefore (a) does **not** end when a send fails — it keeps draining
-//! the PTY and filling a bounded scrollback ring — and (b) selects on a control
-//! channel so `terminal_reattach` can swap in a fresh `Channel` and replay the
-//! ring. The hot path stays lock-free: the channel is a local, touched only by the
-//! rare control message.
+//! Coalesces PTY bytes on time + size so one flush = one `term.write`; sent raw, never JSON
+//! (ARCHITECTURE §1). After a webview reload the pump keeps filling a scrollback ring, and
+//! `terminal_reattach` swaps in a fresh `Channel` to replay it; the hot path stays lock-free.
 
 use std::collections::VecDeque;
 
@@ -80,12 +62,8 @@ impl ScrollbackRing {
     }
 }
 
-/// Pump coalesced PTY bytes into one terminal's IPC channel.
-///
-/// Ends when the PTY closes (reader mpsc `rx` gone → final flush) or the terminal
-/// is torn down (control `ctrl` gone). It does **not** end when a `channel.send`
-/// fails: a dead webview Channel is transient — the pump keeps draining and filling
-/// the ring so a `Reattach` can replay it.
+/// Pump coalesced PTY bytes into one terminal's channel until the PTY closes or `ctrl` drops.
+/// A failed send does NOT end it: the pump keeps filling the ring so a `Reattach` can replay.
 pub async fn pump_to_ui(
     rx: mpsc::Receiver<Bytes>,
     ctrl: mpsc::Receiver<PumpControl>,
@@ -94,12 +72,8 @@ pub async fn pump_to_ui(
     pump_to_ui_tapped(rx, ctrl, channel, None).await
 }
 
-/// [`pump_to_ui`] with the Agent Logs tap.
-///
-/// The tap sees every chunk the moment it arrives, before coalescing, and its
-/// [`LogTap::feed`](crate::logstream::LogTap::feed) is a non-blocking `try_send` of a
-/// refcounted `Bytes` clone — no copy, no lock, no await. A full log queue drops the
-/// chunk *for the log only*; the terminal's own path below is untouched.
+/// [`pump_to_ui`] with the Agent Logs tap: a non-blocking `try_send` of each raw chunk; a full
+/// log queue drops it for the log only, never for the terminal.
 pub async fn pump_to_ui_tapped(
     mut rx: mpsc::Receiver<Bytes>,
     mut ctrl: mpsc::Receiver<PumpControl>,
@@ -158,11 +132,8 @@ pub async fn pump_to_ui_tapped(
     }
 }
 
-/// Send the pending buffer as raw bytes AND record it in the ring.
-///
-/// The ring is fed unconditionally (even if the send fails on a dead webview), so a
-/// later re-attach can replay bytes the dead sink never received. The send result
-/// is intentionally ignored — a failed send no longer ends the pump.
+/// Send the pending buffer and record it in the ring regardless, so a re-attach can replay what
+/// a dead sink missed; the send result is ignored.
 fn flush(channel: &Channel<InvokeResponseBody>, buf: &mut Vec<u8>, ring: &mut ScrollbackRing) {
     if buf.is_empty() {
         return;

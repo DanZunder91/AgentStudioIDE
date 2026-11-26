@@ -1,39 +1,6 @@
-//! Log stream — the fleet-wide log hub behind the Agent Logs tab
-//! (the logs of everything the agents inside the IDE are running, visible in one view).
-//!
-//! # Shape
-//!
-//! ```text
-//!  pump_to_ui ──LogTap::feed (try_send, never waits)──┐
-//!  supervisor ──LogHub::push (tool / system lines)────┤ bounded mpsc
-//!                                                     ▼
-//!                               hub task: split lines per terminal, level, id
-//!                                   │                    │
-//!                          ring (20 000, snapshot)   batched emit ≤ 1 / 100 ms,
-//!                                                    ≤ 2 000 lines → `logstream://lines`
-//! ```
-//!
-//! # The hot byte plane never waits on the log
-//!
-//! The tap runs **inside** the coalescer loop. It does exactly one thing there: a
-//! `try_send` of a refcounted `Bytes` clone. A full queue drops the chunk and counts it;
-//! the count rides along with the next chunk that does get through, and the hub turns it
-//! into a `system` line ("… N output chunks dropped"). Splitting, ANSI stripping and
-//! level guessing all happen on the hub task.
-//!
-//! # Suppression
-//!
-//! While a runtime session is bound to a terminal (the supervisor's binding table), the
-//! tap does not even send: Claude's TUI redraws are noise, and its transcript (source 2,
-//! [`crate::agent::tools`]) carries the real signal. When the session ends, the next
-//! chunk carries `reset` so the splitter forgets any half-parsed state the TUI left.
-//!
-//! # Testability
-//!
-//! Like the supervisor's [`crate::events::EventSink`], emission goes through a trait
-//! ([`LogSink`]) so the hub is constructible without a Tauri app; tests pass a
-//! recorder, and [`LogHub::new`] hands back the task future so a test can run it on a
-//! paused tokio clock.
+//! Fleet-wide log hub behind the Agent Logs tab. The PTY pump's tap only `try_send`s a `Bytes`
+//! clone (full queue: drop and count); splitting, ANSI stripping and levels run on the hub task.
+//! Bound runtime sessions are not tapped: TUI redraws are noise; the transcript is the signal.
 
 pub mod apps;
 pub mod bypass;
@@ -57,11 +24,8 @@ pub use level::classify_level;
 use screen::ScreenSplitter;
 use splitter::LineSplitter;
 
-/// What turns one terminal's PTY bytes into lines is per OS (platform-native): a Unix PTY
-/// carries the program's own text, which the stream splitter reads; on Windows ConPTY repaints a
-/// screen, which only a screen model reads (`screen.rs` says why, with recordings). Both compile
-/// and are tested everywhere; only this choice is per OS. They share `new`/`feed`/
-/// `flush_partial`/`has_partial`/`reset`; the PTY size matters to the screen model alone.
+/// PTY bytes → lines is per OS: a Unix PTY carries the program's text (stream splitter);
+/// ConPTY repaints a screen, which only a screen model reads (see `screen.rs`).
 trait TermResize {
     fn term_resize(&mut self, rows: u16, cols: u16);
 }
@@ -152,10 +116,8 @@ pub struct LogLine {
     /// ANSI-stripped, ≤ 4 KiB.
     pub text: String,
     pub detail: Option<String>,
-    /// The transcript's `tool_use.id` on a `tool` line and the matching `tool_use_id` on
-    /// its `tool-result` line, so the UI pairs a call with its output by id and never by
-    /// guessing. `null` on every other kind.
-    /// `#[serde(default)]` so a line written before the field existed still reads.
+    /// The transcript's `tool_use.id` on a `tool` line and the matching `tool_use_id` on its
+    /// `tool-result`, so the UI pairs them by id. `null` on other kinds; defaulted for old lines.
     #[serde(default)]
     pub tool_use_id: Option<String>,
 }
@@ -354,14 +316,9 @@ impl LogHub {
         hub
     }
 
-    /// Register a terminal and hand back the tap its pump will feed. `suppressed` is the
-    /// initial state (a spawned agent's terminal is bound from birth).
-    ///
-    /// Each terminal is its own log source: when another open terminal already has `label`
-    /// (two `powershell` terminals in one folder — every Windows terminal is titled
-    /// `powershell`), this one becomes `label (2)`, `(3)`, … The label is the source KEY in the
-    /// Logs view, so two terminals sharing one merged into one row and borrowed each other's
-    /// names. [`LogHub::source_of`] says which label a terminal got.
+    /// Register a terminal and return the tap its pump feeds; `suppressed` is the initial state.
+    /// The label is the source KEY in the Logs view, so a duplicate becomes `label (2)`, …;
+    /// [`LogHub::source_of`] tells which label a terminal got.
     pub fn tap(&self, terminal_id: &str, label: &str, suppressed: bool) -> LogTap {
         let flag = Arc::new(AtomicBool::new(suppressed));
         let mut terminals = self
@@ -727,14 +684,8 @@ fn output_draft(terminal_id: &str, shared: &Shared, text: String) -> LineDraft {
     }
 }
 
-/// A fixed-window rate cap: at most `per_sec` admissions per one-second window, the rest
-/// counted as dropped. The clock is a parameter (`now`), so the policy is testable with
-/// made-up instants and the hub drives it from tokio's (pausable) clock.
-///
-/// Fixed windows, not a token bucket, on purpose: the numbers it reports (`rates`) are
-/// the same windows the user reads as "lines per second", and a burst straddling a
-/// boundary admitting up to 2× for an instant is harmless here — the point is only that
-/// the machine can never out-shout the IDE for longer than that.
+/// Fixed-window rate cap (`per_sec` per one-second window, the rest dropped), clocked by `now`.
+/// Fixed windows match the "lines per second" users read; a 2× boundary burst is harmless.
 #[derive(Debug)]
 pub struct RateLimiter {
     per_sec: u32,

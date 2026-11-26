@@ -1,16 +1,6 @@
-/**
- * TerminalRegistry — the non-React owner of every xterm instance.
- *
- * ARCHITECTURE §1 (governing invariant) & §4: high-volume byte streams NEVER
- * enter React state or the Zustand store. `channel.onmessage` in this file is
- * the ONE place PTY bytes land; from there they go straight to `term.write()`.
- * React only mounts and unmounts a DOM host (see `useTerminal`).
- *
- * Instances outlive their React components on purpose: `detach()` moves the
- * terminal's DOM out of the visible tree but keeps the emulator, its
- * scrollback and its cursor alive, so tab/session switches are lossless
- * (ARCHITECTURE §4). Only `dispose()` tears anything down.
- */
+/** Non-React owner of every xterm instance. PTY bytes land only in `channel.onmessage` and go
+ * straight to `term.write()`, never React or the store (ARCHITECTURE §1, §4). `detach()` keeps
+ * the emulator alive so tab switches are lossless; only `dispose()` tears down. */
 
 import "@xterm/xterm/css/xterm.css";
 
@@ -53,69 +43,33 @@ import {
 /** ARCHITECTURE §2.4: "Debounced 50 ms UI-side." */
 const RESIZE_DEBOUNCE_MS = 50;
 
-/**
- * FitAddon's own clamp floor (MINIMUM_COLS / MINIMUM_ROWS in
- * `@xterm/addon-fit`). A proposal that lands on either value means that axis
- * could not be measured — see `applyFit`. Mirrored here because the addon does
- * not export them.
- */
+/** FitAddon's clamp floor (MINIMUM_COLS/ROWS in `@xterm/addon-fit`, not exported): a proposal at
+ * either value means that axis could not be measured (see `applyFit`). */
 const FIT_MIN_COLS = 2;
 const FIT_MIN_ROWS = 1;
 
 const encoder = new TextEncoder();
 
-/**
- * How a terminal's PTY should be spawned, if not the default shell in the
- * default cwd.
- *
- * `agentId` is the only thing that makes a terminal an *agent* terminal. An
- * agent terminal is just a terminal whose argv an adapter chose: same xterm,
- * same Channel, same registry, same lifecycle — only the spawn command differs
- * (`agent_spawn` vs `terminal_open`). The PTY path is deliberately not forked;
- * neither is Rust's.
- */
+/** Spawn overrides. `agentId` alone makes an agent terminal: same xterm, Channel and lifecycle,
+ * only `agent_spawn` instead of `terminal_open`; the PTY path is not forked (nor is Rust's). */
 export interface TerminalSpawnOptions {
   /** Absolute path. Falls back to the registry default (`setDefaultTerminalCwd`). */
   cwd?: string;
   /** Defaults to the user's `$SHELL`, resolved on the Rust side. */
   program?: string;
   args?: string[];
-  /**
-   * Set => spawn via `agent_spawn` instead of `terminal_open`.
-   *
-   * **Must equal this terminal's own `TerminalId`.** Rust keys an agent's PTY
-   * by its agentId (`supervisor/mod.rs`: "the agent's terminal shares the id
-   * space with plain terminals" — `let terminal_id = spec.agent_id.clone()`),
-   * and `agent_spawn` takes no terminalId at all. If the two diverge, output
-   * still streams (the Channel is handed over directly) but every subsequent
-   * `terminal_write`/`_resize`/`_close` addresses an id Rust has never heard
-   * of. `openPty` checks this rather than let it fail silently.
-   */
+  /** Set => spawn via `agent_spawn`. Must equal this terminal's `TerminalId`: Rust keys the PTY
+   * by agentId (`supervisor/mod.rs`), so a mismatch streams output but every write/resize/close
+   * misses; `openPty` checks it. */
   agentId?: AgentId;
-  /**
-   * The AgentAdapter id to launch, e.g. `"claude-code"`. Required when
-   * `agentId` is set — UNLESS `reattach` is set (reattach spawns nothing).
-   *
-   * A runtime id, NOT a program: which binary, which flags, and which
-   * transcript layout it implies are `agent/claude.rs`'s business alone.
-   * The frontend must never learn the answer.
-   */
+  /** AgentAdapter runtime id (e.g. `"claude-code"`), required with `agentId` unless `reattach`.
+   * Not a program: binary, flags and transcript layout are `agent/claude.rs`'s business alone. */
   runtime?: string;
-  /**
-   * Set => re-subscribe to a PTY that already exists (survived a webview
-   * reload) via `terminal_reattach`, instead of spawning a new one. Takes
-   * precedence over `agentId`/`program`: the child is already running, so there
-   * is nothing to launch and no `runtime` is needed. Used only by the store's
-   * `rebuildTerminalTabs` after a `fleet_snapshot`.
-   */
+  /** Set => re-subscribe via `terminal_reattach` to a PTY that survived a webview reload;
+   * overrides `agentId`/`program`. Only the store's `rebuildTerminalTabs` sets it. */
   reattach?: boolean;
-  /**
-   * A KNOWN past session to resume ("Recover session") rather than mint a
-   * fresh one: forwarded to `agent_spawn`'s `resumeSessionId` so `claude`
-   * launches with `--resume <id>`. Set only when an agent is spawned
-   * from the session picker; `undefined` for every ordinary launch. Requires
-   * `agentId`/`runtime` (it is an agent spawn); ignored on the reattach path.
-   */
+  /** A past session to resume (`agent_spawn`'s `resumeSessionId` → `claude --resume <id>`), set
+   * only from the session picker. Requires `agentId`/`runtime`; ignored when reattaching. */
   resumeSessionId?: string;
 }
 
@@ -130,11 +84,8 @@ interface Entry {
   fit: FitAddon;
   serialize: SerializeAddon;
   search: SearchAddon;
-  /**
-   * Find-overlay UI state (query + toggles), kept HERE rather than in the
-   * overlay component so it survives close/reopen and tab switches (the
-   * component unmounts) and dies with the terminal (IntelliJ-like recall).
-   */
+  /** Find-overlay query + toggles, here so they survive the overlay unmounting and die with the
+   * terminal. */
   searchUi: TerminalSearchUiState | null;
   renderer: RendererHandle | null;
   channel: Channel<ArrayBuffer>;
@@ -156,14 +107,9 @@ interface Entry {
   exited: boolean;
   /** The PTY's child IS the agent (`agent_spawn`), not a shell hosting one. */
   agentPty: boolean;
-  /**
-   * `applyFit` has measured a real host at least once. Until then `term.rows/cols` are
-   * xterm's 24x80 default — a guess, not a measurement — and `pushSize` sends nothing.
-   * That never mattered for an open (the PTY is born at the term's size, so there is
-   * nothing to correct), but a REATTACH — a webview reload, or a tab arriving from another
-   * window before its pane is laid out (tab-tearoff.md §7) — would otherwise reflow a live
-   * `claude` TUI to 80 columns on the way to its real size.
-   */
+  /** `applyFit` has measured a real host. Until then rows/cols are xterm's 24x80 guess and
+   * `pushSize` sends nothing, so a reattach (reload, tear-off: tab-tearoff.md §7) never reflows a
+   * live TUI. */
   fitted: boolean;
   /** Size the Rust side currently believes the PTY is. */
   sentSize: Size | null;
@@ -177,24 +123,14 @@ const registry = new Map<TerminalId, Entry>();
 
 let defaultCwd = ".";
 
-/**
- * Set the cwd used by terminals opened without an explicit one.
- *
- * `<TerminalView>` takes only a `terminalId`, so the cwd has to come from
- * here or from `configureTerminal()`. Until this is called the Rust side
- * resolves `"."` against the app process's working directory.
- */
+/** Until set, Rust resolves `"."` against the app process's cwd. */
 export function setDefaultTerminalCwd(cwd: string): void {
   defaultCwd = cwd;
 }
 
 const configured = new Map<TerminalId, TerminalSpawnOptions>();
 
-/**
- * Pre-register how a terminal should spawn, before anything renders it.
- * Lets a caller that knows the cwd/program (e.g. an agent terminal) stay
- * decoupled from the component that mounts it.
- */
+/** Lets a caller that knows the cwd/program stay decoupled from the component that mounts it. */
 export function configureTerminal(terminalId: TerminalId, opts: TerminalSpawnOptions): void {
   configured.set(terminalId, { ...configured.get(terminalId), ...opts });
 }
@@ -203,11 +139,8 @@ export function configureTerminal(terminalId: TerminalId, opts: TerminalSpawnOpt
 
 let holder: HTMLDivElement | null = null;
 
-/**
- * Offscreen parent for detached terminals. `display:none` keeps the emulator
- * alive with zero rendering cost; every attach re-fits, so the stale
- * measurements a hidden element produces never reach the user.
- */
+/** Offscreen `display:none` parent: the emulator lives with no render cost, and every attach
+ * re-fits, so a hidden element's stale measurements never reach the user. */
 function detachedHolder(): HTMLDivElement {
   if (!holder) {
     holder = document.createElement("div");
@@ -220,29 +153,9 @@ function detachedHolder(): HTMLDivElement {
 
 /* ─────────────────────── scrollback wheel bypass ─────────────────────── */
 
-/**
- * Restore mouse-wheel scrolling of the scrollback when an application has
- * grabbed the mouse.
- *
- * The bug (scrolling up did not work, most noticeably while running
- * claude agents): a TUI that enables mouse tracking (claude sends DECSET `?1002h` +
- * `?1006h`) makes xterm hand every wheel event to the application and switch its
- * own scrollback scrolling OFF (`ScrollableElement.handleMouseWheel = false`).
- * From then on wheel-up scrolls nothing — the earlier output is in the buffer
- * but unreachable. Reproduced in real Chromium: a plain terminal scrolls with
- * the wheel; the same terminal with mouse tracking on does not.
- *
- * The fix follows the terminal convention (kitty, iTerm2): the mouse wheel
- * scrolls the *scrollback* on the NORMAL buffer regardless of mouse mode,
- * because the scrollback belongs to the terminal. Full-screen apps use the
- * ALTERNATE buffer, and there the wheel legitimately belongs to the app (its
- * own viewport) — so we defer and let xterm forward the event as before.
- *
- * `attachCustomWheelEventHandler` returns `true` to let xterm handle the event
- * normally, `false` to withhold it. On the normal buffer under mouse tracking we
- * scroll the scrollback ourselves and return `false`, so the app never sees a
- * wheel event it would only have consumed.
- */
+/** Mouse tracking (claude's `?1002h` + `?1006h`) makes xterm give the wheel to the app and stop
+ * scrolling scrollback. On the normal buffer we scroll it ourselves and withhold the event (as
+ * kitty and iTerm2 do); on the alternate buffer the wheel stays the app's. */
 function installScrollbackWheelBypass(term: Terminal): void {
   // Fractional lines carried between pixel-delta (trackpad) events, so slow
   // scrolls accumulate instead of rounding to zero every frame.
@@ -296,39 +209,9 @@ function pushSize(entry: Entry): void {
   });
 }
 
-/**
- * Fit the terminal to its host, and tell the PTY — but only if the host has a
- * real size.
- *
- * The subtlety that bit us: **FitAddon does not return undefined for a
- * zero-size host.** It clamps to its own floor,
- *
- *   cols: Math.max(MINIMUM_COLS = 2, Math.floor(availableWidth  / cellWidth))
- *   rows: Math.max(MINIMUM_ROWS = 1, Math.floor(availableHeight / cellHeight))
- *
- * and with no layout `availableWidth` is *negative* (0 minus padding minus the
- * 14px scrollbar), so it returns exactly `{cols: 2, rows: 1}`. A `>= 1` sanity
- * check can therefore never fire — it is dead code by construction. It only
- * returns undefined when the terminal is not open, or when the character cell
- * itself is unmeasurable.
- *
- * That mattered because `attach()` fits synchronously while allotment has not
- * laid the pane out yet (it sizes purely off ResizeObserver), so every
- * split/drag/reorder remounts the host and pushed a 2-column resize down the
- * PTY. A shell just reflows its prompt; `claude` redraws its entire TUI two
- * characters wide.
- *
- * Better to send no resize than a wrong one: when the host is unmeasurable we
- * do nothing and leave the PTY at its last good size. The ResizeObserver fires
- * as soon as there is real geometry and fits properly then.
- *
- * The two guards below were each measured to fix the bug **on their own**
- * (`terminalFit.browser.test.tsx`). Both are kept deliberately: they encode
- * different invariants — "the host has no layout" vs "FitAddon could not
- * measure, for whatever reason" — and the M2 failure mode (a `claude` TUI
- * redrawing at 2 columns) is bad enough to be worth the redundancy. Neither is
- * decoration; do not drop one assuming the other covers it.
- */
+/** FitAddon clamps an unmeasurable host to `{cols: 2, rows: 1}` instead of undefined, and
+ * `attach()` fits before allotment lays out: a 2-column resize redraws `claude` 2 chars wide, so
+ * send nothing then. Each guard fixes it alone; keep both (different invariants). */
 function applyFit(entry: Entry): void {
   if (entry.disposed || !entry.host || !entry.domOpened) return;
 
@@ -339,11 +222,8 @@ function applyFit(entry: Entry): void {
   const dims = entry.fit.proposeDimensions();
   if (!dims || !Number.isFinite(dims.rows) || !Number.isFinite(dims.cols)) return;
 
-  // Guard 2 — reject the clamp floor, per axis. It is FitAddon's "I could not
-  // measure this axis" signal, never an intent. Per-axis matters: the axes fail
-  // independently, and a column split gives the host real height with zero
-  // width, yielding {cols: 2, rows: 38} — not the {cols: 2, rows: 1} you would
-  // think to look for.
+  // Guard 2: the clamp floor, per axis (axes fail independently: a column split can yield
+  // {cols: 2, rows: 38}).
   if (dims.cols <= FIT_MIN_COLS || dims.rows <= FIT_MIN_ROWS) return;
 
   try {
@@ -374,17 +254,9 @@ function cancelScheduledFit(entry: Entry): void {
 
 /* ──────────────────────────── lifecycle ──────────────────────────── */
 
-/**
- * Turn off every input mode a full-screen program can leave behind: mouse tracking
- * (X10/normal/button/any-motion + UTF-8/SGR/urxvt/pixel encodings), focus events,
- * bracketed paste, application cursor keys and keypad; show the cursor, reset SGR.
- * Written to the EMULATOR, not the PTY. The alternate screen is deliberately left
- * as-is, so the last frame stays on screen to read and copy.
- *
- * Why: when an agent's `claude` is killed mid-frame it
- * never sends its own "mouse off", so xterm keeps routing every drag to a dead
- * process — selection, and therefore copy, stopped working and the tab looked frozen.
- */
+/** Resets every input mode a full-screen program can leave on, written to the emulator, not the
+ * PTY; the alternate screen stays so the last frame can be read. A killed `claude` never turns
+ * its mouse tracking off, so drags (and copy) would go to a dead process. */
 export const TERMINAL_MODE_RESET =
   "\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l" +
   "\x1b[?1004l\x1b[?2004l\x1b[?1l\x1b>\x1b[?25h\x1b[0m";
@@ -406,17 +278,9 @@ export function describeAgentExit(code: number): string {
     : `claude exited with code ${code}`;
 }
 
-/**
- * An agent's process ended while its terminal was open (the `exited` agent event).
- *
- * - The PTY's child WAS the agent (`agent_spawn`): the tab becomes read-only like a
- *   reattached dead PTY, its input modes are reset so text can be selected and
- *   copied, and it says how it ended and how to get back in.
- * - The agent was a `claude` typed into a SHELL: the shell is still alive, so only
- *   the modes are reset — silently, nothing is written over the prompt.
- *
- * Unknown / already-exited / disposed terminals are a no-op.
- */
+/** The agent's process ended. If it was the PTY's child, the tab turns read-only with modes
+ * reset and says how it ended; if typed into a shell, only modes reset, silently. Unknown,
+ * exited or disposed terminals are a no-op. */
 export function noteAgentExited(terminalId: TerminalId, code: number): void {
   const entry = registry.get(terminalId);
   if (!entry || entry.disposed || entry.exited) return;
@@ -513,10 +377,8 @@ function createEntry(terminalId: TerminalId, spawn: TerminalSpawnOptions): Entry
     term.write(toBytes(frame as RawFrame));
   };
 
-  // A WebGL canvas is put on screen one draw late by WebKitGTK, so a terminal that went quiet
-  // right after drawing output (a restored agent's replay, in a pane that is not focused)
-  // showed the frame BEFORE it — blank — indefinitely. Never let a drawn frame be the last
-  // one: see settleRepaint.ts.
+  // WebKitGTK shows a WebGL canvas one draw late, so never let a drawn frame be the last one
+  // (settleRepaint.ts).
   entry.disposables.push(installSettleRepaint(term, () => entry.renderer?.kind === "webgl"));
 
   // Input: xterm -> PTY. Encoded to bytes for binary safety.
@@ -535,20 +397,9 @@ function createEntry(terminalId: TerminalId, spawn: TerminalSpawnOptions): Entry
     }),
   );
 
-  // Defence-in-depth for the "arrows work in the shell but not inside claude"
-  // report. Investigated cause: when a TUI enables mouse tracking, a click is
-  // reported to the app and the mousedown is preventDefault()'d, which could
-  // leave the hidden textarea unfocused so arrows go to the webview, not the PTY.
-  //
-  // Honest caveat: xterm already calls `this.focus()` unconditionally in its own
-  // mousedown handler (verified in @xterm/xterm 6 source and in Chromium), so on
-  // the `.xterm-screen` this is redundant. It is kept because it is NOT fully
-  // redundant: it is a capture-phase listener on the whole host, so it also
-  // focuses on clicks that land on host padding/scrollbar outside the screen
-  // element, and it fires even if xterm's screen-level listener is ever bypassed
-  // — the belt-and-suspenders the WKWebView-only case (which we cannot reproduce
-  // in Chromium) may need. No preventDefault of our own: selection and
-  // mouse-reporting are untouched.
+  // Defence in depth: xterm 6 focuses on its own screen mousedown, but this capture-phase host
+  // listener also covers padding/scrollbar clicks and a bypassed screen listener (WKWebView).
+  // No preventDefault: selection and mouse reporting are untouched.
   const focusOnPointerDown = (): void => {
     if (entry.disposed) return;
     term.focus();
@@ -563,27 +414,9 @@ function createEntry(terminalId: TerminalId, spawn: TerminalSpawnOptions): Entry
   return entry;
 }
 
-/**
- * Open the PTY on the next task rather than right now.
- *
- * React runs `ensureTerminal()` and `attach()` in the same layout-effect tick,
- * and `attach()` fits synchronously — so by the time this fires, term.rows/cols
- * are the real fitted size. That matters: the PTY must be allocated at the
- * correct size or the child's first paint (Claude Code's boxes and status
- * lines) is laid out for 24x80 and then reflows. A terminal that is never
- * attached still opens, at xterm's default
- * size, and gets resized by the first fit.
- *
- * setTimeout, not requestAnimationFrame: rAF never fires while the document is
- * hidden, and background agent terminals must still spawn.
- *
- * Residual: when a renderer addon is in play it re-measures character width as
- * it activates (measured: 151 -> 169 cols), so the WebGL path costs exactly one
- * corrective resize a few ms after open; the DOM path opens exact. We accept
- * that rather than block the spawn on a lazy chunk import — the resize lands
- * before the child has exec'd, so its first paint is still correctly sized,
- * which is the property that actually matters.
- */
+/** Opens on the next task so `attach()` has fitted and the PTY is born at the real size (else
+ * the first paint reflows). setTimeout, not rAF: rAF never fires while hidden, and background
+ * agents must spawn. WebGL may cost one corrective resize, still before the child's first paint. */
 function scheduleOpen(entry: Entry, spawn: TerminalSpawnOptions): void {
   setTimeout(() => {
     if (entry.disposed || entry.opening) return;
@@ -602,13 +435,8 @@ function send(entry: Entry, bytes: Uint8Array): void {
   });
 }
 
-/**
- * Spawn this terminal's PTY through the agent adapter seam (ARCHITECTURE §2.4).
- *
- * The only difference from `terminal_open` is which command runs: the Channel,
- * the entry, and every downstream call are identical, because an agent terminal
- * *is* a terminal — one whose argv `agent/claude.rs` chose.
- */
+/** Same as `terminal_open` except the command: the Channel and every downstream call are shared
+ * (ARCHITECTURE §2.4). */
 async function openAgentPty(
   entry: Entry,
   agentId: AgentId,
@@ -636,10 +464,8 @@ async function openAgentPty(
     resumeSessionId: spawn.resumeSessionId,
     onOutput: entry.channel,
   });
-  // Rust keys an agent's PTY by its agentId and `agent_spawn` accepts no
-  // terminalId, so a mismatch here means every write/resize/close we send will
-  // miss. Bytes would still arrive (the Channel was handed over directly), so
-  // this fails as a *dead keyboard*, not as an error — check it explicitly.
+  // A mismatch would make every write/resize/close miss while bytes still arrive: a dead
+  // keyboard, not an error, so check explicitly.
   if (meta.id !== entry.id) {
     throw new Error(
       `agent_spawn returned terminalId ${meta.id} but this terminal is keyed ` +
@@ -711,21 +537,15 @@ async function openPty(entry: Entry, spawn: TerminalSpawnOptions): Promise<void>
   }
 }
 
-/**
- * Create the xterm instance and open its PTY, once. Idempotent: safe to call
- * on every render, every attach, and from React StrictMode's double-invoked
- * effects.
- */
+/** Creates the instance and opens its PTY once; idempotent across renders, attaches and
+ * StrictMode's double-invoked effects. */
 export function ensureTerminal(terminalId: TerminalId, cwd?: string, spawn?: TerminalSpawnOptions): void {
   const existing = registry.get(terminalId);
   if (existing && !existing.disposed) return;
   createEntry(terminalId, { ...configured.get(terminalId), ...spawn, ...(cwd ? { cwd } : {}) });
 }
 
-/**
- * Move the terminal's DOM into `host` and start tracking its size.
- * Creates the terminal first if it does not exist yet.
- */
+/** Moves the terminal's DOM into `host` and tracks its size; creates the terminal if needed. */
 export function attach(terminalId: TerminalId, host: HTMLElement): void {
   const entry = registry.get(terminalId);
   if (!entry || entry.disposed) return;
@@ -752,11 +572,7 @@ export function attach(terminalId: TerminalId, host: HTMLElement): void {
   entry.ro.observe(host);
 }
 
-/**
- * Remove the terminal's DOM from the visible tree but KEEP the instance,
- * its scrollback and its PTY alive. This is what makes tab/session switching
- * lossless.
- */
+/** Keeps the instance, scrollback and PTY alive: what makes tab/session switching lossless. */
 export function detach(terminalId: TerminalId): void {
   const entry = registry.get(terminalId);
   if (!entry || entry.disposed) return;
@@ -770,35 +586,19 @@ export function detach(terminalId: TerminalId): void {
   else entry.container.remove();
 }
 
-/**
- * Who to ask when a terminal this window has never shown is disposed — set by tab
- * tear-off (`app/tearoff`) to "the window holding it". Answers whether it took the close.
- */
+/** Set by tab tear-off (`app/tearoff`): asks the window holding a never-shown terminal to close
+ * it; returns whether it did. */
 let remoteDisposer: ((terminalId: TerminalId) => boolean) | null = null;
 
-/**
- * Route the close of a terminal that lives in ANOTHER window (tab tear-off) to that window.
- *
- * The case it exists for: the main rail's ✕ on an agent whose tab was moved to a detached
- * window. `dismissAgent` finds no tab here and calls `dispose(agentId)` to "still kill any
- * live child" — but this window holds no entry for it, so without a hand-off the close went
- * nowhere and the agent kept running, unlisted, in the other window. `null` unsets.
- */
+/** E.g. the rail's ✕ on an agent whose tab moved to a detached window: without this hand-off
+ * the agent would keep running unlisted there. `null` unsets. */
 export function setRemoteDisposer(fn: ((terminalId: TerminalId) => boolean) | null): void {
   remoteDisposer = fn;
 }
 
-/**
- * Tear everything down: renderer + addons + emulator + the PTY itself.
- * Call on tab close, not on unmount.
- *
- * With no entry here, the terminal was never mounted in this window, and there are two
- * cases. Configured to REATTACH: a tab rebuilt after a reload (or adopted from another
- * window) that was never shown — its PTY is alive in Rust, and returning early, as this
- * used to, left it running with no tab at all. Otherwise: it may live in another window,
- * which `remoteDisposer` hands the close to. Both are one-shot — `configured` is dropped —
- * so a second `dispose` stays the no-op it always was.
- */
+/** Renderer, addons, emulator and PTY; call on tab close, not unmount. With no entry here: a
+ * configured-to-reattach tab never shown still has a live PTY to close; otherwise hand off to
+ * `remoteDisposer`. Both one-shot, so a second `dispose` is a no-op. */
 export function dispose(terminalId: TerminalId): void {
   const entry = registry.get(terminalId);
   if (!entry) {
@@ -816,15 +616,9 @@ export function dispose(terminalId: TerminalId): void {
   teardown(entry, true);
 }
 
-/**
- * Tear down this window's VIEW of a terminal and leave its PTY running — the hand-off half
- * of a tab moving to another window (tab-tearoff.md §3: "a hand-off needs 'abandon without
- * killing', which does not exist"). Everything `dispose` does except `terminal_close`.
- *
- * The receiving window re-binds the same PTY with `terminal_reattach`, which swaps the
- * pump's Channel and replays Rust's 256 KB ring. Lost in the move, by decision: scrollback
- * older than that ring, the selection, and the find overlay's query.
- */
+/** Everything `dispose` does except `terminal_close`: tear-off's hand-off half (tab-tearoff.md
+ * §3). The receiver reattaches, replaying Rust's 256 KB ring; older scrollback, the selection
+ * and the find query are lost by decision. */
 export function abandon(terminalId: TerminalId): void {
   configured.delete(terminalId);
   const entry = registry.get(terminalId);
@@ -902,10 +696,7 @@ export function focusTerminal(terminalId: TerminalId): void {
   if (entry && !entry.disposed && entry.domOpened && entry.host) entry.term.focus();
 }
 
-/**
- * Serialize scrollback to a replayable ANSI string (ARCHITECTURE §4: the
- * persist/re-attach and offscreen-virtualization hook).
- */
+/** Replayable ANSI scrollback (ARCHITECTURE §4: persist/re-attach, offscreen virtualization). */
 export function serializeTerminal(terminalId: TerminalId): string | null {
   const entry = registry.get(terminalId);
   if (!entry || entry.disposed || !entry.domOpened) return null;
@@ -928,29 +719,14 @@ export interface TerminalSearchUiState extends SearchUiOptions {
   query: string;
 }
 
-/**
- * The live SearchAddon for a terminal, for the find overlay
- * (`find/TerminalSearch`). Loaded with the terminal in `createEntry` and
- * disposed with it by `term.dispose()` — same lifecycle as fit/serialize.
- */
+/** Loaded in `createEntry` and disposed by `term.dispose()`, like fit/serialize. */
 export function getSearchAddon(terminalId: TerminalId): SearchAddon | undefined {
   const entry = registry.get(terminalId);
   return entry && !entry.disposed ? entry.search : undefined;
 }
 
-/**
- * The terminal's current selection, or `null` when there is none.
- *
- * Read by `<TerminalView>`'s Cmd/Ctrl+F handler to seed the overlay
- * (`find/selectionSeed`): pressing Cmd+F with text selected must search for
- * that selection. It lives here rather than
- * in the view because the view never touches an xterm instance: the registry
- * owns them, and `getTerminal` is already how the overlay reaches one.
- *
- * xterm joins selected rows with `\n`, so a block selection spanning lines
- * arrives as a multi-line string and `seedFromSelectionText` declines it — the
- * same answer the editor gives for the same shape.
- */
+/** Seeds the find overlay (`find/selectionSeed`); here because only the registry touches xterm.
+ * Multi-line selections arrive joined with `\n` and are declined, as in the editor. */
 export function getTerminalSelection(terminalId: TerminalId): string | null {
   const entry = registry.get(terminalId);
   if (!entry || entry.disposed) return null;

@@ -1,47 +1,6 @@
-/**
- * The Shiki highlighter singleton + lazy grammar loader.
- *
- * ## Why this file exists
- *
- * `shiki.ts` was a **TRUE gap**: no test imported `ensureLang` or `highlighter` at all. The
- * module was only ever *transitively executed* by the browser-tier editor tests, with nothing
- * asserted about it. What lives here is not cosmetic:
- *
- *   - **The "forgiving degrade to plaintext" contract.** `ensureLang`
- *     must answer `false` — never throw — for an unknown id or a failed chunk
- *     import, because its caller (`applyShikiHighlight`) treats `false` as
- *     "render plaintext" and a throw would escape into the editor.
- *   - **Two memos.** A broken grammar memo either re-imports a chunk on every
- *     keystroke, or (worse) caches a *failed* load so a language that was
- *     briefly unreachable stays dead for the rest of the session. A broken
- *     highlighter memo builds a second engine + re-parses both themes.
- *   - **The hard WebKitGTK constraint:** the pure-JS RegExp engine, in
- *     `forgiving` mode. Silently regaining the WebAssembly engine would work on
- *     the dev's Mac and break on Linux — exactly the class of bug no one notices
- *     locally.
- *
- * ## The seams, stated up front (so no assertion is vacuously green)
- *
- *  1. **`shiki`'s `bundledLanguages`** — the real map holds ~200 lazy loaders
- *     with static `import()` specifiers. It is replaced by a per-test registry
- *     so a grammar can be made to *succeed*, *throw*, or *not exist* on demand.
- *     Those three outcomes are the entire contract; the real map cannot produce
- *     the middle one to order.
- *  2. **`shiki/core`'s `createHighlighterCore`** + **`shiki/engine/javascript`**
- *     — third-party engine construction (anti-pattern: we do not test Shiki).
- *     Faked so we can observe *what we asked Shiki for* — the decision this
- *     module owns — and count how many times we asked.
- *  3. **The themes are NOT mocked.** They are real JSON, and the invariant in
- *     the second test — `THEME_DARK`/`THEME_LIGHT` must equal the `name` of the
- *     theme object actually handed to Shiki — is only meaningful against the
- *     real files. Shiki resolves a theme *by name* at `codeToTokens` time, so a
- *     constant that drifts from its import throws at highlight time, in
- *     production only. Mocking the themes would make that assertion a tautology.
- *
- * Module-level `let highlighterPromise` and `const loaded` are process-wide
- * state, so every test re-imports the module through `freshModule()` — otherwise
- * test 1's memo would decide test 2's call counts.
- */
+/** Contract: `ensureLang` degrades to `false`, never throws; memos never cache a failed load; the
+ * engine stays pure-JS (WebKitGTK). `bundledLanguages` and engine construction are faked; themes
+ * are real, since Shiki resolves them by name. Each test gets `freshModule()`. */
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
@@ -70,12 +29,8 @@ vi.mock("shiki/engine/javascript", () => ({
   createJavaScriptRegexEngine: shikiMock.createJavaScriptRegexEngine,
 }));
 
-/**
- * A module instance with virgin memos. `vi.resetModules()` drops `shiki.ts` from
- * the registry so the next `import()` re-evaluates its top-level state; the
- * hoisted fakes above survive (they are this file's objects, not the registry's),
- * which is why their call history is cleared separately below.
- */
+/** Re-evaluates `shiki.ts`'s module-level memos; the hoisted fakes survive, so their call history
+ * is cleared separately. */
 async function freshModule() {
   vi.resetModules();
   return await import("./shiki");
@@ -190,10 +145,7 @@ describe("ensureLang() — lazy grammar loading, forgiving on failure", () => {
 
     await expect(ensureLang("klingon")).resolves.toBe(false);
 
-    // The `!loadGrammar` bail-out sits BEFORE `await highlighter()`, so a file
-    // in an unsupported language must not pay for engine construction at all.
-    // This also pins the ordering: swapping those two lines still returns false,
-    // but starts an engine for nothing.
+    // The unsupported-language bail-out must come before engine construction.
     expect(shikiMock.createHighlighterCore).not.toHaveBeenCalled();
     expect(shikiMock.loadLanguage).not.toHaveBeenCalled();
   });
@@ -227,10 +179,7 @@ describe("ensureLang() — lazy grammar loading, forgiving on failure", () => {
 
     await expect(ensureLang("rust")).resolves.toBe(false);
 
-    // `loaded.add` runs only on success, so the id stays absent from the memo
-    // and the next attempt genuinely retries. Caching the failure would strand
-    // the language as plaintext for the rest of the session — the exact bug
-    // this test exists for.
+    // `loaded.add` runs only on success, so a failed language genuinely retries.
     failing = false;
     await expect(ensureLang("rust")).resolves.toBe(true);
     expect(shikiMock.loadLanguage).toHaveBeenCalledWith({ name: "rust" });

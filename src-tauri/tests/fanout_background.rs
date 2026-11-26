@@ -1,18 +1,6 @@
-//! **Background sub-agents in the fan-out** — the regression: an IDE agent told to
-//! spawn 20 agents and keep them alive for a minute launches them as BACKGROUND
-//! sub-agents. A background launch's `tool_result` ("Async agent launched …") comes back
-//! in the parent at once; a fan-out that read it as the sub-agent's end marked all 20
-//! `Done` the moment they started, and the agent tree, the Village and the City showed
-//! nobody working.
-//!
-//! The sessions here are SYNTHESIZED in temp dirs with the shape of a
-//! real run (CLI 2.1.309), read for structure only: one `Agent` tool_use
-//! per line, the async-launch ack with its `toolUseResult`, sidecars with
-//! `requestShape: "background"`, `<task-notification>`s written as a queue `enqueue`,
-//! a `queued_command` attachment, a later delivery, a queue `remove` and an
-//! unstamped request snapshot, and `"finished": true` on a finished sidecar. No prompt
-//! text, path or id of the real run is copied. Nothing reads or writes the
-//! real `~/.claude`; the live test points `HOME` at a temp dir first.
+//! Background sub-agents: their launch ack ("Async agent launched …") returns at once and must
+//! not mark them `Done`. Sessions are SYNTHESIZED in temp dirs in a real run's shape (CLI
+//! 2.1.309), with none of its content; the live test points `HOME` at a temp dir.
 
 mod common;
 
@@ -181,11 +169,9 @@ impl Session {
         .expect("write meta");
     }
 
-    /// Agent `i` stopped with `status` at `at`: its last line just before, then the
-    /// parent's notification in every copy the CLI writes — the `enqueue` and the
-    /// attachment at the stop, the delivery and the `remove` seconds later, and a
-    /// request snapshot that carries no stamp. `run` keeps two stops of one agent
-    /// distinct, as their `<usage>` does for real.
+    /// Agent `i` stopped with `status` at `at`: its last line, then every copy of the parent's
+    /// notification the CLI writes (enqueue, attachment, delivery, remove, unstamped snapshot);
+    /// `run` keeps two stops of one agent distinct, as `<usage>` does.
     fn stop(&self, i: usize, status: &str, at: i64, run: u32) {
         append(
             &self.transcript(i),
@@ -342,10 +328,8 @@ fn each_background_agent_runs_until_its_own_end() {
     }
 }
 
-/// A stopped agent that is resumed (`SendMessage`) works again, and its next stop
-/// ends it again. The resume here begins 8 ms after the stop — as fast as the real
-/// one — i.e. BEFORE the notification's delivery and `remove` copies are written, so
-/// reading the latest copy instead of the earliest would call it finished.
+/// The resume starts 8 ms after the stop, BEFORE the notification's delivery and `remove`
+/// copies, so reading the latest copy instead of the earliest would call it finished.
 #[test]
 fn a_resumed_background_agent_works_again_until_it_stops_again() {
     let s = Session::background(2, T0);
@@ -433,10 +417,8 @@ fn a_nested_background_child_ends_from_its_parents_transcript() {
 
 // ── Through the real supervisor ─────────────────────────────────────────────
 
-/// **The seam.** The real `ClaudeAdapter`, tailer and supervisor over a fake `claude`
-/// that writes the real run's shape for the session id it is handed: the snapshot —
-/// what the agent tree, the Village and the City paint from — shows twenty working
-/// sub-agents, and one notification later exactly one of them is done.
+/// The seam: real `ClaudeAdapter`, tailer and supervisor over a fake `claude` writing the
+/// real shape; the snapshot shows twenty working sub-agents, then exactly one done.
 #[cfg(unix)]
 #[tokio::test]
 async fn the_supervisor_shows_twenty_working_background_agents() {

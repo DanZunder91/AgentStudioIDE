@@ -1,56 +1,6 @@
-/**
- * RailTabs — the right rail's tab bar: Files / Vault / History / Collections / DB /
- * Tools / Git. Find lives OUT of it, as a
- * magnifying-glass icon in the titlebar — it is a momentary overlay
- * toggle, not a mounted panel, so it never belonged among the persistent-panel tabs.
- *
- * The PERSISTENT panels the bar switches between (`rightRailTab`) are Files = the
- * multi-root `<WorkspaceTree/>`, Vault = the `<VaultPanel/>` secrets manager,
- * History = the `<HistoryPanel/>` API request log, Collections = the
- * `<CollectionsPanel/>` saved-request library (HTTP/WS/gRPC), DB = the
- * `<DbPanel/>` saved-connection list, Tools = the `<ToolsPanel/>`
- * self-contained developer utilities, and Git = the `<GitPanel/>` source-control
- * view.
- *
- * Reuses the existing `.rail__tabs` / `.rail__tab` styling (App.css); the overflow
- * trigger + menu styling is feature-local (`./railTabs.css`).
- *
- * Each tab is an inline-SVG icon from `components/icons` — folder / padlock / clock /
- * bookmark / database / spanner / branch — with **no visible text**; the label is the
- * tooltip (only the icon is shown, and the label appears as a tooltip on hover).
- * Icon+label tabs do not fit: four of them needed ~271px of a ~279px content box
- * ("Collections" clipped at the rail edge), so the strip wrapped at the narrow end of the
- * resizer. Dropping the words is what bought the headroom every tab since has spent.
- *
- * ⚠️ **THE WIDTH BUDGET lives in code, not in this comment** (as prose it went stale).
- * Seven tabs do not fit at the 10px gap — 7×17 + 6×10 = **179px against 159px** of
- * content box at `RAIL_MIN_W` — and the answer is an overflow menu, not another gap
- * shave:
- *
- *   `railTabsLayout.ts` owns the constants (TAB_W 17, TAB_GAP 10, STRIP_CHROME 21,
- *   TRIGGER_W 17) and the ONE function, `visibleTabCount(railWidth, tabCount)`.
- *   This component subscribes to the store's `rightRailWidth` — the width only ever
- *   changes through `setRightRailWidth`, so NO ResizeObserver — slices `TABS` to the
- *   visible prefix, and folds the rest behind a tab-sized "⋯" trigger that opens a
- *   `role="menu"` popover (labels visible there, unlike the strip). At the 180px
- *   drag-min that is 5 tabs + trigger = 152px ≤ 159px; at the default 300px all
- *   seven fit outright (179px ≤ 279px) and no trigger renders. Selection never
- *   reorders the strip: visibility is width math alone, and when the ACTIVE tab is
- *   in the hidden set the trigger carries `rail__tab--active` in its stead.
- *   `src/e2e/railChrome.browser.test.tsx` re-derives needed-vs-available from the
- *   live boxes so a pixel drift between the CSS and the constants turns red.
- *
- * Because there is no text, the accessible name comes from `aria-label` on the BUTTON
- * (the glyph itself stays `aria-hidden` + `focusable={false}`, as `components/icons`
- * marks every icon) — a `title` is a tooltip, not a name. Icons stroke with
- * `currentColor`, so each inherits its tab's dim/active colour rather than fighting it.
- *
- * a11y note: these are plain buttons with `aria-selected`, NOT `role="tab"`. The
- * CENTER pane strip (`TabBar`) already owns `role="tab"`, and the smoke-core E2E
- * asserts a SINGLE `getByRole("tab")` there — a second `role="tab"` group in the
- * rail would make that lookup ambiguous. The overflow popover is `role="menu"` /
- * `role="menuitem"` (the SettingsMenu pattern), which stays clear of that lookup.
- */
+/** The right rail's tab bar: icon-only, the label in `aria-label` and the tooltip. The width budget
+ * is `railTabsLayout.ts`; tabs past it fold behind "⋯". Plain buttons with `aria-selected`, not
+ * `role="tab"`: the smoke-core E2E expects a single `role="tab"` group (the center `TabBar`). */
 
 import { useEffect, useRef, useState } from "react";
 
@@ -71,11 +21,7 @@ import "./railTabs.css";
 
 type RailTabId = RightRailTab;
 
-/**
- * The tab strip, in display order. NOT exported: a test must state its own
- * literal expectations (an expectation read from the table under test can only
- * catch plumbing, never a wrong value).
- */
+/** Display order. NOT exported: tests state their own literal expectations. */
 const TABS: ReadonlyArray<{
   id: RailTabId;
   label: string;
@@ -119,13 +65,8 @@ export function RailTabs(): React.JSX.Element {
   // otherwise a narrow rail shows a strip with no lit tab and the selection looks lost.
   const activeHidden = hidden.some(({ id }) => id === rightRailTab);
 
-  // The cut is width math; if it moves under an open menu (a drag mid-interaction),
-  // the menu's contents just changed, so close rather than show a stale list. Also
-  // covers the round trip where the trigger unmounts (wide) and comes back (narrow):
-  // without this, a lingering `open` would make it reappear pre-opened. Done with
-  // the previous-value-during-render pattern (react.dev "adjusting state when a
-  // prop changes") rather than an effect — the close must land in the SAME render
-  // that moved the cut, and `react-hooks/set-state-in-effect` forbids the effect form.
+  // A cut that moves under an open menu closes it (no stale list, no pre-opened trigger on return).
+  // Done during render, not in an effect, so the close lands in the render that moved the cut.
   const [prevVisible, setPrevVisible] = useState(visible);
   if (prevVisible !== visible) {
     setPrevVisible(visible);
@@ -161,16 +102,8 @@ export function RailTabs(): React.JSX.Element {
           type="button"
           className={`rail__tab${rightRailTab === id ? " rail__tab--active" : ""}`}
           aria-selected={rightRailTab === id}
-          // ICON-ONLY: the label moved to the tooltip. With the
-          // text present, four tabs needed ~271px of a ~279px content box, so at the
-          // narrow end of the resizer the strip wrapped — and "Collections" ended up
-          // clipped at the rail edge. Glyph-only bought ~254px of
-          // that back; see the width budget in the file header for what seven now cost.
-          //
-          // The accessible name now comes from `aria-label`, NOT from text content, so
-          // it must be set explicitly: `title` alone is a tooltip, not a name, and a
-          // screen reader would announce an unlabelled button. `aria-label` also keeps
-          // every existing `getByRole("button", { name: "Files" })` lookup working.
+          // Icon-only (text made the strip wrap), so the name must come from `aria-label`:
+          // `title` is a tooltip, not an accessible name.
           aria-label={label}
           title={label}
           data-testid={`rail-tab-${id}`}
@@ -181,11 +114,8 @@ export function RailTabs(): React.JSX.Element {
       ))}
 
       {hidden.length > 0 && (
-        // The wrapper is a plain (NOT positioned) flex item: it exists so outside-click
-        // containment covers trigger + menu together, while the menu's absolute box
-        // still anchors to `.rail__tabs` (position: relative, in railTabs.css) and can
-        // span the strip's full width — a trigger-anchored popover would be clipped by
-        // `.rail`'s `overflow-x: hidden` at the strip's right edge.
+        // Plain (unpositioned) wrapper: outside-click covers trigger + menu, and the menu anchors
+        // to `.rail__tabs` at full width; trigger-anchored, `.rail`'s overflow would clip it.
         <div className="rail-tabs__overflow" ref={overflowRef}>
           <button
             type="button"

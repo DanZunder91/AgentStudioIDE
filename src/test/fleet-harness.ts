@@ -1,11 +1,5 @@
-/**
- * Shared harness for the fleet slice: reset, wire-shaped fixtures, invariants.
- *
- * Mirrors `store-harness.ts` for the layout slice. The invariants live here
- * rather than inline because they are the spec, and they are asserted from three
- * angles: after telemetry sequences, after component interactions, and in
- * property tests.
- */
+/** Fleet-slice harness (mirrors `store-harness.ts`). The invariants are the spec, asserted after
+ * telemetry sequences, after component interactions and in property tests. */
 
 import { expect } from "vitest";
 
@@ -29,12 +23,8 @@ export function resetFleetStore(): void {
   resetFleetRowsCache();
 }
 
-/**
- * An `AgentNode` **as the wire sends it** — i.e. without the four UI-only
- * fields (ARCHITECTURE §2.2). Typed as AgentNode because that is the declared contract, but
- * the point of the cast is that Rust does not send these: a fixture that
- * included them would let a hydration bug pass unnoticed.
- */
+/** An `AgentNode` as the wire sends it, without the four UI-only fields (ARCHITECTURE §2.2): a
+ * fixture with them would let a hydration bug pass unnoticed. */
 export function wireAgent(partial: Partial<AgentNode> & { id: AgentId }): AgentNode {
   return {
     parentId: null,
@@ -51,10 +41,7 @@ export function wireAgent(partial: Partial<AgentNode> & { id: AgentId }): AgentN
   } as AgentNode;
 }
 
-/**
- * The fleet's structural invariants. True of the store after ANY sequence of
- * telemetry, however malformed.
- */
+/** The fleet's structural invariants: true after ANY telemetry sequence, however malformed. */
 export function assertFleetInvariants(s: FleetState, where = ""): void {
   const at = (msg: string) => `${where ? `${where}: ` : ""}${msg}`;
   const ids = Object.keys(s.agents) as AgentId[];

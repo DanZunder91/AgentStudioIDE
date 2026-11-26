@@ -1,22 +1,6 @@
-/**
- * Agent Logs store — the UI's copy of the Rust log ring plus the view state.
- *
- * Its own `create(...)`, not the main app store (`app/store.ts`), so this feature's state
- * stays in this feature. Module-level, so the filter / follow / expanded row survive the
- * panel remounting on every tab switch or cross-pane move without any
- * bespoke survival code.
- *
- * ── The ingest rule ─────────────────────────────────────────────
- * Take `logstream_snapshot` on connect, then append `logstream://lines` batches,
- * keeping only ids `> lastId`. The subscription is made FIRST and batches that land
- * before the snapshot resolves are held and replayed after it — otherwise a line
- * emitted between "snapshot served" and "listener registered" would be lost, and one
- * emitted between "listener registered" and "snapshot served" would be dropped by
- * the `> lastId` rule because the snapshot's newer ids were ingested after it.
- *
- * `lastId` survives Clear: the Rust ring is emptied but its ids keep increasing, so a
- * remount's fresh snapshot can never resurrect a cleared line.
- */
+/** The UI's copy of the Rust log ring plus view state; module-level so it survives remounts.
+ * Ingest: subscribe FIRST, hold batches until `logstream_snapshot` resolves, then replay keeping
+ * ids `> lastId`. `lastId` survives Clear (Rust ids keep rising, so nothing resurrects). */
 
 import { create } from "zustand";
 
@@ -52,14 +36,8 @@ export function clampSidebarWidth(w: number): number {
 
 export type ConnStatus = "idle" | "loading" | "ready" | "error";
 
-/**
- * The ⌘F bar. In THIS store rather than the app store's `findBars`
- * slice: that slice exists so a component's `useState` stops dying on remount, and this store is
- * already the Logs view's remount-proof home — the filter, the folds and the error cursor live
- * here — and the bar has to read and write those folds.
- * One owner per view beats a second copy of half its state in another store.
- * Absence (`null`) IS the closed state: Esc forgets the query, as every house bar does.
- */
+/** The ⌘F bar; lives here, not in `findBars`, because it reads and writes this store's folds.
+ * `null` IS the closed state: Esc forgets the query, as every house bar does. */
 export interface LogsFind {
   query: string;
   caseSensitive: boolean;
@@ -68,16 +46,10 @@ export interface LogsFind {
   cursor: number;
   /** What is searched: the stream, or the detail drawer (⌘F pressed inside the drawer). */
   scope: "list" | "detail";
-  /**
-   * Blocks the user folded/unfolded by hand while the bar was open: find stops overriding
-   * them (otherwise "show less" would be dead until the bar closed). Dropped with the bar.
-   */
+  /** Blocks folded/unfolded by hand while the bar is open: find stops overriding them. */
   touched: Record<string, true>;
-  /**
-   * Bumped by every gesture that should scroll to the current match (a new query, a
-   * toggle, a step — even a step that cannot move, with one match) and by nothing else,
-   * so a batch of new lines never yanks the list back to a match the reader left.
-   */
+  /** Bumped only by gestures that should scroll to the current match (query, toggle, step), so
+   * new lines never yank the list back to a match the reader left. */
   seq: number;
 }
 
@@ -102,17 +74,12 @@ export interface AgentLogsState {
   /* ── system apps ── */
   /** The last `syslog_status` / `syslog_set` answer; null until the first one lands. */
   syslog: SyslogStatus | null;
-  /**
-   * The filter most recently SENT and not yet answered — the controls show it so a
-   * click reads as taken while Rust restarts `log stream`. Null when nothing is in flight.
-   */
+  /** The filter SENT and not yet answered, shown so a click reads as taken while Rust restarts
+   * `log stream`. Null when nothing is in flight. */
   syslogPending: SyslogFilter | null;
   /** Why the last status read failed (cleared by the next successful read). */
   syslogError: string | null;
-  /**
-   * Why the last `syslog_set` failed. Separate from `syslogError` so the next 2 s poll
-   * cannot silently wipe it — only a successful apply clears it.
-   */
+  /** Why the last `syslog_set` failed; apart from `syslogError` so the 2 s poll cannot wipe it. */
   applyError: string | null;
   /** `syslog_apps` — what the app picker offers. */
   apps: RunningApp[];
@@ -130,18 +97,12 @@ export interface AgentLogsState {
   runningDismissed: Record<string, number>;
 
   /* ── command blocks ── */
-  /**
-   * The user's explicit expand/collapse per block key (`toolUseId`). Absent = automatic
-   * (collapsed, unless a query hits its hidden output). In the store, not the row, so a
-   * tab switch or pane move keeps what you opened.
-   */
+  /** Explicit expand/collapse per block key (`toolUseId`); absent = automatic (collapsed unless a
+   * query hits hidden output). In the store so tab switches and pane moves keep it. */
   expandedBlocks: Record<string, boolean>;
 
   /* ── error navigation ── */
-  /**
-   * A click on a sidebar error badge (or ↑/↓ on it). The panel — the one place that knows
-   * the stream's row offsets — resolves it into a scroll and records the cursor.
-   */
+  /** A sidebar error badge click (or ↑/↓); the panel, which knows row offsets, resolves it. */
   jumpRequest: { source: string; step: "first" | "next" | "prev"; seq: number } | null;
   /** The error row the last jump landed on: highlighted, and the base for ↑/↓. */
   errorCursor: { source: string; lineId: number } | null;
@@ -166,44 +127,26 @@ export interface AgentLogsState {
   setSidebarOpen(open: boolean): void;
   setSidebarWidth(width: number): void;
   dismissRunning(source: string, lastId: number): void;
-  /**
-   * A sidebar row's click: show ONLY `source` — or, when it already is the one source
-   * shown, back to all sources.
-   */
+  /** Sidebar row click: show ONLY `source`, or all sources if it already is the only one. */
   toggleOnlySource(source: string): void;
-  /**
-   * Show ONLY `source`, whatever the pick was — a block header's "→ open <service> stream"
-   * link. Not `setSourcePick(sources, [source])`: with exactly two sources
-   * seen that reads as "untick the other one" and becomes an exclusion, which is not a solo
-   * (the sidebar presses no row and the stream header would not show).
-   */
+  /** Show ONLY `source` (a block header's stream link). Not `setSourcePick(sources, [source])`:
+   * with two sources that becomes an exclusion, not a solo. */
   soloSource(source: string): void;
-  /**
-   * Show ONLY these sources — a dev app's row in the sidebar solos every stream of that app.
-   * An EMPTY list is kept as-is: it shows nothing, which is what an app with
-   * no stream yet has to show (the panel puts "Pick a log to stream" there).
-   */
+  /** Show ONLY these sources (a dev app's row). An EMPTY list is kept: it shows nothing, as an
+   * app with no stream yet must. */
   soloSources(sources: readonly string[]): void;
   /** "show N more" / "show less" on a block. */
   setBlockExpanded(key: string, expanded: boolean): void;
-  /**
-   * Jump to `source`'s first error (`first`) or step from the cursor (`next` / `prev`):
-   * the stream narrows to that source, the Error level comes on if it was off (you asked
-   * for errors), follow stops, and the panel scrolls once it has re-rendered.
-   */
+  /** Jump to `source`'s first error or step from the cursor: narrows to that source, turns Error
+   * on, stops follow; the panel scrolls after re-render. */
   requestErrorJump(source: string, step: "first" | "next" | "prev"): void;
   /** The panel landed (or found nothing to land on): record the cursor, drop the request. */
   resolveErrorJump(cursor: { source: string; lineId: number } | null): void;
 
   /* ── ⌘F find ── */
   find: LogsFind | null;
-  /**
-   * ⌘F: open the bar in `scope`, or refocus it. `seed` is the selection
-   * (`selectionSeed.ts` rules, already applied): a CHANGED seed replaces the query and
-   * restarts at the first match, exactly as typing it would; null or the same text leaves
-   * the query and the user's place alone (an unchanged seed is a refocus,
-   * not a new search). A scope change is a new search over different text: cursor 0.
-   */
+  /** ⌘F: open the bar in `scope` or refocus it. A CHANGED `seed` (selection) replaces the query at
+   * match 0; null or the same text keeps query and place. A scope change restarts at 0. */
   openFind(scope: "list" | "detail", seed: string | null): void;
   setFindQuery(query: string): void;
   toggleFindCase(): void;
@@ -250,11 +193,8 @@ const initialData = () => ({
   find: null as LogsFind | null,
 });
 
-/*
- * Every status request (poll or apply) takes a ticket; an answer older than the newest
- * one already shown is dropped. Without it a poll sent just before a click, answering
- * just after it, would snap the controls back to the old filter for two seconds.
- */
+/* Status requests take tickets; an answer older than the newest shown is dropped, so a poll
+ * answering just after a click cannot snap the controls back. */
 let syslogTicket = 0;
 let syslogShown = 0;
 /** Applies only: the newest one owns `syslogPending` and `applyError`. */
@@ -497,10 +437,8 @@ function connect(): () => void {
   };
 }
 
-/**
- * Start (or join) the live stream. Ref-counted, so two mounts share one listener.
- * Returns an idempotent release fn — the last release unsubscribes.
- */
+/** Start (or join) the live stream; ref-counted. Returns an idempotent release (the last one
+ * unsubscribes). */
 export function startLogstream(): () => void {
   refs += 1;
   if (refs === 1) disconnect = connect();
@@ -528,12 +466,8 @@ export function retryLogstream(): void {
 let pollRefs = 0;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-/**
- * Read `syslog_status` now and every `SYSLOG_POLL_MS` while a panel is mounted — the
- * live lines/s, whether the child is running, and a reason that can change under us
- * (a missing binary, a revoked group). Ref-counted like `startLogstream`; the last
- * release stops the timer, so a closed tab costs nothing.
- */
+/** Poll `syslog_status` every `SYSLOG_POLL_MS` while a panel is mounted (rate, running, reason).
+ * Ref-counted like `startLogstream`; the last release stops the timer. */
 export function startSyslogPoll(): () => void {
   pollRefs += 1;
   if (pollRefs === 1) {

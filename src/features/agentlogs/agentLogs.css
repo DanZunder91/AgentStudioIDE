@@ -1,14 +1,6 @@
-/* ── Agent Logs — the fleet's logs, per source ──────────────────────────────────
-   A Sources sidebar on the left, the selected stream on the right. Dense
-   and monospace, in the shape of `tail -f`: time · level · [source] · text; an agent's
-   tool calls as command blocks; lifecycle lines as dividers. Theme vars from App.css;
-   the feature's own tones are declared here
-   under an `--alog-` prefix rather than borrowed from another feature's `:root`, so no
-   two features depend on each other's CSS load order.
-
-   The source palette is eight hues chosen to read on `--bg-app #0d1117` (all ≥ 4.5:1)
-   and to stay distinguishable from the level tones: the orange/green pair echoes a
-   typical terminal theme (process orange, subsystem green). */
+/* ── Agent Logs: Sources sidebar + the selected stream, `tail -f` style. Own tones use the
+ * `--alog-` prefix so no two features depend on each other's CSS load order. Source hues are
+ * ≥ 4.5:1 on `--bg-app #0d1117` and distinct from the level tones. ── */
 :root {
   --alog-src-0: #e8873c;
   --alog-src-1: #56d364;
@@ -227,6 +219,8 @@
   display: flex;
   flex-direction: column;
 }
+/* The panel's one flex: 1 1 0 / min-height: 0 scroll box: its clientHeight is the pane's share,
+   which is what makes the list's windowing window (LESSONS §38). */
 .alog-list {
   flex: 1 1 0;
   min-height: 0;

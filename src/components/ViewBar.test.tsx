@@ -1,24 +1,6 @@
-/**
- * ViewBar — the top-level strip of views.
- *
- * Driven through the REAL store slice (`views` / `activeViewId` /
- * `layoutActions.{createView,activateView,renameView,closeView,moveTabToView,
- * reorderViews}`), because the questions worth asking here are integration
- * questions: does switching swap the whole arrangement, and does the work
- * inside it survive?
- *
- * The three seams that can actually be wrong, and are falsified here:
- *   1. switching renders the TARGET view's tree and not the previous one;
- *   2. a terminal is NOT re-created across a switch — same xterm instance, same
- *      PTY, same scrollback (the reason inactive views need no keep-alive);
- *   3. the close confirmation reports the TRUE tab count, read live for the
- *      active view rather than from its stale snapshot — and says what actually
- *      happens to those tabs (`closeView` rescues them; it does not kill them).
- *
- * The pure gesture cases drive `<ViewBarView>` with props instead: rename,
- * reorder and the confirmation wording are presentation, and a store adds
- * nothing to proving them.
- */
+/** ViewBar through the REAL store slice: switching renders the target tree, terminals survive a
+ * switch (same xterm, PTY, scrollback), and the close confirmation counts tabs live and says they
+ * move. Pure gestures drive `<ViewBarView>` with props. */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -332,13 +314,8 @@ describe("ViewBarView — gestures", () => {
     expect(onReorder).not.toHaveBeenCalled();
   });
 
-  /**
-   * A `dataTransfer` can advertise a type and carry nothing under it — this app
-   * does it deliberately elsewhere (the API panel's self-drop marker), and a drag
-   * that starts outside the app can too. So "the type is in the list" is not "there
-   * is an id here": acting on the empty string would move tab `""` or reorder view
-   * `""`, and the strip would be left lit as if something had happened.
-   */
+  /** A `dataTransfer` can advertise a type with nothing under it (our self-drop marker, foreign
+   * drags); acting on "" would move tab `""` and leave the strip lit. */
   it("ignores a chip drop that advertises a tab but carries no id", () => {
     const onMoveTabToView = vi.fn();
     render(<ViewBarView {...props({ onMoveTabToView })} />);
@@ -527,10 +504,8 @@ describe("switching a view", () => {
   });
 
   it("keeps the SAME xterm instance, its PTY and its scrollback across a switch", async () => {
-    // The decisive architectural fact: `TerminalRegistry` owns the emulator and
-    // the PTY outside React, so unmounting an inactive view's tree costs
-    // nothing. If this ever goes red, views need a keep-alive scheme — and this
-    // is the test that would say so.
+    // `TerminalRegistry` owns the emulator and PTY outside React; if this goes red, views need a
+    // keep-alive scheme.
     const first = store().activeViewId;
     const tabId = actions().openTerminalTab({ cwd: "/w/gazelle" });
     const termId = terminalIdOf(tabId);
@@ -573,11 +548,8 @@ describe("switching a view", () => {
   });
 
   it("re-attaches the emulator's DOM into the returning view's pane", async () => {
-    // Re-attach is what triggers the refit: `attach()` fits synchronously and
-    // re-observes the host, so a tree that comes back at a different size is
-    // measured against the NEW geometry rather than the view you just left.
-    // (The fit ITSELF is unmeasurable in jsdom — no layout engine — and is
-    // pinned by `features/terminal/terminalFit.browser.test.tsx`.)
+    // `attach()` fits synchronously and re-observes the host, so a returning tree is measured at
+    // its NEW size (the fit itself: `features/terminal/terminalFit.browser.test.tsx`).
     const first = store().activeViewId;
     const tabId = actions().openTerminalTab({ cwd: "/w/gazelle" });
     const termId = terminalIdOf(tabId);

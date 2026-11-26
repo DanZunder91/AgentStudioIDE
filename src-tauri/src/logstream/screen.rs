@@ -1,48 +1,6 @@
-//! Windows: a terminal's ConPTY output → log lines, by interpreting it as the screen it draws.
-//!
-//! **Why this exists beside [`super::splitter`] (platform-native).** On macOS and Linux a PTY
-//! carries the program's own bytes: text, `\r`, `\n` and a few escapes, so a line splitter that
-//! strips escapes and treats `\r` as "redraw this line" is right. On Windows every terminal goes
-//! through ConPTY, and ConPTY is a *screen renderer*: conhost keeps the screen and sends the
-//! terminal whatever repaints it — the prompt and each keystroke drawn with cursor positioning
-//! (`CSI row;col H`), blank rows skipped with a cursor jump instead of `\r\n`, a whole-screen
-//! repaint after every resize. Fed to the stream splitter that became
-//! `GeGetGet-Get-LGet-Lo…Get-Location`. Recordings of the real bytes are in
-//! `tests/fixtures/logstream/conpty/` and `tests/logstream_conpty.rs` holds this module to them.
-//!
-//! So on Windows the hub keeps a small model of the screen instead:
-//! - **A grid of rows**, the viewport's size (the hub passes the PTY size, and every resize), a
-//!   cursor, and the VT operations ConPTY uses: cursor moves (`H f A B C D E F G d \``), erase in
-//!   line / display (`K J X`), insert/delete characters and lines (`@ P L M`), scroll (`S T`, a
-//!   line feed at the bottom, reverse index), scroll margins (`r`), save/restore cursor.
-//!   Colours and modes are rendering, not content.
-//! - **Autowrap with the wrap remembered.** ConPTY leaves a long line to the terminal's autowrap
-//!   (deferred, as VT does: the wrap happens at the next character, so a row filled exactly and
-//!   then `\r\n` is not wrapped). Rows joined by a wrap are ONE logical line — the log shows
-//!   `Lost = 0 (0% loss),` whole, not cut where the pane happened to end.
-//! - **A line is emitted when it is finished**: the cursor leaves it (a line feed, a jump to
-//!   another row) or it scrolls away. Keystroke repaints rewrite the row in place, so the command
-//!   is logged once, as typed. The hub's ~250 ms silence flush emits the cursor's line too (a
-//!   prompt, `Password:`); when that line is later finished with more text, only what was added
-//!   is emitted — the stream splitter's behaviour, so both OSes read the same.
-//! - **A repaint is not new output.** Each row remembers the text it last emitted; a row redrawn
-//!   with the same text emits nothing. A resize can also *shift* the screen (a shorter pane drops
-//!   the top rows) and reflow it, so on a resize (and on `CSI H`, where every ConPTY full repaint
-//!   starts) the lines already on screen are noted in order, and the repaint's lines are matched
-//!   against them in that order — each old line once, so two identical `Reply from …` rows stay
-//!   two. The match ends at the next silence flush.
-//! - **A bare `\n` is a new line** (as `\r\n`): ConPTY always sends `\r\n` for one, and so the
-//!   hub's other feeders (tests, a non-ConPTY byte source) read as on Unix. Were ConPTY to move
-//!   down one row in the same column with a bare `\n`, the cost is that row's indentation only.
-//! - **Alternate screen** (`CSI ?1049h` / `?1047h` / `?47h`): nothing is logged while a TUI owns
-//!   the screen, as in the stream splitter; leaving it restores the main screen, whose repaint
-//!   is matched like a resize's.
-//! - **4 KiB cap** per line (the `…` marker included), C0/C1 controls never content, UTF-8 decoded
-//!   as it arrives (a character split across reads is joined), wide (CJK, emoji) characters take
-//!   two columns as they do in conhost.
-//!
-//! Pure and clock-free, like the stream splitter: every rule is testable without a runtime, and it
-//! compiles and is tested on every OS. Only the hub's choice of it is `cfg(windows)`.
+//! Windows: ConPTY output → log lines via a small screen model. ConPTY repaints a screen
+//! (cursor jumps, resize repaints) that a stream splitter garbles; `tests/logstream_conpty.rs`
+//! replays real recordings. Pure and tested on every OS; only the hub's choice is `cfg(windows)`.
 
 use std::collections::VecDeque;
 

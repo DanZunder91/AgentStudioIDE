@@ -1,16 +1,6 @@
-/**
- * Who made the call: a flow's `terminalId` (from the proxy userinfo) → the title the user
- * sees on that terminal's tab — the agent's name for an agent terminal, the tab's own
- * (custom) title for a plain one.
- *
- * Two sources are not terminals at all:
- * - `terminalId === "ide-api-client"` (reserved by Rust) is the IDE's own API client, whose
- *   `http_send` / `ws_*` / `grpc_send` record straight into the ring — labelled **API client**.
- * - `terminalId === null` with a resolved `client` is a process that connected to the proxy
- *   on its own (Postman pointed at us, a browser with `--proxy-server`) — labelled
- *   **external · <name>**, never "unattributed" when the process is known.
- * Only a flow with neither (`null` / `null`) is "unattributed".
- */
+/** Who made the call: a flow's `terminalId` (proxy userinfo) → that terminal tab's title. Reserved
+ * `ide-api-client` (set by Rust) is the IDE's API client; a null id with a resolved `client` is
+ * `external · <name>`; only null/null is "unattributed". */
 
 import type { AgentId, AgentNode, Tab, TabId } from "../../app/types";
 import { protoLabel } from "./networkFormat";
@@ -63,12 +53,8 @@ export function externalText(client: Pick<FlowClient, "name">): string {
   return `external · ${client.name}`;
 }
 
-/**
- * The precedence, in order: the reserved API-client id; a resolved external process; a
- * null/null flow (`unattributed` — the client stripped the userinfo AND the proxy could not
- * name it); an id with an open tab; an id with no open tab — a terminal that has since
- * closed — said as such rather than pretended unknown.
- */
+/** Precedence: reserved API-client id; resolved external process; null/null (`unattributed`); an
+ * id with an open tab; an id with no open tab, said as a closed terminal rather than unknown. */
 export function resolveSource(
   f: SourceOf,
   index: ReadonlyMap<string, string>,
@@ -86,11 +72,8 @@ export function resolveSource(
 
 const NO_TITLES: ReadonlyMap<string, string> = new Map();
 
-/**
- * A closed terminal, by the title it LAST had (`gazelle (closed)` — a
- * `closed terminal 0000eeee` names nothing a person remembers); the short id only when its title
- * was never seen (it closed before the IDE watched it — e.g. a previous run's flows).
- */
+/** A closed terminal by the title it last had (`gazelle (closed)`); the short id only when its
+ * title was never seen (it closed before the IDE watched it, e.g. a previous run's flows). */
 export function goneText(terminalId: string, closed: ReadonlyMap<string, string>): string {
   const title = closed.get(terminalId);
   return title === undefined || title.trim() === "" ? `closed terminal ${terminalId.slice(0, 8)}` : `${title} (closed)`;
@@ -101,13 +84,8 @@ export const UNATTRIBUTED_KEY = "\u0000unattributed";
 /** The Source picker's reserved key for the IDE's own API client. */
 export const API_CLIENT_KEY = "\u0000api-client";
 
-/**
- * The id a source has in the Source picker: the TERMINAL ID, never its title. Titles change
- * as agents work (`claude` → `claude · fixing the build`), so a pick keyed by title stopped
- * matching the moment the title moved and "Only" hid everything.
- * An external process is keyed by its NAME (`ext:Postman`), so every pid of Postman is one
- * row — the same rule as the Process picker.
- */
+/** Keyed by terminal id, never title: agents retitle terminals as they work, and a title key
+ * stops matching. An external process is keyed by name (`ext:Postman`), like the Process picker. */
 export function sourceKey(f: SourceOf): string {
   if (isApiClient(f)) return API_CLIENT_KEY;
   if (isExternal(f)) return `ext:${f.client.name}`;
@@ -125,13 +103,9 @@ export interface PickerRow {
   count: number;
 }
 
-/**
- * The Source picker's rows: one per TERMINAL that made a call (keyed by `sourceKey`),
- * labelled with its current title, with its flow count. Two terminals with the same title
- * are two rows; each gets a short id (`#1a2b3c4d`) as its sublabel so they can be told apart.
- * The API client is one reserved row (sublabel says what it is); an external process is one
- * row per name, its executable path as the sublabel when every flow came from one path.
- */
+/** One row per terminal that made a call (by `sourceKey`), titled, with its flow count; same-title
+ * terminals get a short-id sublabel. One reserved API-client row; one row per external name,
+ * its executable path as sublabel when every flow came from one path. */
 export function sourceItems(
   flows: readonly SourceOf[],
   index: ReadonlyMap<string, string>,
@@ -170,13 +144,8 @@ export function agentTerminalIds(tabs: Record<TabId, Tab>): Set<string> {
   return out;
 }
 
-/**
- * The group a Source picker row belongs to in the sidebar, mirroring the Logs sidebar's
- * Terminals / Agents groups. DECIDED: a CLOSED terminal (its `t:` id has no tab any more) is
- * listed under Terminals — it was a terminal, and whether an agent ran in it is no longer
- * knowable; the API client, external processes and unattributed flows are not terminals at all,
- * so they share a small Other group.
- */
+/** Mirrors the Logs sidebar's Terminals / Agents groups. A closed terminal (`t:` id, no tab) is
+ * under Terminals: whether an agent ran in it is no longer knowable. Non-terminals go to Other. */
 export function sourceGroupOf(key: string, agentIds: ReadonlySet<string>): SourceGroup {
   if (!key.startsWith("t:")) return "other";
   return agentIds.has(key.slice(2)) ? "agents" : "terminals";
@@ -205,11 +174,8 @@ export function processKey(f: { client: { name: string } | null }): string {
   return f.client === null ? UNKNOWN_PROCESS_KEY : f.client.name;
 }
 
-/**
- * The Process picker's rows: one per client name (so "only gazelle" is one click whatever
- * its pid), `unknown` for flows the proxy could not attribute, each with its flow count and —
- * when every flow of that name came from one executable — its path as the sublabel.
- */
+/** One row per client name (any pid), `unknown` for unattributed flows, each with its flow count
+ * and, when every flow of that name came from one executable, its path as the sublabel. */
 export function processItems(
   flows: readonly { client: { name: string; path: string | null } | null }[],
 ): PickerRow[] {
@@ -239,11 +205,8 @@ export function hostKey(f: Pick<FlowSummary, "host">): string {
   return f.host;
 }
 
-/**
- * The Host picker's rows: one per host, its flow count, and the protocols seen on it as the
- * sublabel (`HTTPS, gRPC`) — so a host that only ever tunnelled is visible as such before it
- * is picked. Sorted by name.
- */
+/** One row per host with its flow count and the protocols seen as sublabel (`HTTPS, gRPC`), so a
+ * tunnel-only host shows as such before it is picked. Sorted by name. */
 export function hostItems(flows: readonly Pick<FlowSummary, "host" | "proto">[]): PickerRow[] {
   const rows = new Map<string, PickerRow & { protos: Set<FlowProto> }>();
   for (const f of flows) {

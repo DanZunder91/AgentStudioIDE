@@ -1,17 +1,6 @@
-/**
- * Layer 5 — the City's yokochō, the front of its backdrop in Tokyo (ramen shops or the like in the
- * background, with neon signs for ramen and soba in katakana and sushi in hiragana; then
- * empty space left between the clusters, and karaoke added), against a REAL 2D context in Chromium.
- *
- * The jsdom suite (backdropShops.test.ts) proves the layout, the rects and the lights asked for; only
- * real pixels can prove what the canvas makes of them: that the row's face is exactly what `faceAt`
- * says — nothing painted above it (nor in the air, where it is the street's top), every pixel below it
- * down to the street opaque — at Fit and zoomed in; that a pan moves the picture by exactly the pan
- * and a zoom keeps every world pixel its colour; and, in the real frame of the reference city, that
- * the four featured words light up in their neon colours at Fit by night, and that nothing of the row ever
- * shows in front of a building or a temple, nor in the open sky between its clusters. *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/backdropShops.browser.test.tsx`
- */
+/** Real pixels for the yokochō layer: its face is exactly `faceAt`, pans and zooms keep every world
+ * pixel's colour, and nothing of it shows in front of a building, a temple or the open sky.
+ * Run with `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -146,11 +135,8 @@ describe("world-locked, in real pixels", () => {
 });
 
 describe("in the reference city's frame", () => {
-  /**
-   * A frame of the reference city at Fit (1280×800 @2x), after the street has filled — the real
-   * pipeline, its Tokyo backdrop and all; `shops: false` the same frame with this layer's paint and
-   * lights left out (its face still cutting the canyon's lights), so a difference is this layer's own.
-   */
+  /** A real-pipeline frame of the reference city at Fit (1280×800 @2x); `shops: false` leaves this
+   * layer's paint and lights out (its face still cuts the canyon's), so a difference is its own. */
   function frame(amb: Ambience, shops = true) {
     const { paint, paintLights } = SHOPS;
     if (!shops) {

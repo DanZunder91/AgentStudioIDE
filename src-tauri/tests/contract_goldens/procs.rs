@@ -1,18 +1,6 @@
-//! **Contract goldens: dev apps on this machine.** Same rules as the parent file: real
-//! production code paths, typed structs serialised as Tauri would, normalised only where
-//! volatile.
-//!
-//! | golden | produced by |
-//! |---|---|
-//! | `procs-list.json` (`ProcsList` by scenario) | `procscan::assemble` over a **synthetic process table** (raw pids/argv/fds as the platform glue would report them — nothing reads this machine's processes) + `docker::parse_ps` over captured `docker ps --format '{{json .}}'` text, combined by `procs_list_of`; plus `unavailable_list()` (Windows) and the Docker-down reason from `docker::ps_failure_reason` |
-//! | `app-lines.json` (`LogLine[]`, `kind: "app"` + its `system` lines) | a real `Procs::tail_file` on a real file (picked, as `logstream_pick_file` would), through the real `AppTails` engine into a real `LogHub` — `LogHub::snapshot`, then `logstream_untail` |
-//! | `procs-commands.json` | the real `logstream_tail_app` / `logstream_tail_docker` results (`{ key, source }`; the docker one against a fake `docker` script), and `procs_restart_prepare` / `procs_restart_in_ide` result shapes |
-//!
-//! The process table includes the IDE (pid 100) with a plain terminal and an agent terminal:
-//! their apps carry `origin: "ide"`, `terminalId`, `agentId`, `launchedBy`, and
-//! `console: "ide-terminal"` when fd 1 is that terminal's pty slave.
-//!
-//! **Normalised:** line ids and timestamps; the temp dir prefix of paths (→ `/work`).
+//! Dev-app goldens: `procs-list.json` (`procscan::assemble` over a synthetic process table +
+//! `docker::parse_ps`), `app-lines.json` (real `AppTails` → `LogHub`), `procs-commands.json`.
+//! The IDE is pid 100 with two terminals. Normalised: ids, timestamps, temp prefix → `/work`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write as _;

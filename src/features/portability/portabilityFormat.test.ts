@@ -1,20 +1,5 @@
-/**
- * Tests for `portabilityFormat` — every decision and every sentence the config-bundle dialogs
- * make.
- *
- * ── Every expectation is written out ─────────────────────────────────────────
- * Nothing below reads its expected value from `portabilityFormat.ts` or from
- * `portabilityFixtures.ts`. The fixtures are inputs; the strings are typed
- * here by hand. That is the difference between "the formatter agrees with itself" and
- * "the formatter produces this sentence".
- *
- * ── The copy is tested as behaviour, not as a snapshot ───────────────────────
- * For the two sentences the design depends on — the passphrase truth and the unverified
- * provenance note — the assertions pin the *clauses that carry the meaning* and, just as
- * importantly, assert the reassuring vocabulary is ABSENT. A snapshot would notice an
- * edit; only a negative assertion notices someone quietly making the copy comfortable,
- * which is the failure mode the passphrase copy is guarding against.
- */
+/** Every expectation is typed out by hand (fixtures are inputs). Key copy is pinned by its meaning
+ * clauses plus assertions that reassuring vocabulary is absent, which a snapshot would miss. */
 
 import { describe, expect, it } from "vitest";
 
@@ -715,19 +700,13 @@ describe("the overwrite switch and the read-only guardrail", () => {
   });
 
   it("describes the read-only toggle in BOTH positions, and says what OFF costs", () => {
-    // This used to assert a sentence claiming connections arrive read-only
-    // "whatever the file says" — true when the value was forced, and false now that the checkbox
-    // beside it can switch it off. Copy that describes a behaviour the UI no longer has is worse
-    // than no copy.
     expect(IMPORT_READ_ONLY_LABEL).toBe("Import connections as read-only");
     expect(IMPORT_READ_ONLY_HINT).toContain("On (default)");
     expect(IMPORT_READ_ONLY_HINT).toContain("Off:");
     // The consequence has to be named, or "off" reads as a preference rather than a risk.
     expect(IMPORT_READ_ONLY_HINT).toContain("DELETE");
-    // What must NOT come back is the *claim* that read-only is unconditional. Note the new copy
-    // legitimately says a connection "keeps whatever the file says" — that is the OFF position
-    // described accurately, so forbidding the phrase outright would fail against correct copy.
-    // The forbidden thing is the old promise, not the words in it.
+    // Forbid the old promise that read-only is unconditional, not its words: the OFF hint
+    // accurately says a connection "keeps whatever the file says".
     expect(IMPORT_READ_ONLY_HINT).not.toContain("read-only whatever the file says");
   });
 });

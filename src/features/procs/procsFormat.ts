@@ -11,11 +11,8 @@ export function basename(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-/**
- * The command as one line. 🔴 Renders exactly the argv Rust sent — which Rust already masked —
- * and adds nothing but quotes around an argument containing whitespace, so the line is
- * unambiguous. It never looks anything up, and it never shows env (Rust never sends it).
- */
+/** Renders exactly the argv Rust sent (already masked), adding only quotes around whitespace.
+ * Never looks anything up and never shows env (Rust never sends it). */
 export function commandLine(argv: readonly string[]): string {
   return argv.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
 }
@@ -38,23 +35,15 @@ export function portsLabel(ports: readonly number[], max = 2): string {
   return rest > 0 ? `${shown.join(" ")} +${rest}` : shown.join(" ");
 }
 
-/**
- * The store's id for one stream of one app: its file path, or `docker` for a container's logs.
- * Not Rust's key (that arrives with the tail) — this one exists before the tail does, so a
- * double click on Stream can be refused while the first one is in flight.
- */
+/** Not Rust's key (that arrives with the tail): this one exists before the tail does, so a double
+ * click on Stream can be refused while the first is in flight. */
 export function streamId(appKey: string, path: string | null): string {
   return `${appKey}\u0000${path ?? "docker"}`;
 }
 
-/**
- * The grouping rule for `kind: "app"` log lines: a line's `source` is
- * `<name> · <file>` / `<name> · docker`, so it belongs under the DevApp whose `name` it starts
- * with, followed by ` · `. The separator is part of the match, so `web-admin · x.log` is never
- * claimed by an app named `web`; and when two names both match (`api` and `api · v2`, since a
- * name may itself contain the separator) the LONGEST wins. Null = no listed app claims it
- * (the app exited; the stream is then an orphan the Logs view shows on its own).
- */
+/** The app whose `name` + ` · ` prefixes `source` (`<name> · <file>` / `<name> · docker`); the
+ * separator is part of the match and the longest name wins (names may contain it). Null = no
+ * listed app claims it (the app exited; the Logs view shows the stream on its own). */
 export function devAppForSource(source: string, apps: readonly DevApp[]): DevApp | null {
   let best: DevApp | null = null;
   for (const a of apps) {
@@ -68,11 +57,7 @@ export function devAppForSource(source: string, apps: readonly DevApp[]): DevApp
 /** The sidebar group's title — the top group, **Apps**. */
 export const APPS_TITLE = "Apps";
 
-/**
- * The Apps group's sub-sections, one per runtime, in this order (grouped by language or
- * runtime — Rust first; Shell last, it is the least specific). EVERY one
- * is shown, empty or not (every option stays visible).
- */
+/** Rust first, Shell last (least specific); every runtime is shown, empty or not. */
 export const RUNTIME_ORDER: readonly DevRuntime[] = ["rust", "jvm", "node", "python", "go", "docker", "shell"];
 
 /** A sub-section's heading — the runtime AND its toolchain, since the rows carry no badge. */
@@ -91,13 +76,9 @@ export interface RuntimeSection {
   apps: DevApp[];
 }
 
-/**
- * Group the apps by runtime — one entry per {@link RUNTIME_ORDER} runtime, an empty one too. Within a
- * section: the apps with a live log stream first (`isLive`), then the ones the IDE started,
- * then the external ones — and otherwise Rust's order (a stable sort, so Rust's order holds
- * inside each rank). A build that predates `origin` sends none, which ranks as external: that
- * build listed only external apps.
- */
+/** One entry per {@link RUNTIME_ORDER} runtime, empty too. Within: live first, then IDE-started,
+ * then external, else Rust's order (stable sort). No `origin` (an older build) ranks as external:
+ * that build listed only external apps. */
 export function groupByRuntime(apps: readonly DevApp[], isLive: (app: DevApp) => boolean = () => false): RuntimeSection[] {
   const rank = (a: DevApp): number => (isLive(a) ? 0 : a.origin === "ide" ? 1 : 2);
   return RUNTIME_ORDER.map((runtime) => ({
@@ -106,10 +87,8 @@ export function groupByRuntime(apps: readonly DevApp[], isLive: (app: DevApp) =>
   }));
 }
 
-/**
- * The row's small tag: `by claude · gazelle` for an app the IDE started (who started it — the
- * agent's or terminal's title), `by the IDE` when Rust could not name it, `external` otherwise.
- */
+/** `by claude · gazelle` for an IDE-started app (the agent's or terminal's title), `by the IDE`
+ * when Rust could not name it, `external` otherwise. */
 export function originTag(app: Pick<DevApp, "origin" | "launchedBy">, sidebarLabel: string | null = null): string {
   if (app.origin !== "ide") return "external";
   // The Logs sidebar's own name for that agent/terminal wins (`bash · workspace`), so the tag and
@@ -117,12 +96,8 @@ export function originTag(app: Pick<DevApp, "origin" | "launchedBy">, sidebarLab
   return `by ${sidebarLabel ?? app.launchedBy ?? "the IDE"}`;
 }
 
-/**
- * The name Network's Process picker knows the app by: netcap's `client_name` — the executable's
- * basename without a Windows `.exe` (`/work/gazelle/target/debug/gazelle` → `gazelle`). Falls
- * back to argv[0]'s basename when Rust could not read the exe; null when it has neither (a
- * container), so the card does not offer a link to nothing.
- */
+/** Netcap's `client_name`: the exe basename without `.exe`, else argv[0]'s basename; null when
+ * neither exists (a container), so the card offers no link to nothing. */
 export function processNameOf(app: Pick<DevApp, "exe" | "argv">): string | null {
   const path = app.exe ?? app.argv[0] ?? null;
   if (path === null || path === "") return null;

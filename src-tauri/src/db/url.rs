@@ -1,78 +1,6 @@
-//! Connection strings: **build** (form → string), **parse** (string → form), and the
-//! credential split that runs on both.
-//!
-//! The dialog can create a connection string and do its reverse: a `URL`
-//! field annotated *"Overrides settings above"*. This module is both directions plus the safety
-//! property that makes them shippable.
-//!
-//! # The safety property, first, because it is why this file is server-side
-//!
-//! **`postgres://user:s3cret@host:5432/db` is how people paste a connection string.** Storing
-//! that verbatim would silently defeat every other secret rule in the feature. So the
-//! credential split is **server-authoritative** (never trust the client to have sanitised
-//! something that matters) and it runs on *both* directions:
-//!
-//! * [`build`] can only ever emit `""` or a `{{VAR}}` reference in the password position. It
-//!   **refuses** a literal `password_ref`, because the primary button next to the string it
-//!   produces is *Copy connection string* and the clipboard is readable by every other app on
-//!   the machine.
-//! * [`parse`] strips a real password out of the string it returns and never returns the
-//!   value. [`split_url_credentials`] is the same walk, but it *hands the value back* so
-//!   `db_connection_upsert` can put it in the Vault and leave `{{VAR}}` in the record.
-//!
-//! A credential in the **query string** (`?password=…`, which libpq, sqlx and ClickHouse all
-//! honour) is treated exactly like one in the userinfo: it lands in the same [`PasswordSlot`],
-//! and [`UrlParts::password_param`] remembers *which* parameter carried it so a re-render puts
-//! the `{{VAR}}` back under the same name. The parameters that count as credentials are an
-//! explicit denylist ([`is_credential_param`]); a vendor parameter we have never seen that
-//! happens to carry a secret is still stored as typed, which is recorded below as a known
-//! limitation rather than papered over.
-//!
-//! # Why this does not use the `url` crate
-//!
-//! The obvious plan is to delegate the structure to `url` 1.x (`set_username`, `set_host`,
-//! `form_urlencoded`) so that percent-encoding is never hand-written. **The escaping still
-//! is delegated** — every component goes through `percent-encoding`'s RFC 3986 sets — but the
-//! *structure* cannot be, and the reason is not a preference:
-//!
-//! * WHATWG "special" schemes are exactly `http`, `https`, `ws`, `wss`, `ftp` and `file`.
-//!   `postgresql://`, `mysql://`, `mongodb://`, `redis://` and `clickhouse://` are **none of
-//!   them**, so `url` gives them an **opaque host** — which it percent-encodes and does not
-//!   lowercase. A non-ASCII host would come back rewritten as `%C3%BC…`, which is neither what
-//!   the user typed nor what a resolver wants, and it would break the round-trip property
-//!   outright.
-//! * `Url` cannot represent a MongoDB seed list (`mongodb://a:27017,b:27017/db`) at all —
-//!   the plan already carved that out, and the carve-out generalises: once the authority is ours
-//!   for one family it may as well be ours for all of them, rather than two code paths that
-//!   disagree in the corners.
-//! * `form_urlencoded` emits `+` for a space. In a connection string handed to another tool
-//!   that is a value-changing difference, so the query is encoded with `%20`.
-//!
-//! What that costs is ~120 lines of splitting. What it buys is a **total** round-trip: the
-//! property test below drives `parse(build(c)) == c` over every engine crossed with a hostile
-//! alphabet, which is only meaningful if nothing in the pipeline silently normalises.
-//!
-//! # Known, deliberate limitations (stated, not discovered later)
-//!
-//! * **No IDNA.** A unicode host is preserved **verbatim** rather than punycoded. Converting
-//!   it would mean a security-relevant transformation this module cannot test against a real
-//!   IDN server; preserving it keeps the round trip honest and the user in control. An IDN
-//!   host must be entered in its `xn--` form.
-//! * **No MongoDB seed lists yet** — a named error rather than a half-parse.
-//! * **Aurora is not detectable from a scheme.** `aurora-postgres` and `postgres` both write
-//!   `postgresql://`, so [`parse`] reports the *base* engine of the family. That is
-//!   information the string genuinely does not carry, and guessing would be worse.
-//! * **One credential per connection string.** A string that carries a password in two places
-//!   at once — two denylisted parameters, or a parameter *and* the userinfo — is **refused**,
-//!   naming every position. A connection has one password field and one Vault reference, so
-//!   there is no honest way to keep both; keeping one and dropping the other silently is the
-//!   outcome this refusal exists to avoid. See [`parse_parts`].
-//! * **A credential parameter is preserved under its own name, never normalised.** Whether the
-//!   spelling is one the *driver* honours is the string's own property: sqlx and libpq both act
-//!   on `password` and ignore `passwd`/`PASSWORD`, so a paste that would not have authenticated
-//!   before a save still does not after one. Renaming it to `password` to "fix" that would
-//!   change what the string means, which is strictly worse than preserving a parameter nothing
-//!   reads.
+//! Connection strings: build, parse, and the server-side credential split both share (userinfo
+//! or a denylisted query parameter, kept under its own name). Structure is hand-rolled: `url`
+//! mangles non-special-scheme hosts. No IDNA; one credential per string; Aurora reads as its base.
 
 use std::collections::BTreeMap;
 
@@ -83,12 +11,8 @@ use crate::db::error::DbError;
 use crate::db::model::{DbConnectionInput, DbEngineId, DbFamily, ParsedUrl, SslMode};
 use crate::db::secret;
 
-/// RFC 3986 *unreserved* only: `ALPHA DIGIT - . _ ~`. Everything else is percent-encoded.
-///
-/// Stricter than the userinfo production strictly requires (which also permits sub-delims and
-/// `:`), and that strictness is the point: encoding `:` means the user/password split at the
-/// first colon is unambiguous for **any** user and **any** password, which is what makes the
-/// hostile-password round trip total instead of nearly total.
+/// RFC 3986 unreserved only; encoding `:` too makes the user/password split unambiguous for any
+/// value, so the hostile round trip is total.
 const USERINFO: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
@@ -99,10 +23,8 @@ const USERINFO: &AsciiSet = &NON_ALPHANUMERIC
 /// `a?b` survives.
 const PATH_SEGMENT: &AsciiSet = USERINFO;
 
-/// Query keys and values. Unreserved plus `,`, which is unambiguous here and extremely common
-/// in database settings (`search_path=public,extensions`) — encoding it to `%2C` would make
-/// every such string unreadable for no correctness gain. Notably `+` **is** encoded, because
-/// a reader that treats the query as form-urlencoded would otherwise turn it into a space.
+/// Query keys and values: unreserved plus `,` (common, e.g. `search_path=a,b`); `+` is encoded so
+/// form-urlencoded readers do not read a space.
 const QUERY: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
@@ -110,10 +32,8 @@ const QUERY: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'~')
     .remove(b',');
 
-/// Percent-encode for the userinfo position. `pub` because [`secret::redact`] needs it: a
-/// driver that echoes a DSN has already encoded the password, so the raw bytes may simply not
-/// appear in the message and matching only the raw form is how a redaction check passes while
-/// the secret ships.
+/// Percent-encode for userinfo. `pub` for [`secret::redact`]: a driver echoing a DSN has already
+/// encoded the password.
 pub fn encode_userinfo(s: &str) -> String {
     utf8_percent_encode(s, USERINFO).to_string()
 }
@@ -142,15 +62,8 @@ fn decode(s: &str, what: &str) -> Result<String, DbError> {
 
 /* ────────────────────────── the credential denylist ────────────────────────── */
 
-/// Query-parameter names that carry a credential, and whose **value** therefore goes to the
-/// Vault instead of into the stored string.
-///
-/// Matched **exactly** (after lowercasing), which is why `authSource` — a real MongoDB
-/// setting — is not caught by the `auth` entry. Exactness is load-bearing: a substring match
-/// here would strip `authSource` and break every Atlas connection string.
-///
-/// This list is the residual hole in the credential split, stated as a limitation: a vendor parameter we have
-/// never seen that happens to carry a secret is stored as typed.
+/// Query-parameter names whose value is a credential (sent to the Vault). Exact match after
+/// lowercasing, so `authSource` survives; an unknown vendor secret parameter is stored as typed.
 pub fn is_credential_param(lower_key: &str) -> bool {
     matches!(
         lower_key,
@@ -172,21 +85,16 @@ pub fn is_credential_param(lower_key: &str) -> bool {
     )
 }
 
-/// The query-parameter names a family's connection string uses to carry the **SSL mode**.
-///
-/// Used by [`engines::validate`] to refuse an `options` key that would let the query string
-/// silently contradict the SSL control — the "form says `prefer`, connection uses
-/// `verify-full`" divergence the contract calls the most important of its corrections.
+/// The query parameters carrying a family's SSL mode, refused as `options` keys by
+/// [`engines::validate`] so the string cannot contradict the SSL control.
 pub fn family_ssl_param_names(family: DbFamily) -> &'static [&'static str] {
     match family {
         DbFamily::Postgres => &["sslmode"],
         DbFamily::Mysql => &["ssl-mode", "sslmode"],
         DbFamily::Clickhouse => &["sslmode", "secure"],
         DbFamily::Redis => &["sslmode"],
-        // 🔴 DynamoDB has NO connection string, so there is no query string
-        // for an SSL parameter to hide in and nothing to refuse. Its transport is HTTPS by
-        // construction; the `sslMode` control exists only so DynamoDB Local over loopback can be
-        // reached with plain HTTP.
+        // DynamoDB has no connection string; `sslMode` exists only so DynamoDB Local can use plain
+        // HTTP.
         DbFamily::Dynamodb => &[],
         DbFamily::Mongodb => &[
             "tls",
@@ -225,13 +133,8 @@ pub struct UrlParts {
     /// The one credential this string carries, wherever it carried it. [`Self::password_param`]
     /// says where.
     pub password: PasswordSlot,
-    /// The **query parameter** that carried the password (`?password=…`), when the string put it
-    /// there instead of in the userinfo. `None` — the ordinary case — means the userinfo.
-    ///
-    /// The name is kept verbatim, because it is part of what the string *means*: MySQL's
-    /// `?pass=` is not ClickHouse's `?password=`, and moving a secret from one parameter to
-    /// another would hand the server a setting the user never wrote. It is also why
-    /// [`render_with`] can put a freshly minted `{{VAR}}` back exactly where the value was.
+    /// The query parameter that carried the password (`None` = userinfo), kept verbatim (`?pass=`
+    /// is not `?password=`) so [`render_with`] puts the `{{VAR}}` back in place.
     pub password_param: Option<String>,
     pub ssl_mode: Option<SslMode>,
     /// Whether the *scheme* implied TLS (`rediss`, `https`). Kept so a render reproduces the
@@ -242,20 +145,9 @@ pub struct UrlParts {
 
 /* ──────────────────────────────────── build ──────────────────────────────────── */
 
-/// Render a draft into its engine's canonical connection string.
-///
-/// The output is explicit about everything the record actually says — scheme, path and SSL
-/// parameter are present whether or not they match a default, because this string's job is to be
-/// pasted somewhere else and an elided default is a value the reader has to know to reconstruct.
-///
-/// **The port is the one exception, and it is not an inconsistency.** `DbConnection::port` is
-/// `Option<u16>`, so "no port" is a state the record can be *in*, not a default we are choosing to
-/// elide: writing `:5432` for a connection whose port field is empty would put a number in the
-/// string that the user never typed, and for an
-/// `mongodb+srv://` string a port is invalid outright. An absent port renders as no `:port` at all.
-///
-/// Refuses a literal `password_ref`: see the module doc. The result is safe to put on a
-/// clipboard, in a ticket, or in a screenshot.
+/// Render a draft into its engine's canonical string, explicit about every default except the
+/// port (absent renders as none; SRV forbids one). Refuses a literal `password_ref`, so the output
+/// is safe to copy.
 pub fn build(input: &DbConnectionInput) -> Result<String, DbError> {
     let spec = engines::require_spec(input.engine)?;
     let parts = parts_from_input(spec, input)?;
@@ -272,10 +164,7 @@ fn parts_from_input(spec: &EngineSpec, input: &DbConnectionInput) -> Result<UrlP
             "Port must be a whole number from 1 to 65535.",
         ));
     }
-    // The pair is refused here as well as in `engines::validate`, because `db_url_build` reaches
-    // this function *without* going through the validator, and the string it produces is the one
-    // behind *Copy connection string*. An SRV URI with a port is not a string any Mongo driver
-    // will accept, so emitting one would hand the user a broken paste.
+    // Also refused here: `db_url_build` skips the validator, and its output is what gets copied.
     reject_port_with_srv(input.srv, input.port)?;
     if !spec.ssl_modes.contains(&input.ssl_mode) {
         return Err(DbError::invalid_config(format!(
@@ -325,17 +214,8 @@ fn parts_from_input(spec: &EngineSpec, input: &DbConnectionInput) -> Result<UrlP
     })
 }
 
-/// **A port and `srv` are mutually exclusive, and the pair is refused rather than resolved.**
-///
-/// `mongodb+srv://` takes the host *and the port* from a DNS SRV record, so a port in the URI is
-/// not redundant — it is invalid, and the driver says so
-/// (`a port cannot be specified with 'mongodb+srv'`). We could silently drop one of the two, and
-/// that is exactly what must not happen: which one to drop is the user's decision, and a record
-/// that quietly loses the port it was given is how a connection ended up with
-/// `mongodb://…:27017/` for a host nobody typed a port for.
-///
-/// One function, called from [`parts_from_input`], [`render_with`] and
-/// [`crate::db::engines::validate`], so the three cannot disagree about what the pair means.
+/// A port and `srv` are mutually exclusive (SRV takes both from DNS), refused rather than dropping
+/// one. Shared by [`parts_from_input`], [`render_with`] and [`crate::db::engines::validate`].
 pub fn reject_port_with_srv(srv: bool, port: Option<u16>) -> Result<(), DbError> {
     match (srv, port) {
         (true, Some(port)) => Err(DbError::invalid_config(format!(
@@ -347,20 +227,8 @@ pub fn reject_port_with_srv(srv: bool, port: Option<u16>) -> Result<(), DbError>
     }
 }
 
-/// Refuse `srv` together with `sslMode: disable`.
-///
-/// 🔴 **Because otherwise the SSL control silently does nothing.** The MongoDB driver turns TLS
-/// **on** for any `mongodb+srv://` connection — measured in `mongodb-3.8.0/src/client/options.rs`
-/// — so a user who picks SRV *and* "disable" gets an encrypted, certificate-verifying connection
-/// regardless of what the dropdown says. Two honest options existed: silently override the
-/// dropdown, or refuse the pair. Refusing wins, for the same reason
-/// [`reject_port_with_srv`] refuses rather than dropping a port: a control that reports one thing
-/// and does another is worse than a control that says no, and this app has already been caught
-/// once today shipping a setting that could not do what it claimed.
-///
-/// `require` is deliberately still allowed even though SRV upgrades it to full verification —
-/// that direction is *stricter* than asked, which is the safe way to be wrong, and refusing it
-/// would block the ordinary Atlas connection this whole fix exists to enable.
+/// Refuse `srv` with `sslMode: disable`: the driver forces TLS for SRV, so the control would lie.
+/// `require` stays allowed; SRV only makes it stricter.
 pub fn reject_disabled_tls_with_srv(srv: bool, ssl_mode: SslMode) -> Result<(), DbError> {
     if srv && matches!(ssl_mode, SslMode::Disable) {
         return Err(DbError::invalid_config(
@@ -372,12 +240,8 @@ pub fn reject_disabled_tls_with_srv(srv: bool, ssl_mode: SslMode) -> Result<(), 
     Ok(())
 }
 
-/// Trim, drop IPv6 brackets (they are re-added on render), lowercase ASCII, and refuse the
-/// characters that would silently change what the string means.
-///
-/// Lowercasing is ASCII-only on purpose: `HOST.Example.COM` → `host.example.com` is safe and
-/// expected, while lowercasing non-ASCII would be a locale-dependent transformation of a host
-/// we have already decided not to touch (see the module doc on IDNA).
+/// Trim, drop IPv6 brackets (re-added on render), ASCII-lowercase (non-ASCII untouched: no IDNA),
+/// and refuse characters that would change what the string means.
 fn normalise_host(raw: &str) -> Result<String, DbError> {
     let mut host = raw.trim();
     if host.starts_with('[') && host.ends_with(']') && host.len() > 2 {
@@ -397,10 +261,8 @@ fn normalise_host(raw: &str) -> Result<String, DbError> {
     Ok(host.to_ascii_lowercase())
 }
 
-/// The scheme a rendered string uses. Derived from the **family** rather than read out of
-/// `EngineSpec::url_schemes`, because for the Redis family it depends on the TLS mode; a
-/// routing test asserts every scheme this can return is listed in the corresponding
-/// descriptor, so the two cannot drift.
+/// The scheme a rendered string uses, from the family since Redis's depends on the TLS mode; a
+/// routing test keeps it within `EngineSpec::url_schemes`.
 fn scheme_for(
     family: DbFamily,
     srv: bool,
@@ -411,10 +273,8 @@ fn scheme_for(
         DbFamily::Postgres => "postgresql",
         DbFamily::Mysql => "mysql",
         DbFamily::Clickhouse => "clickhouse",
-        // There is no `dynamodb://` URI anywhere in the world, and inventing one would produce a
-        // string that looks pasteable and works in nothing. `EngineSpec.url_schemes` is empty for
-        // this engine and `DbConnection.url` stays `null`, so no caller reaches this arm — the
-        // empty string is what makes that a visibly wrong value if one ever does.
+        // No `dynamodb://` exists and no caller reaches this; the empty string makes a stray call
+        // visible.
         DbFamily::Dynamodb => "",
         DbFamily::Mongodb => {
             if srv {
@@ -443,20 +303,13 @@ pub fn render(parts: &UrlParts) -> Result<String, DbError> {
     render_with(parts, &parts.password)
 }
 
-/// Render `parts`, substituting `password` for whatever slot it carries. This is how the same
-/// walk produces the display string (password removed), the stored string (`{{VAR}}`), and the
-/// canonical build output.
-///
-/// `password` goes wherever [`UrlParts::password_param`] says it belongs — the userinfo, or that
-/// named query parameter. One walk for both positions, so the two cannot drift.
+/// Render `parts` with `password` in the slot [`UrlParts::password_param`] names (userinfo or that
+/// parameter); one walk for the display, stored and canonical strings.
 pub fn render_with(parts: &UrlParts, password: &PasswordSlot) -> Result<String, DbError> {
     if parts.host.is_empty() {
         return Err(DbError::invalid_config("Host is required."));
     }
-    // Structural, so **no** caller can render an SRV URI with a port in it — not `build`, not the
-    // display re-render inside `parse`, not a hand-built `UrlParts`. Every other guard against
-    // this pair is upstream of a particular entry point; this one is at the only place a string
-    // is actually produced.
+    // The one place a string is produced, so no caller can render an SRV URI with a port.
     reject_port_with_srv(parts.srv, parts.port)?;
     let scheme = scheme_for(parts.family, parts.srv, parts.ssl_mode, parts.scheme_tls);
     let mut out = format!("{scheme}://");
@@ -475,10 +328,7 @@ pub fn render_with(parts: &UrlParts, password: &PasswordSlot) -> Result<String, 
     };
     match userinfo_password {
         PasswordSlot::None => {}
-        // A `{{VAR}}` is written **verbatim**. `{`/`}` are not RFC 3986 characters, so
-        // encoding them would be more correct and completely unreadable; this string's first
-        // job is to show a human that their password is not in it ("visible rather than
-        // magic"), and `%7B%7BPG_PASSWORD%7D%7D` does not do that. Parsing decodes either form.
+        // `{{VAR}}` is written verbatim so it stays readable; parsing decodes either form.
         PasswordSlot::Ref(r) => {
             out.push(':');
             out.push_str(r);
@@ -555,12 +405,8 @@ pub fn render_with(parts: &UrlParts, password: &PasswordSlot) -> Result<String, 
     Ok(out)
 }
 
-/// The query parameters that carry `mode` for `family`.
-///
-/// Each family's spelling is the one **its own tooling** uses, so the produced string works
-/// when pasted into `psql`, the MySQL client or a Mongo driver — that is the whole point of
-/// the button next to it. ClickHouse has no standard, so it borrows libpq's names (and
-/// [`take_ssl_mode`] still accepts the JDBC-world `secure=true`).
+/// The SSL-mode query parameters for `family`, spelled as its own tooling expects; ClickHouse
+/// borrows libpq's (and [`take_ssl_mode`] also accepts `secure=true`).
 fn ssl_params(family: DbFamily, mode: SslMode) -> Result<Vec<(String, String)>, DbError> {
     let pair = |k: &str, v: &str| (k.to_string(), v.to_string());
     Ok(match family {
@@ -614,11 +460,8 @@ fn mysql_ssl_name(mode: SslMode) -> &'static str {
 
 /* ──────────────────────────────────── parse ──────────────────────────────────── */
 
-/// Detect the engine, family, scheme-implied TLS and SRV-ness from a scheme.
-///
-/// Returns the **base** engine of a family: `postgresql://` could be `postgres` or
-/// `aurora-postgres` and the string does not say, so the dialog is told the base one and
-/// (through `applyParsedUrl`) asks the user rather than switching their driver silently.
+/// Engine, family, scheme-implied TLS and SRV-ness from a scheme. Returns the family's base engine
+/// (Aurora is indistinguishable); the dialog asks rather than switching drivers.
 fn engine_for_scheme(scheme: &str) -> Option<(DbEngineId, DbFamily, Option<bool>, bool)> {
     Some(match scheme {
         "postgres" | "postgresql" => (DbEngineId::Postgres, DbFamily::Postgres, None, false),
@@ -773,11 +616,8 @@ pub fn parse_parts(text: &str) -> Result<UrlParts, DbError> {
     for key in options.keys().cloned().collect::<Vec<_>>() {
         if is_credential_param(&key.to_ascii_lowercase()) {
             if let Some(value) = options.remove(&key) {
-                // An **empty** credential parameter is not a credential. `?password=` carries no
-                // secret, and libpq reads it as "no password" — exactly as `postgres://u:@h`
-                // does — so it is dropped rather than counted as a place a password lives. If it
-                // were counted, a typed password would silently *move* out of the userinfo and
-                // into it on the next save.
+                // An empty credential parameter is no credential (libpq reads it as no password);
+                // counting it would move a typed password into it on the next save.
                 if !value.is_empty() {
                     query_credentials.push((key, value));
                 }
@@ -840,11 +680,8 @@ pub fn parse_parts(text: &str) -> Result<UrlParts, DbError> {
 
 fn split_host_port(s: &str, family: DbFamily, srv: bool) -> Result<(String, Option<u16>), DbError> {
     let (host, port) = split_host_port_inner(s, family, srv)?;
-    // 🔴 A pasted `mongodb+srv://host:27017/db` is **refused, not repaired**. The driver refuses it
-    // too (`a port cannot be specified with 'mongodb+srv'`), so accepting it here would only move
-    // the failure to connect time — and stripping the port would silently rewrite the string the
-    // user pasted. Its own message rather than [`reject_port_with_srv`]'s, because the actionable
-    // advice for a *string* is to edit the string.
+    // A pasted SRV URI with a port is refused, not repaired (the driver refuses it too); own
+    // message, since the fix is to edit the string.
     if let (true, Some(port)) = (srv, port) {
         return Err(DbError::invalid_config(format!(
             "`mongodb+srv://` must not carry a port, and this one has `:{port}`. SRV discovery \
@@ -1056,14 +893,8 @@ fn take_ssl_mode(
     }
 }
 
-/// Parse a connection string for the dialog.
-///
-/// **The password value is never returned and never written.** A real password is dropped
-/// here — `had_password` says it was there so the UI can explain — while a `{{VAR}}` reference
-/// survives into [`ParsedUrl::url`], because a reference is not a secret.
-///
-/// On `Err` the caller leaves the form **untouched**: a half-filled form after a bad paste is
-/// worse than a refusal, because the user cannot tell which fields are still theirs.
+/// Parse a connection string for the dialog. A real password is dropped (`had_password` says so);
+/// a `{{VAR}}` survives. On `Err` the caller leaves the form untouched.
 pub fn parse(text: &str) -> Result<ParsedUrl, DbError> {
     let parts = parse_parts(text)?;
     // One check for both positions, because by now there is only one slot to look at — which is
@@ -1100,13 +931,8 @@ pub fn parse(text: &str) -> Result<ParsedUrl, DbError> {
 
 /* ─────────────────── what a string SAYS about the credential (the dial path) ─────────────────── */
 
-/// What a connection string says about *who* it connects as — nothing more.
-///
-/// Deliberately **not** secret-bearing: [`Self::has_password`] is a `bool`, never the value. The
-/// engines need to know *whether* the string speaks for the password, not what it says, and a
-/// struct that carried the value would be one more place a `Debug` could leak it. The user
-/// name is carried because it is not a secret and because an auth failure has to be able to name
-/// the account that was actually dialled.
+/// Who a connection string connects as: the user name and whether a password is present, never
+/// the value (one less place a `Debug` could leak it).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UrlCredential {
     /// The user the string names, `None` when its authority carries no userinfo at all.
@@ -1116,25 +942,9 @@ pub struct UrlCredential {
     pub has_password: bool,
 }
 
-/// Read `text`'s credential positions, for the engines that must decide whether a typed password
-/// still applies.
-///
-/// 🔴 **The rule this exists to implement: a URL wins where it *says* something.** A URL override
-/// that carries no password says nothing about the password, so the password typed beside it fills
-/// the gap — the same "fills a gap only" reasoning [`UrlParts::password_param`] already documents.
-/// A URL that *does* carry one keeps its own, because the string in hand is better evidence than a
-/// field next to it. Originally the sqlx engines read this as "a URL suppresses the password
-/// field entirely", so `postgresql://gazelle@localhost:5433/orders` — a string our
-/// own importer had *stripped* the password out of — dialled with no password at all and Postgres
-/// answered `password authentication failed`.
-///
-/// **A string this parser cannot read says nothing**, which is the conservative answer for the
-/// question actually being asked: the fallback only ever *adds* a credential the user typed into
-/// the dialog, and the alternative (assume it carries one) would silently reproduce the bug above
-/// for every string our grammar is narrower than a driver's — `redis+unix://`, a Postgres socket
-/// path, a `mysql://` form sqlx grew after this was written. The engines whose driver exposes its
-/// own parse (`redis-rs`, the MongoDB driver) ask *it* instead and never come here, precisely so
-/// that where a second opinion exists it is the dialling one that wins.
+/// A string's credential positions: a URL wins only where it says something, so a password-less
+/// URL lets the typed password fill the gap. Unparseable → says nothing (only adds a typed
+/// credential). Redis and MongoDB ask their own drivers instead.
 pub fn credential_of(text: &str) -> UrlCredential {
     let Ok(parts) = parse_parts(text) else {
         return UrlCredential::default();
@@ -1169,13 +979,8 @@ pub struct SplitCredentials {
     pub parts: UrlParts,
 }
 
-/// Take every credential out of `text`, **server-side**, before anything is written.
-///
-/// The frontend cannot save a URL with an inline password even by mistake, because this runs
-/// on the save path regardless of what the client did. Handles: no userinfo, a user with no
-/// password, percent-encoded userinfo, an already-`{{VAR}}`'d string, and a denylisted query
-/// parameter (`?password=…`) — which is the same credential in a different place, not a special
-/// case, and comes back out through the same two fields.
+/// Take every credential out of `text` server-side on the save path, whatever the client did:
+/// userinfo (plain or percent-encoded), an existing `{{VAR}}`, or a denylisted query parameter.
 pub fn split_url_credentials(text: &str) -> Result<SplitCredentials, DbError> {
     let parts = parse_parts(text)?;
     let (password, password_ref) = match &parts.password {
@@ -1534,11 +1339,8 @@ mod tests {
 
     #[test]
     fn parse_reports_which_parameter_carried_the_password_so_a_paste_can_be_rebuilt() {
-        // The decision to keep `?password=` in the string was only half-delivered
-        // until this field existed: the dialog rebuilds a pasted URL from fields, so without
-        // the NAME the `{{VAR}}` reappeared in the userinfo — moving the credential to a
-        // different place in the string, which is the one real worry inside the refusal this
-        // replaced. The value is never returned; only where it was.
+        // Without the parameter's name the rebuilt URL would move `{{VAR}}` into the userinfo; only
+        // the name is returned, never the value.
         let q =
             parse("clickhouse://agentstudio@h:8123/maestro?password=s3cret&compress=1").unwrap();
         assert_eq!(q.password_param.as_deref(), Some("password"));
@@ -1739,11 +1541,8 @@ mod tests {
             ("mongodb+srv://a:1,b:2/d", "exactly one host"),
             ("postgresql://a,b:5432/d", "`,` is not valid here"),
         ];
-        // A plain `match`, because the `unwrap_or_else` spelling this used to have could never
-        // pass: `unwrap_or_else` runs its closure on the **Err** arm, so the "unreachable"
-        // placeholder inside it panicked on the first correctly-refused case. Both halves have
-        // to be asserted explicitly — that `Ok` is a failure, and that `Err` says the right
-        // thing — and a closure cannot express the first one.
+        // A plain `match`: both `Ok` (a failure) and the `Err` message must be asserted, and an
+        // `unwrap_or_else` closure runs only on `Err`.
         for (text, want) in cases {
             match parse(text) {
                 Ok(p) => panic!("{text:?} must be refused, but parsed as {p:?}"),
@@ -1773,14 +1572,8 @@ mod tests {
 
     /* ────────── what a string SAYS about the credential (the dial path) ────────── */
 
-    /// 🔴 The single question every engine asks before deciding whether the **typed** password
-    /// still applies. It is one table because the answer must not differ per engine — two answers
-    /// to this question is precisely the bug that shipped, where PostgreSQL, MySQL, Redis and
-    /// MongoDB each dropped a typed password beside a URL while ClickHouse kept it.
-    ///
-    /// The `false` rows are the load-bearing ones: each is a string that carries **no** password, so
-    /// the field beside it must fill the gap. `postgres://u:@h` is the sharpest — libpq reads an
-    /// empty password position as "no password", so it must not count as the string speaking.
+    /// One table so every engine gets the same answer. The `false` rows are load-bearing;
+    /// `postgres://u:@h` has an empty password position, which libpq reads as no password.
     #[test]
     fn credential_of_reports_only_what_the_string_actually_says() {
         let cases: &[(&str, Option<&str>, bool)] = &[
@@ -1820,10 +1613,8 @@ mod tests {
             // ── a string we cannot read says nothing (see the function's doc) ──
             ("not a url at all", None, false),
             ("sqlserver://ro:s3cret@h:1433/d", None, false),
-            // Two credentials at once is a `parse_parts` refusal, so it lands in the same bucket.
-            // Recorded rather than smoothed over: this is the one row where "says nothing" is not
-            // literally true, and the consequence is only that a typed password wins a string the
-            // save path would have refused outright.
+            // Two credentials is a `parse_parts` refusal, so it also says nothing here; a typed
+            // password then wins a string the save path would refuse.
             ("postgresql://ro:a@h:5432/d?password=b", None, false),
         ];
         for (text, user, has_password) in cases {
@@ -1950,17 +1741,10 @@ mod tests {
         }
     }
 
-    /// The values here are distinctive strings (`pw-alpha`, …) and not the single letters this
-    /// test used to use. A one-character "secret" is contained in almost any URL — `c` is in
-    /// `clickhouse` — so the containment assertion below failed for a reason that had nothing to
-    /// do with the code under test. A fixture value that can match by accident makes a
-    /// leak-detection assertion worthless in both directions.
+    /// Values are distinctive (`pw-alpha`): a one-letter secret matches almost any URL by accident.
     #[test]
     fn split_url_credentials_takes_a_denylisted_query_parameter_and_keeps_its_name() {
-        // ClickHouse's own `?password=`, the realistic case (kept in the string, because every
-        // database system accepts it). Measured against the fixture:
-        // `psql "postgresql://agentstudio@postgres:5432/maestro?password=agentstudio-test-pw"` connects,
-        // and the wrong value fails authentication — so this is a credential, not a decoration.
+        // ClickHouse's own `?password=`, the realistic case; drivers do authenticate from it.
         let s = split_url_credentials(
             "clickhouse://u@h:8123/d?password=pw-alpha&compress=1&authSource=keepme",
         )
@@ -1984,10 +1768,8 @@ mod tests {
         );
     }
 
-    /// Every denylisted name is honoured, and **its own spelling survives**. Normalising them all
-    /// to `password` would hand the server a setting the user never wrote — for MySQL, a `pass=`
-    /// turned into `password=` is a different parameter, and that is the exact "changing what the
-    /// string means" worry the older refusal was right about.
+    /// Each denylisted name keeps its spelling: rewriting MySQL's `pass=` to `password=` would send
+    /// a different parameter.
     #[test]
     fn a_credential_parameter_keeps_the_name_it_arrived_under() {
         for name in [
@@ -2006,10 +1788,8 @@ mod tests {
             "accesskey",
             "access_key",
             "credentials",
-            // Case is part of the name too. Neither libpq nor sqlx honours `PASSWORD` (both match
-            // their keywords case-sensitively), and preserving a parameter the driver ignores is
-            // strictly better than renaming one it does not: the string keeps meaning what it
-            // meant, and the secret still leaves the file.
+            // Case is part of the name: libpq and sqlx ignore `PASSWORD`, and preserving it beats
+            // renaming; the secret still leaves the file.
             "PASSWORD",
             "Password",
         ] {
@@ -2027,11 +1807,8 @@ mod tests {
         }
     }
 
-    /// **Two credentials in one string are refused, by name.** Decided rather than defaulted: a
-    /// connection has one password field and one Vault reference, so there is nowhere to put a
-    /// second secret. libpq and sqlx both happen to let the query parameter win (they read it
-    /// after the userinfo), but silently keeping one and dropping the other is the worst outcome
-    /// available here — the user would never learn which of their two passwords was thrown away.
+    /// One password field and one Vault reference per connection, so a second secret cannot be
+    /// kept, and dropping one silently would hide which password was lost.
     #[test]
     fn two_credentials_in_one_string_are_refused_naming_every_place() {
         let cases: &[(&str, &[&str])] = &[
@@ -2076,10 +1853,6 @@ mod tests {
         }
     }
 
-    /// An **empty** credential parameter is not a credential: `?password=` carries no secret and
-    /// libpq reads it as "no password", exactly like `postgres://u:@h`. So it is dropped and not
-    /// counted as a position — otherwise a typed password would silently MOVE out of the userinfo
-    /// and into it on the next save.
     #[test]
     fn an_empty_credential_parameter_is_dropped_rather_than_treated_as_a_place() {
         let p = parse_parts("postgresql://u:pw-alpha@h:5432/d?password=&sslmode=require").unwrap();
@@ -2111,13 +1884,7 @@ mod tests {
 
     /* ────────────── the SRV / absent-port pair ───────────────────────────────── */
 
-    /// 🔴 **The Atlas round trip, end to end through the two public functions.**
-    ///
-    /// This is the test the whole change exists for. A saved connection with `srv: true` and **no
-    /// port** must render as `mongodb+srv://host/db` — no `:27017` anywhere — and re-parsing that
-    /// string must give back both facts. Before the fix, `parts_from_input` hardcoded `srv: false`
-    /// and `port: Some(input.port)`, so the same draft rendered `mongodb://…:27017/maestro`: a
-    /// scheme Atlas does not answer *and* a port an SRV URI may not carry.
+    /// `srv: true` with no port must render `mongodb+srv://host/db` and re-parse to both facts.
     #[test]
     fn an_srv_connection_with_no_port_round_trips_as_a_portless_srv_uri() {
         let mut i = input(DbEngineId::Mongodb);
@@ -2190,11 +1957,6 @@ mod tests {
         }
     }
 
-    /// A pasted `mongodb+srv://host:27017/db` is **refused with a message that names the port**,
-    /// not silently stripped. The driver refuses it too — `mongodb-3.8.0`'s
-    /// `ConnectionString::parse` answers *"a port cannot be specified with 'mongodb+srv'"* — so
-    /// accepting it here would only move the failure to connect time, and stripping it would
-    /// rewrite the string the user pasted.
     #[test]
     fn a_pasted_srv_uri_carrying_a_port_is_refused_by_name() {
         let err = match parse("mongodb+srv://cluster0.abcde.mongodb.net:27017/maestro") {
@@ -2274,11 +2036,8 @@ mod tests {
 
     /* ─────────────────── the round-trip property ─────────────────── */
 
-    /// A canonical config: exactly what [`build`] emits and therefore exactly what [`parse`]
-    /// must give back. Deliberately generated as **already canonical** (lowercase host,
-    /// explicit port, sorted options) so the assertion can compare against the generated input
-    /// itself rather than against something re-derived by the code under test — a
-    /// self-referential expectation proves only plumbing.
+    /// Canonical configs (what [`build`] emits: lowercase host, explicit port, sorted options), so
+    /// the assertion compares against the input itself, not a re-derived value.
     fn canonical_inputs() -> Vec<DbConnectionInput> {
         // Hosts: an ordinary name, an IPv4 literal, an IPv6 literal, a long label, and a
         // unicode one (preserved verbatim — see the module doc on IDNA).
@@ -2294,11 +2053,8 @@ mod tests {
         let hostile = crate::db::secret::tests::hostile_secrets();
         let mut out = Vec::new();
         for spec in ENGINES {
-            // 🔴 **DynamoDB is excluded from every round-trip property in this file, deliberately.**
-            // It has no connection string to build or parse, so including it
-            // would mean inventing a `dynamodb://` scheme that works in no tool — and every
-            // property here would then be proving something about a fiction. The skip is a named
-            // predicate rather than an `if` so a reader sees it as a decision.
+            // DynamoDB has no connection string; skipped via a named predicate (see
+            // `has_connection_string`).
             if !has_connection_string(spec.family) {
                 continue;
             }
@@ -2343,10 +2099,8 @@ mod tests {
             let text = build(i).unwrap_or_else(|e| panic!("build failed: {}", e.message));
             let p = parse(&text).unwrap_or_else(|e| panic!("parse of {text:?}: {}", e.message));
 
-            // `engine` is compared against the family's BASE engine, not `i.engine`: Aurora is
-            // wire-compatible with its upstream, so `postgresql://` genuinely does not say
-            // which of the two it is. That is information the string does not carry, and this
-            // is the one field the round trip cannot recover.
+            // Compared against the family's base engine: Aurora is not recoverable from
+            // `postgresql://`.
             assert_eq!(p.family, Some(spec.family), "{text}");
             assert_eq!(
                 p.engine,
@@ -2388,15 +2142,8 @@ mod tests {
         }
     }
 
-    /// The **query-borne** half of the round-trip property (`?password=` stays part of the
-    /// string).
-    ///
-    /// `render → parse → render` must be *total* for a credential that lives in a query
-    /// parameter, over the same hostile alphabet as the userinfo property and over every name on
-    /// the denylist. This is where a naive implementation breaks: `&` and `=` inside a query
-    /// value terminate the parameter, `+` becomes a space to a form-urlencoded reader, and `%`
-    /// makes the decode direction lossy — so the encoding has to be right in **both**
-    /// directions, and struct equality is the only assertion that proves it.
+    /// Query-borne credentials must round-trip totally over the hostile alphabet and every
+    /// denylisted name (`&`, `=`, `+`, `%` break naive encoding), checked by struct equality.
     #[test]
     fn a_query_borne_credential_round_trips_through_render_and_parse_unchanged() {
         let names = [
@@ -2452,11 +2199,8 @@ mod tests {
                          ?sslmode=require&{name}={{{{PG_PROD_PASSWORD}}}}"
                     )
                 );
-                // The explicit leak checks too, in every spelling — but only for secrets long
-                // enough that a match cannot be an accident. `-` is on the hostile alphabet and
-                // is a substring of `api-key`: a fixture value that can match by coincidence
-                // makes a leak assertion worthless in both directions (the same trap the
-                // `pw-alpha` comment above records).
+                // Leak checks only for secrets longer than 2 chars: a short one (`-` in `api-key`)
+                // can match by accident.
                 if secret.len() > 2 {
                     assert!(!stored.contains(&secret), "{stored}");
                     assert!(!stored.contains(&encode_query(&secret)), "{stored}");
@@ -2505,22 +2249,14 @@ mod tests {
         }
     }
 
-    /// 🔴 **DynamoDB has no connection string, and this file's round-trip properties must SKIP it
-    /// rather than be taught to produce one.**
-    ///
-    /// Every property below builds a URL and parses it back. For DynamoDB there is nothing to build
-    /// (`url_schemes` is empty, `DbConnection.url` is always `null`), so
-    /// including it would either fabricate a `dynamodb://` scheme that works in no tool on earth,
-    /// or bend the properties until they prove less about the seven engines that do have strings.
-    /// Named here so the skip is a decision a reader can see, not a gap.
+    /// DynamoDB has no connection string (`url_schemes` empty, `url` always `null`), so the
+    /// round-trip properties skip it instead of inventing a `dynamodb://` scheme.
     fn has_connection_string(family: DbFamily) -> bool {
         family != DbFamily::Dynamodb
     }
 
-    /// **The hostile-password property.** For every password in the alphabet, no output of the
-    /// parse or the split path contains it — not the display URL, not the stored URL, not any
-    /// field. This is the likeliest way the feature could leak a production credential, so it
-    /// is asserted over the corners rather than over one example.
+    /// For every hostile password, nothing parse or split returns contains it (display URL, stored
+    /// URL, any field).
     #[test]
     fn no_hostile_password_ever_survives_into_anything_we_return() {
         for secret in crate::db::secret::tests::hostile_secrets() {

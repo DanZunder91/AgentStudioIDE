@@ -1,34 +1,9 @@
-/* ── Usage limits — the left rail's status strip ─────────────────────────────
-   A distilled version of Claude Code's own "Your usage limits" dialog: one row
-   per window, the label on the left, a colour-coded "N% used" chip on the right,
-   and the reset time revealed on hover/focus. **No progress bars** — the number
-   IS the signal.
+/* Usage strip: one row per window, a colour-coded "N% used" chip, the reset time on hover. Every
+   horizontal box is `min-width: 0` + ellipsis: the rail clips and must never scroll sideways. */
 
-   Lives above the AGENTS list, so everything here is sized to read as chrome,
-   not as a dialog: 10–11px type, 20px rows, one hairline rule at the bottom.
-   Every horizontal box is `min-width: 0` + ellipsis: the rail is ~260px, is
-   user-resizable, and clips (`overflow-x: hidden`) — nothing in here may be able
-   to force a horizontal scrollbar. */
-
-/* ── the tone ramp ──────────────────────────────────────────────────────────
-   The single place the three bands' colours are defined (usageTone() picks the
-   band; CSS picks the paint). Overriding these three pairs re-themes the panel.
-
-   Chosen for a red-green colourblind reader, not just for hue. The app's own
-   trio (--green #3fb950, #d29922, #f85149) is unusable here: measured on the
-   rail (#161b22) its green sits at L* 66.8 and its amber at L* 67.0 — IDENTICAL
-   lightness, so under deuteranopia they collapse into one khaki. These three
-   move lightness monotonically with severity instead:
-
-     tone     hex        L*     contrast on --bg-elev (the chip's fill)
-     ok       #2ea043    58.2   4.80:1   (WCAG AA)
-     warn     #dea82c    72.0   7.51:1
-     danger   #ffb3ab    79.9   9.47:1
-
-   Simulated (Machado 2009, severity 1.0) the ordering survives intact —
-   deuteranopia: L* 52.2 / 73.7 / 80.6; protanopia: 58.2 / 68.4 / 75.9. So the
-   band is readable from lightness alone. The chip's font-weight (500/600/700)
-   and size (10/10.5/11px) ramp with it as a third, non-colour channel. */
+/* ── the tone ramp ── the only place band colours live (usageTone() picks the band). Lightness
+   rises with severity so the bands survive red-green colourblindness; the chip's weight and size
+   ramp too as a non-colour channel. ok is 4.80:1 on --bg-elev (WCAG AA). */
 :root {
   --usage-ok: #2ea043;
   --usage-warn: #dea82c;
@@ -38,17 +13,8 @@
   --usage-danger-border: rgba(255, 179, 171, 0.45);
 }
 
-/* The rail's FOOTER (an earlier build had it
-   at the top, hence the `border-top`: the rule separates the strip from the agent
-   list ABOVE it, not from content below, and there is none below).
-
-   `margin-top: auto` is belt-and-braces. The strip already lands at the bottom
-   because `.fleet-tree`/`.fleet-empty` take the column's slack (`flex: 1 1 auto`
-   in fleet.css), but that makes the footer's position depend on a SIBLING's
-   growth: the day the rail grows a third child that doesn't grow, the strip would
-   quietly float up mid-rail. Declaring it here makes the intent local and
-   independent, and `usageFooter.browser.test.tsx` measures the result in real
-   pixels (jsdom has no layout engine, so it cannot). */
+/* The rail's footer. `margin-top: auto` keeps it at the bottom without relying on a sibling's
+   growth; `usageFooter.browser.test.tsx` measures it in real pixels (jsdom has no layout). */
 .usage {
   margin-top: auto;
   flex: 0 0 auto;
@@ -198,11 +164,8 @@
   border-style: dashed;
 }
 
-/* ── the reset tooltip ──────────────────────────────────────────────────────
-   A styled popover rather than `title=""`: no 1–2s browser delay, and it can be
-   linked to the chip with aria-describedby. `pointer-events: none` keeps it from
-   ever sitting under the cursor and flickering the hover it depends on. It is
-   right-anchored and clamped to the row so it cannot widen the rail. */
+/* ── the reset tooltip ── a popover, not `title=""` (no browser delay; aria-describedby).
+   `pointer-events: none` avoids hover flicker; right-anchored, clamped so the rail can't widen. */
 .usage__tip {
   position: absolute;
   top: calc(100% + 4px);
@@ -222,10 +185,7 @@
   pointer-events: none;
 }
 
-/* ── the two data-free states ───────────────────────────────────────────────
-   Never a zero, never a fake number: either a breathing placeholder or one
-   short, true sentence. Both wrap (no `nowrap`) so a long sentence grows
-   downward, never sideways. */
+/* ── the two data-free states ── never a zero or a fake number; both wrap, growing downward. */
 .usage__placeholder,
 .usage__error {
   margin: 5px 0 1px;

@@ -1,47 +1,11 @@
-//! Reading the current working directory of a live process (terminal cwd tracking).
-//!
-//! The terminal cwd-tracker (supervisor) polls the shell child's cwd so that, as
-//! the user `cd`s around, each repo they land in gets the ad-hoc-detection hook
-//! installed at its git root — so a `claude` typed there is recognised, all
-//! **workspace-scoped** (never `~/.claude`).
-//!
-//! **This module only ever *reads* the OS's view of a process. It writes nothing.**
-//! It is a thin, side-effect-free helper so the poller's logic (change detection +
-//! the routed install) stays testable without a live process.
-//!
-//! Platform strategy:
-//! - **Linux** — `readlink("/proc/<pid>/cwd")`, the canonical answer.
-//! - **macOS** — `proc_pidinfo(PROC_PIDVNODEPATHINFO)`, reading
-//!   `proc_vnodepathinfo.pvi_cdir.vip_path` (the same call `lsof` uses). We go
-//!   through `libc` (already in the tree transitively; declaring it a direct,
-//!   macOS-only dep adds no new build and no new `cargo audit` surface — same
-//!   rationale as `rand`) rather than a new `libproc` crate or a hand-transcribed
-//!   struct: `libc` ships the maintained, correct `proc_vnodepathinfo` layout, so
-//!   there is zero FFI-layout risk.
-//! - **Windows** — the process's PEB: `NtQueryInformationProcess(ProcessBasicInformation)`
-//!   → `PEB.ProcessParameters` → `CurrentDirectory.DosPath`, copied out with
-//!   `ReadProcessMemory` (`PROCESS_QUERY_INFORMATION | PROCESS_VM_READ` — rights a user
-//!   holds on their own processes; no administrator, no prompt). ONE implementation,
-//!   shared with dev-app discovery: [`crate::procscan::winproc::process_cwd`] (the walk is
-//!   pure and tested on every OS in [`crate::procscan::winparse`]; the offsets of the
-//!   non-public fields are proved by live Windows tests). A 32-bit (WOW64) process answers
-//!   `None` — its 64-bit copy of the parameters may be stale, and a stale cwd is worse than
-//!   none. **What it reads is the Win32 process cwd:** `cmd.exe`'s `cd` moves it, but
-//!   Windows PowerShell's `Set-Location` moves only PowerShell's own location — the IDE's
-//!   PowerShell prompt hook syncs `[Environment]::CurrentDirectory` so the two agree.
-//! - **Other OSes** — `None` (best-effort, documented); ad-hoc detection there still works
-//!   via the spawn-cwd install and folder-open. See `on_cwd_changed` in the supervisor.
+//! Reads a live process's cwd for terminal cwd tracking; writes nothing (never `~/.claude`).
+//! Linux `/proc/<pid>/cwd`; macOS `proc_pidinfo(PROC_PIDVNODEPATHINFO)` with `libc`'s layout;
+//! Windows [`crate::procscan::winproc::process_cwd`] (WOW64 → `None`); other OSes `None`.
 
 use std::path::PathBuf;
 
-/// The current working directory of process `pid`, or `None` when it cannot be
-/// determined — a dead/unknown pid, a permission failure, a 32-bit process on Windows, or
-/// a platform where we do not support it. Never panics; never writes anything.
-///
-/// A `None` here is deliberately *not* an error the caller reacts to: the poller
-/// treats it as "no reading this tick" and simply tries again next interval (see
-/// `cwd_moved` in the supervisor), so a transient failure never triggers a redundant
-/// install nor loses the last-known-good cwd.
+/// `pid`'s cwd, or `None` when unreadable (dead pid, permission, WOW64, unsupported OS).
+/// The poller treats `None` as "no reading this tick", not an error, and keeps the last good cwd.
 #[cfg(target_os = "linux")]
 pub fn process_cwd(pid: u32) -> Option<PathBuf> {
     // `/proc/<pid>/cwd` is a symlink to the process's cwd; readlink resolves it.
@@ -54,10 +18,8 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
-    // SAFETY: `proc_pidinfo` fills the caller-provided `proc_vnodepathinfo` buffer
-    // (whose layout `libc` mirrors from the SDK) and returns the number of bytes
-    // written — `size` on success, `<= 0` on failure. We zero-init the buffer, hand
-    // its exact size, and read only within it; nothing is written back to the OS.
+    // SAFETY: `proc_pidinfo` fills the zeroed `libc`-layout buffer of exactly `size` bytes and
+    // returns the bytes written (`size` on success, `<= 0` on failure); we read only within it.
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
     let written = unsafe {
@@ -105,11 +67,8 @@ pub fn process_cwd(_pid: u32) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    /// On a platform we support, our OWN pid resolves to our OWN cwd. We read only
-    /// this test process — never an arbitrary live pid — and compare against
-    /// `current_dir`. Canonicalized on both sides: the OS reports the real,
-    /// symlink-resolved path (macOS `/tmp` → `/private/tmp`), which `current_dir`
-    /// may not.
+    /// Reads only this test's own pid. Both sides canonicalized: the OS reports the resolved
+    /// path (macOS `/tmp` → `/private/tmp`), which `current_dir` may not.
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[test]
     fn own_pid_reports_own_cwd() {

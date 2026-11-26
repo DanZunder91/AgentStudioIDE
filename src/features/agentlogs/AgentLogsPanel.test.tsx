@@ -1,12 +1,6 @@
-/**
- * AgentLogsPanel — rendered for real over the real stores; only the Tauri seam
- * (`@tauri-apps/api/core` + `/event`) and the xterm-owning terminal module are mocked.
- * Events are driven through the captured `listen` handler, exactly as Rust would.
- *
- * The stream has three row shapes: raw rows (`alog-row`), lifecycle dividers
- * (`alog-divider`) and command blocks (`alog-block-head` + `alog-block-out` + `alog-block-more`).
- * `shown()` reads every entry's line id in order; `rows()` reads raw rows only.
- */
+/** AgentLogsPanel over the real stores; only the Tauri seam and terminal module are mocked, and
+ * events go through the captured `listen` handler. `shown()` reads every entry's line id in
+ * order (raw rows, dividers, blocks); `rows()` reads raw rows only. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

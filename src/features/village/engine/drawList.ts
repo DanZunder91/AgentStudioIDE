@@ -1,23 +1,6 @@
-/**
- * Scene → ordered draw instructions. The engine owns ALL depth decisions; the
- * renderer paints the list front to back without thinking.
- *
- * Order: ground tiles (row-major) → the Seats LAN's cables → walls, props and
- * characters z-sorted by their bottom edge (the top-down "2.5D" trick from
- * pixel-agents) → the city's lift shafts, then their riders each in its car
- * (`liftShafts`) → the LAN's packets → context meters → bubbles → labels. z rules:
- *
- *   wall                 (row+1)·16                 sprite is 2 tiles tall, anchored at its tile bottom
- *   prop                 (row+h)·16                 bottom edge of the footprint
- *   pc / coffee / monitor (row+h)·16 + 0.5          in front of the desk they stand on
- *   laptop               table bottom + 0.5         in front of the 3-row team table it stands on
- *                                                   (a down-facing one is on the table's TOP row)
- *   chair facing up      (row+h)·16 + 1             its back hides the seated sitter's legs
- *   character            feet y + 0.5               (seated: minus SIT_OFFSET, i.e. its chair tile)
- *
- * Ties keep insertion order (walls, then props, then characters), so the sort is
- * fully deterministic.
- */
+/** Scene → ordered draw list: the engine owns ALL depth decisions, the renderer just paints.
+ * Walls, props and characters z-sort by bottom edge (pixel-agents' 2.5D), with small offsets;
+ * ties keep insertion order, so the sort is deterministic. */
 
 import {
   SEAT_LIFT,
@@ -72,12 +55,8 @@ export function wallMask(world: World, col: number, row: number): number {
 /** Cosy house hues (degrees), spread so neighbours read apart: butter, coral, sage, sky, lavender, teal. */
 export const HOUSE_HUES = [42, 12, 95, 205, 275, 165] as const;
 
-/**
- * Room floors as `pattern + 9·tint` (the variant encoding `drawTile` decodes — pixel-agents
- * floor_N × render/tiles.ts FLOOR_TINTS): warm planks, dark planks, warm tiles, cool small
- * tiles, dark tiles, warm small tiles. ONE per room, so a floor reads as a floor and not a
- * patchwork of per-tile patterns.
- */
+/** Room floors as `pattern + 9·tint` (the encoding `drawTile` decodes). ONE per room, so a floor
+ * reads as a floor, not a patchwork. */
 export const HOUSE_FLOORS = [6, 6 + 9, 2, 3 + 18, 2 + 9, 4] as const;
 
 /** The door tile: plain dark wood, a threshold that reads against any room floor. */
@@ -90,11 +69,8 @@ export interface HouseStyle {
   floor: number;
 }
 
-/**
- * Each house's look, derived from its key (so it is the same on every frame and every
- * reload), with linear probing so neighbours differ: while an unused hue / floor is
- * left, no two houses share one.
- */
+/** Each house's look from its key (stable across frames and reloads), linear-probed so no two
+ * houses share a hue or floor while an unused one is left. */
 export function houseStyles(keys: readonly string[]): Map<string, HouseStyle> {
   /** The option at `seed`, or the next one not taken yet (all taken → a fresh round). */
   const pick = <T>(options: readonly T[], seed: number, used: Set<T>): T => {
@@ -114,11 +90,8 @@ export function houseStyles(keys: readonly string[]): Map<string, HouseStyle> {
   return out;
 }
 
-/**
- * Label placement ranks (lower = placed first; see labels.ts `placeLabels`): the hovered
- * character is always labelled, then whoever is waiting on the user, then root agents,
- * then sub-agents — so in a crowd the labels that matter survive.
- */
+/** Label placement ranks (lower first; labels.ts `placeLabels`), so in a crowd the labels that
+ * matter survive. */
 export const LABEL_RANK = { hovered: 0, waiting: 1, root: 2, sub: 3 } as const;
 
 export function labelRank(c: CharacterView, hovered: string | null): number {
@@ -142,11 +115,8 @@ interface StaticItems {
   lounge: { z: number; item: DrawItem } | null;
 }
 
-/**
- * A walled footprint whose walls and floors share one look: a house, walls included (the
- * village), or a whole building of floors (the city). Its bottom row is the street-facing
- * front wall, with the door in it.
- */
+/** A walled footprint sharing one look: a house (village) or a building of floors (city); its
+ * bottom row is the street-facing front wall, with the door. */
 interface Shell {
   key: string;
   col0: number;
@@ -158,11 +128,8 @@ interface Shell {
   style?: HouseStyle;
 }
 
-/**
- * The city's lounge: its own look — station walls of a hue no building
- * wears (not in `HOUSE_HUES`) round a hall of cream subway tiles (pattern 5, warm tint: not in
- * `HOUSE_FLOORS`), so the waiting room under the street never reads as one more floor of a building.
- */
+/** The lounge's own look: a hue no building wears, cream subway tiles not in `HOUSE_FLOORS`, so it
+ * never reads as one more floor. */
 export const LOUNGE_STYLE: HouseStyle = { hue: 188, floor: 5 };
 
 /** The city's lounge and its house, or null (a village, or a city built without capacity). */
@@ -207,11 +174,8 @@ function shellsOf(world: World): Shell[] {
   }));
 }
 
-/**
- * Ground tiles and walls never change for a given World (it is immutable — a new house
- * plan builds a new one), so they are built once per World instead of ~3,000 fresh
- * objects every animation frame. Weak, so a replaced World is collected with its items.
- */
+/** Ground tiles and walls are fixed per (immutable) World, so they are built once per World, not
+ * ~3,000 objects a frame. Weak, so a replaced World is collected with its items. */
 const STATIC = new WeakMap<World, StaticItems>();
 
 function staticItems(world: World): StaticItems {
@@ -265,29 +229,18 @@ function staticItems(world: World): StaticItems {
 
 // ───────────────────────────── neon signs ─────────────────────────────
 
-/**
- * World px from a building's roof line down to the top of its neon sign: one tile (the top floor's
- * slab and the top of its back wall), plus 2. Below the roof, so the building's name —
- * centred `SIGN_ABOVE` over it — is never under the sign (and labels are painted last anyway).
- */
+/** World px from a building's roof line down to its neon sign's top: one tile plus 2, so the name
+ * centred `SIGN_ABOVE` over it is never under the sign. */
 export const NEON_DROP = TILE + 2;
 
-/**
- * Where a project building's neon sign hangs (`DrawItem` "neon"): the outer face of its RIGHT wall,
- * `NEON_DROP` below its roof. The right side, because the street door (and the lift up its column)
- * is on the left, and the gap after a building opens with a lamp whose art stops at the front
- * wall's top — so a sign high on the wall reaches out over open sky. From the rect alone: a taller
- * building (more floors, more desk rows) keeps its sign at the top.
- */
+/** A project building's neon sign: the outer face of its RIGHT wall (door and lift are on the
+ * left), `NEON_DROP` below its roof, reaching out over the gap's open sky. */
 export function neonAnchor(b: CityBuilding): { x: number; y: number } {
   return { x: (b.col + b.w) * TILE, y: b.row * TILE + NEON_DROP };
 }
 
-/**
- * The neon signs of a city World: one per PROJECT building with a known language (never the HQ),
- * z-keyed at its front wall's depth — so, inserted after the walls, each is painted over its whole
- * wall (a tie keeps insertion order) and under everything on the street. Built once per World.
- */
+/** One neon sign per PROJECT building with a known language (never the HQ), z-keyed at its front
+ * wall's depth: painted over its wall, under the street. Built once per World. */
 const NEON = new WeakMap<World, { z: number; item: NeonItem }[]>();
 
 /** A neon sign's draw item. */
@@ -307,17 +260,9 @@ export function neonSigns(world: World): readonly { z: number; item: NeonItem }[
 
 // ───────────────────────────── the lifts ─────────────────────────────
 
-/**
- * The lift shafts of a city World (`DrawItem` "shaft", render/lift.ts), built once per World: every
- * project building's lift (a building with a team has one) and the lounge's. TILE rows:
- *   - a building's runs from the row above its top stop (a car there is two tiles tall) down to the
- *     row above its door — the door row itself is the street door, and the near sidewalk's walkers'
- *     heads pass in front of it — with a landing door at every stop but the street door;
- *   - the lounge's runs from the soil under the far sidewalk (its kiosk stands ON the sidewalk) down
- *     to its last aisle, with a landing door at every aisle.
- * The draw list puts them after the scene, so a shaft runs OVER the back walls and slabs it crosses,
- * and before the riders, so a car is never behind its own shaft.
- */
+/** Lift shafts per city World (render/lift.ts), built once: each project building's (row above its
+ * top stop to the row above its door) and the lounge's (soil under the far sidewalk to its last
+ * aisle). Drawn after the scene (over walls it crosses) and before the riders. */
 export type ShaftItem = Extract<DrawItem, { t: "shaft" }>;
 
 const SHAFTS = new WeakMap<World, ShaftItem[]>();
@@ -343,10 +288,8 @@ export interface CapacityDraw {
   frame: CapacityFrame;
   /** The seat an agent holds in the sim (`VillageSim.seatFor`) — its context bar sits on that desk. */
   seatOf: (key: string) => Seat | null;
-  /**
-   * The city's lounge: the benches (by seat number) a sim character is on, leaving from, away
-   * from or heading back to (`VillageSim.loungeClaims`) — no anonymous waiter sits there. Absent = none.
-   */
+  /** Lounge benches a sim character is on, leaving, away from or heading back to
+   * (`VillageSim.loungeClaims`): no waiter sits there. Absent = none. */
   claims?: ReadonlySet<number>;
 }
 
@@ -355,10 +298,8 @@ export const RACK_UNITS = 8;
 /** A context bar's width, world px (it fits one desk tile). */
 export const METER_W = 14;
 
-/**
- * Rack `index`'s reading for these memory shares: units fill rack by rack, the agents' first (a
- * non-zero share lights at least one unit), then everything else in use; the rest stay dark.
- */
+/** Rack `index`'s reading: units fill rack by rack, the agents' first (a non-zero share lights at
+ * least one), then the rest in use; the remainder stays dark. */
 export function rackReading(memory: CapacityFrame["memory"] | null, index: number): PropReading {
   const total = RACKS * RACK_UNITS;
   if (!memory || (memory.agents === null && memory.used === null)) return { kind: "rack", agents: 0, other: 0, known: false };
@@ -369,10 +310,8 @@ export function rackReading(memory: CapacityFrame["memory"] | null, index: numbe
   return { kind: "rack", agents: a, other: inRack(lit) - a, known: true };
 }
 
-/**
- * A capacity prop's reading: the Village's Seats hall (the selected agent's context window), a rack,
- * a gauge, or a lounge bench's waiter (`claims` and `time` are the bench's).
- */
+/** A capacity prop's reading: the Seats hall, a rack, a gauge, or a lounge bench's waiter
+ * (`claims` and `time` are the bench's). */
 function capacityReading(prop: Prop, frame: CapacityFrame | null, claims: ReadonlySet<number> | undefined, time: number): PropReading | undefined {
   const i = prop.index as number;
   if (prop.kind === "hall") return { kind: "hall", hall: frame?.hall ?? null };
@@ -384,11 +323,8 @@ function capacityReading(prop: Prop, frame: CapacityFrame | null, claims: Readon
 
 // ───────────────────────────── the city's lounge: its waiters ─────────────────────────────
 
-/**
- * Hue shifts a waiter wears: none, or a touch either way — enough to tell two of the same sheet
- * apart, never enough to turn a face green (a big shift moves the skin too). Few, so the sprite bank
- * caches at most 6 × 3 sheets for the whole hall.
- */
+/** Waiter hue shifts: small enough never to turn a face green, few so the sprite bank caches at
+ * most 6 × 3 sheets. */
 export const WAITER_HUES = [0, 15, 345] as const;
 /** A waiter's routine lasts ROUTINE_MIN..ROUTINE_MIN + ROUTINE_SPREAD − 1 s (its own), and ends in a short shift in its seat. */
 export const ROUTINE_MIN = 9;
@@ -403,11 +339,8 @@ export function waiterLook(i: number): { palette: number; hueShift: number } {
   return { palette: h % PALETTE_COUNT, hueShift: WAITER_HUES[(h >>> 8) % WAITER_HUES.length] };
 }
 
-/**
- * Bench `i`'s waiter's pose at `time` (s): mostly sitting still; at the end of its routine (its own
- * length and phase, so the hall never moves in step) a brief shift in its seat; and one in
- * `READER_EVERY` reads a paper through the first half of it. Deterministic in (bench, time).
- */
+/** Bench `i`'s waiter pose at `time` (s): mostly still, a brief shift at its routine's end (own
+ * length and phase, so the hall never moves in step); 1 in `READER_EVERY` reads a paper. */
 export function waiterPose(i: number, time: number): WaiterPose {
   const h = hash2(i, 0x5e47);
   const period = ROUTINE_MIN + (h % ROUTINE_SPREAD);
@@ -416,32 +349,22 @@ export function waiterPose(i: number, time: number): WaiterPose {
   return t >= period - SHIFT_SEC ? "shift" : "still";
 }
 
-/**
- * Lounge bench `i`'s waiter this frame — an anonymous agent waiting to be called on every FREE seat:
- * no holder (`frame.desks[i]`) and no sim character on it, leaving it, away from it or coming back to
- * it (`claims`). A held seat is EMPTY: its agent is away at work. Before the first capacity frame
- * nobody is known to be anywhere, so the benches are empty.
- */
+/** A waiter on every FREE bench: no holder (`frame.desks[i]`) and no claim; a held seat is EMPTY
+ * (its agent is at work). Before the first capacity frame the benches are empty. */
 export function waiterOn(i: number, frame: CapacityFrame | null, claims: ReadonlySet<number> | undefined, time: number): PropReading | undefined {
   if (!frame || frame.desks[i] || claims?.has(i)) return undefined;
   return { kind: "waiter", ...waiterLook(i), pose: waiterPose(i, time) };
 }
 
-/**
- * Where an agent's context bar goes on its desk: a sitter facing up has its desk on the row above
- * (the bar on the desk's free right tile); one facing down (a city leader) has it on the row below
- * (the bar centred on its front edge).
- */
+/** Context bar spot: facing up, on the desk's free right tile in the row above; facing down (a
+ * city leader), centred on the front edge of the desk below. */
 export function meterSpot(seat: Seat): { x: number; y: number } {
   if (seat.facing === "down") return { x: seat.col * TILE + 1, y: (seat.row + 2) * TILE - 5 };
   return { x: (seat.col + 1) * TILE + 1, y: seat.row * TILE - 5 };
 }
 
-/**
- * This frame's draw list. `seated` (`VillageSim.seating()`) is who sits where in the project rooms;
- * `events` the real communications the view observed (`LanEvent`, on the same clock as `time`): the
- * LANs' packets, their Wi-Fi pulses and a busy switch / router come from those and nothing else.
- */
+/** This frame's draw list. LAN packets, Wi-Fi pulses and busy routers come only from `events`
+ * (real communications, on `time`'s clock) and `seated` (`VillageSim.seating()`). */
 export function buildDrawList(
   world: World,
   chars: CharacterView[],
@@ -560,11 +483,8 @@ export function buildDrawList(
   return out;
 }
 
-/**
- * The city's words: each building's sign over its roof (the folder) and each floor's name plate
- * on the slab above it (the agent or console tab) — nothing else. Every sub-agent has a desk
- * (engine/city.ts), so no floor ever counts a "+N" overflow.
- */
+/** The city's only words: each building's sign (the folder) and each floor's name plate. Every
+ * sub-agent has a desk, so no floor shows a "+N" overflow. */
 function cityLabels(out: DrawItem[], city: CityInfo, floors: readonly House[], frame: CapacityFrame | null): void {
   for (const b of city.buildings)
     out.push({ t: "label", x: (b.col + b.w / 2) * TILE, y: b.row * TILE - SIGN_ABOVE, text: b.label, tone: b.hq ? "civic" : "house" });
@@ -615,10 +535,7 @@ const PLATE_INSET = 2;
 const HIT_HALF_W = 8;
 const HIT_H = 32;
 
-/**
- * Key of the topmost (last-drawn) character whose 16×32 sprite box contains the
- * world point, ignoring characters that are despawning. null if none.
- */
+/** Topmost (last-drawn) non-despawning character whose 16×32 box contains the point, or null. */
 export function hitTest(chars: CharacterView[], wx: number, wy: number): string | null {
   let best: string | null = null;
   let bestZ = -Infinity;

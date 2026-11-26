@@ -1,21 +1,10 @@
-/**
- * The status pill: 🤖 Idle / ⚡ Running / ⏳ Waiting / ✓ Done / ✕ Error.
- *
- * Subscribes to nothing — its parent row already reads the status it needs, and
- * a second subscription for the same field would double the re-render work on
- * the hottest path in the app (one pill per agent, per telemetry tick).
- */
+/** Subscribes to nothing: the parent row already reads the status, and a second subscription
+ * would double work on the hottest render path. */
 
 import type { AgentStatus } from "../../app/types";
 import "./fleet.css";
 
-/**
- * Glyph + label per status — every state carries a distinct, at-a-glance icon
- * (turn hooks). `idle` is the robot 🤖 (agent parked at its prompt, nothing
- * running); `running` the ⚡ bolt (actively working). The bolt used to be latched
- * on forever because idle was never emitted — the turn hooks also wire the transition
- * (see the hook-driven status pipeline), so the robot actually appears now.
- */
+/** Glyph + label per status: 🤖 idle (parked at its prompt), ⚡ running. */
 const PRESENTATION: Record<AgentStatus, { label: string; glyph: string }> = {
   idle: { label: "Idle", glyph: "🤖" },
   running: { label: "Running", glyph: "⚡" },

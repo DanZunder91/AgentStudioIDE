@@ -1,20 +1,6 @@
-//! The ad-hoc-detection hook listener — a single localhost endpoint.
-//!
-//! A runtime's `SessionStart`/`SessionEnd` hook POSTs its payload here; we bind it
-//! to the terminal the session runs in. **This is a security boundary:** any local
-//! process can connect to a localhost port, so every request must present the
-//! per-launch secret token or it is dropped. Without that, any program on the
-//! machine could forge phantom agents into the rail.
-//!
-//! # Why hand-rolled instead of `hyper`/`axum`
-//!
-//! One POST shape, on `127.0.0.1`, from a hook we wrote. What matters is tight
-//! control over the things that make a listener safe — a body-size cap, a read
-//! timeout (so a stuck connection can't pin a task), and a constant-time token
-//! compare. That is more auditable as ~120 lines of `tokio` than as a general HTTP
-//! server wired through service traits, and it adds no new crate (just tokio's
-//! `net` feature). The token check, not the parser, is the boundary; the parser is
-//! deliberately minimal and refuses anything it doesn't recognise.
+//! The ad-hoc-detection hook listener on localhost. SECURITY BOUNDARY: any local process can
+//! connect, so a request without the per-launch token is dropped. Hand-rolled on tokio (no
+//! hyper/axum) for an auditable body cap, read timeout and constant-time token compare.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -31,13 +17,8 @@ use crate::agent::hook::{HEADER_TERMINAL, HEADER_TOKEN};
 /// anything this big is not one of our hooks and is refused.
 const MAX_HEAD: usize = 64 * 1024;
 
-/// The body is the runtime's hook payload, and it is NOT small: `UserPromptSubmit`
-/// carries the user's whole prompt. A pasted query result or log is routinely past
-/// 64 KiB — a realistic prompt can be 100 KB or more; a 64 KiB cap answered
-/// 400, the hook's `curl … || true` swallowed it, and the agent was drawn idle for
-/// its entire turn. The token is checked on the headers BEFORE any body byte is
-/// read, so this cap only bounds an authenticated peer; it sits above any prompt a
-/// model can take (a 1M-token context is ~4 MB of text).
+/// `UserPromptSubmit` carries the whole prompt, routinely past 64 KiB; a too-small cap left
+/// agents shown idle. The token is checked before any body byte, so this bounds only our hooks.
 const MAX_BODY: usize = 16 * 1024 * 1024;
 
 /// A whole request must arrive within this window. Bounds a slow/stuck peer to one
@@ -94,12 +75,8 @@ impl HookListener {
         ))
     }
 
-    /// Start accepting. `on_hook(terminal_id, body)` is invoked for every request
-    /// that **passed the token check** — its argument is the raw payload, which the
-    /// supervisor hands to an adapter to parse (keeping payload schema out of here).
-    ///
-    /// The callback is intentionally not the supervisor: the listener knows nothing
-    /// about agents, which makes it trivially testable and reusable.
+    /// Start accepting. `on_hook(terminal_id, body)` gets the raw payload of every request that
+    /// passed the token check; the listener knows nothing about agents.
     pub fn serve<F>(self, on_hook: F)
     where
         F: Fn(String, Vec<u8>) + Send + Sync + 'static,
@@ -107,11 +84,8 @@ impl HookListener {
         self.serve_with_ctl(on_hook, None);
     }
 
-    /// [`Self::serve`], plus the agent-control route: a `POST` to
-    /// [`crate::agent_ctl::CTL_PATH`] goes to `on_ctl`, which answers with a status and a body.
-    /// Same token check, same caps; only the time allowed to *answer* is longer
-    /// ([`CTL_TIMEOUT`]). Without a handler that route answers 404 and every other path is a
-    /// hook, exactly as before.
+    /// [`Self::serve`] plus the agent-control route: a `POST` to [`crate::agent_ctl::CTL_PATH`]
+    /// goes to `on_ctl`, same checks but [`CTL_TIMEOUT`] to answer. No handler → that route 404s.
     pub fn serve_with_ctl<F>(self, on_hook: F, on_ctl: Option<Arc<CtlHandler>>)
     where
         F: Fn(String, Vec<u8>) + Send + Sync + 'static,
@@ -214,10 +188,8 @@ async fn read_request(
         return None;
     };
 
-    // The security boundary, decided on the HEADERS: a peer without the token never
-    // gets a single body byte read, so the body cap below only ever bounds our own
-    // hooks. A missing or wrong token is indistinguishable from an attacker, so it is
-    // dropped exactly like one.
+    // Security boundary, decided on HEADERS: without the token no body byte is read,
+    // and a wrong token is dropped exactly like an attacker.
     let token_ok = head
         .token
         .as_deref()

@@ -1,30 +1,6 @@
-/**
- * terminalClipboard — copy and paste in the terminal on Windows and Linux, the Windows
- * Terminal way (platform-native: a native behaviour per OS, macOS untouched).
- *
- * macOS needs nothing from here: ⌘C / ⌘V are the app menu's Copy / Paste accelerators,
- * which fire the webview's own `copy` / `paste` DOM events, and xterm already handles
- * both. Ctrl+C stays the interrupt key there, as it always was.
- *
- * Windows and Linux have no such menu, so xterm saw Ctrl+C as ^C and Ctrl+V as ^V:
- * nothing could be copied and cmd could not paste. Windows Terminal's convention is:
- *   - Ctrl+C copies WHEN THERE IS A SELECTION (and clears it); otherwise it is ^C.
- *   - Ctrl+V pastes.
- *   - Ctrl+Shift+C / Ctrl+Shift+V always copy / paste (never ^C / ^V).
- *
- * How each half reaches the clipboard without an OS permission prompt (no OS permission
- * may be required):
- *   - PASTE is the webview's own: the key handler tells xterm "not yours" WITHOUT
- *     `preventDefault()`, so the webview performs its native paste into xterm's textarea,
- *     the `paste` event fires, and xterm's handler runs the same `paste()` routine as
- *     `term.paste()` — line endings to CR, bracketed-paste markers when the program asked
- *     for them. No `navigator.clipboard.readText()`: in WebView2 that is a permission
- *     request (wry only auto-allows it when the window is built with `clipboard: true`)
- *     and in WKWebView it is a "Paste" callout — exactly the prompt that is forbidden.
- *   - COPY writes the terminal's selection with `navigator.clipboard.writeText()`, the
- *     route every copy button in this app already takes (a user-gesture write never
- *     prompts). A refused write keeps the selection, so nothing is lost.
- */
+/** Windows Terminal copy/paste on Windows and Linux; macOS untouched (menu accelerators). No OS
+ * permission prompt: paste is the webview's native paste (`clipboard.readText()` prompts in
+ * WebView2/WKWebView); copy uses `navigator.clipboard.writeText()` (a gesture write never does). */
 
 import { os, type Os } from "../../lib/platform";
 
@@ -42,12 +18,8 @@ export interface TerminalKey {
   metaKey: boolean;
 }
 
-/**
- * The letter a chord names: `ev.key` (so Dvorak/AZERTY users press the letter printed
- * on their key), falling back to the physical key when the layout's letter is not Latin
- * (a Russian layout's Ctrl+C has `key === "с"` but `code === "KeyC"`) — what Windows
- * Terminal does too.
- */
+/** `ev.key` (the letter printed on the user's layout), else the physical key for non-Latin
+ * layouts (Russian Ctrl+C has `key === "с"`), as Windows Terminal does. */
 function chordLetter(ev: TerminalKey): string {
   const key = ev.key.toLowerCase();
   if (/^[a-z]$/.test(key)) return key;
@@ -55,12 +27,7 @@ function chordLetter(ev: TerminalKey): string {
   return m ? m[1].toLowerCase() : "";
 }
 
-/**
- * Decide what a key press does: platform × key × "is anything selected?". Pure.
- *
- * Only a plain Ctrl chord counts: Alt is excluded because AltGr IS Ctrl+Alt on Windows
- * (a European layout types characters with it), and Meta is the Windows/Super key.
- */
+/** Pure. Only a plain Ctrl chord counts: AltGr is Ctrl+Alt on Windows; Meta is Windows/Super. */
 export function terminalKeyAction(platform: Os, ev: TerminalKey, hasSelection: boolean): TerminalKeyAction {
   if (platform === "macos") return "pass";
   if (ev.type !== "keydown") return "pass";
@@ -86,13 +53,8 @@ export function writeClipboardText(text: string): Promise<void> {
   return navigator.clipboard.writeText(text);
 }
 
-/**
- * Install the copy/paste keys on one terminal. `platform` and `writeText` are injectable
- * for tests; production passes neither.
- *
- * The handler's return value is xterm's contract: `false` = "not yours" (xterm neither
- * sends the key to the PTY nor cancels it), `true` = xterm handles it as before.
- */
+/** `platform`/`writeText` are injectable for tests. Handler returns follow xterm: `false` = not
+ * xterm's (neither sent to the PTY nor cancelled), `true` = xterm handles it. */
 export function installTerminalClipboardKeys(
   term: ClipboardTerminal,
   platform: Os = os(),

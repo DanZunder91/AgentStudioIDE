@@ -1,22 +1,6 @@
-/**
- * The WHOLE-COMPUTER store — every app's sockets, one full sample per second.
- *
- * Its own `create(...)`, not the app store, and every choice the user makes here — sort,
- * selection, filter, Hide listeners, expanded apps, pause — lives in it rather than in
- * component state, because the Network panel is a TAB and remounts on every switch.
- *
- * ── Sampling runs only while the mode is on screen ──
- * `nettop` / `/proc` sampling costs CPU every second, so the view holds it with
- * {@link acquireMachine} on mount and lets go with {@link releaseMachine} on unmount.
- * The stop is DEFERRED one macrotask and cancelled by a re-acquire, so React StrictMode's
- * mount → unmount → mount (and a tab move's remount) sends exactly one `netmachine_start`
- * and no stop. Leaving the mode for real sends exactly one `netmachine_stop`.
- *
- * ── Listen first, then start ──
- * The event subscription is made before `netmachine_start`, so the first sample is never
- * emitted into a gap. It stays for the app's life (samples only flow while running). A
- * failed subscription or start is not sticky: the next entry tries again.
- */
+/** Whole-computer store; choices live here, not in component state, as the Network tab remounts.
+ * Sampling costs CPU, so it runs only while mounted; the stop waits one macrotask and a re-acquire
+ * cancels it (StrictMode). Listen before `netmachine_start`; a failed start is not sticky. */
 
 import { create } from "zustand";
 
@@ -43,10 +27,7 @@ export interface MachineState {
   selectedKey: string | null;
   /** The app key whose "Capture this app" guide is open; at most one. */
   guideKey: string | null;
-  /**
-   * A pid {@link revealMachinePid} asked for that no sample has shown yet: the first sample
-   * that has it selects + expands its row, then this goes back to null.
-   */
+  /** A pid {@link revealMachinePid} awaits: the first sample with it selects + expands its row. */
   pendingPid: number | null;
   /** Open the pending pid's "Capture this app" guide when its row is found (Network's Apps sidebar). */
   pendingGuide: boolean;
@@ -191,10 +172,8 @@ export function releaseMachine(): void {
   }, 0);
 }
 
-/**
- * Fetch the status once for the mode switch's label ("Whole Mac") before the mode is
- * ever entered. Idempotent while in flight or known; a failure is not sticky.
- */
+/** Fetch status once for the mode switch's label before the mode is entered.
+ * Idempotent while in flight or known; a failure is not sticky. */
 export function ensureMachineStatus(): Promise<void> {
   if (statusLoad) return statusLoad;
   if (useMachineStore.getState().status !== null) return Promise.resolve();
@@ -261,21 +240,9 @@ export function selectApp(key: string | null): void {
   useMachineStore.setState({ selectedKey: key, pendingPid: null, pendingGuide: false });
 }
 
-/**
- * A dev app card's "connections →": put this
- * pid's row in front of the user — selected and expanded. The caller only knows the pid (a
- * dev app is named after its project, `web`; the sampler names the process, `node`), and the
- * row's key is `name:pid`, so the row is found by pid: in the newest sample now, else in the
- * first sample that has it (sampling starts when Whole Mac mounts, so there may be none yet).
- *
- * Every narrowing that could hide the row is undone, as `showAppFlows` does for IDE traffic:
- * the app picker, the text filter, and Hide listeners — a dev server's ports ARE listeners, so
- * leaving it on would land on a table without the very sockets the link was for. Pause is
- * lifted too: a frozen table would never show the row. Switching the panel's MODE is the
- * caller's job (`networkStore.setNetworkMode("machine")`) — this store does not own it.
- * `openGuide` also opens the row's "Capture this app" guide (Network's Apps sidebar, for an
- * external app: "point it at the proxy by hand").
- */
+/** Select and expand a pid's row (row key is `name:pid`), now or in the first sample that has it.
+ * Undoes app picker, filter, Hide listeners and pause; switching the panel mode is the caller's.
+ * `openGuide` also opens the row's "Capture this app" guide. */
 export function revealMachinePid(pid: number, openGuide = false): void {
   useMachineStore.setState((s) => {
     const cleared: MachineState = {

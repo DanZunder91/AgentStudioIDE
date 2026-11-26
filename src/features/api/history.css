@@ -47,11 +47,8 @@
   border-color: var(--danger, #f7768e);
 }
 
-/* ── search box ───────────────────────────────────────────────────────────
-   `min-width: 0` + a flexible basis is load-bearing, not cosmetic: the rail
-   drags down to 180px and `railChrome.browser.test.tsx` asserts this panel
-   never scrolls horizontally. An input's default `size` gives it an intrinsic
-   min-content width that would blow the rail out. Mirrors `.logs-filter`. */
+/* search box: `min-width: 0` + a flexible basis stop the input's intrinsic width blowing out
+   the 180px rail (railChrome.browser.test.tsx: no horizontal scroll). Mirrors .logs-filter. */
 .history-search {
   display: flex;
   align-items: center;

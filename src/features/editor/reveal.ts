@@ -1,13 +1,5 @@
-/**
- * revealInEditor — open (or focus) a file and put the cursor at a location.
- *
- * The reusable "reveal a location" seam. Go-to-definition reveals an LSP result
- * this way (via the Workspace), and the Find-in-Files panel opens a match through
- * this same helper — one place that knows how to open a tab + position + scroll.
- *
- * `line`/`col` are **1-based** (grep / ripgrep / editor gutter convention); `col`
- * defaults to the start of the line. Out-of-range values are clamped, never throw.
- */
+/** Open or focus a file and place the cursor; shared by go-to-definition and the find panels.
+ * `line`/`col` are 1-based (`col` defaults to line start); out-of-range values clamp. */
 
 import { TAB_ELSEWHERE, useAppStore } from "../../app/store";
 import { whenViewReady } from "./EditorRegistry";

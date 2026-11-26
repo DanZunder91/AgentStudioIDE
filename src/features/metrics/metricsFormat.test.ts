@@ -1,15 +1,5 @@
-/**
- * `metricsFormat` — every string the dashboard renders.
- *
- * These are pinned with **literal** expectations, on purpose. A wrong duration or a
- * token count off by 1000× is worse than no dashboard, and the only thing standing
- * between the two is this file. Zero, `null` and "unknown" get their own cases
- * everywhere they are representable, because those three are exactly where a
- * "helpful" `?? 0` sneaks in.
- *
- * No fake timers anywhere: every relative formatter takes `nowMs`, so a countdown
- * assertion is arithmetic, not timing.
- */
+/** Literal expectations on purpose; zero, `null` and unknown get their own cases wherever a
+ * `?? 0` could sneak in. No fake timers: relative formatters take `nowMs`. */
 
 import { describe, expect, it } from "vitest";
 
@@ -275,18 +265,8 @@ describe("turnLabel", () => {
   });
 
   it("falls back to PROJECT · TIME, never to invented content", () => {
-    // Changed when ALL scope landed. A turn with no label used to fall back to a
-    // truncated session id; now it falls back to the project basename plus the turn
-    // time, because that is what identifies a turn to a human scanning *every* project
-    // at once — a session id identifies it to a machine. The session handle is still
-    // reachable, in the expanded turn detail.
-    //
-    // What has NOT changed, and is the actual claim: the fallback is always DERIVED
-    // (project, clock), never fabricated, and a whitespace-only label counts as absent
-    // rather than being rendered as an empty cell.
-    // The clock is LOCAL time, so build the expectation the same way instead of
-    // hard-coding a clock string — that only holds in one timezone and fails on a
-    // runner in another (a test must give the same answer in every timezone).
+    // The fallback is derived (project + local clock), never fabricated; a whitespace label counts
+    // as absent. Built with `formatClock` so the test holds in every timezone.
     const at = turn({ label: null }).startedAtMs;
     expect(turnLabel(turn({ label: null }))).toBe(`proj · ${formatClock(at)}`);
     expect(turnLabel(turn({ label: "   " }))).toBe(`proj · ${formatClock(at)}`);
@@ -395,11 +375,7 @@ describe("formatScopeCoverage", () => {
   });
 
   it("says so out loud when the answer is WIDER than the question", () => {
-    // The honest replacement for an earlier error. Asking for one project without naming
-    // one used to return `scan-failed` and the panel read "Could not read your
-    // sessions"; now the report covers everything and SAYS that it did. Silence would be
-    // the other failure mode — a report whose scope differs from the request without
-    // admitting it is worse than an error, because it looks correct.
+    // The report covers everything and says so: a silently wider scope would look correct.
     expect(formatScopeCoverage("project", true)).toBe(
       "All projects — this project was requested, but no project is selected",
     );

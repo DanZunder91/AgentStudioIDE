@@ -1,36 +1,6 @@
-/**
- * usageStore — the polled usage-limits store.
- *
- * Covers: the success/failure state shapes (including "a failure never blanks the
- * last good snapshot"), the `loading` flag through both outcomes, single-flight
- * dedupe *asserted on IPC call counts*, the ordering guarantee (peak concurrency of
- * 1), the immediate-first-fetch, the 5s cadence, the failure backoff curve,
- * reference counting + idempotent stop, visibility pause/resume, listener cleanup,
- * and the non-DOM guard.
- *
- * ── How this suite stays hermetic and non-flaky ──────────────────────────────
- *
- * `vi.mock("./usageIpc")` — no Tauri IPC is ever touched. `claudeUsage`
- * is a `vi.fn()` handed deferreds, so *when* a response lands is the test's decision.
- *
- * `vi.mock("./usageFormat")` — `parseUsageError` is a spy, not the real classifier.
- * That module has its own suite; stubbing it
- * keeps this file testing the STORE's contract ("hand the raw rejection reason to
- * the parser and store what comes back") instead of re-testing theirs, and lets us
- * assert the raw reason reached it unmangled.
- *
- * `vi.resetModules()` before every test, with the module imported *inside* each test.
- * `usageStore` keeps its lifecycle in module scope on purpose (a ref count, a timer
- * handle, a failure streak — plumbing, not rendered state), and none of that is
- * reachable via `setState`, so a shared module instance would leak a live timer and
- * a failure streak into the next test. A fresh instance per test is the only way to
- * get real isolation without exporting a test-only reset hatch into production code.
- * `vi.hoisted` keeps the two mock functions stable across those resets.
- *
- * Every test that starts polling registers its stopper with `track()`, and `afterEach`
- * runs them all — belt and braces on top of `resetModules`, since a stray timer is
- * exactly the failure mode that makes a suite like this flaky.
- */
+/** Hermetic: `./usageIpc` and `./usageFormat` are mocked. `vi.resetModules()` per test because the
+ * store keeps its timer, ref count and failure streak in module scope (no test-only reset hatch).
+ * Every test that starts polling registers its stopper with `track()`: no stray timer survives. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -75,12 +45,8 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
-/**
- * Drain the microtask queue. Fake timers do not advance microtasks, so after
- * resolving a deferred we must let the `await`/`finally` chain inside the store run
- * before asserting. Several turns because the chain is several links deep
- * (`claudeUsage` → `fetchOnce`'s await → `setState` → `.finally` → re-arm).
- */
+/** Fake timers do not advance microtasks: drain several turns so the store's await chain
+ * (`claudeUsage` → `fetchOnce` → `setState` → `.finally` → re-arm) runs before asserting. */
 async function flush(): Promise<void> {
   for (let i = 0; i < 6; i++) await Promise.resolve();
 }
@@ -191,7 +157,7 @@ describe("refresh — the failure path", () => {
     mockUsage.mockRejectedValueOnce("unauthorized: token expired");
     await useUsageStore.getState().refresh();
 
-    // The whole point of requirement 1: stale-but-true numbers, never a blank panel.
+    // A failed refresh keeps stale-but-true numbers, never a blank panel.
     expect(useUsageStore.getState().snapshot).toBe(snapA);
     expect(useUsageStore.getState().error).toBe("unauthorized");
     expect(useUsageStore.getState().loading).toBe(false);
@@ -455,10 +421,8 @@ describe("startUsagePolling — failure backoff", () => {
     await advance(1); // t = 7000
     expect(mockUsage).toHaveBeenCalledTimes(3);
 
-    // And the superseded 15s timer must have been CANCELLED, not merely outrun:
-    // t = 15000 (its old deadline) has to pass with no extra call. Re-arming
-    // without cancelling leaks a timer per manual refresh — invisible in state,
-    // visible only as surplus round trips.
+    // The superseded 15s timer must be CANCELLED, not merely outrun: re-arming without cancelling
+    // leaks a timer per manual refresh, visible only as surplus round trips.
     await advance(USAGE_POLL_MS); // t = 12000
     expect(mockUsage).toHaveBeenCalledTimes(4);
     await advance(3000); // t = 15000 — the abandoned deadline

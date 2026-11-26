@@ -1,15 +1,5 @@
-/**
- * The backdrop styles wired into the City's sky (render/city.ts, render/backdrop.ts) — with each module's
- * layer replaced by a recording stand-in, so what is proved here is the WIRING, not the art:
- *
- *   - each style paints its own layers and no other, at their depths — a HIGH layer after the clouds
- *     and before the towers and the haze, a MID layer after the haze and before the temples;
- *   - at night they light up in the same order (HIGH, the landmarks' lights, the haze's windows, MID),
- *     and each light is cut by what stands in front of its layer: the haze and any MID face for a HIGH
- *     layer, the temples, the street's trees and lamps, and this frame's street sprites;
- *   - no star, moon or haze window shows through a layer's face;
- *   - the frame hands the night pass the boxes of the agents, passers-by and vehicles it drew.
- */
+/** Each module's layer is a recording stand-in, so this proves the WIRING (layer order, night-light
+ * cuts), not the art. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

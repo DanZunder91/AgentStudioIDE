@@ -1,19 +1,6 @@
-//! Adversarial and property-style tests of the capture proxy (`src/netcap/`).
-//!
-//! `netcap_e2e.rs` proves the proxy works for well-behaved clients. This file is about the
-//! other kind: garbage on the wire, requests that never end, absurd headers, malformed
-//! targets, thousands of flows, hundreds at once — plus redaction and the body cap stated
-//! as properties over random inputs (fixed seeds, `rand`; no `proptest` in this crate).
-//!
-//! The proxy runs inside the IDE process, so "a hostile client wedged it" is not a Network
-//! tab problem, it is an IDE problem. Every adversarial case therefore asserts three
-//! things: the proxy answered 4xx or hung up, it did so **within a bounded time** (a hang
-//! is a failure, never a stuck suite — everything runs under `tokio::time::timeout`), and a
-//! normal request right after it **still succeeds**.
-//!
-//! Hermetic: loopback only, every upstream is started here, no DNS lookup of
-//! any name (targets are IP literals), no OS trust store. Contract numbers are restated as
-//! literals.
+//! Adversarial and property tests of the capture proxy. It runs in the IDE process, so each hostile
+//! case asserts a 4xx or hang-up within a bounded time (all under `tokio::time::timeout`) and
+//! that a normal request still succeeds after. Hermetic: loopback, IP literals, fixed `rand` seeds.
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -355,10 +342,8 @@ async fn garbage_truncated_and_oversized_requests_are_refused_and_the_proxy_stay
     .await;
 }
 
-/// A client that trickles a request head forever (slowloris) must be cut off by the
-/// header deadline — not held open for the life of the IDE, one fd and one task each.
-/// Two-sided: still open well before the deadline (it is the deadline doing
-/// this, not an instant refusal), closed soon after it.
+/// Slowloris must be cut off by the header deadline, not held for the IDE's life. Two-sided: still
+/// open well before the deadline (not an instant refusal), closed soon after it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_request_head_that_never_finishes_is_cut_off_by_the_header_deadline() {
     within(
@@ -464,11 +449,8 @@ async fn connect_to_a_closed_port_is_a_prompt_502_and_an_error_flow() {
     .await;
 }
 
-/// A CONNECT target that is not `host:port` is a client bug and gets a 400 — never a
-/// silent substitution. The port cases are the finding: `http::Authority` accepts any
-/// digits (or letters) after the colon and `port_u16()` returns `None` for them, which the
-/// proxy used to read as "no port → default 443", tunnelling `127.0.0.1:99999` to
-/// `127.0.0.1:443`.
+/// `http::Authority` accepts any digits or letters after the colon and `port_u16()` is then `None`;
+/// that must be a 400, never read as "no port, default 443" (`127.0.0.1:99999` to `:443`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn malformed_connect_targets_are_400_and_never_rerouted() {
     within(Duration::from_secs(60), "malformed CONNECT", async {
@@ -646,10 +628,8 @@ fn random_token(rng: &mut StdRng) -> String {
         .collect()
 }
 
-/// Nothing is redacted: any header whose name
-/// contains `token` / `secret` / `key` / `authorization` / `cookie`, in any case — sent on the
-/// request AND echoed back on the response — is stored BYTE-EXACT under its name, exactly
-/// like an ordinary control header. Masking is a UI toggle, never the store's business.
+/// Headers named like token/secret/key/authorization/cookie, on request and response, are stored
+/// byte-exact; masking is a UI toggle, never the store's business.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_sensitive_header_value_is_stored_byte_exact() {
     within(
@@ -901,13 +881,8 @@ async fn the_flow_ring_keeps_exactly_the_newest_5000() {
     .await;
 }
 
-/// 200 parallel requests: all complete with the right status, and each is exactly one
-/// flow carrying that status.
-///
-/// At most [`IN_FLIGHT`] at a time: macOS caps a listener's accept queue at
-/// `kern.ipc.somaxconn` (128 by default) and resets connects beyond it, so 200 simultaneous
-/// connects fail in the kernel before the proxy sees them. 100 stays under that cap and still
-/// overlaps on every worker thread.
+/// At most [`IN_FLIGHT`] at a time: macOS caps a listener's accept queue at `kern.ipc.somaxconn`
+/// (128 by default) and resets connects beyond it before the proxy sees them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_hundred_parallel_requests_all_complete_as_two_hundred_flows() {
     const IN_FLIGHT: usize = 100;

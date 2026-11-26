@@ -1,49 +1,6 @@
-/**
- * `statements.ts` — the frontend mirror of `guard.rs`'s statement splitter.
- *
- * 🔴 **Written to fix a bug.** With a four-line buffer whose two commented-out lines were
- * selected, ⌘⏎ answered *"That statement was blocked before it ran — this
- * connection is read-only, or it does not allow multiple statements."* Two things were wrong,
- * and this file is the fix for the first:
- *
- * 1. `QueryEditor`'s ⌘⏎ passed a **mode** (`"statement"`) and nothing else, so the store sent
- *    the **whole buffer** and Rust's `guard::multi_statement_refusal` counted two statements
- *    and refused. The mode said "one statement"; the payload said "all of them".
- * 2. `consoleFormat.runHint` had been telling users *"Runs the statement under the cursor."*
- *    since the console shipped. **Nothing computed that**, so the promise was never true.
- *
- * ── Why a mirror and not a call into Rust ────────────────────────────────────
- * The answer is needed **synchronously, inside a keystroke handler**, from the CM6 state — an
- * `invoke()` round trip to ask "where does this statement end" would make ⌘⏎ async for no gain.
- * So the rules are duplicated, deliberately, and the duplication is the risk: if this file and
- * `guard.rs` disagree, the frontend sends a fragment Rust then splits differently. That is why
- * every rule below names the `guard.rs` behaviour it mirrors, and why the tests use the same
- * cases as `guard.rs`'s own (`a_semicolon_inside_a_string_literal_is_not_a_terminator`, …).
- *
- * ── Lexical, never a parser — and never a security boundary ──────────────────
- * Same statement as `guard.rs`'s header, for the same reason: read-only is enforced by the
- * *server*, and the multi-statement refusal is enforced by *Rust*. This module decides what to
- * put in the box, not whether the box is allowed to be opened. A splitter that is wrong about
- * some exotic quoting form here mis-sends a query; it cannot grant a permission.
- *
- * The forms understood are exactly `guard.rs`'s: `-- line comments`, **nested** block comments
- * (an inner `/*` opens a second level that the first closer only closes back down to one),
- * `'single quoted'` with `''` doubling, `E'…\'…'` with backslash escapes, `"quoted identifiers"`
- * with `""` doubling, and `$$dollar$$` / `$tag$…$tag$` bodies.
- * Every one of them can contain a `;` that is not a terminator — and a `;` swallowed from the
- * middle of a string literal does not merely misparse, it *corrupts* the query that runs.
- *
- * ── Offsets, not just text ───────────────────────────────────────────────────
- * `guard.rs` returns `Vec<String>` because it only ever needs the text. The editor needs to
- * answer "which of these contains the caret", so each statement carries its range as well.
- * `text === buffer.slice(from, to)` always holds: the range is the *trimmed* span, so a caret
- * in the whitespace between two statements belongs to neither and falls back by position.
- *
- * Offsets are JavaScript string indices (UTF-16 code units) because that is what CodeMirror's
- * `EditorState` uses. `guard.rs` indexes by `char`; the two disagree beyond the BMP, which is
- * harmless here because every character the lexer reacts to is ASCII — a surrogate half can
- * never equal `'`, `;` or `-`.
- */
+/** Frontend mirror of guard.rs's splitter, needed synchronously in the ⌘⏎ handler: keep the two in
+ * sync (the tests share guard.rs's cases). Lexical, never a security boundary. Offsets are UTF-16
+ * indices (CM6's); guard.rs counts chars, harmless as every char the lexer reacts to is ASCII. */
 
 /** One statement, trimmed, with the range it occupies in the buffer it came from. */
 export interface SqlStatement {
@@ -64,18 +21,8 @@ const TAG_CHAR = /[\p{L}\p{N}_]/u;
 /** `$1` is a placeholder, not a dollar quote — a tag may not START with a digit. */
 const DIGIT = /[0-9]/;
 
-/**
- * Split `text` into statements at top-level `;`, dropping empty and comment-only fragments.
- *
- * Mirrors `guard.rs::split_statements` rule for rule. The two behaviours worth stating out
- * loud, because both are load-bearing and neither is obvious:
- *
- * * A trailing fragment that is **only comments** is dropped (`is_only_comments` in Rust).
- *   Without that, an ordinary script ending in `-- done` would count as an extra statement and
- *   be refused as multi-statement.
- * * Whitespace and comments *inside* a statement are preserved verbatim, because the statement
- *   is echoed back next to its result and rewriting the user's SQL would be a small lie.
- */
+/** Mirrors guard.rs::split_statements. A comment-only trailing fragment is dropped (else "-- done"
+ * reads as multi-statement); text inside a statement is kept verbatim, as it is echoed back. */
 export function splitStatements(text: string): SqlStatement[] {
   const out: SqlStatement[] = [];
   let start = 0;
@@ -153,14 +100,8 @@ export function splitStatements(text: string): SqlStatement[] {
   return out;
 }
 
-/**
- * The statement `offset` sits in, or `null` when the buffer holds none at all.
- *
- * A caret in the whitespace *after* a statement (the newline that follows its `;`, most of the
- * time) belongs to that statement — a caret is at the end of a line far more often
- * than it is inside one. A caret before the first statement gets the first: there is nothing
- * preceding it, and the alternative — running the whole buffer — is the bug this file fixes.
- */
+/** A caret after a statement (usually just past its ";") belongs to it; one before the first
+ * statement gets the first. null when the buffer holds none. */
 export function statementAtOffset(text: string, offset: number): SqlStatement | null {
   const statements = splitStatements(text);
   if (statements.length === 0) return null;
@@ -176,13 +117,7 @@ export function statementAtOffset(text: string, offset: number): SqlStatement | 
   return preceding ?? statements[0];
 }
 
-/**
- * The whole line containing `offset`, without its line break.
- *
- * The `commandline` engines (Redis, Valkey) have no `;` and no statements — Run means
- * "one command line", so the line is the unit. CodeMirror normalises `\r\n` and `\r` to `\n`
- * when it builds a document, so `\n` is the only separator that can reach this.
- */
+/** Redis/Valkey run one command line. CM6 normalises line breaks, so \n is the only separator. */
 export function lineAtOffset(text: string, offset: number): string {
   const pos = Math.min(Math.max(offset, 0), text.length);
   const start = text.slice(0, pos).lastIndexOf("\n") + 1;
@@ -190,30 +125,9 @@ export function lineAtOffset(text: string, offset: number): string {
   return text.slice(start, next === -1 ? text.length : next);
 }
 
-/**
- * **What ⌘⏎ actually sends** — the one function `QueryEditor` calls, per engine family.
- *
- * | | no selection | selection |
- * |---|---|---|
- * | `sql` | the statement under the cursor | the selected text, verbatim |
- * | `commandline` | the line under the cursor | the selected text, verbatim |
- * | `json` | the whole buffer | the selected text, verbatim |
- *
- * **A selection wins for every engine, and is passed through untouched.** If the selection
- * is two *commented-out* lines, sending exactly that — and being told by
- * the server that there is nothing to run — is the correct outcome. Second-guessing a
- * selection because it looks like a comment would mean ⌘⏎ ran something other than what is
- * highlighted on screen, which is the accident the multi-statement guard exists to prevent, in miniature.
- *
- * `json` is deliberately NOT split: a MongoDB command document is one object, and there is no
- * `;` in it to split on — the SQL lexer would be answering a question that was never asked.
- *
- * The one exception to "verbatim": a selection of nothing but whitespace is treated as no
- * selection. It cannot be what the user meant, and honouring it would make Run a silent no-op
- * (the store refuses a blank buffer) — a button that does nothing and says nothing.
- *
- * `from`/`to` come from CodeMirror's `state.selection.main`, which guarantees `from <= to`.
- */
+/** What ⌘⏎ sends. A selection wins verbatim on every engine (whitespace-only counts as none);
+ * otherwise sql runs the statement under the cursor, commandline the line, and json the whole
+ * buffer (one command document, never split). */
 export function textToRun(
   queryLanguage: "sql" | "json" | "commandline",
   text: string,
@@ -249,10 +163,7 @@ function skipBlockComment(text: string, i: number): number {
   return j;
 }
 
-/**
- * The length of a dollar-quote opening tag at `i` (`$$` → 2, `$tag$` → 5), or `null` when this
- * `$` is not one — a `$1` placeholder, or a bare `$`.
- */
+/** Length of a dollar-quote tag at i ($$ is 2, $tag$ is 5), or null ($1 placeholder, bare $). */
 function dollarTag(text: string, i: number): number | null {
   let j = i + 1;
   while (j < text.length && TAG_CHAR.test(text[j])) {
@@ -274,12 +185,7 @@ function pushTrimmed(out: SqlStatement[], text: string, start: number, end: numb
   out.push({ text: trimmed, from, to });
 }
 
-/**
- * True when `s` is nothing but comments and whitespace.
- *
- * Mirrors `guard.rs::is_only_comments`: a trailing `-- done` must not count as a statement, or
- * an ordinary script would look multi-statement and be refused.
- */
+/** Mirrors guard.rs::is_only_comments: a trailing "-- done" must not count as a statement. */
 function isOnlyComments(s: string): boolean {
   let i = 0;
   while (i < s.length) {

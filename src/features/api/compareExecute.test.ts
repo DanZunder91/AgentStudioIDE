@@ -1,13 +1,6 @@
-/**
- * compareExecute — the A/B dual-send path. `httpIpc`
- * and the persistence modules are mocked at the module boundary, exactly like
- * execute.test.ts. What's under test: the two wires (A = the request's own
- * method/url, B = compare's, BOTH carrying the same substituted headers/body),
- * true simultaneity (both fired before the function returns), each side settling
- * independently in real time, BOTH executions recorded in history with the
- * LITERAL (pre-substitution) request — a secret never logged — and `sending`
- * flipping false only once both sides have settled.
- */
+/** A/B dual send with `httpIpc` and persistence mocked like execute.test.ts: two wires with the
+ * same substituted headers/body, fired together, settling independently, both recorded LITERAL
+ * (no secret logged), `sending` clearing once both settle. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -61,11 +54,8 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-/**
- * A compare-enabled request whose urls/header/body carry `{{VAR}}` placeholders,
- * plus an active env holding the secret. The header rows also exercise the wire
- * filter: row 2 is disabled, row 3 enabled but unnamed — neither may travel.
- */
+/** A compare request with `{{VAR}}`s and an active env holding the secret. Header row 2 is
+ * disabled and row 3 unnamed: neither may travel. */
 function setup(): string {
   const id = api().createApiRequest();
   api().patchApiRequest(id, {

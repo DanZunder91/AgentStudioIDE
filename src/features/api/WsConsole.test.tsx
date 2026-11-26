@@ -1,16 +1,5 @@
-/**
- * WsConsole — the API client's live WebSocket console.
- *
- * `wsIpc` is mocked at the module boundary: the real `ws_*` commands cross Tauri
- * (pinned in `wsIpc.test.ts`). What is under test here is the console — the
- * connect flow (connecting → open, robust to the id/open-event ordering), the
- * streaming log (in / out / sys rows), sending, disconnecting, and the error
- * surface.
- *
- * The mocked `wsConnect` captures the `onEvent` callback so a test can drive
- * socket events, and returns a promise the test controls (resolve / reject /
- * pending) to model the connect handshake.
- */
+/** The mocked wsConnect captures onEvent to drive socket events, and returns a promise the test
+ * resolves, rejects or leaves pending to model the handshake. */
 
 import {
   act,
@@ -75,11 +64,7 @@ function addHeaderRow(name: string, value: string): HTMLElement {
   return row;
 }
 
-/**
- * Seed the Vault with a live token and make it active — via `setState`, not the
- * actions, so this is pure fixture and not a test of the env editor. The value is
- * what the secret-safety assertions look for the ABSENCE of.
- */
+/** Fixture via setState, not the actions. SECRET is what secret-safety asserts is ABSENT. */
 const SECRET = "s3cr3t-live-token";
 function seedVault(): void {
   useAppStore.setState((s) => {
@@ -520,13 +505,7 @@ describe("WsConsole — handshake headers", () => {
   });
 });
 
-/**
- * A value the edge computes is only real if it reaches the DURABLE
- * record. The rows are `req.headers`, the field the saved-request store already
- * snapshots for every protocol, so this needed no new persistence code; that claim
- * is worth proving rather than asserting, and this is what would go red if the
- * saved-request shape ever stopped carrying headers for a `ws` request.
- */
+/** Goes red if saved ws requests ever stop carrying req.headers to the durable record. */
 describe("WsConsole — headers survive save → reopen", () => {
   it("round-trips through the saved-request store, keeping {{VAR}} literal", () => {
     seedVault();
@@ -556,12 +535,8 @@ describe("WsConsole — headers survive save → reopen", () => {
   });
 });
 
-/**
- * The SEAM: the console → the REAL `wsIpc` → the Tauri boundary,
- * with only `invoke` mocked. The blocks above pin what the console hands the
- * wrapper and `wsIpc.test.ts` pins what the wrapper puts on the wire; neither one
- * alone proves the payload a running app actually sends.
- */
+/** Seam: only invoke is mocked. Neither the console tests nor wsIpc.test.ts alone prove the
+ * payload a running app sends. */
 describe("WsConsole — seam to the real wsIpc (only Tauri mocked)", () => {
   let ipc: TauriMock;
 

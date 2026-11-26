@@ -1,28 +1,6 @@
-/**
- * Agent Village — the sky: time-of-day grade, weather and night lights.
- *
- * The scene follows the real weather and time of day: rain when it rains, afternoon outside the
- * house when it is afternoon. Everything here is OUTDOORS only: one clip
- * path — the visible screen with every house interior punched out (even-odd) — and
- * every layer is painted inside it, so rooms stay warmly lit and dry.
- *
- * Two entry points, because they belong at two depths of the frame:
- *   - `paintPuddles` — wet ground on paths/plaza/road, right after the ground (characters walk OVER it);
- *   - `paintAmbience` — after the world, before bubbles/labels (text stays readable):
- *     grade → overcast veil → (city) after-grade sky lights → lamp/campfire/door light → fog → particles → lightning.
- *
- * A CITY (`World.city`, the side view) is the same sky with two differences: its outdoors has
- * no edge (the sky backdrop fills the view, so the grade does too — the backdrop paints its own
- * sky colours through the grade's inverse, render/city.ts), and after the grade its open sky gets
- * the stars, moon and lit far windows (`paintCityNight`), while at night each floor's light spills
- * onto the facade around it — the lit windows of a city block.
- *
- * Cost per frame is bounded and allocation-free: one path of 1 + (visible houses)
- * rects built in place, a few fills per layer, one pass over the particles (≤ 3
- * rects each), and the puddles — laid out once per World (≈ 1 in 6 path/plaza
- * tiles) and painted in colour batches, so a wet frame sets `fillStyle` a handful
- * of times, not once per rect.
- */
+/** The sky, OUTDOORS only: every layer is clipped to the screen less house interiors (even-odd),
+ * so rooms stay lit and dry. `paintPuddles` goes right after the ground, `paintAmbience` after the
+ * world and before bubbles/labels. Per-frame cost is bounded and allocation-free. */
 
 import {
   TILE,
@@ -94,11 +72,8 @@ export function interiorRects(
   return out;
 }
 
-/**
- * The outdoors on screen: the village's own rect clipped to the view, so the panel's
- * backdrop around the map is never graded or rained on. No world (cols 0) = the whole view,
- * and so is a city: its sky backdrop runs to every edge.
- */
+/** The outdoors on screen: the village's rect clipped to the view, so the panel's backdrop is
+ * never graded or rained on. No world (cols 0) or a city: the whole view. */
 export function outdoorRect(
   world: World,
   cam: Camera,
@@ -197,10 +172,8 @@ function lights(
         rect(ctx, cam, h.col * TILE - GLOW, h.row * TILE - GLOW, h.w * TILE + 2 * GLOW, h.h * TILE + 2 * GLOW, SKY.window);
 }
 
-/**
- * A city's stars, moon and far lit windows (from golden hour on), clipped to open sky: above the
- * street and outside every building (even-odd: the buildings stand inside the sky rect).
- */
+/** A city's stars, moon and far lit windows (golden hour on), clipped to open sky: above the
+ * street and outside every building (even-odd). */
 function nightSky(
   ctx: DrawTarget,
   amb: Ambience,
@@ -306,11 +279,8 @@ function particles(
   }
 }
 
-/**
- * Everything outdoors that is not ground: painted after the world and before bubbles and
- * labels. `flash` 0..1 is the storm's lightning brightness this frame; `vehicles` are the City's
- * vehicles drawn this frame, whose lamps the night lights switch on.
- */
+/** Outdoor non-ground layers, after the world, before bubbles and labels. `flash` 0..1 is the
+ * lightning; `vehicles` are this frame's City vehicles, whose lamps the night lights switch on. */
 export function paintAmbience(
   ctx: DrawTarget,
   amb: Ambience,
@@ -417,13 +387,8 @@ function fill(ctx: DrawTarget, cam: Camera, wx: number, wy: number, w: number, h
   ctx.fillRect(sx(cam, wx), sy(cam, wy), w * cam.zoom, h * cam.zoom);
 }
 
-/**
- * Wet ground: darker puddles on ≈ 1 in 6 path/plaza/road tiles (stable per tile) with ripple
- * rings that grow and fade with `timeMs`. A no-op unless it is raining. Paths, roads and the
- * plaza are never inside a house, so no clip is needed. Painted in colour batches
- * (bodies, shine, then the rings by radius), so the style changes a fixed handful of
- * times per frame however many puddles are on screen.
- */
+/** Puddles on ≈ 1 in 6 path/plaza/road tiles (stable per tile) with ripples; no-op unless it
+ * rains. Those tiles are never indoors, so no clip. Colour-batched: few style changes a frame. */
 export function paintPuddles(
   ctx: DrawTarget,
   amb: Ambience,

@@ -1,8 +1,5 @@
-//! Runtime-agnostic fan-out types (ARCHITECTURE §5).
-//!
-//! The supervisor speaks only these; the Claude-specific *derivation* of them from
-//! transcripts + `.meta.json` sidecars lives in `agent/claude.rs`. An aider/codex
-//! adapter would produce the same shapes from its own telemetry.
+//! Runtime-agnostic fan-out types (ARCHITECTURE §5); the Claude derivation from transcripts and
+//! `.meta.json` sidecars lives in `agent/claude.rs`.
 
 /// A sub-agent the tailer detected in a runtime's telemetry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,10 +27,9 @@ pub struct FanoutAgent {
 /// which is what keeps a child finishing from greying its parent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FanoutStatus {
-    /// Spawned, no end observed yet. For Claude: no `tool_result` for a foreground
-    /// launch; for a BACKGROUND launch (whose `tool_result` is only the launch ack)
-    /// no task notification it has not written past, no `finished` flag, and not
-    /// silent for `claude::SUBAGENT_STALE_MS`.
+    /// No end observed yet. Claude: a foreground launch has no `tool_result`; a background one (its
+    /// result is only the launch ack) has no unread task notification, no `finished` flag, and has
+    /// not been silent for `claude::SUBAGENT_STALE_MS`.
     Running,
     /// The parent's transcript carries a successful `tool_result` for this agent —
     /// or, for a background one, a `completed`/`killed` notification, its sidecar's
@@ -43,10 +39,8 @@ pub enum FanoutStatus {
     Error,
 }
 
-/// The reconstructed tree plus any cross-check disagreements. A mismatch is
-/// **logged, not silently resolved**: if the sidecar's `parentAgentId`
-/// and the `Agent`-tool edge disagree, drawing either as truth silently could paint
-/// a wrong tree, so we surface it.
+/// A sidecar `parentAgentId` that disagrees with the `Agent`-tool edge is surfaced, never silently
+/// resolved: drawing either as truth could paint a wrong tree.
 #[derive(Debug, Clone, Default)]
 pub struct FanoutResult {
     pub agents: Vec<FanoutAgent>,
@@ -75,24 +69,15 @@ pub enum FanoutDelta {
     },
 }
 
-/// Diff a fresh parse against what we've already emitted — **pure**, so the
-/// tailer's decision logic is unit-testable without any I/O.
-///
-/// `known` maps `agent_id → last emitted status`. Returns a `Spawned` for each new
-/// agent and a `StatusChanged` for each status transition, in a deterministic order
-/// (sorted by id). The parent-stays-running invariant is upheld structurally: each
-/// agent's status is compared only to its own prior value.
+/// Pure diff of a fresh parse against `known` (agent_id → last emitted status), so the tailer's
+/// logic is testable without I/O. Each status is compared only to its own prior value.
 pub fn diff_fanout(
     known: &std::collections::HashMap<String, FanoutStatus>,
     current: &[FanoutAgent],
 ) -> Vec<FanoutDelta> {
     let mut deltas = Vec::new();
-    // Ordered **shallowest-first** so a `Spawned` for a parent is always emitted
-    // before its children: a depth-2 agent's parent is depth-1, so ascending depth
-    // guarantees parent-before-child. Without this, a child could reach the UI
-    // before its parent node exists and be dropped. Id is the tiebreaker for
-    // determinism. (`None` depth — older CLIs — sorts first; those parent to the
-    // root, which always exists.)
+    // Shallowest first so a parent's `Spawned` precedes its children's (a child arriving first is
+    // dropped); id breaks ties. `None` depth (older CLIs) sorts first: those parent to the root.
     let mut sorted: Vec<&FanoutAgent> = current.iter().collect();
     sorted.sort_by(|a, b| {
         a.spawn_depth

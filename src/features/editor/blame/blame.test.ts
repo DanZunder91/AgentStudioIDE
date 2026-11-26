@@ -1,10 +1,5 @@
-/**
- * `blame.ts` — the pure logic behind the annotate gutter: labels,
- * run collapsing, line clamping, the popover model, and the calm error note.
- * All locale-sensitive assertions pass an explicit "en-US" so they don't depend
- * on the runner's locale; timestamps are built with the LOCAL-time Date
- * constructor so they don't depend on the runner's timezone either.
- */
+/** Locale-sensitive assertions pass "en-US" and timestamps use the local-time Date constructor,
+ * so results don't depend on the runner's locale or timezone. */
 
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";

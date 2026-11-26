@@ -1,16 +1,6 @@
-/**
- * Agent Village — characters, their origin marker, the spawn/despawn effect
- * and the status bubbles.
- *
- * Sheets are the vendored pixel-agents 112×96 character PNGs: 7 columns × 3
- * rows of 16×32 frames. Rows: down, up, right (left = right mirrored).
- * Columns: 0-2 walk (cycle 0,1,2,1; col 1 doubles as the idle pose), 3-4 type,
- * 5-6 read. The CharacterView's (x, y) is the FEET (bottom-centre).
- *
- * Spawn/despawn is a green "matrix rain": per column, a bright head sweeps
- * top-to-bottom over ALL 32 rows of the frame, trailed by flickering green;
- * on spawn the sprite is revealed behind the head, on despawn it is consumed.
- */
+/** Sheets: vendored pixel-agents PNGs, 7 cols × 3 rows of 16×32 frames. Rows: down, up, right
+ * (left = right mirrored); cols 0-2 walk (cycle 0,1,2,1; col 1 = idle), 3-4 type, 5-6 read.
+ * A CharacterView's (x, y) is the FEET (bottom-centre). */
 
 import { SEAT_LIFT, type CharacterView, type Dir } from "../villageTypes";
 import type { Camera } from "./camera";
@@ -67,11 +57,7 @@ export function headTop(c: Pick<CharacterView, "y" | "seated">): number {
   return Math.round(c.y) - HEAD - (c.seated ? SEAT_LIFT : 0);
 }
 
-/**
- * The matrix-rain reveal/consume of one frame. Column `i` of the displayed
- * sprite starts after a per-column stagger and sweeps its head from row 0 to
- * past row 31 (the whole frame — no rows are skipped).
- */
+/** Matrix-rain reveal/consume: column `i` starts after a stagger; its head sweeps all 32 rows. */
 function drawMatrix(
   ctx: DrawTarget,
   cam: Camera,

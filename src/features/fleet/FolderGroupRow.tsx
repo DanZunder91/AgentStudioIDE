@@ -1,14 +1,6 @@
-/**
- * A folder-group header — the layer above root agents.
- *
- * Root agents are grouped by `cwd`; this row names the folder, counts its
- * agents, rolls up their statuses, discloses the group (default EXPANDED), and
- * carries a per-folder `+` to launch another agent in it.
- *
- * `memo` on primitive props, exactly like `<AgentRow>`: a re-flatten on an
- * activity tick hands it identical numbers, so it re-renders nothing — the same
- * budget the fan-out tree holds.
- */
+/** A folder-group header above its root agents: name, count, status rollup, disclosure (expanded
+ * by default) and a per-folder `+`. `memo`'d on primitives like `<AgentRow>`, so a tick
+ * re-renders nothing. */
 
 import { memo, useState, type CSSProperties, type DragEvent } from "react";
 
@@ -18,25 +10,12 @@ import { projectColor, projectMonogram } from "./projectBadge";
 import { useLaunchAgent } from "./useLaunchAgent";
 import "./fleet.css";
 
-/**
- * Drag payload for reordering a folder-group header (feature: sortable rail). The
- * VALUE is the dragged folder's absolute path; the drop target reads it back and
- * calls `moveFolder(dragged, target)` (dragged lands immediately before target).
- *
- * A folder-specific MIME so a folder drag, an agent-row drag (AGENT_DND_MIME) and
- * a centre-pane tab drag (TAB_DND_MIME) never accept one another.
- */
+/** Drag MIME for reordering folder headers; the value is the folder path (it lands before the
+ * target). Distinct from AGENT_DND_MIME and TAB_DND_MIME so the drags never cross. */
 export const FOLDER_DND_MIME = "application/x-agentstudio-folder";
 
-/**
- * A dragover-readable marker type encoding the SOURCE folder's own path.
- *
- * `dataTransfer` VALUES are unreadable during `dragover` (the drag store is in
- * protected mode until the drop) — but the TYPE list is readable. So the source
- * path is smuggled into a type name, letting a `dragover` suppress the drop
- * indicator on the very row being dragged (a self-drop is a no-op). Lowercased
- * because the HTML5 DnD spec lowercases every format string.
- */
+/** DnD values are unreadable during `dragover` but types are not, so the source path rides in a
+ * type name and the dragged row hides its own drop indicator. Lowercased, as the spec does. */
 export function folderPathType(path: string): string {
   return `${FOLDER_DND_MIME}-path:${path}`.toLowerCase();
 }

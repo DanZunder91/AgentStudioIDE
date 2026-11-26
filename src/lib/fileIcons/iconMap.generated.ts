@@ -1,10 +1,6 @@
-/**
- * ⚠️ GENERATED — do not edit; source: scripts/icons/mapping.mjs (+ the vendored
- * SVGs in src/assets/file-icons/svg); upstream v5.37.0.
- * Regenerate with `node scripts/icons/generate.mjs`.
- *
- * The `<FileIcon>` lookup tables (file-icons.md §3 ladder).
- */
+/** GENERATED — do not edit: `node scripts/icons/generate.mjs` from scripts/icons/mapping.mjs
+ * and the SVGs in src/assets/file-icons/svg (upstream v5.37.0).
+ * The `<FileIcon>` lookup tables (file-icons.md §3 ladder). */
 
 export interface IconMap {
   /** exact lowercased basename → icon id, e.g. "cargo.toml" → "rust" */

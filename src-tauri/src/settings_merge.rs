@@ -1,27 +1,6 @@
-//! Merge our binding hook into a Claude `settings.local.json`, non-destructively
-//! Generic over the JSON; the hook *content* comes from the adapter.
-//!
-//! Three rules, because this writes into the user's project:
-//! 1. **Preserve** everything already there — a user's own hooks, permissions,
-//!    plugins. We only ever *append* our entries.
-//! 2. **Idempotent, per event** — recognise our own hook by its `marker` and never
-//!    add a second copy *to an event that already has ours*, so opening the same
-//!    workspace twice does not accrete duplicates. The check is **per event, not
-//!    whole-file**: when a newer build installs additional events (e.g. turn hooks added
-//!    `Stop`/`UserPromptSubmit`/`Notification` on top of `SessionStart`/`SessionEnd`),
-//!    a file written by an older build — which carries our marker on the *old* events
-//!    only — is upgraded in place by back-filling the missing events. A whole-file
-//!    marker scan would wrongly declare such a file "already installed" and strand it
-//!    without the new hooks (the "stuck on Running" bug).
-//! 3. **Never clobber** — if the existing file is present but unparseable, leave it
-//!    untouched rather than overwrite data we don't understand.
-//! 4. **Upgrade our own command in place** — when an event already carries our marker but
-//!    the command text differs from the one we install now (e.g. a newer build added
-//!    `curl --noproxy '*'` so the hook bypasses the capture proxy),
-//!    the `command` string of OUR hook is rewritten in place. Only a hook object whose
-//!    `command` contains the marker is touched; its position, the entry's `matcher` and every
-//!    user hook stay as they were. Without this, per-event idempotency would keep an old
-//!    command forever in every workspace that was ever opened.
+//! Merges our hook into a project's Claude `settings.local.json`: preserve all user content,
+//! never clobber an unparseable file, idempotent per event (back-fill events an older install
+//! lacks), and rewrite only our marked hook's `command` in place when it changed.
 
 use serde_json::Value;
 
@@ -37,10 +16,8 @@ pub enum MergeOutcome {
     SkipMalformed,
 }
 
-/// Merge `additions` (shape: `{ "hooks": { "<Event>": [entry, …] } }`) into
-/// `existing`.
-///
-/// `marker` is a substring of our hook command that identifies it as ours.
+/// Merge `additions` (`{ "hooks": { "<Event>": [entry, …] } }`) into `existing`; `marker` is a
+/// substring of our hook command that identifies it as ours.
 pub fn merge_hook_settings(
     existing: Option<&str>,
     additions: &Value,
@@ -73,10 +50,8 @@ pub fn merge_hook_settings(
         // Nothing to add (shouldn't happen for a real adapter) — leave as-is.
         return MergeOutcome::AlreadyPresent;
     };
-    // Per-event idempotency: only append to events that don't already carry OUR
-    // marker. `changed` tracks whether we actually added anything, so a file that
-    // already has every event we install is reported `AlreadyPresent` (no rewrite),
-    // while one missing some events is upgraded in place.
+    // Append only to events without OUR marker; `changed` separates `AlreadyPresent` (no
+    // rewrite) from a partial install upgraded in place.
     let mut changed = false;
     for (event, entries) in additions_hooks {
         let Some(entries) = entries.as_array() else {
@@ -157,10 +132,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Rule 4 against the REAL adapter content: a workspace installed by a build whose hook
-    /// command predates `--noproxy '*'` is upgraded in place — every event, no duplicate, the
-    /// user's own hook and settings untouched — and a second merge is a no-op. Pure: no file
-    /// is read or written, so `~/.claude` cannot be touched.
+    /// Rule 4 against the REAL adapter content (a command without `--noproxy '*'`).
+    /// Pure: no file I/O, so `~/.claude` cannot be touched.
     #[test]
     fn an_old_hook_command_install_is_upgraded_in_place_idempotently() {
         use crate::agent::adapter::AgentAdapter as _;
@@ -220,10 +193,8 @@ mod tests {
         );
     }
 
-    /// The SessionStart context upgrade against the REAL adapter content: an install
-    /// whose SessionStart still carries the plain POST command (no context JSON) gets the new
-    /// SessionStart command in place; the other events — already current — are byte-for-byte
-    /// untouched; a second merge is a no-op. Pure: no file I/O, so `~/.claude` is untouchable.
+    /// Against the REAL adapter content: only SessionStart changes, the other events stay
+    /// byte-for-byte. Pure: no file I/O, so `~/.claude` cannot be touched.
     #[test]
     fn an_install_without_the_session_start_context_is_upgraded_in_place() {
         use crate::agent::adapter::AgentAdapter as _;
@@ -328,12 +299,8 @@ mod tests {
         );
     }
 
-    /// **Upgrade in place (regression, the "stuck on Running" bug):** a file written
-    /// by an older build carries our marker on the *old* events only. Re-installing
-    /// with a newer, larger event set must **back-fill the missing events** — not
-    /// declare the file "already installed" and strand it. Here the old file has our
-    /// `SessionStart`/`SessionEnd`; additions add `Stop`. `Stop` must appear, and the
-    /// old events must NOT gain a duplicate.
+    /// A whole-file marker check would call an older install "already installed" and strand it
+    /// without the new events (agents stuck on Running).
     #[test]
     fn backfills_new_events_into_an_older_install() {
         let old = match merge_hook_settings(None, &additions(), "my-marker") {

@@ -1,35 +1,6 @@
-/**
- * `classifyLine` — the TS twin of `logstream::level::classify_level` (Rust,
- * `src-tauri/src/logstream/level.rs`), for the ONE place the UI has to guess a level
- * itself: the lines inside a command block's output. Rust levels every stream line it emits, but
- * a tool result is one wire line whose `detail` holds many lines — and a block used to paint all
- * of them with the RESULT's level, so `WARN gazelle::db: pool at 90%` read `I`. Each output line is now
- * classified on its own, by the same rule table.
- *
- * ── Same rules, not "similar" rules ──────────────────────────────────────────────
- * Two heuristics that disagree would show one line as W in a service's stream and I in
- * the block that tailed it. So this is a transliteration, rule for rule and in the same
- * precedence (os_log compact column → a structured logger's declared level → keywords),
- * and `src/test/contract/level.contract.test.ts` asserts agreement on EVERY case of the
- * golden table Rust writes (`goldens/level-cases.json`). Change a rule here only together
- * with Rust, and regenerate that golden.
- *
- * ── Where the regex dialects differ, and how each difference is closed ───────────
- * The `regex` crate is Unicode-aware by default; a JS RegExp is not, even with `u`:
- *   - `\d` in Rust is any `\p{Nd}` digit — spelled `\p{Nd}` here.
- *   - `\s` in Rust is `\p{White_Space}` (JS's `\s` adds U+FEFF and omits U+0085) — spelled
- *     `[\p{White_Space}]` here.
- *   - `\b` in Rust is a UNICODE word boundary (`é` is a word character, so `éerror` holds
- *     no word `error`); JS's `\b` is ASCII-only. It is rebuilt from the Unicode `\w` class
- *     below. A leading boundary is `(?:^|[^\w])` — it consumes one character, which is
- *     harmless because every leading-`\b` rule is either a bare `is_match` or sits before a
- *     capture that does not include it — rather than a lookbehind, which older WebKit
- *     (Safari < 16.4, i.e. the WKWebView of an older macOS) rejects at PARSE time: one
- *     unsupported literal would take the whole Logs view down at module load.
- *   - `(?i)` in Rust is simple Unicode case folding — JS's `iu` is the same folding.
- * Rust matches leftmost-first (the same preference a backtracking engine has), so the
- * captured level column is the same one JS captures.
- */
+/** TS twin of Rust's `classify_level` (`src-tauri/src/logstream/level.rs`) for block output
+ * lines: same rules, same precedence, golden-checked by `src/test/contract/level.contract.test.ts`
+ * (change both). Unicode classes stand in for `\d`/`\s`/`\b`; no lookbehind (old WebKit). */
 
 import type { LogLevel } from "./agentLogsTypes";
 

@@ -1,67 +1,7 @@
 #!/usr/bin/env node
-/**
- * `npm run verify` — the ONE command that runs everything that can run on this machine.
- *
- * ── Why this exists ──────────────────────────────────────────────────────────
- * CI state on GitHub is not tracked. The one requirement is that every test passes locally —
- * the integration tests included, with no exceptions.
- *
- * So **local is the authority**, and that demands one command rather than a checklist a
- * human assembles from memory. The gap it closes is specific: the usual gate commands
- * cover the hermetic tiers, but every integration test in this repo is `#[ignore]`d — by
- * design (`cargo test` must never need Docker, a network, or a signed-in CLI). The
- * consequence is that the tests which prove the product actually WORKS are
- * exactly the ones a default run silently skips. This runs them too.
- *
- * ── The three classes, and why they are not treated alike ────────────────────
- * Lumping them together would recreate a permanently-red gate: a suite that fails because
- * someone's Wi-Fi is down teaches people to ignore failures.
- *
- *  1. **BLOCKING — hermetic.** typecheck, lint, vitest, coverage, browser tier, cargo
- *     fmt/clippy/test, and the dependency audit. No excuses available.
- *  2. **BLOCKING — local integration.** Real work against things fully under our control:
- *     the Dockerised databases, the installed `claude` CLI, the real `~/.claude`. If these
- *     fail, the product is broken. This is the class that matters most, and the class a
- *     default `cargo test` skips entirely.
- *  3. **REPORTED, non-blocking — public internet.** The live TLS smokes against
- *     example.com / echo.websocket.org / grpcb.in. They prove our TLS stack against the
- *     real world (they are how a change of crypto provider was verified), but a third party's
- *     outage is not our regression. Run, printed, never fatal.
- *
- * Deliberately EXCLUDED, by name and with the reason — because a silent skip is
- * indistinguishable from a pass:
- *   `grpc::tests::reflect_lists_services_from_a_live_server`
- *   `grpc::tests::unary_call_against_a_live_server`
- * Both want a gRPC server on `localhost:50051` that this repo does not ship. They are
- * tests for a fixture that does not exist, not failing tests.
- *
- * ── Docker ───────────────────────────────────────────────────────────────────
- * The database tier needs `docker/db-fixtures`. This script brings it up if it is not
- * already healthy and leaves it **as it found it**: if you had it running, it stays up; if
- * this script started it, it stops it. Nobody should have to remember a teardown.
- *
- * Without Docker at all (a Windows VM with no nested virtualisation, a Mac whose Docker Desktop
- * is stopped), every step that needs it is still in the plan and still FAILS — with the reason
- * printed ("Docker is not available on this machine — …") instead of a stack trace — and every
- * other step still runs. A missing Docker never turns a blocking step into a skip.
- *
- * ── Windows hosts ────────────────────────────────────────────────────────────
- * Command spelling goes through `spawnSpec` (scripts/platform.mjs): npm is `npm.cmd` there and
- * must be spawned through a shell (CVE-2024-27980). The Docker cross-compile
- * (`scripts/windows-check.mjs`) is replaced by a printed SKIP: on Windows the native cargo
- * clippy/test steps compile, lint AND run the `cfg(windows)` code, which is strictly more than
- * the cross-compile proves. The decisions are pure functions (`planSteps`, `decideStep`,
- * `dockerVerdict`), unit-tested in `verify.test.mjs` with the platform passed in.
- * `node scripts/verify.mjs --plan` prints this host's plan (run / skip / fail + reason) and runs
- * nothing.
- *
- * A step whose tests are `cfg`-gated to other OSes (`onlyOn`) is a named SKIP saying
- * "0 tests" rather than a cargo run that compiles them away and prints ok; and a Windows host runs
- * its own local integration — a real PowerShell terminal captured by Network, the Event Log, and
- * the real app over CDP (`scripts/windows-smoke.mjs --build`, hermetic: its own app identifier).
- *
- * Zero dependencies, like `audit.mjs` and `attribution.mjs`.
- */
+/** `npm run verify`: everything runnable here; local is the authority. Blocking: hermetic and local
+ * integration (#[ignore]d by design); reported only: public internet. The fixture is left as found;
+ * no Docker means fail with a reason, never skip. `--plan` prints the plan and runs nothing. */
 
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -69,11 +9,8 @@ import { fileURLToPath } from "node:url";
 
 import { spawnSpec, WINDOWS_HOST_CHECK_SKIP } from "./platform.mjs";
 
-// Not `new URL("..", import.meta.url).pathname`: on Windows that is `/C:/Users/…`, which no API
-// accepts as a cwd. And not `new URL(…)` at all at module level: under vitest's jsdom environment
-// the global `URL` resolves `..` against `http://localhost:3000/@fs/…`, so importing this file in
-// a test threw. `fileURLToPath` on the string gives `C:\Users\…` on Windows and the same POSIX
-// path as before elsewhere — the form scripts/windows-check.mjs and friends already use.
+// fileURLToPath, not `new URL(…).pathname` (`/C:/…` on Windows), and no module-level `new URL`:
+// under vitest's jsdom the global URL resolves against http://localhost, breaking test imports.
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const COMPOSE = "docker/db-fixtures/compose.yaml";
 
@@ -86,21 +23,9 @@ const red = (s) => c(31, s);
 const yellow = (s) => c(33, s);
 const dim = (s) => c(2, s);
 
-/**
- * One step. `blocking: false` means a failure is reported and does not change the exit
- * code — reserved for things a third party can break.
- *
- * `needsDocker: true` — the step cannot run without a Docker daemon; without one it FAILS with
- * that reason (blocking or not, per its class) rather than crashing.
- * `needsFixture: true` — it also needs `docker/db-fixtures` up (the lifecycle in `main`), and it
- * is the step `--no-docker` leaves out.
- * `skipOn: { <platform>: reason }` — the step is redundant on that host OS; it is reported as
- * SKIP with the reason, every run.
- * `onlyOn: { platforms, reason }` — the step's tests exist only on those OSes (they are
- * `cfg`-gated). Elsewhere cargo would compile them away, run ZERO tests and print `ok` — a silent
- * 0-test pass, indistinguishable from a pass — so the step is a SKIP there, with the
- * reason and the words "0 tests".
- */
+/** `blocking: false`: reported only (third-party breakable). `needsDocker`/`needsFixture`: fail
+ * with the reason without Docker; `--no-docker` drops fixture steps. `skipOn`: named SKIP per OS;
+ * `onlyOn`: SKIP saying "0 tests" elsewhere (cargo would compile them away and print ok). */
 const HERMETIC = [
   { name: "typecheck", cmd: "npm", args: ["run", "typecheck"] },
   { name: "lint", cmd: "npm", args: ["run", "lint"] },
@@ -143,11 +68,8 @@ const LOCAL_INTEGRATION = [
     ],
   },
   {
-    // Agent tools over MCP: the real `claude mcp add|get|remove` behind `agent-studio mcp
-    // install|status|uninstall`, so a change in the wording Claude Code prints is caught here.
-    // In a throwaway CLAUDE_CONFIG_DIR, HOME and XDG dirs: the user's Claude Code config is never
-    // written, and the test asserts it comes out byte-identical. No model call. Claude's own
-    // health check starts the built binary as the MCP server.
+    // Real `claude mcp add|get|remove` in throwaway CLAUDE_CONFIG_DIR/HOME/XDG dirs; asserts the
+    // user's config stays byte-identical. Catches Claude Code wording changes. No model call.
     name: "MCP install via the real claude CLI (throwaway config)",
     cmd: "cargo",
     args: [
@@ -184,10 +106,7 @@ const LOCAL_INTEGRATION = [
     ],
   },
   {
-    // "Open in Browser": enumeration reads this machine's real installed
-    // apps, so it belongs here rather than in EXTERNAL — no network, nothing a
-    // third party can break. It asserts a browser was FOUND and that the argv
-    // built for it is the `open -b <bundle-id>` form; it never launches one.
+    // Reads this machine's installed apps (no network, so not EXTERNAL); never launches a browser.
     name: "browser enumeration on the real machine",
     cmd: "cargo",
     args: [
@@ -197,10 +116,8 @@ const LOCAL_INTEGRATION = [
     ],
   },
   {
-    // Network capture: the system curl, driven through the proxy with the env
-    // `pty_env` injects, against a loopback upstream. Proves a real client honours the
-    // variables — nothing leaves the host. macOS/Linux: `/usr/bin/curl`, decrypted. Windows:
-    // `System32\curl.exe` — Schannel, so tunnelled, and proven never broken.
+    // System curl honours the injected proxy env against a loopback upstream. Windows curl uses
+    // Schannel, so it is tunnelled, and proven never broken.
     name: "real curl through the capture proxy",
     cmd: "cargo",
     args: [
@@ -209,10 +126,8 @@ const LOCAL_INTEGRATION = [
     ],
   },
   {
-    // An agent's `curl --noproxy '*' http://127.0.0.1:…` in an IDE terminal used to
-    // never reach Network. A REAL PTY with the injected env resolves `curl`
-    // to the netcap curl shim, which drops the bypass and execs the real /usr/bin/curl through
-    // the proxy (attributed to the terminal); strict off, the same command bypasses again.
+    // A real PTY resolves `curl` to the netcap shim, which drops `--noproxy` and goes through the
+    // proxy; with strict off, the same command bypasses again.
     name: "real curl --noproxy in a PTY captured by the curl shim",
     cmd: "cargo",
     args: [
@@ -251,11 +166,9 @@ const LOCAL_INTEGRATION = [
     onlyOn: { platforms: ["darwin"], reason: "macOS only: the real /usr/bin/log stream (Windows' Event Log is its own step)" },
   },
   {
-    // Agent Logs · system apps on WINDOWS: an event written with ReportEventW
-    // under a fresh source travels the production path — `Syslog::set` → EvtSubscribe →
-    // EvtRender/EvtFormatMessage → hub — and the level floor, the provider filter and disable are
-    // checked on real events. Leaves `AgentStudio-test-<ulid>` records in the Application log,
-    // hence ignored. Windows only (the module is cfg(windows); zero tests elsewhere).
+    // ReportEventW events through the production path into the hub. Leaves
+    // `AgentStudio-test-<ulid>` records in the Application log, hence ignored.
+    // Windows only (cfg(windows)).
     name: "real Windows Event Log into the log hub",
     cmd: "cargo",
     args: [
@@ -295,13 +208,8 @@ const LOCAL_INTEGRATION = [
     },
   },
   {
-    // The Rust core compiled and linted FOR Windows (scripts/windows-check.mjs): a Linux
-    // container cross-compiling to x86_64-pc-windows-gnu, since a Mac cannot run Windows.
-    // Proves every `cfg(windows)` item and Windows-only test type-checks and passes clippy;
-    // RUNS nothing (the script's header lists what a green does not prove). Without it, no
-    // local gate looks at Windows-only code at all. Needs Docker, like
-    // db_live. ~45 s cold, ~10 s warm. On a Windows HOST it is skipped by name: the
-    // native cargo steps above already compile, lint and run the cfg(windows) code.
+    // Cross-compiles and lints cfg(windows) code; runs nothing (see the script's header). Needs
+    // Docker. Skipped by name on a Windows host, whose native cargo steps already cover it.
     name: "Windows: the Rust core compiles and lints for Windows (Docker)",
     cmd: "node",
     args: ["scripts/windows-check.mjs"],
@@ -309,22 +217,16 @@ const LOCAL_INTEGRATION = [
     skipOn: { win32: WINDOWS_HOST_CHECK_SKIP },
   },
   {
-    // Layer-6 E2E against the REAL app, on Ubuntu in Docker — Tauri's WebDriver
-    // cannot drive macOS, and macOS UI automation needs a permission (no OS permission may
-    // be required). Needs Docker, like db_live. It catches what unit tests cannot: a column
-    // rendering at 0px, or a wdio.conf that never loads (`__dirname` in ESM).
+    // Layer-6 E2E on Ubuntu in Docker: Tauri's WebDriver can't drive macOS, and macOS UI
+    // automation would need an OS permission. Catches what unit tests can't (a 0px column).
     name: "E2E: the real app on Ubuntu (Docker)",
     cmd: "node",
     args: ["scripts/e2e-linux.mjs", "--all"],
     needsDocker: true,
   },
   {
-    // The REAL app on WINDOWS: WebView2 + the Rust core + real PTYs, driven over CDP
-    // by Playwright (scripts/windows-smoke.mjs) — Tauri's WebDriver tier cannot drive WebView2 here.
-    // `--build` builds the exe it needs first: `tauri build --debug --no-bundle` with a config
-    // override in the OS temp dir (a remote-debugging port, a fresh `npm run build`, and the smoke's
-    // OWN identifier, so the run never reads or writes the user's real app data), copied out of
-    // `target` before it runs. Slow (a debug build of the whole app); nothing leaves the machine.
+    // The real app on Windows over CDP (WebDriver can't drive WebView2 here). `--build` makes a
+    // hermetic debug exe first (own identifier); slow, and nothing leaves the machine.
     name: "Windows: the real app (WebView2) smoke",
     cmd: "node",
     args: ["scripts/windows-smoke.mjs", "--build"],
@@ -356,10 +258,7 @@ const EXTERNAL = [
     blocking: false,
   },
   {
-    // Agent Village ambience (the Village shows the real weather): the
-    // real `village_weather` command against Open-Meteo for Asia/Tokyo — zone → city coordinates,
-    // the live forecast parsed, then served again from the in-process cache. Open-Meteo's
-    // outage is not our regression.
+    // The real `village_weather` against Open-Meteo for Asia/Tokyo, then from the in-process cache.
     name: "live weather: Open-Meteo for Asia/Tokyo",
     cmd: "cargo",
     args: [
@@ -369,10 +268,8 @@ const EXTERNAL = [
     blocking: false,
   },
   {
-    // Network capture against a REAL site (a service that makes a real outbound HTTP call, to a
-    // safe target). Only https://example.com/ (IANA). curl through
-    // the proxy is decrypted (200, "Example Domain"); a client that doesn't read the IDE's CA is
-    // tunnelled and its request still succeeds — the never-break guarantee on the real internet.
+    // Only https://example.com/: curl via the proxy is decrypted; a client not trusting the IDE's
+    // CA is tunnelled and still succeeds (never-break, on the real internet).
     name: "live: example.com through the capture proxy",
     cmd: "cargo",
     args: [
@@ -430,10 +327,7 @@ function run(step) {
   return result(r.status === 0);
 }
 
-/**
- * What `docker info` said about this machine. Pure: takes the `spawnSync` result.
- * Exported and unit-tested — "is Docker here" decides whether four steps run or fail.
- */
+/** Pure; decides whether the Docker steps run or fail. */
 export function dockerVerdict(probe) {
   if (probe.error) {
     if (probe.error.code === "ENOENT") {
@@ -463,13 +357,8 @@ function probeDocker() {
   );
 }
 
-/**
- * Run, skip, or fail-without-running — for one step on this host. Pure.
- *  - `skip` only for a step that is REDUNDANT on this OS (`skipOn`), with the reason printed.
- *  - `fail` for a step that needs Docker on a machine without it: it keeps its class (blocking
- *    or external), so a blocking Docker step still fails the run (never a silent skip), with
- *    the cause printed rather than a stack trace.
- */
+/** Pure. `skip` only when redundant on this OS (`skipOn`); a Docker step without Docker fails in
+ * its own class, so a blocking one still fails the run, with the cause printed. */
 export function decideStep(step, platform, docker) {
   const hostSkip = step.skipOn?.[platform];
   if (hostSkip) return { step, action: "skip", reason: hostSkip };
@@ -482,11 +371,8 @@ export function decideStep(step, platform, docker) {
   return { step, action: "run", reason: null };
 }
 
-/**
- * The whole plan, per group. Pure. `--no-network` drops the external group; `--no-docker` drops
- * the database-fixture step (and `main` says so in the summary) — exactly as before. Nothing else
- * is ever dropped: every other step is run, skipped with a reason, or failed with a reason.
- */
+/** Pure. Only `--no-network` (external group) and `--no-docker` (fixture step) drop steps; every
+ * other step runs, skips with a reason, or fails with a reason. */
 export function planSteps({ groups, platform, docker, skipDocker = false, skipExternal = false }) {
   return groups
     .filter((g) => !(g.external && skipExternal))
@@ -503,28 +389,12 @@ export const GROUPS = [
   { name: "external (non-blocking)", steps: EXTERNAL, external: true },
 ];
 
-/**
- * The engines the database tier actually dials. **Postgres, MySQL, ClickHouse and MongoDB** have
- * drivers (six of the eight presets, counting the two Aurora rows), so those four can break the
- * product; the rest exist for the drivers still to come.
- *
- * 🔴 Why this list exists at all: `fixtureHealthy` used to require **every** container to be
- * healthy, so an unhealthy ClickHouse — an engine no test touches — refused to run the whole
- * tier, and with it the only tests that prove the database client works. A gate that fails
- * for a reason unrelated to the code teaches people to skip it. Add an engine here in the same commit that adds its driver:
- * a driver whose container cannot block the tier is a driver whose live tests can be silently
- * skipped, which is the same defect from the other side.
- */
+/** Engines the DB tier dials: only these can block it (an unhealthy driverless engine must not
+ * refuse the tier). Add one in the same commit as its driver, or its live tests can be skipped. */
 const TIER_ENGINES = ["postgres", "mysql", "clickhouse", "mongo", "redis", "dynamodb"];
 
-/**
- * Which fixture containers matter, and what to say about the rest. Pure and unit-tested:
- * "is the fixture usable" is a decision, and a decision inside a runner that nobody can test
- * is how a permanently-red gate gets built in the first place.
- *
- * `states` maps service name → docker health string (`healthy`, `unhealthy`, `starting`, `""`
- * for a container with no healthcheck).
- */
+/** Pure: "is the fixture usable" is a decision and must be testable. `states`: service → docker
+ * health (`healthy`, `unhealthy`, `starting`, `""` with no healthcheck). */
 export function fixtureVerdict(states, required = TIER_ENGINES) {
   const names = Object.keys(states);
   const missing = required.filter((n) => !names.includes(n));
@@ -541,11 +411,7 @@ export function fixtureVerdict(states, required = TIER_ENGINES) {
   };
 }
 
-/**
- * Parse `docker compose ps --format "{{.Service}}\t{{.Health}}"`. Pure. Splits on `\r?\n`: the
- * Docker CLI on Windows may end lines with CRLF, and a `\r` left on the health string would make
- * `healthy\r` read as unhealthy — the whole tier refused for a line ending.
- */
+/** Pure. Splits on `\r?\n`: Windows Docker may emit CRLF, and `healthy\r` would read unhealthy. */
 export function parseFixtureStates(stdout) {
   const states = {};
   for (const line of String(stdout).trim().split(/\r?\n/).filter(Boolean)) {
@@ -566,10 +432,7 @@ function fixtureStates() {
   return parseFixtureStates(r.stdout);
 }
 
-/**
- * The pure verdict. Exported and unit-tested (`verify.test.mjs`) because the interesting
- * logic is *which* failures matter, and that must not be discovered by reading a runner.
- */
+/** Pure; which failures matter is pinned in verify.test.mjs, not left to reading a runner. */
 export function classify(results) {
   const failedBlocking = results.filter((r) => !r.ok && r.blocking);
   const failedExternal = results.filter((r) => !r.ok && !r.blocking);

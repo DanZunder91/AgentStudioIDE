@@ -1,47 +1,6 @@
-//! The engine seam and the PostgreSQL implementation (plus the MySQL one beside it).
-//!
-//! ## The seam, and why it is a trait
-//!
-//! Same philosophy as `AgentAdapter` and `lsp::registry`'s `Prober`: every
-//! engine-specific line lives behind [`DbEngine`] / [`DbSession`], so adding MySQL, ClickHouse,
-//! Mongo or Redis cannot reach into the command layer, the store or the guard. [`engine_for`]
-//! is the only door, and an engine that is not wired returns an error that **names the
-//! engine** rather than a silent `None` — a row the dialog offers and nothing can connect
-//! to would be the worst of both.
-//!
-//! ## The read-only guarantee, and the measurement that shaped it
-//!
-//! Read-only is the boundary, and the **server** must enforce it. For Postgres
-//! that is `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`. The non-obvious part, which
-//! was measured against the Docker fixture in both directions:
-//!
-//! ```text
-//! psql -c "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY; INSERT …"
-//!    → SET / INSERT 0 1        ← the write SUCCEEDED
-//! psql -c "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY" -c "INSERT …"
-//!    → ERROR: cannot execute INSERT in a read-only transaction
-//! ```
-//!
-//! A simple-query batch runs inside one implicit transaction that has **already begun** with
-//! the old characteristics, so a `SET` at the head of the batch does not bind the statements
-//! behind it. Since [`sqlx::raw_sql`] takes multiple `;`-separated statements, the natural
-//! implementation — prepend the `SET` to the user's script — would silently void the single
-//! most important guardrail in this feature. So the `SET` is **its own round trip at connect**
-//! ([`PostgresEngine::open`]) and is never concatenated with user SQL.
-//!
-//! `src-tauri/tests/db_live.rs::read_only_survives_a_multi_statement_script` is the proof, and
-//! it asserts on **the absence of the row**, not on the presence of an error: the first attempt
-//! at that measurement failed with a NOT NULL violation, which looks exactly like the guard
-//! working while the guard had in fact let the write through.
-//!
-//! ## Every value is read as text
-//!
-//! [`sqlx::raw_sql`] executes unprepared, which puts the Postgres connection in the **simple
-//! query protocol**, where the server text-encodes every type it has — including ones an
-//! extension added this morning. So one `try_get_unchecked::<Option<String>, _>(i)` per cell
-//! yields exactly what `psql` would print, `None` is SQL NULL and `Some("")` is the empty
-//! string. `try_get_unchecked` is load-bearing: the checked `try_get` would consult
-//! `Type::compatible` and reject `String` for an `int4` column.
+//! The engine seam ([`DbEngine`]/[`DbSession`], reached only via [`engine_for`]) plus PostgreSQL
+//! and MySQL. The read-only `SET` is its own round trip at connect: prepended to a `raw_sql` batch
+//! it would not bind (see `tests/db_live.rs`). Cells are read as text (simple query protocol).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -63,21 +22,15 @@ use crate::db::tree::{count_label, DbGroup, DbNode, DbNodeKind, DbNodeRef};
 
 /* ─────────────────────────────── the seam's types ─────────────────────────────── */
 
-/// Everything an engine needs to dial, **with the secret resolved**.
-///
-/// In-process only: this is built inside `db_open` / `db_test_connection` and never crosses
-/// the IPC boundary in either direction. Its [`std::fmt::Debug`] is hand-written so a
-/// stray `dbg!`, a `tracing` field or a panic message cannot print the password — the class of
-/// leak that is only ever found when someone pastes a log.
+/// Everything an engine needs to dial, with the secret resolved. In-process only (never crosses
+/// IPC); `Debug` is hand-written so the password cannot reach a log or panic.
 #[derive(Clone)]
 pub struct ResolvedConfig {
     pub engine: DbEngineId,
     pub family: DbFamily,
     pub host: String,
-    /// `None` = the record's port field was empty. **Not resolved on the way in on purpose**: the
-    /// engine is what knows whether a port is even meaningful, and for `mongodb+srv` it is not —
-    /// substituting 27017 here would put a port into a place that must not have one. Every engine
-    /// that does need a number gets it from [`Self::port_or_default`].
+    /// `None` = empty port field, deliberately unresolved: `mongodb+srv` must have no port. Engines
+    /// that need a number call [`Self::port_or_default`].
     pub port: Option<u16>,
     /// `mongodb+srv://` — DNS seed-list discovery (Atlas). Meaningful only to
     /// [`crate::db::mongo`]; the other engines have no seed-list form and ignore it.
@@ -125,22 +78,8 @@ impl std::fmt::Debug for ResolvedConfig {
 }
 
 impl ResolvedConfig {
-    /// The port to dial: the record's, or **the descriptor's `default_port`** when the field was
-    /// left empty.
-    ///
-    /// One function for every engine, so "what does an empty port mean" is answered in exactly one
-    /// place. The descriptor rather than each driver's own default, for a measured reason:
-    /// `sqlx-postgres`'s `PgConnectOptions::new_without_pgpass()` defaults its port to
-    /// **`$PGPORT` or 5432** (`sqlx-postgres-0.9.0/src/options/mod.rs:57`), while
-    /// `MySqlConnectOptions::new()` hardcodes 3306 and ClickHouse has no driver default at all
-    /// because *we* build the URL. Taking "the driver's default" would therefore mean three
-    /// different rules, one of which depends on the environment the app was launched from — and it
-    /// would make the dialog's placeholder (`EngineSpec::default_port`, which is what the user
-    /// *sees* in the empty box) a lie whenever `PGPORT` was set. The number is the same 5432/3306
-    /// either way; what differs is whether it is predictable.
-    ///
-    /// ⚠️ Meaningless when [`Self::srv`] is set — an SRV connection has no port, and
-    /// [`crate::db::mongo`] never calls this on that path.
+    /// The record's port, or the descriptor's `default_port` (the dialog's placeholder), never the
+    /// driver's: sqlx-postgres would read `$PGPORT`. Meaningless when [`Self::srv`] is set.
     pub fn port_or_default(&self) -> u16 {
         match self.port {
             Some(port) => port,
@@ -162,11 +101,8 @@ impl ResolvedConfig {
         }
     }
 
-    /// What the URL override says about the credential, or "nothing" when there is no override.
-    ///
-    /// One call site's worth of code, kept here so *every* engine asks the question the same way
-    /// and gets the same answer — see [`crate::db::url::credential_of`] for the rule and for the
-    /// bug that came of two engines answering it differently.
+    /// What the URL override says about the credential (nothing without one); every engine asks
+    /// here. The rule is [`crate::db::url::credential_of`].
     pub fn url_credential(&self) -> crate::db::url::UrlCredential {
         self.url
             .as_deref()
@@ -222,21 +158,14 @@ pub trait DbEngine: Send + Sync {
     async fn open(&self, cfg: &ResolvedConfig) -> Result<Box<dyn DbSession>, DbError>;
 }
 
-/// Cancels a session's running statement, from outside the session.
-///
-/// Owned independently of [`DbSession`] so it stays reachable while a query holds the session's
-/// mutex — see [`DbSession::cancel_handle`]. `Send + Sync` because it is stored in the session
-/// registry and called from a different task than the one running the query.
-// `async_trait` marks its boxed futures `#[must_use]`; clippy ≥ 1.99 flags that as
-// double_must_use on every async method. The futures are awaited; nothing to fix here.
+/// Cancels a session's running statement from outside it; owned apart from [`DbSession`] so it is
+/// reachable while a query holds the session mutex.
+// clippy >= 1.99 flags async_trait's `#[must_use]` futures as double_must_use; they are awaited.
 #[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait DbCancel: Send + Sync {
-    /// Ask the server to stop the statement this session is running.
-    ///
-    /// Returns `Ok(())` when the request was **delivered**, which is not the same as "the query has
-    /// stopped": every engine's cancel is advisory and asynchronous. The caller must not report
-    /// more than was done.
+    /// Ask the server to stop this session's statement. `Ok(())` means delivered, not stopped:
+    /// every engine's cancel is advisory and asynchronous.
     async fn cancel(&self) -> Result<(), DbError>;
 }
 
@@ -247,44 +176,9 @@ pub trait DbCancel: Send + Sync {
 pub trait DbSession: Send {
     /// A round trip that asks the server what it is. Used by Test Connection.
     async fn probe(&mut self) -> Result<ServerInfo, DbError>;
-    /// Ensure this session's connection is still usable, re-establishing it if it is not.
-    ///
-    /// 🔴 **The bug: Test Connection passed, but no query would run.** A
-    /// session is one connection cached in this process for the lifetime of the app
-    /// ([`crate::db::session`]), and until this method existed nothing ever asked whether its socket
-    /// was still there. A laptop suspend, a pooler's idle timeout, a NAT table expiring, a server
-    /// restart — every one of those closes a long-lived TCP socket, and every one of them turned
-    /// each later `db_query` on that session into a write to a corpse: `UnexpectedEof`, classified
-    /// by `error.rs` into *"the server accepted the connection and then closed it without
-    /// answering"*. Worse, **Test Connection kept saying the connection was fine**, because
-    /// [`crate::db::test_connection`] dials a fresh connection every call and never touches the
-    /// cache — so the one diagnostic a user reaches for agreed with them that the server was up.
-    /// The only cure was restarting the app, which empties the map. That is the defect this
-    /// removes: the user keeps their session id, and it keeps working.
-    ///
-    /// **A reconnect is a NEW server session, and that is a property of the feature, not a
-    /// footnote.** Temp tables, `SET`s the user issued themselves, advisory locks, open cursors and
-    /// an uncommitted `BEGIN` are all gone. They died with the socket — this call does not destroy
-    /// them, it finds them already destroyed — but someone who ran `BEGIN; UPDATE …` and comes back
-    /// to a silently fresh session could reasonably believe their transaction was still open. So an
-    /// implementation re-applies **only the setup this app itself owns** (the read-only guardrail
-    /// and the statement timeout, in `open`'s order) and never tries to replay anything the user
-    /// ran. Guessing at their session state would be worse than losing it.
-    ///
-    /// The default is a **no-op**, and it is safe for the engines that take it because they hold no
-    /// single long-lived socket that can go stale under them:
-    ///
-    /// * **ClickHouse** and **DynamoDB** are per-request HTTP over a `reqwest::Client`, whose pool
-    ///   discards a dead connection and dials another for the next request.
-    /// * **MongoDB** holds a `mongodb::Client`, which owns a monitored, self-healing connection
-    ///   pool — reconnecting is the driver's job, and it does it.
-    /// * ⚠️ **Redis does NOT belong on that list, and taking the default there is a KNOWN GAP.**
-    ///   `crate::db::redis::RedisSession` holds a `redis::aio::MultiplexedConnection` — one socket,
-    ///   for the life of the session, with no reconnect logic anywhere in it (`ConnectionManager` is
-    ///   redis-rs's reconnecting type and we do not use it). A Redis session therefore has exactly
-    ///   the bug described above and is not yet fixed. Written down here rather than smoothed into
-    ///   the comfortable list, because a doc that quietly implies a guarantee we do not make is how
-    ///   the next person stops looking.
+    /// Re-dial the cached connection if it died (suspend, idle timeout, restart). A reconnect is a
+    /// new server session: only this app's setup is re-applied, never the user's state. The default
+    /// no-op suits HTTP and Mongo's pool; Redis's single socket takes it too, a known gap.
     async fn ensure_live(&mut self, _limits: &Limits) -> Result<(), DbError> {
         Ok(())
     }
@@ -292,41 +186,9 @@ pub trait DbSession: Send {
     /// alongside whatever succeeded; only a transport failure is an `Err` (the `http_send`
     /// contract — a 500 is a response, not an exception).
     async fn run(&mut self, script: &Script, limits: &Limits) -> Result<Vec<DbResultSet>, DbError>;
-    /// Run `script` the way [`DbSession::run`] does, but with read-only held by the server for
-    /// data writes rather than left as a session default: on a session opened read-only, an engine
-    /// whose read-only is session state runs **each statement in a `READ ONLY` transaction of its
-    /// own, always rolled back**. The agent tools' path. Decided on the session itself, so a
-    /// connection made read-only a moment before the open still gets it.
-    ///
-    /// Why a second path at all: a read-only session is only `SET SESSION CHARACTERISTICS AS
-    /// TRANSACTION READ ONLY` (a *default* for later transactions) plus
-    /// [`guard::read_only_escape`], which by its own doc is a speed bump and not a boundary. An
-    /// agent can be prompt-injected, so for an agent the server has to refuse a hostile
-    /// statement's write: `DO $$ … set_config('default_transaction_read_only','off',false); COMMIT;
-    /// INSERT … $$` passed the filter and wrote.
-    ///
-    /// The SQL engines' contract:
-    /// * the guards of [`DbSession::run`] first, unchanged;
-    /// * each statement is sent on its own, after **the server** confirmed it is exactly one
-    ///   statement (a prepare, which executes nothing), so the splitter cannot be talked into
-    ///   sending `SELECT '\''; COMMIT; …` as "one statement";
-    /// * each statement runs in its own `READ ONLY` transaction, rolled back after it, so a
-    ///   session setting it changes, a `COMMIT` it issues or a mode it flips does not reach the
-    ///   next statement's transaction, which is begun read-only by name. MySQL's session variables
-    ///   are not transactional, so there the session is also asked before each statement whether
-    ///   it is still read-only;
-    /// * on MySQL, `CALL`, `EXECUTE` and executable comments are refused up front: a MySQL
-    ///   procedure may `COMMIT` inside the one statement (see `mysql_unheld`).
-    ///
-    /// What this holds is **data writes**. A statement that acts on the server rather than on its
-    /// data — PostgreSQL's `COPY … TO PROGRAM`, `pg_read_file`, `dblink`; MySQL's `INTO OUTFILE` —
-    /// runs inside a read-only transaction too, with the account's privileges. The agent tools
-    /// refuse the known ones before a session is opened (`agent_ctl`'s `db_refuse`), and the only
-    /// boundary for the rest is a least-privileged account.
-    ///
-    /// A session opened read-write has nothing to hold, and the run is [`DbSession::run`]'s. So is
-    /// the default's: the other engines enforce read-only per command (Redis's and MongoDB's
-    /// allowlists) or per request (ClickHouse's `readonly`, DynamoDB), which `run` already is.
+    /// [`DbSession::run`] for agent tools: on a read-only session each statement (server-confirmed
+    /// single) runs in its own rolled-back `READ ONLY` transaction, as the session default is
+    /// escapable. Holds data writes only (`agent_ctl`'s `db_refuse` covers known server effects).
     async fn run_strict(
         &mut self,
         script: &Script,
@@ -334,34 +196,14 @@ pub trait DbSession: Send {
     ) -> Result<Vec<DbResultSet>, DbError> {
         self.run(script, limits).await
     }
-    /// A handle that can cancel this session's running statement, or `None` when the engine has
-    /// no server-side cancel at all.
-    ///
-    /// 🔴 **It is a separate handle rather than a method for one reason, and that reason is the
-    /// whole of why an earlier version had no working `db_cancel`.** `db::query` holds
-    /// `LiveSession::session`'s mutex for the entire duration of `run` — it must, the session is
-    /// `&mut` for a query. So anything reachable only *through* the session is, by construction,
-    /// unreachable exactly while a query is running: a `cancel(&self)` method would deadlock behind
-    /// the statement it was asked to cancel. Three engines had complete, correct cancel code that
-    /// no caller could ever reach.
-    ///
-    /// The handle is taken ONCE at `session::insert`, before the session goes behind the mutex, and
-    /// stored beside it. It owns everything it needs (connect options, a backend id, a query-id
-    /// prefix) and dials a **sibling** connection — the busy one cannot service a cancel against
-    /// itself.
-    ///
-    /// `None` is the honest answer for MongoDB, Redis and DynamoDB, and it is **structural**: the
-    /// command reports "this engine has no server-side cancel" without a round trip, rather than
-    /// each engine returning a runtime `Err` that reads like a failure.
+    /// A handle that cancels this session's running statement, or `None` when the engine has none.
+    /// Separate because `db::query` holds the session mutex for the whole run; taken once at
+    /// `session::insert`, it dials a sibling connection.
     fn cancel_handle(&self) -> Option<Arc<dyn DbCancel>> {
         None
     }
-    /// One level of the connection tree, shaped like `read_dir`.
-    ///
-    /// Each engine describes its own hierarchy here, and there is deliberately no `hierarchy`
-    /// table on `EngineSpec` to disagree with it — see `db::tree`'s module doc. The levels really
-    /// do differ: MySQL and ClickHouse can see every database on the server, while a PostgreSQL
-    /// connection is bound to one and cannot read another's catalog.
+    /// One level of the connection tree, shaped like `read_dir`; each engine owns its hierarchy
+    /// (see `db::tree`'s module doc).
     async fn children(&mut self, node: &DbNodeRef) -> Result<Vec<DbNode>, DbError>;
     /// Close the connection. `Box<Self>` because `sqlx`'s `close` consumes.
     async fn close(self: Box<Self>);
@@ -387,30 +229,15 @@ static AURORA_MYSQL: MysqlEngine = MysqlEngine {
     id: DbEngineId::AuroraMysql,
 };
 static MONGODB: crate::db::mongo::MongoEngine = crate::db::mongo::MongoEngine;
-/// Redis and Valkey share one driver: Valkey is Redis's protocol under a different name, and the
-/// live tier proves the Redis half against the fixture. The Valkey row is therefore the same claim
-/// the two Aurora rows make — wire compatibility, verified against the upstream server, stated
-/// rather than implied.
-/// DynamoDB signs its own requests over the `reqwest` already in the tree — no AWS SDK,
-/// so this row costs zero packages.
+/// DynamoDB signs its own requests over `reqwest` (no AWS SDK). Redis and Valkey share one driver:
+/// Valkey is wire-compatible, and only the Redis half is proven against the live fixture.
 static DYNAMODB: crate::db::dynamodb::DynamodbEngine = crate::db::dynamodb::DynamodbEngine;
 static REDIS: crate::db::redis::RedisEngine = crate::db::redis::RedisEngine::new(DbEngineId::Redis);
 static VALKEY: crate::db::redis::RedisEngine =
     crate::db::redis::RedisEngine::new(DbEngineId::Valkey);
 
-/// The engine for `id`, or an `invalid-config` error **naming the engine**.
-///
-/// Wired: the **PostgreSQL family** (PostgreSQL, Aurora PostgreSQL), the **MySQL family**
-/// (MySQL, Aurora MySQL), **ClickHouse** over its HTTP interface, **MongoDB** through the
-/// official driver, Redis/Valkey and DynamoDB. `db_engines()` drives the whole dialog, so a new
-/// engine adds a driver here and nothing else.
-///
-/// This function only claims what the live tier has actually run. The two Aurora rows are the
-/// one place that needs care: they are wire-compatible re-uses of the engine beside them,
-/// verified against the fixture's PostgreSQL/MySQL rather than against an Aurora cluster. That
-/// is a real distinction and it is recorded rather than smoothed over — "wire-compatible" is a
-/// claim about the protocol, and Aurora's failure modes at the *edges* (failover, reader
-/// endpoints) are not exercised by anything here.
+/// The engine for `id`, or an `invalid-config` error naming it. Aurora rows reuse the
+/// PostgreSQL/MySQL engines as wire-compatible; Aurora-only edges (failover, readers) are untested.
 pub fn engine_for(id: DbEngineId) -> Result<&'static dyn DbEngine, DbError> {
     // Still called for its ERROR: an id with no descriptor row is a bug, and it must fail here
     // rather than inside an engine that would then serve another engine's defaults.
@@ -430,13 +257,8 @@ pub fn engine_for(id: DbEngineId) -> Result<&'static dyn DbEngine, DbError> {
 
 /* ──────────────────────────────── PostgreSQL ──────────────────────────────── */
 
-/// The PostgreSQL engine — also Amazon Aurora PostgreSQL, which is wire-compatible.
-///
-/// Carries its preset id for the same reason [`MysqlEngine`] does: one type, two descriptor
-/// rows. It used to be zero-sized and hardcode `DbEngineId::Postgres` in `spec()`, which was
-/// correct while Postgres was the only wired engine and became a **bug** the moment Aurora
-/// PostgreSQL was registered against the same type — an Aurora connection would have reported
-/// itself as plain "PostgreSQL" and served Postgres's defaults.
+/// PostgreSQL, also Aurora PostgreSQL (wire-compatible). Carries its preset id so each descriptor
+/// row reports its own spec.
 pub struct PostgresEngine {
     id: DbEngineId,
 }
@@ -446,50 +268,8 @@ pub struct PostgresEngine {
 /// failures with different advice.
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Apply the User and Password **fields** to driver options the URL override has already filled —
-/// but only where the URL said nothing.
-///
-/// 🔴 **This is the dropped-password bug, and its shape is worth keeping.** Both sqlx engines
-/// used to read
-///
-/// ```ignore
-/// if cfg.url.is_none() && !cfg.password.is_empty() { opts = opts.password(&cfg.password); }
-/// ```
-///
-/// — i.e. *the presence of a URL suppresses the password field*, which is a different rule from the
-/// one the dialog promises (*"Overrides settings above"*). A URL that carries no password does not
-/// override anything about the password; it is silent on the subject. And silence was the common
-/// case, because our own importer **strips** a pasted password out of the string and does not put a
-/// `{{VAR}}` back in its place. So `postgresql://gazelle@localhost:5433/orders` plus a password
-/// typed into the box the dialog points at dialled with **no password at all**.
-///
-/// The same reasoning applies to the user, and it is not decoration: without it a bare
-/// `postgresql://localhost/db` dials as whatever `PgConnectOptions`'s URL parse defaults the
-/// username to (the OS user), silently ignoring a User field sitting right there — and
-/// [`ResolvedConfig::effective_user`] would then name an account the connection never tried.
-///
-/// By the time this runs, `db::substitute_url` has already put the resolved secret back into any
-/// `{{VAR}}`, so a URL that carried a *reference* genuinely carries the *password* here and is
-/// correctly left alone.
-///
-/// Generic over the two option types rather than written twice: "what does an empty field mean
-/// beside a URL" must have exactly one answer, and the previous copy-paste is how the two engines
-/// came to share one bug (duplication across a boundary does not announce itself).
-/// Which database a live session should say it is on: **the one the driver actually dialled**.
-///
-/// 🔴 **The bug: it connected, but queries returned nothing.** Every
-/// engine built its session with `database: cfg.database.clone()` — the *form field* — while the
-/// connection itself had been made from the URL override. With `Connection type: URL only` the
-/// field is empty, so the field and the connection disagreed about the most load-bearing string in
-/// the feature. The visible damage differs per engine and is worst where it is quietest: MongoDB's
-/// `command_database()` falls back to **`admin`** when this is empty, so `{"find": "tracks"}` ran
-/// against a database that has no `tracks` and returned **zero documents and no error at all** —
-/// a connection that works, a query that succeeds, and an empty grid.
-///
-/// The fix is the same principle as [`dial_error`]'s: **ask the thing that dialled.**
-/// `get_database()` is the option value sqlx parsed out of the URL (or that we set from the field on
-/// the form path), so it cannot disagree with the connection the way a second parse of the string
-/// could. `cfg.database` remains only as the fallback for a driver that reports nothing.
+/// The database a live session reports: the one the driver dialled (`get_database()`), else
+/// `cfg.database`. The form field can be empty under a URL override (Mongo would then use `admin`).
 pub fn dialled_database(dialled: Option<&str>, cfg: &ResolvedConfig) -> String {
     dialled
         .filter(|d| !d.is_empty())
@@ -497,13 +277,8 @@ pub fn dialled_database(dialled: Option<&str>, cfg: &ResolvedConfig) -> String {
         .unwrap_or_else(|| cfg.database.clone())
 }
 
-/// A failed **dial**, mapped, redacted, and — when the server rejected the credentials — told which
-/// account and which server were actually used.
-///
-/// The identity comes from the driver's own `get_username`/`get_host`/`get_port`, never from the
-/// [`ResolvedConfig`] fields: with a URL override in play those two can disagree, and a message that
-/// names the form's user while the string dialled someone else would be worse than the redacted
-/// original it replaces. See [`DbError::with_auth_identity`].
+/// A failed dial, mapped and redacted; on an auth failure it names the account and server the
+/// driver actually used (not the form's). See [`DbError::with_auth_identity`].
 fn dial_error(
     e: &sqlx::Error,
     secrets: &[&str],
@@ -519,19 +294,8 @@ fn dial_error(
     )
 }
 
-/// The error for a session whose socket had died and could not be re-dialled.
-///
-/// 🔴 **The one thing it must never do is repeat the dead socket's own error.** That failure is the
-/// `UnexpectedEof` — *"(expected to read 5 bytes, got 0 bytes at EOF)"* — and it
-/// is about a socket that has already been thrown away. Reporting it would send the user off to
-/// check a host and a port that are demonstrably fine, which is precisely the misattribution
-/// `error.rs`'s `UnexpectedEof` arm was written to end. So [`DbSession::ensure_live`] discards the
-/// liveness probe's error entirely and reports **this** instead: the connection dropped, re-opening
-/// it was attempted, and here is what that *fresh* attempt said — a current answer about a current
-/// dial, which is the only part the user can act on.
-///
-/// `dial`'s code is preserved rather than flattened to `network`: a rotated password surfaces here
-/// as `auth`, and the panel's sentence for it is the useful one.
+/// A dead session that could not be re-dialled. Reports the fresh dial's error (code kept, e.g.
+/// `auth`), never the dead socket's `UnexpectedEof`, which would blame a working host and port.
 pub(crate) fn reconnect_failed(host_label: &str, dial: DbError) -> DbError {
     DbError::new(
         dial.code,
@@ -543,16 +307,8 @@ pub(crate) fn reconnect_failed(host_label: &str, dial: DbError) -> DbError {
     )
 }
 
-/// The session setup [`PostgresEngine::open`] applies to a freshly dialled connection — and the
-/// **only** thing [`DbSession::ensure_live`] re-applies after a reconnect.
-///
-/// One function rather than two copies, because the order is load-bearing and a second copy is how
-/// it drifts. The read-only guardrail goes first, before anything else can run on this connection
-/// (see the module doc for the measurement that shaped it); a reconnect that re-applied it second,
-/// or forgot it, would hand back a session the user believes is read-only and the server does not.
-///
-/// Returns the backend pid — it belongs to the *connection*, so it must be re-read here and never
-/// carried over from the socket that died.
+/// Session setup for a fresh connection, and all [`DbSession::ensure_live`] re-applies. Order is
+/// load-bearing: read-only guardrail first. Returns the backend pid, re-read per connection.
 async fn apply_pg_session_setup(
     conn: &mut PgConnection,
     read_only: bool,
@@ -606,21 +362,8 @@ async fn apply_mysql_session_setup(
         .ok())
 }
 
-/// A backend id shared between a session and the cancel handle standing beside it.
-///
-/// 🔴 **This exists because a reconnect changes the id, and a stale one is not inert.**
-/// `LiveSession::cancel` is captured ONCE at `session::insert` and outlives any number of
-/// reconnects. PostgreSQL's cancel here is `SELECT pg_cancel_backend(pid)` — a SQL function against
-/// whatever backend currently holds that pid, **not** libpq's cancel-key protocol, which is the
-/// thing that would make a stale handle harmlessly wrong. Backend pids are OS pids and OS pids are
-/// recycled, and `pg_cancel_backend` succeeds against any backend the same role owns — which
-/// emphatically includes this app's *other* session on the same database. A handle frozen at the
-/// old pid could therefore cancel a stranger's query, and the stranger is most likely the user
-/// themselves, in another tab, wondering why their statement died.
-///
-/// So the id is shared, not copied: [`DbSession::ensure_live`] stores the new one and the handle
-/// reads it at cancel time. `0` means "unknown" — no PostgreSQL backend pid and no MySQL connection
-/// id is ever zero — and a handle that reads `0` refuses rather than guessing.
+/// Backend id shared by a session and its cancel handle: a reconnect changes it, and a stale pid
+/// could cancel another session's query. `0` means unknown, and the handle then refuses.
 #[derive(Debug)]
 pub(crate) struct BackendId(std::sync::atomic::AtomicU64);
 
@@ -641,6 +384,8 @@ impl BackendId {
     }
 }
 
+/// Apply the User/Password fields only where the URL override says nothing about them: a URL with
+/// no password does not override the typed one. Generic so both sqlx engines share one rule.
 fn fill_credential_gaps<T>(
     cfg: &ResolvedConfig,
     mut opts: T,
@@ -648,11 +393,8 @@ fn fill_credential_gaps<T>(
     set_password: fn(T, &str) -> T,
 ) -> T {
     let says = cfg.url_credential();
-    // No URL → `says` is the default, so the form path falls out of the same rule rather than
-    // needing a branch of its own.
-    // `cfg.user` verbatim, NOT trimmed: the form branch of both `connect_options` already sets it
-    // that way, and a helper that quietly normalised it would make the same field mean two things
-    // depending on whether a URL was present.
+    // No URL → `says` is the default, so the form path needs no branch. `cfg.user` stays untrimmed,
+    // matching both `connect_options` form branches.
     if says.user.is_none() && !cfg.user.is_empty() {
         opts = set_user(opts, &cfg.user);
     }
@@ -663,11 +405,8 @@ fn fill_credential_gaps<T>(
 }
 
 impl PostgresEngine {
-    /// Build the driver's connect options from a [`ResolvedConfig`].
-    ///
-    /// Starts from `new_without_pgpass()` rather than `new()`: reading the developer's
-    /// `~/.pgpass` would mean a connection could succeed with a credential the user never gave
-    /// this app, which is both surprising and unreproducible on another machine.
+    /// Connect options from a [`ResolvedConfig`]. `new_without_pgpass()`: never dial with a
+    /// `~/.pgpass` credential the user did not give this app.
     fn connect_options(cfg: &ResolvedConfig) -> Result<PgConnectOptions, DbError> {
         let mut opts = match &cfg.url {
             // A raw URL wins over the fields (the dialog's "Overrides settings above"). It is
@@ -755,11 +494,8 @@ impl DbEngine for PostgresEngine {
             )
         })?;
 
-        // ── the guardrail, as its OWN round trip, then the statement timeout. See the module doc:
-        //    prepending the guardrail to the user's script would make it a decoration, and the
-        //    order matters — it must land before anything else can run on this connection. Both
-        //    live in `apply_pg_session_setup` so `ensure_live`'s reconnect cannot re-apply a
-        //    different set, or the same set in a different order.
+        // ── the read-only guardrail as its own round trip, then the timeout (see module doc).
+        //    Shared with `ensure_live` via `apply_pg_session_setup`: same set, same order.
         let backend_pid =
             apply_pg_session_setup(&mut conn, cfg.read_only, cfg.timeout_ms, &secrets).await?;
 
@@ -780,25 +516,9 @@ impl DbEngine for PostgresEngine {
 
 /* ──────────────────────────────── MySQL family ──────────────────────────────── */
 
-/// The MySQL engine — also Amazon Aurora MySQL, which is wire-compatible.
-///
-/// ## Read-only is server-enforced here, and MORE strictly than on Postgres
-///
-/// `SET SESSION TRANSACTION READ ONLY` makes the server reject DML with
-/// `ERROR 1792 (25006) Cannot execute statement in a READ ONLY transaction`. **Measured on the
-/// fixture (MySQL 8.4.6)**, including the case that escapes on Postgres: sending
-/// `SET SESSION … READ ONLY; INSERT …` as ONE batch is still refused, where libpq's simple
-/// query protocol happily runs the INSERT (see this module's header). We still send the
-/// guardrail as its own round trip — not because MySQL needs it, but because relying on a
-/// difference between two servers' batch semantics is not a guarantee worth building on.
-///
-/// ## `max_execution_time` only covers SELECTs, and that is why it is layer 2
-///
-/// MySQL's server-side statement timeout applies to read-only SELECT statements *only* — there
-/// is no equivalent for DML. So it is a genuine partial: the client-side `tokio::time::timeout`
-/// in [`DbSession::run`] is what bounds every other statement, and `cancel` is what stops the
-/// server-side work. Postgres's `statement_timeout` has no such carve-out; not saying so here
-/// would leave the impression the two engines offer the same protection.
+/// MySQL, also Aurora MySQL (wire-compatible). The read-only `SET` is its own round trip as on
+/// Postgres, though MySQL also refuses a batched write. `max_execution_time` covers SELECTs only;
+/// the client-side timeout and `cancel` bound everything else.
 pub struct MysqlEngine {
     /// Which preset this instance serves. One type, two rows: MySQL and Aurora MySQL differ
     /// only in their descriptor (label, defaults), never in how they are dialled — so the id is
@@ -892,11 +612,8 @@ impl DbEngine for MysqlEngine {
     }
 }
 
-/// Our SSL ladder → the driver's. Written out for the same reason as `pg_ssl_mode`: a new mode
-/// on either side must be a compile error, never a silent downgrade.
-///
-/// ⚠️ `VerifyCa` maps to `VerifyCa` and `VerifyFull` to `VerifyIdentity` — MySQL's names for
-/// the same two rungs (chain only, chain + hostname).
+/// Our SSL ladder → the driver's, written out so a new mode is a compile error. `VerifyCa` →
+/// `VerifyCa`, `VerifyFull` → `VerifyIdentity` (chain only; chain + hostname).
 fn mysql_ssl_mode(mode: SslMode) -> MySqlSslMode {
     match mode {
         SslMode::Disable => MySqlSslMode::Disabled,
@@ -959,10 +676,8 @@ impl DbSession for MySqlSession {
             .unwrap_or_else(|| "MySQL (version unavailable)".to_string());
         Ok(ServerInfo {
             version,
-            // Deliberately narrowed: `ServerInfo::backend_pid` is an `i32` (Postgres's type) and
-            // MySQL's connection id is a `u64`. A wrapping cast would print a negative id that
-            // matches no connection, so an id that does not fit is reported as absent — and
-            // `cancel` still works, because it reads `self.connection_id`, not this field.
+            // `backend_pid` is `i32`, MySQL's id `u64`: one that does not fit is reported absent,
+            // not wrapped. `cancel` reads `self.connection_id`, not this.
             backend_pid: self
                 .connection_id
                 .get()
@@ -1182,12 +897,8 @@ impl DbSession for MySqlSession {
 }
 
 /* ────────────────────────────── the cancel handles ──────────────────────────────
- * One per family that HAS a server-side cancel. Each owns everything it needs and dials a
- * **sibling** connection, because the connection running the query is busy running it.
- *
- * They live outside their sessions so they stay reachable while `db::query` holds the session
- * mutex — see `DbSession::cancel_handle`. That is the whole reason cancel now works.
- */
+ * One per family with a server-side cancel. Each dials a sibling connection and lives outside its
+ * session, so it stays reachable while `db::query` holds the session mutex. */
 
 /// The refusal a cancel handle gives when its session currently has no backend to address — the
 /// only state a reconnect can leave it in, and far better than firing at a remembered pid.
@@ -1275,9 +986,6 @@ fn dial_timeout(after: Duration) -> DbError {
 }
 
 /// Run one statement as its own round trip, mapping and redacting any failure.
-///
-/// Generic for the same reason `collect` is: the session-setup statements differ per engine but
-/// the "one statement, its own trip, mapped and redacted" shape does not.
 async fn exec_one<'c, DB, E>(executor: E, sql: &str, secrets: &[&str]) -> Result<(), DbError>
 where
     DB: sqlx::Database,
@@ -1302,28 +1010,19 @@ fn pg_ssl_mode(mode: SslMode) -> PgSslMode {
     }
 }
 
-/// One live PostgreSQL connection.
-///
-/// A single connection rather than a pool, deliberately: `SET SESSION CHARACTERISTICS` is
-/// *session* state, and a pool would hand out connections that never received it. The pooling
-/// question belongs to whatever feature first needs concurrency.
+/// One live PostgreSQL connection, not a pool: `SET SESSION CHARACTERISTICS` is session state a
+/// pool's other connections would lack.
 struct PgSession {
     conn: PgConnection,
     /// The database this connection is bound to. Held because the tree's root node names it: a
     /// PostgreSQL connection cannot read another database's catalog, so this is the ONLY database
     /// it can honestly offer (see `children`).
     database: String,
-    /// Whether this session was opened read-only.
-    ///
-    /// Session state, not a per-run limit — which is why it lives here and not on [`Limits`]
-    /// (see that type's doc: a per-run read-only flag would imply it could be switched off per
-    /// run). `run` reads it to refuse statements that would change the transaction access mode;
-    /// see [`guard::read_only_escape`] for what that does and does not guarantee.
+    /// Opened read-only: session state, so not on [`Limits`]. `run` refuses access-mode changes;
+    /// see [`guard::read_only_escape`] for what that does not guarantee.
     read_only: bool,
-    /// Kept so [`DbSession::cancel_handle`] can dial a **sibling** connection (the busy one cannot
-    /// service a cancel request) — and so [`DbSession::ensure_live`] can re-dial *this* one after
-    /// the server, a pooler or a laptop suspend has closed it. `PgConnectOptions` carries the
-    /// password, which is what makes both possible without going back to the store.
+    /// Lets [`DbSession::cancel_handle`] dial a sibling connection and [`DbSession::ensure_live`]
+    /// re-dial this one; it carries the password, so neither goes back to the store.
     opts: PgConnectOptions,
     /// The dial timeout `open` used, so a reconnect waits exactly as long and no longer.
     connect_timeout: Duration,
@@ -1353,11 +1052,8 @@ impl PgSession {
 
 /* ───────────────────────── the connection tree's shared shaping ───────────────────────── */
 
-/// The two group nodes under a schema (or, for schema-less engines, a database).
-///
-/// Shared by every SQL engine so "Tables" and "Views" cannot end up spelled or counted
-/// differently per engine. `counts` is what the one catalog query returned, keyed by
-/// `information_schema.tables.table_type`.
+/// The Tables and Views group nodes under a schema (or database), shared by every SQL engine.
+/// `counts` is keyed by `information_schema.tables.table_type`.
 pub(crate) fn group_nodes(
     database: &str,
     schema: Option<&str>,
@@ -1412,11 +1108,8 @@ pub(crate) fn table_node(
     )
 }
 
-/// `information_schema.tables.table_type` → (tables, views).
-///
-/// Anything that is neither `BASE TABLE` nor `VIEW` (a Postgres foreign table, a MySQL
-/// `SYSTEM VIEW`) is counted as a table rather than dropped: a node the user can see and expand
-/// beats an object that silently is not there.
+/// `table_type` → (tables, views). Anything else (foreign table, `SYSTEM VIEW`) counts as a table
+/// rather than vanishing.
 fn split_table_counts(rows: &[(String, i64)]) -> (usize, usize) {
     let mut tables = 0usize;
     let mut views = 0usize;
@@ -1431,12 +1124,8 @@ fn split_table_counts(rows: &[(String, i64)]) -> (usize, usize) {
     (tables, views)
 }
 
-/// The one thing `sqlx`'s `QueryResult` types have in common that we need, and which `sqlx`
-/// does not expose as a trait: how many rows the statement changed.
-///
-/// Written as a two-impl local trait rather than duplicating `collect` per engine. The
-/// alternative — a `collect` for Postgres and a near-identical one for MySQL — is exactly the
-/// duplication that once produced two drifting error-sentence tables in the frontend.
+/// The rows-changed count sqlx's `QueryResult` types share but do not expose as a trait, so one
+/// `collect` serves both engines.
 trait RowsAffected {
     fn rows_affected(&self) -> u64;
 }
@@ -1480,20 +1169,9 @@ impl DbSession for PgSession {
         })
     }
 
-    /// PostgreSQL's reconnect — the stale-connection fix. See
-    /// [`DbSession::ensure_live`] for what the whole thing is for.
-    ///
-    /// 🔴 **Ping first, and NEVER a retry.** The order is the safety property: the statement is only
-    /// sent after liveness has been *proven*, so nothing is ever re-sent. If the connection dies in
-    /// the gap between the ping and the query, that error is surfaced and the run fails — because an
-    /// `INSERT` that died mid-flight may well have committed, and a silent retry would apply it
-    /// twice. This must not grow into a retry loop, however tempting the remaining sliver of race
-    /// looks; the same warning is at the call site in `db::query`.
-    ///
-    /// The ping's own error is deliberately thrown away rather than reported: it is the
-    /// `UnexpectedEof` about a socket we are in the middle of replacing, and it is precisely the
-    /// message that sent the user to check a host and a port that were fine. What a failure
-    /// reports instead is [`reconnect_failed`].
+    /// PostgreSQL's reconnect. Ping first and never retry: a statement that died mid-flight may
+    /// have committed, so this must not grow into a retry loop. The ping's `UnexpectedEof` is
+    /// dropped in favour of [`reconnect_failed`].
     async fn ensure_live(&mut self, limits: &Limits) -> Result<(), DbError> {
         // The overwhelmingly common path, and it must stay cheap: one round trip, then nothing.
         if Connection::ping(&mut self.conn).await.is_ok() {
@@ -1579,10 +1257,7 @@ impl DbSession for PgSession {
 
     async fn children(&mut self, node: &DbNodeRef) -> Result<Vec<DbNode>, DbError> {
         let secrets = self.owned_secrets();
-        // 🔴 Every catalog query below uses BOUND parameters, not interpolation. A schema or table
-        // name is server-provided *data* — and a schema someone created as `x'; …` would otherwise
-        // splice into our SQL. Introspection is the one place in this file that prepares
-        // statements; `raw_sql` is for the user's own text, where the whole point is not to.
+        // Catalog queries bind schema/table names (server-provided data); never interpolate them.
         match node {
             // A PostgreSQL connection is bound to ONE database and cannot read another's catalog,
             // so listing `pg_database` would produce nodes that fail when expanded. The root shows
@@ -1677,11 +1352,8 @@ impl DbSession for PgSession {
                 schema,
                 name,
             } => {
-                // `format_type` gives the server's OWN spelling **with its length** —
-                // `character varying(16)`, `numeric(12,4)` — which is what the tree means by verbatim.
-                // `information_schema.columns` would hand back a bare `character varying` and a
-                // separate length column, i.e. a type name we would have to reassemble ourselves
-                // (and would get subtly wrong for arrays and numerics).
+                // `format_type` gives the server's own spelling with length (`character
+                // varying(16)`); `information_schema.columns` would split the length out.
                 let rows: Vec<(String, String, bool)> = sqlx::query_as(
                     "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull \
                      FROM pg_attribute a \
@@ -1710,10 +1382,8 @@ impl DbSession for PgSession {
                     .collect())
             }
 
-            // Answered by the saved-query store, not the server — it must work with no session
-            // at all, so `db_children` intercepts it before reaching an engine.
-            // Both are answered by the saved-query store, never by the server —
-            // `db_children` intercepts them before an engine is asked.
+            // Answered by the saved-query store, never the server: `db_children` intercepts them
+            // first.
             DbNodeRef::SavedQueries | DbNodeRef::SavedQuery { .. } => Ok(Vec::new()),
         }
     }
@@ -1736,13 +1406,8 @@ impl DbSession for PgSession {
 
 /* ───────────────────── the checks both SQL engines run before sending ───────────────────── */
 
-/// What every SQL run is checked against before anything is sent, in one place for both engines
-/// and both run paths: something to run, the multi-statement setting, and — on a read-only session
-/// — the access-mode filter. Returns the statements.
-///
-/// The access-mode filter refuses the whole run rather than the one statement: a script that flips
-/// the mode and then writes must not execute halfway. See [`guard::read_only_escape`] for what it
-/// does and does not guarantee.
+/// Pre-send checks for every SQL run: something to run, the multi-statement setting, and on a
+/// read-only session the access-mode filter, which refuses the whole run. Returns the statements.
 fn vet_sql_script(
     script: &Script,
     limits: &Limits,
@@ -1840,19 +1505,9 @@ fn failed(sets: &[DbResultSet]) -> bool {
     sets.iter().any(|s| s.kind == DbResultKind::Message)
 }
 
-/// PostgreSQL: every statement in a transaction of its own — `BEGIN TRANSACTION READ ONLY`, the
-/// statement, `ROLLBACK` — so nothing one statement does carries into the next one's.
-///
-/// That is the whole design, and why it needs no check between statements. A session-level
-/// `set_config(…, false)` or `SET SESSION CHARACTERISTICS` is undone by the `ROLLBACK` of the
-/// transaction it ran in; a `COMMIT` ends only its own statement's transaction, which holds
-/// nothing; and the next statement's transaction is begun read-only by name, whatever the
-/// session's default says. Within one statement PostgreSQL holds the line itself: a `COMMIT`
-/// inside a `DO` block or a procedure is "invalid transaction termination" in a transaction
-/// block, and `transaction_read_only` cannot be turned off once the statement has a snapshot.
-/// (An earlier version kept one transaction for the whole run and checked a marker setting
-/// between statements; the agent's own SQL could copy the marker into the session and survive
-/// a `COMMIT`.)
+/// PostgreSQL: each statement in its own `BEGIN TRANSACTION READ ONLY` … `ROLLBACK`, so no session
+/// setting or `COMMIT` carries into the next. Within a statement PostgreSQL itself refuses a
+/// `COMMIT` in a `DO` block or procedure.
 async fn pg_read_only_run(
     conn: &mut PgConnection,
     pieces: &[String],
@@ -1891,13 +1546,8 @@ async fn pg_one_statement(
     collect(&mut *conn, piece.to_string(), &only, limits, secrets).await
 }
 
-/// MySQL / MariaDB: every statement in a transaction of its own — `START TRANSACTION READ ONLY`,
-/// the statement, `ROLLBACK` — as on PostgreSQL ([`pg_read_only_run`]), with one difference that
-/// needs a check: MySQL's session variables are not transactional. A `ROLLBACK` does not undo a
-/// statement that turned the session's `transaction_read_only` off, and a later DDL statement's
-/// implicit commit would then run read-write. So before each statement the session is asked
-/// whether it is still read-only — the server's own variable, which only the server can answer —
-/// and the run stops if it is not.
+/// MySQL/MariaDB: as [`pg_read_only_run`], but session variables are not transactional, so before
+/// each statement the server is asked whether the session is still read-only; the run stops if not.
 async fn mysql_read_only_run(
     conn: &mut MySqlConnection,
     pieces: &[String],
@@ -1961,17 +1611,9 @@ async fn mysql_session_read_only(conn: &mut MySqlConnection) -> bool {
     false
 }
 
-/// What a read-only MySQL run refuses before anything is sent, because no transaction can hold it.
-///
-/// * `CALL` (and `EXECUTE`, which can run a prepared `CALL`): MySQL lets a procedure `COMMIT`, so
-///   one `CALL` can end the transaction, turn the session read-write and write — inside a single
-///   statement, before anything between statements can see it. PostgreSQL refuses a `COMMIT` in
-///   a procedure called inside a transaction block, so it needs no such rule.
-/// * An executable comment (`/*! … */`, MariaDB's `/*M! … */`): the server runs what is inside it.
-///
-/// Read with [`sql_words`]: every place in the text a statement can start is checked — after every
-/// `;`, inside a string or not — and comments are skipped by MySQL's own lexer rules, so `--`
-/// followed by a control character hides nothing. A false start can only refuse more.
+/// What a read-only MySQL run refuses up front: `CALL`/`EXECUTE` (a procedure may `COMMIT`
+/// mid-statement) and executable comments (`/*! */`, `/*M! */`). Every statement start is checked
+/// with [`sql_words`]'s MySQL lexer rules; a false start only refuses more.
 fn mysql_unheld(text: &str) -> Option<DbError> {
     if sql_words::has_executable_comment(text) {
         return Some(DbError::blocked(format!(
@@ -2003,15 +1645,8 @@ fn mysql_error_number(e: &sqlx::Error) -> Option<u16> {
         .map(|d| d.number())
 }
 
-/// Drive the driver's per-statement stream into one [`DbResultSet`] per statement.
-///
-/// The whole script goes to the server as **one** `raw_sql` batch, which is both what makes the
-/// simple query protocol (and therefore the text encoding every cell is read in) available and the exact shape the
-/// read-only measurement in the module doc is about.
-///
-/// A database error ends the batch — Postgres rolls the implicit transaction back — and is
-/// appended as a `message` result attributed to the statement that was running, so the output
-/// pane shows "statements 1 and 2 produced this, statement 3 said that".
+/// Drive the per-statement stream of one `raw_sql` batch into one [`DbResultSet`] per statement.
+/// A database error ends the batch and is appended as a `message` result for the failing statement.
 async fn collect<'c, DB, E>(
     executor: E,
     sql: String,
@@ -2138,13 +1773,8 @@ where
     (0..ncols).map(|i| read_cell(row, i)).collect()
 }
 
-/// One cell, as text.
-///
-/// `try_get_unchecked` skips sqlx's `Type::compatible` check, which is what allows `String` for
-/// an `int4` column — in the simple query protocol every value on the wire already *is* text.
-/// The `Vec<u8>` fallback covers a column whose text encoding is not valid UTF-8; the final
-/// placeholder is deliberately visible rather than `None`, because reporting an unreadable
-/// value as SQL NULL would be the app lying about the data.
+/// One cell as text. `try_get_unchecked` allows `String` for any column (simple protocol = text);
+/// non-UTF-8 falls back to bytes, then a visible placeholder, never `None` (which means NULL).
 fn read_cell<R: Row>(row: &R, i: usize) -> Option<String>
 where
     for<'r> Option<String>: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
@@ -2202,14 +1832,8 @@ mod tests {
         assert_eq!(e.spec().id, DbEngineId::Postgres);
     }
 
-    /// 🔴 **Each wired engine must report the descriptor for the id it was registered under.**
-    ///
-    /// This pins a trap that is easy to reintroduce. `PostgresEngine` was zero-sized and
-    /// hardcoded `DbEngineId::Postgres` in `spec()`, which was fine while it served one row —
-    /// and the moment Aurora PostgreSQL was registered against the same type, an Aurora
-    /// connection would have reported itself as "PostgreSQL" and served Postgres's defaults
-    /// (including its `sslMode`, which differs). Same trap on the MySQL side. Nothing else in
-    /// the suite looks at the pairing, because every other test asks for one engine by name.
+    /// One type serves two rows (e.g. PostgreSQL and Aurora PostgreSQL), so each must report the
+    /// spec of the id it was registered under (their `sslMode` defaults differ).
     #[test]
     fn every_wired_engine_reports_the_spec_of_the_id_it_is_registered_under() {
         for id in [
@@ -2243,11 +1867,6 @@ mod tests {
         assert_eq!(aurora_my.label, "Amazon Aurora MySQL");
     }
 
-    /// **Every descriptor row resolves to an engine, and each reports the row it was registered
-    /// under.** That is every row — this test used to assert the opposite for Redis and Valkey
-    /// while they were not wired, and it earned its keep on the way through: both halves of the
-    /// pairing are what an earlier Aurora bug was, where one engine type served two rows and
-    /// hardcoded one id.
     #[test]
     fn every_descriptor_row_resolves_to_an_engine_that_knows_which_row_it_is() {
         for spec in engines::ENGINES {
@@ -2308,19 +1927,8 @@ mod tests {
         assert_eq!(opts.get_application_name(), Some("Agent Studio"));
     }
 
-    /// 🔴 **An empty port field dials the engine's standard port**, for both sqlx engines, and it is
-    /// the *descriptor's* number — the same one the dialog shows in the empty box.
-    ///
-    /// Hand-written expectations (5432/3306) rather than `spec.default_port`: a test that reads its
-    /// expectation from the table under test can only prove plumbing, and the claim
-    /// here is about these two values specifically.
-    ///
-    /// ⚠️ For Postgres this deliberately does **not** use sqlx's own default. Measured in
-    /// `sqlx-postgres-0.9.0/src/options/mod.rs:57`: `new_without_pgpass()` sets its port from
-    /// **`$PGPORT`**, falling back to 5432. Letting that stand would make the dialog's placeholder
-    /// wrong on any machine where `PGPORT` is set and would make this test depend on the developer's
-    /// environment — so `connect_options` always calls `.port()`, with
-    /// `port_or_default()`.
+    /// Expectations are hand-written, not read from `spec.default_port`. Postgres must not use
+    /// sqlx's default, which reads `$PGPORT`.
     #[test]
     fn an_empty_port_field_dials_the_engines_standard_port() {
         let mut c = cfg();
@@ -2387,27 +1995,14 @@ mod tests {
 
     /* ────────── the URL override and the password typed beside it ────────── */
 
-    /// `PgConnectOptions`/`MySqlConnectOptions` expose `get_username` but **no** password getter,
-    /// so the only hermetic way to see whether the password reached the driver is their derived
-    /// `Debug` — which does print it (`password: Option<String>`, `#[derive(Debug)]`, measured in
-    /// `sqlx-postgres-0.9.0/src/options/mod.rs:16`).
-    ///
-    /// That is a fragile-looking assertion and it is deliberate: if sqlx ever starts redacting its
-    /// own `Debug`, this goes **red** rather than quietly passing, and someone re-reads it. The
-    /// claim it stands in for is proved for real against a live server in
-    /// `db_live.rs::…a_url_with_no_password_still_uses_the_typed_one`; this one is the fast guard
-    /// that runs in the ordinary `cargo test`.
+    /// The options types have no password getter, so this reads their derived `Debug`; if sqlx
+    /// starts redacting it this goes red. The live proof is in `db_live.rs`.
     fn sends_password(printed: &str, password: &str) -> bool {
         printed.contains(&format!("password: Some({password:?})"))
     }
 
-    /// 🔴 **The dropped-password bug.** `Connection type: URL only`, a string our own importer
-    /// had stripped the password out of, and the password typed into the field the dialog points
-    /// at — and the app dialled with no password at all.
-    ///
-    /// The negative half is the load-bearing one: a URL that *does* carry a password
-    /// must keep its own, so the typed one must be **absent** from what dials. Without that, this
-    /// test would pass on an implementation that simply always applies the field.
+    /// The negative half is load-bearing: a URL that carries a password keeps it and the typed one
+    /// is absent, or always applying the field would pass.
     #[test]
     fn a_url_that_carries_no_password_still_takes_the_one_typed_beside_it() {
         let mut c = cfg();
@@ -2470,10 +2065,8 @@ mod tests {
         );
     }
 
-    /// The other half of "the URL wins where it *says* something": a string with no userinfo says
-    /// nothing about the user either, and without this the connection would dial as whatever
-    /// `PgConnectOptions`'s URL parse defaults the username to (the OS user) while a User field sat
-    /// right there — and `dial_error` would then name an account nothing tried.
+    /// Otherwise the driver would dial as the OS user (its URL default) despite a filled User
+    /// field.
     #[test]
     fn a_url_that_names_no_user_still_takes_the_user_field() {
         let mut c = cfg();
@@ -2491,10 +2084,8 @@ mod tests {
         );
     }
 
-    /// `url::credential_of` returns "says nothing" for a string it cannot parse, so a URL our
-    /// grammar is narrower than the driver's still gets the typed password rather than silently
-    /// dropping it. Postgres's socket form is the real example: sqlx accepts it, `parse_parts` has
-    /// no host to find.
+    /// A URL `url::credential_of` cannot parse (e.g. Postgres's socket form) says nothing, so the
+    /// typed password still applies.
     #[test]
     fn a_url_our_own_parser_cannot_read_still_gets_the_typed_password() {
         let mut c = cfg();
@@ -2562,12 +2153,8 @@ mod tests {
         }
     }
 
-    /// An engine that takes the **default** [`DbSession::ensure_live`] — ClickHouse, DynamoDB and
-    /// MongoDB, whose transports cannot hold a stale socket the way a single `PgConnection` does.
-    ///
-    /// It counts every call that reaches it, so "the default is a no-op" is an *observation* rather
-    /// than a restatement of the source. An "improvement" that made the default probe the server
-    /// would cost three engines a round trip per query and would show up here immediately.
+    /// A session on the default [`DbSession::ensure_live`]. It counts calls, so a default that
+    /// started probing the server (a round trip per query for three engines) shows up here.
     #[derive(Default)]
     struct DefaultSession {
         probes: usize,
@@ -2711,13 +2298,8 @@ mod tests {
         }
     }
 
-    /// 🔴 **The failure the user must NOT be shown is the dead socket's own.**
-    ///
-    /// That error — `UnexpectedEof`, *"(expected to read 5 bytes, got 0 bytes at EOF)"* — is what
-    /// a dead socket produces, and `error.rs` renders it as advice about SSL modes and poolers. It is
-    /// about a socket we have already thrown away, so repeating it sends the user to inspect a host
-    /// and a port that are fine. `ensure_live` discards the probe's error and reports the reconnect
-    /// attempt instead; this pins the sentence that replaces it.
+    /// The dead socket's `UnexpectedEof` must never be shown: it sends the user to check a working
+    /// host and port.
     #[test]
     fn a_failed_reconnect_says_the_connection_dropped_and_never_replays_the_eof() {
         // The exact shape of the dead socket's error, built through the real mapper.
@@ -2775,13 +2357,8 @@ mod tests {
         }
     }
 
-    /// 🔴 **A stale backend id is not a stale curiosity — it is a cancel aimed at a stranger.**
-    ///
-    /// `PgCancel` runs `SELECT pg_cancel_backend(pid)`: a SQL call against whichever backend holds
-    /// that pid *now*. A handle frozen at the pid the session had before a reconnect would, once the
-    /// OS recycled it, ask the server to interrupt somebody else's statement — most plausibly this
-    /// app's own other session, since `pg_cancel_backend` succeeds for any backend the same role
-    /// owns. Sharing the id is the fix, and this is the property that makes it true.
+    /// A stale pid could, once recycled, cancel another of this app's sessions via
+    /// `pg_cancel_backend`; sharing the id prevents that.
     #[test]
     fn a_reconnect_moves_the_id_the_cancel_handle_will_read() {
         let id = BackendId::new(Some(4242));

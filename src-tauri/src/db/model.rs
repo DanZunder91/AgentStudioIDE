@@ -1,39 +1,11 @@
-//! The database client's wire types — the Rust mirror of `src/features/db/types.ts`.
-//!
-//! `types.ts` is the **committed contract and the source of truth**; this file mirrors it
-//! with `#[serde(rename_all = "camelCase")]`, exactly as `api_store.rs`'s `SavedRequest`
-//! mirrors its frontend counterpart. Where the two could drift, `tests/wire_contract.rs`'s
-//! sibling checks and the golden `db_engines()` snapshot in `engines.rs` are what notice.
-//!
-//! ## The two invariants this file exists to make structural
-//!
-//! 1. **No secret is expressible here.** [`DbConnection::password_ref`] is `""` or a
-//!    `{{VAR}}` reference; [`DbConnection::url`] has had its credentials split out
-//!    server-side before it ever reaches this struct; a CA certificate crosses as a
-//!    [`CaSummary`], never as PEM. The one place a plaintext password appears in the whole
-//!    module is the `password` **argument** to `db_connection_upsert` /
-//!    `db_test_connection` (the two stated exceptions) and
-//!    [`crate::db::engine::ResolvedConfig`], which is in-process only and has a hand-written
-//!    `Debug` that redacts it.
-//! 2. **`null` is SQL NULL; `""` is the empty string.** Used by the result sets, and the
-//!    reason the whole design has no type-mapping dependencies, so it
-//!    is stated where the types live.
-//!
-//! ## Serde spellings, and why each is what it is
-//!
-//! Every enum here is `rename_all = "kebab-case"`, which yields `"verify-ca"`,
-//! `"aurora-postgres"` and — because they are single words — `"disable"`, `"postgres"`,
-//! `"forever"`, `"sql"`. That is one attribute instead of five, and it cannot disagree with
-//! `types.ts` for any of the values the contract actually lists. `DbErrorCode` is the one
-//! multi-word set that needs it visibly (`not-found`, `invalid-config`, `secret-missing`).
+//! DB client wire types, mirroring `src/features/db/types.ts` (the source of truth). No secret is
+//! expressible here (`password_ref` is `""` or `{{VAR}}`, CAs cross as [`CaSummary`]); `null` is
+//! SQL NULL and `""` the empty string. Enums are `kebab-case`.
 
 use serde::{Deserialize, Serialize};
 
-/// The driver family behind an engine — what the connect path switches on.
-///
-/// Note this is deliberately coarser than [`DbEngineId`]: Aurora is *wire-compatible* with
-/// its upstream, so `aurora-postgres` and `postgres` share one family and therefore one
-/// driver code path. Shipping "Aurora" costs two data rows, not a second driver.
+/// The driver family an engine connects through; coarser than [`DbEngineId`] so Aurora shares its
+/// upstream's driver path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DbFamily {
@@ -79,11 +51,8 @@ pub enum SslMode {
     VerifyFull,
 }
 
-/// How long a password may be retained — the dialog's "Save: Forever" control.
-///
-/// `Forever` writes a Vault variable and stores the `{{VAR}}` reference. `Session` and
-/// `Never` write **nothing**: the typed value is used for one connect and dropped, which is
-/// why `db_connection_upsert` must not persist a password just because it was handed one.
+/// Password retention. `Forever` stores a Vault `{{VAR}}` reference; `Session`/`Never` write
+/// nothing, so `db_connection_upsert` must not persist a password just because it got one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SavePassword {
@@ -92,12 +61,8 @@ pub enum SavePassword {
     Never,
 }
 
-/// How `db_query` treats the editor's text. Mirrors `DbRunMode` in `types.ts`.
-///
-/// `Statement` is the default **and the safe one**: it runs exactly one statement and refuses
-/// text that holds more, so a stray semicolon cannot smuggle a second one past the user's
-/// intent. `Script` runs the whole text and is gated on the connection's `allowMultiStatement`.
-/// Neither is a security boundary — read-only is, and it is the server's.
+/// How `db_query` treats the editor's text (mirrors `DbRunMode`). `Statement`, the default, refuses
+/// more than one; `Script` is gated on `allowMultiStatement`. Neither is a security boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DbRunMode {
@@ -114,11 +79,8 @@ impl Default for DbRunMode {
     }
 }
 
-/// A CA certificate as it crosses the IPC boundary: **a summary, never the PEM**.
-///
-/// This is what stops the store/load pair from being an arbitrary-file-read oracle for the
-/// webview: only PEM-parseable bytes can go in, and nothing comes back out but subjects, a
-/// count and a fingerprint.
+/// A CA certificate across IPC: a summary, never the PEM, so store/load cannot become a file-read
+/// oracle for the webview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CaSummary {
@@ -127,11 +89,8 @@ pub struct CaSummary {
     pub sha256: String,
 }
 
-/// A saved connection, as persisted and as returned to the UI.
-///
-/// Persisted in the OS **app config dir**, never a workspace and never `~/.claude`.
-/// `id`/`created_at`/`updated_at` are Rust's: the UI hands up a
-/// [`DbConnectionInput`] and never invents a `0` timestamp.
+/// A saved connection, persisted in the OS app config dir (never a workspace or `~/.claude`).
+/// `id` and timestamps are set by Rust, never the UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbConnection {
@@ -143,17 +102,8 @@ pub struct DbConnection {
     /// and the copy can never disagree with `engine` (Rust overwrites whatever came in).
     pub family: DbFamily,
     pub host: String,
-    /// The TCP port, or **`None` for "the engine's default"**.
-    ///
-    /// 🔴 Optional, and this was a real bug rather than a nicety. It was a
-    /// required `u16`, the dialog pre-filled the descriptor's default, and so a port was
-    /// *always* stored and always emitted into the built connection string. Pasting an Atlas
-    /// URI gave `mongodb://…:27017/` back — a port nobody typed, and for
-    /// `mongodb+srv` a port is not merely redundant but **invalid**: SRV resolves host and port
-    /// from DNS, so the URI must not carry one.
-    ///
-    /// `#[serde(default)]` is the backward-compatibility half: an existing record's number
-    /// still loads, and a record written before the field existed loads as `None`.
+    /// The TCP port, or `None` for the engine's default (an SRV URI must carry no port).
+    /// `#[serde(default)]` lets records written before the field load as `None`.
     #[serde(default)]
     pub port: Option<u16>,
     /// Database / catalog / Redis db index as a string / `""`.
@@ -165,17 +115,9 @@ pub struct DbConnection {
     /// Raw URL override. Credentials are split out server-side on save, so this may
     /// contain `{{VAR}}` but never a password.
     pub url: Option<String>,
-    /// `mongodb+srv://` — DNS seed-list discovery, which is how MongoDB Atlas is reached.
-    ///
-    /// 🔴 Exists because without it **Atlas could not be connected to at all**. SRV-ness existed
-    /// only inside the transient [`crate::db::url::UrlParts`], so pasting an Atlas URI parsed
-    /// correctly, filled the form, and then lost the one bit that made it work; the saved record
-    /// built a plain single-host `mongodb://host:port`, which Atlas does not answer.
-    ///
-    /// **Forbids a port** ([`crate::db::engines::validate`] refuses the pair rather than dropping
-    /// one silently) and implies TLS — the driver's own `mongodb+srv` handling switches TLS on,
-    /// and this app keeps that rather than letting the SSL ladder weaken it (see
-    /// [`crate::db::mongo`]). Only meaningful for the MongoDB family; other engines ignore it.
+    /// `mongodb+srv://` (DNS seed list, how Atlas is reached); MongoDB family only. Forbids a port
+    /// ([`crate::db::engines::validate`]) and keeps the driver's implied TLS (see
+    /// [`crate::db::mongo`]).
     #[serde(default)]
     pub srv: bool,
     pub ssl_mode: SslMode,
@@ -197,27 +139,9 @@ pub struct DbConnection {
     pub updated_at: u64,
 }
 
-/// What the UI hands to `db_connection_upsert` / `db_test_connection` / `db_url_build`:
-/// `DbConnectionDraft` from the contract, plus an **optional `id`**.
-///
-/// ## Why `id` lives here rather than as a second command argument
-///
-/// `DbConnectionDraft` is `Omit<DbConnection, "id" | "createdAt" | "updatedAt">`, so the
-/// dialog genuinely cannot name which record it is editing — and it should not have to; it
-/// is handed an `initial` record by the wiring layer, which *does* know the id. Carrying it
-/// as an optional field means one shape covers both calls: absent (or `""`) creates, present
-/// updates, and handing a **whole `DbConnection`** back in works unchanged because serde
-/// ignores the `createdAt`/`updatedAt` it does not declare. A separate `id` argument would
-/// have made a full record's own `id` silently ignored, which is a worse failure than a
-/// missing one.
-///
-/// ## Defaults, and the one that is a safety property
-///
-/// `read_only` defaults to **`true`** when absent. That is not tidiness: read-only
-/// is the boundary, `EngineSpec.defaults` deliberately cannot express it, and a
-/// serde default of `false` would mean any caller that omitted the field got a
-/// **read-write** connection to production. The asymmetry is one checkbox click versus a
-/// dropped table, so the absent case has to fail safe.
+/// Input to `db_connection_upsert`/`db_test_connection`/`db_url_build`: the contract's draft plus
+/// an optional `id` (absent or `""` creates; a whole `DbConnection` also fits). `read_only`
+/// defaults to `true` when absent: an omitted field must fail safe.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbConnectionInput {
@@ -248,20 +172,9 @@ pub struct DbConnectionInput {
     pub save_password: SavePassword,
     #[serde(default)]
     pub url: Option<String>,
-    /// WHICH query parameter the pasted string carried the password in (`"password"`,
-    /// `"pwd"`, …) — `None` when it came from the `user:password@` userinfo, which is also
-    /// the default and the ordinary form-driven case.
-    ///
-    /// 🔴 **This exists because a fresh paste's placement was otherwise unrecoverable.**
-    /// `db_url_parse` is pure: it strips the credential out of the string and *discards*
-    /// the value, so by the time Save arrives the `?password=` parameter is gone and
-    /// [`crate::db::url::UrlParts::password_param`] — which is read off the string — is
-    /// `None`. Upsert then put the `{{VAR}}` in the userinfo, and the user who pasted
-    /// `?password=…` got a saved string that described their connection differently from
-    /// how they wrote it.
-    ///
-    /// It is a HINT, not an instruction: a URL that still carries its own parameter wins,
-    /// because the string in hand is better evidence than a field alongside it.
+    /// The query parameter a pasted string carried the password in (`password`, `pwd`, …), or
+    /// `None` for userinfo. `db_url_parse` discards the value, so Save needs this hint to keep the
+    /// placement; a URL still carrying its own parameter wins.
     #[serde(default)]
     pub password_param: Option<String>,
     pub ssl_mode: SslMode,
@@ -283,10 +196,8 @@ fn read_only_default() -> bool {
     true
 }
 
-/// The on-disk / on-the-wire shape of `db-connections.json`.
-///
-/// `version` is bumped when the schema changes so a mismatch is a decision rather than a
-/// guess (see [`crate::db::store`] for what each direction does).
+/// The shape of `db-connections.json`; `version` is bumped on schema change (see
+/// [`crate::db::store`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbConnectionStore {
@@ -316,12 +227,8 @@ pub struct DeleteReport {
     pub saved_queries_removed: u32,
 }
 
-/// The outcome of Test Connection. **Resolves on failure** — an unreachable server is a
-/// result, not an exception, exactly like `http_send`'s "a 500 is a response" contract.
-///
-/// `error` is human prose (the dialog renders it verbatim), already **mapped and redacted**:
-/// `sqlx` and libpq echo connection strings into error text, so a wrong password must never
-/// be able to reach this field.
+/// Test Connection's outcome; resolves on failure. `error` is prose the dialog renders verbatim,
+/// already mapped and redacted (drivers echo connection strings).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbTestResult {
@@ -344,30 +251,16 @@ pub struct ParsedUrl {
     pub family: Option<DbFamily>,
     pub host: String,
     pub port: Option<u16>,
-    /// True iff the pasted scheme was `mongodb+srv://`.
-    ///
-    /// 🔴 **Mirrored in `types.ts` as `ParsedUrl.srv`.** Without it the *paste* path cannot recover the one fact that makes an Atlas URI
-    /// work: the parser knows, `DbConnection::srv` can now hold it, and the only missing link is
-    /// the dialog being told. The alternative — sniffing `mongodb+srv` out of [`Self::url`] in the
-    /// frontend — is exactly the "UI guesswork about a structural fact" that the contract already
-    /// rejected for [`Self::ssl_mode`].
+    /// True iff the pasted scheme was `mongodb+srv://` (mirrored as `ParsedUrl.srv`), so the dialog
+    /// need not sniff it from [`Self::url`].
     pub srv: bool,
     pub database: String,
     pub user: String,
-    /// True iff the pasted string carried a **real** password. A `{{VAR}}` reference does
-    /// not count — it is not a secret, it survives into `url`, and telling the user their
-    /// reference "was taken out and stored separately" would be false.
-    ///
-    /// The value itself is never returned and never written: see [`crate::db::url::parse`].
+    /// True iff the pasted string carried a real password; a `{{VAR}}` reference does not count.
+    /// The value is never returned or written (see [`crate::db::url::parse`]).
     pub had_password: bool,
-    /// WHICH query parameter carried the password (`"password"`, `"pwd"`, …), or `None` when
-    /// it came from the `user:password@` userinfo.
-    ///
-    /// Returned so the *paste* path can honour the decision to keep `?password=` as part of
-    /// the string. Without it the dialog rebuilds from fields and
-    /// the `{{VAR}}` reappears in the userinfo — silently moving the credential to a
-    /// different place in the string, which is the one real concern inside the refusal this
-    /// replaced. The NAME is returned, never the value.
+    /// The query parameter that carried the password (`password`, `pwd`, …), or `None` for
+    /// userinfo, so the paste path keeps `?password=` in place. The name only, never the value.
     pub password_param: Option<String>,
     /// The TLS mode the string asked for, or `None` when it said nothing. Parsed here rather
     /// than left as an ordinary `options` entry, because a form that shows `prefer` while
@@ -549,15 +442,8 @@ mod tests {
         assert!(!input.srv);
     }
 
-    /// 🔴 **Backward compatibility, at the serde boundary.** The port went from `u16` to
-    /// `Option<u16>` and `srv` did not exist, so every record already on a user's disk is written
-    /// in the old shape. Reading one must yield the *same* connection it always was — a number
-    /// stays a number, and an absent `srv` is `false`, not "unknown".
-    ///
-    /// This is the `SavedRequest` protocol-tail rule the contract's header states, asserted rather
-    /// than assumed: without `#[serde(default)]` on `srv` this fails with
-    /// `missing field \`srv\``, and the whole connection list would have loaded as
-    /// [`DbConnectionStore::default`] — i.e. every saved connection silently gone.
+    /// Records on disk predate `Option<u16>` ports and `srv`; without `#[serde(default)]` on `srv`
+    /// the whole list would load as empty.
     #[test]
     fn a_record_written_before_this_change_still_loads_with_its_port_and_no_srv() {
         // Verbatim the old on-disk shape, keys and all. Written out as a literal on purpose: a

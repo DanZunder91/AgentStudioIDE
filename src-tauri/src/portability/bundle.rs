@@ -1,23 +1,6 @@
-//! The bundle **format** and every pure transform over it.
-//!
-//! `src/features/portability/types.ts` is the **authority**; every type here mirrors it with
-//! `#[serde(rename_all = "camelCase")]`. Crypto lives in [`super::seal`] and
-//! nothing in this file knows any.
-//!
-//! ## Why the record types are deliberately lenient on the way in
-//!
-//! A bundle is a file a person was emailed. Every field below is `#[serde(default)]`, and the
-//! numbers are `i64` rather than `u16`/`u32`, so a hostile or merely old file lands as *values
-//! this code can refuse individually* instead of as one serde error that would read as
-//! "not a bundle". A port of `-1` must become a clamped port with a notice, not a rejected
-//! import — guardrails are re-applied on import, and you cannot re-apply a guardrail to a
-//! record that failed to parse. Unknown JSON fields are dropped, which is serde's default and is
-//! why `deny_unknown_fields` appears nowhere here.
-//!
-//! ## The redaction heuristic, and what it cannot do
-//!
-//! See [`redact_header_value`]. It is the single most likely place this feature leaks a
-//! credential, and its limits are written out there rather than implied.
+//! The bundle format and its pure transforms, mirroring `src/features/portability/types.ts` (the
+//! authority); crypto is in [`super::seal`]. Fields are lenient (`default`, `i64`) so a bad or old
+//! file lands as values guardrails can refuse one by one, not as one parse error.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -29,10 +12,8 @@ use super::seal::SealedPayload;
 pub const BUNDLE_KIND: &str = "agentstudio.bundle";
 /// The format version. Bumped only for a change a reader cannot absorb.
 pub const BUNDLE_VERSION: i64 = 1;
-/// What replaces a redacted header value in `structure` mode.
-///
-/// A visible marker rather than an empty string, so an imported request fails loudly at send
-/// time instead of silently sending `Authorization: ` and returning a confusing 401.
+/// Visible marker (not `""`) so an imported request fails loudly instead of sending
+/// `Authorization: ` and getting a confusing 401.
 pub const REDACTED_PLACEHOLDER: &str = "{{REDACTED — supply this value}}";
 /// Bundle size ceiling, checked against the file's **length** before a byte is read.
 pub const MAX_BUNDLE_BYTES: u64 = 8 * 1024 * 1024;
@@ -117,13 +98,8 @@ pub struct Bundle {
 
 /* ────────────────────────── the exported records ────────────────────────── */
 
-/// A DB connection, minus everything meaningless or dangerous on another machine.
-///
-/// Deliberately **not** the full `DbConnection`: no `createdAt`/`updatedAt` (the importer stamps
-/// its own), no `family` (denormalised from the engine descriptor on import, never trusted from
-/// the file), no `savePassword` (derived from whether a `passwordRef` survived), and **no
-/// `caSummary`** — a CA fingerprint describes a certificate file on the sharer's laptop, which
-/// the recipient does not have.
+/// A DB connection minus what is meaningless or unsafe elsewhere: no timestamps, no `family`
+/// (from the engine on import), no `savePassword` (derived), no `caSummary` (a sharer-local file).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ExportedDbConnection {
@@ -131,27 +107,16 @@ pub struct ExportedDbConnection {
     pub name: String,
     pub engine: String,
     pub host: String,
-    /// `null` (or absent) = **no port**, i.e. the recipient's build should use the engine's
-    /// default. `i64` rather than `u16` because a bundle is a file a human can edit: an
-    /// out-of-range number must arrive as a *clampable value with a notice*, not as a serde error
-    /// that discards the whole import (guardrails are re-applied on import).
-    ///
-    /// 🔴 `Option`, like `DbConnection::port`. It used to be a plain `i64`, so exporting a
-    /// connection whose port field was empty would have invented one — the same defect the record
-    /// itself had. `src/features/portability/types.ts` mirrors it as `number | null`.
+    /// `None` = no port (use the engine default), mirrored as `number | null`. `i64` so an
+    /// out-of-range number arrives clampable with a notice instead of failing the import.
     pub port: Option<i64>,
     pub database: String,
     pub user: String,
     /// `""` or a `{{VAR}}` name. **Never a value** — and re-checked on import, because a
     /// hand-written bundle could put a literal here.
     pub password_ref: String,
-    /// `mongodb+srv://` — DNS seed-list discovery (see `DbConnection::srv`).
-    ///
-    /// 🔴 Without it an exported Atlas connection arrives on the recipient's machine as a plain
-    /// `mongodb://host`, which is precisely the bug that made Atlas unreachable in the first
-    /// place — a bundle that silently drops the one bit that makes a connection work is worse than
-    /// one that refuses to carry it. The container-level `#[serde(default)]` means an older
-    /// bundle still imports (as `false`, the ordinary single-host form).
+    /// `mongodb+srv://` seed-list discovery; dropping it would make an exported Atlas connection
+    /// unreachable. Older bundles import it as `false`.
     pub srv: bool,
     pub ssl_mode: String,
     /// Carried for information and **not honoured on import** (guardrails are re-applied).
@@ -262,13 +227,8 @@ impl ImportItemKind {
     }
 }
 
-/// A **plan-scoped key, unique across every kind**: `"<kind>:<native id>"`.
-///
-/// Namespaced because `ImportChoices.actions` keys on this alone, and the native ids are not drawn
-/// from one space — a `variable`'s id is its *name*, an `environment`'s is a uuid, a `dbQuery`'s a
-/// ULID. Nothing stopped a variable called `01J…` from colliding with a connection of that id, and
-/// the consequence would be one item's "skip" silently applied to another: a mis-routed override
-/// that no error would ever report.
+/// Plan-scoped key unique across kinds, `"<kind>:<native id>"`: native ids share no space, and a
+/// collision would silently apply one item's action to another.
 pub fn item_id(kind: ImportItemKind, native_id: &str) -> String {
     format!("{}:{}", kind.as_str(), native_id.trim())
 }
@@ -284,12 +244,8 @@ pub struct ImportItem {
     pub reason: String,
 }
 
-/// One `{{VAR}}` the bundle references, and what this machine already knows about it.
-///
-/// This and [`ImportPlan::hosts`] are the security surface of the whole feature:
-/// an imported request may name `{{PROD_API_KEY}}` — which the recipient's Vault may well
-/// hold — while pointing at any host in the world. Intent is not decidable here, so visibility
-/// before anything runs is the honest mitigation.
+/// One referenced `{{VAR}}` and what this machine knows of it. With [`ImportPlan::hosts`] this is
+/// the security surface: an import may pair a held secret with any host, so both are shown first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanVariable {
@@ -307,17 +263,8 @@ pub struct ImportChoices {
     /// Whether an incoming secret value may replace one this machine already has. Defaults to
     /// **false**.
     pub overwrite_existing_secrets: bool,
-    /// Whether imported DB connections are made read-only.
-    ///
-    /// 🔴 **Defaults to `true`, and the explicit `serde` default is load-bearing.** The struct is
-    /// `#[serde(default)]`, so a missing field would otherwise become `false` — i.e. an older
-    /// frontend, or a hand-written IPC call, would silently import **writable** connections. The
-    /// safe value has to be the one that appears when nobody said anything.
-    ///
-    /// An earlier version *forced* this. It is now **enforced but optional**: the reasoning still
-    /// justifies the default — a connection that has just arrived is new *on this machine*, and
-    /// the recipient did not make the sharer's choice — but it does not justify removing the
-    /// decision from the person looking at the review screen.
+    /// Make imported DB connections read-only. Defaults to `true`, and the explicit serde default
+    /// is load-bearing: a missing field must not import writable connections. Optional, not forced.
     #[serde(default = "read_only_by_default")]
     pub force_read_only: bool,
 }
@@ -340,14 +287,8 @@ impl Default for ImportChoices {
     }
 }
 
-/// What an import did to each kind of thing.
-///
-/// Deliberately **not** [`BundleCounts`], which describes a *file*. Two differences make them
-/// genuinely different types rather than a reuse opportunity: `BundleCounts.referencedVariables`
-/// counts distinct `{{VAR}}` **names mentioned**, which is meaningless as an outcome; and what a
-/// result needs is the number of variables **written**, which `secretValues` ("how many carry a
-/// value") is not. Sharing one type made the receipt read "3 variables" off a field meaning "3
-/// names were referenced" — a wrong number in user-facing copy. Two meanings, two types.
+/// Import outcome per kind; not [`BundleCounts`] (which describes a file): variables WRITTEN
+/// differ from names referenced or values carried.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportCounts {
@@ -401,12 +342,8 @@ impl ExportOptions {
 
 /* ───────────────────────── the canonical header ───────────────────────── */
 
-/// `kind|version|mode|createdAtMs|label` — the AEAD additional data.
-///
-/// Built by hand from the header's own fields rather than by serialising it, because a
-/// serialiser's key order or number formatting changing would silently make every previously
-/// sealed bundle unopenable. `label` goes last so it can contain a `|` without shifting the
-/// meaning of any earlier field.
+/// `kind|version|mode|createdAtMs|label`, the AEAD additional data. Built by hand: a serializer
+/// change would make sealed bundles unopenable. `label` last so a `|` in it shifts nothing.
 pub fn canonical_header(header: &BundleHeader) -> String {
     format!(
         "{}|{}|{}|{}|{}",
@@ -420,12 +357,8 @@ pub fn canonical_header(header: &BundleHeader) -> String {
 
 /* ───────────────────────── `{{VAR}}` references ───────────────────────── */
 
-/// Every `{{VAR}}` name in `text`, in order of appearance (duplicates included).
-///
-/// A name must be non-empty and contain no whitespace and no braces. That is not pedantry: it is
-/// exactly what excludes [`REDACTED_PLACEHOLDER`] (`{{REDACTED — supply this value}}`) from being
-/// re-read as a variable named "REDACTED — supply this value", and it matches what
-/// `db::secret::vault_var_name` can actually mint (`[A-Z0-9_]`).
+/// Every `{{VAR}}` name in order (duplicates included). Names are non-empty with no whitespace
+/// or braces, which excludes [`REDACTED_PLACEHOLDER`] and matches what Vault names can be.
 pub fn references_in(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
@@ -472,10 +405,7 @@ fn strip_references(text: &str) -> String {
     out
 }
 
-/// Every distinct `{{VAR}}` the whole payload references, sorted.
-///
-/// Computed **after** redaction, so the list describes what is actually in the file rather than
-/// what was in the store before a value was replaced by [`REDACTED_PLACEHOLDER`].
+/// Every distinct referenced `{{VAR}}`, sorted; computed after redaction so it describes the file.
 pub fn referenced_variables(contents: &BundleContents) -> Vec<String> {
     let mut set: BTreeSet<String> = BTreeSet::new();
     for c in &contents.db_connections {
@@ -502,20 +432,9 @@ pub fn referenced_variables(contents: &BundleContents) -> Vec<String> {
 
 /* ───────────────────────────────── hosts ───────────────────────────────── */
 
-/// The host component of `text`, tolerating everything the API client accepts.
-///
-/// Not delegated to the `url` crate for the reason `db/url.rs`'s module doc gives at length:
-/// WHATWG-"special" schemes are only `http(s)`/`ws(s)`/`ftp`/`file`, so `postgresql://` and
-/// friends get an opaque host the crate rewrites. And a gRPC endpoint (`localhost:50051`) has no
-/// scheme at all, while a saved request's URL may begin with `{{BASE_URL}}`.
-///
-/// Returns `None` when there is nothing host-shaped to show, which is a better plan entry than a
-/// row saying `""`.
-///
-/// Known limitation: a comma-separated **seed list** (`mongodb://a.h:27017,b.h:27017/d`) reports
-/// only its first host. Stated rather than glossed — no MongoDB driver is wired in this build, so
-/// nothing can currently *reach* the second one, and a plan row per seed would be revisited when
-/// one is.
+/// The host of `text`, tolerating schemeless gRPC endpoints, `{{BASE_URL}}` prefixes and DB
+/// schemes the `url` crate mangles (see `db/url.rs`). `None` if nothing host-shaped. A seed list
+/// reports only its first host.
 pub fn host_of(text: &str) -> Option<String> {
     let mut s = text.trim();
     if s.is_empty() {
@@ -596,11 +515,8 @@ const SENSITIVE_HEADER_NAMES: &[&str] = &[
 /// Substrings that make *any* header name suspect.
 const SENSITIVE_HEADER_SUBSTRINGS: &[&str] = &["token", "secret", "key", "password", "passwd"];
 
-/// The alphabet a base64/hex/JWT/`sk-live-…` credential is drawn from.
-///
-/// `=` is deliberately **excluded** so base64 padding splits a run rather than extending it —
-/// which is what lets `session=` (7) stay under the threshold while the base64 body it introduces
-/// does not.
+/// The alphabet a base64/hex/JWT/`sk-live-…` credential uses. `=` is excluded so padding splits
+/// a run (`session=` stays under the threshold).
 fn is_secretish(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '+' | '/' | '~')
 }
@@ -609,11 +525,8 @@ fn is_secretish(c: char) -> bool {
 /// legitimately contains are all shorter (`Bearer` 6, `Basic` 5, `Token` 5, `Digest` 6).
 const SECRETISH_RUN_LIMIT: usize = 8;
 
-/// A Vault value shorter than this is not swept for by exact match.
-///
-/// A variable holding `1`, `true` or `dev` would otherwise turn every request that contains those
-/// three characters into a redacted mess — the classic way a redactor destroys the message while
-/// looking like it worked (`db::secret::redact`'s empty-secret guard is the same lesson).
+/// Vault values shorter than this are not swept by exact match: `1` or `dev` would redact every
+/// request containing them.
 const EXACT_SWEEP_MIN_LEN: usize = 6;
 
 /// `true` iff `name` is a header whose value we treat as secret-bearing.
@@ -640,36 +553,9 @@ fn longest_secretish_run(text: &str) -> usize {
     best
 }
 
-/// What `structure` mode writes for one header, and whether it redacted.
-///
-/// ## The rule
-///
-/// 1. A value on a **non-sensitive** header name is kept verbatim.
-/// 2. An **empty** value is kept — there is nothing to leak.
-/// 3. On a sensitive name, the value is kept iff, with every `{{VAR}}` span removed, no run of
-///    [`SECRETISH_RUN_LIMIT`] or more secret-alphabet characters remains. So
-///    `Bearer {{TOKEN}}` → `Bearer ` → run 6 → **kept**; `Bearer sk-live-abc123` → run 18 →
-///    **redacted**; `session={{SID}}` → `session=` → run 7 → **kept**.
-/// 4. Otherwise the whole value becomes [`REDACTED_PLACEHOLDER`] and the caller adds a notice
-///    naming the header.
-///
-/// ## What this CANNOT catch — stated plainly rather than implied
-///
-/// * **A secret on a header whose name looks innocent.** `X-Custom-Auth: sk-live-…` and
-///   `X-Trace: <a bearer token>` are **not** redacted. Widening rule 3 to every header was
-///   measured and rejected: `User-Agent: Mozilla/5.0 (Macintosh; …)` has an 11-character run, so
-///   an unconditional scan redacts ordinary requests, and a redactor people learn to distrust is
-///   worse than a narrow one. This is a real, accepted false negative.
-/// * **A secret shaped like prose.** A passphrase-style credential
-///   (`Authorization: my dog has fleas`) has no long run, so rule 3 keeps it.
-/// * **A secret that is over-redacted.** `Authorization: Negotiate` (9) is redacted although it
-///   carries nothing. Over-redaction is the safe direction and the notice says which header.
-/// * **A secret in the request body** — see [`redact_body`], which uses the *exact* sweep only.
-///
-/// The exact sweep in [`redact_header_value`]'s caller closes the largest part of the real gap,
-/// because it needs no heuristic at all: any occurrence of a value this machine's Vault actually
-/// holds is certainly a secret, on any header and in any body. And the whole heuristic layer is
-/// irrelevant in `sealed` mode, which is the answer for a config whose credentials must travel.
+/// `structure` mode for one header: keep non-sensitive names and empty values; on a sensitive
+/// name, redact if a [`SECRETISH_RUN_LIMIT`]+ run remains once `{{VAR}}`s are removed. Misses
+/// secrets on innocent-looking names and prose-like ones; the exact Vault sweep covers more.
 pub fn redact_header_value(name: &str, value: &str) -> Option<&'static str> {
     if value.trim().is_empty() || !header_is_sensitive(name) {
         return None;
@@ -680,9 +566,7 @@ pub fn redact_header_value(name: &str, value: &str) -> Option<&'static str> {
     Some(REDACTED_PLACEHOLDER)
 }
 
-/// Every Vault value long enough to sweep for by exact match, longest first.
-///
-/// Longest first so a value that contains another (`sk-live-abc` inside `sk-live-abcdef`) does not
+/// Vault values long enough for the exact sweep, longest first so a contained value doesn't
 /// leave the longer one's tail behind.
 pub fn sweepable_secrets(vault: &crate::api_store::ApiStore) -> Vec<String> {
     let mut values: Vec<String> = vault
@@ -697,12 +581,8 @@ pub fn sweepable_secrets(vault: &crate::api_store::ApiStore) -> Vec<String> {
     values
 }
 
-/// `text` with every known Vault value replaced by [`REDACTED_PLACEHOLDER`]. `true` when
-/// something was replaced.
-///
-/// This is **not** a heuristic: it is exact knowledge of what the secrets on this machine are, so
-/// it catches a literal token pasted into any header, any URL and any body — the cases
-/// [`redact_header_value`] admits it cannot see.
+/// Replace every known Vault value with [`REDACTED_PLACEHOLDER`] (`true` if any): exact
+/// knowledge, not a heuristic, so it catches what [`redact_header_value`] cannot see.
 pub fn redact_body(text: &str, secrets: &[String]) -> (String, bool) {
     let mut out = text.to_string();
     let mut hit = false;
@@ -735,10 +615,8 @@ mod tests {
 
     #[test]
     fn the_redaction_placeholder_is_never_read_back_as_a_variable() {
-        // 🔴 The specific trap: `REDACTED_PLACEHOLDER` is itself `{{…}}`-shaped. If the scanner
-        // accepted it, every redacted header would add a phantom variable to
-        // `referencedVariables`, and the import dialog would tell the recipient to supply a
-        // variable called "REDACTED — supply this value".
+        // The placeholder is `{{…}}`-shaped; accepting it would add a phantom variable the
+        // import dialog asks the recipient to supply.
         assert!(REDACTED_PLACEHOLDER.starts_with("{{"));
         assert_eq!(references_in(REDACTED_PLACEHOLDER), Vec::<String>::new());
     }
@@ -924,7 +802,7 @@ mod tests {
             None,
             "the name-gated heuristic cannot see this — sealed mode is the answer"
         );
-        // …and prose-shaped secrets slip rule 3 even on a sensitive name.
+        // …and prose-shaped secrets slip the run check even on a sensitive name.
         assert_eq!(
             redact_header_value("Authorization", "my dog has fleas"),
             None
@@ -1173,10 +1051,8 @@ mod tests {
         assert_eq!(parsed.row_limit, 99_999_999_999);
         assert_eq!(parsed.timeout_ms, 0);
 
-        // …and an ABSENT port is not a hostile number: it is the legitimate "no port, use the
-        // engine's default" state `DbConnection::port` can hold. It must arrive as
-        // `None` so the importer carries it across instead of clamping it to a default it then
-        // reports as a correction.
+        // An ABSENT port is the legitimate "use the engine default" state: it must arrive
+        // as `None`, not be clamped and reported as a correction.
         let no_port: ExportedDbConnection =
             serde_json::from_value(serde_json::json!({"id": "c"})).expect("parses");
         assert_eq!(no_port.port, None);

@@ -1,24 +1,6 @@
-/**
- * Blame gutter — the CM6/DOM glue for the annotate view.
- *
- * Thin by design: every label/run/clamp decision is a pure function in
- * `blame.ts`; this file only (a) renders those labels as a `gutter()` placed
- * LEFT of the line numbers, and (b) owns the hover popover ("step on the name →
- * see the commit").
- *
- * The gutter lives in a module-level `Compartment` that `EditorRegistry`
- * includes (empty) in every view, so toggling blame is a `reconfigure` — the
- * view, its buffer, undo history, and scroll position are never recreated.
- *
- * Popover behavior:
- *  - mouseenter on a committed line's marker arms a ~150 ms show timer;
- *    mouseleave before it fires cancels it (a mouse sweeping down the gutter
- *    opens nothing).
- *  - once shown, leaving the marker starts a short grace timer so the pointer
- *    can travel INTO the popover (which cancels the hide); leaving the popover
- *    re-arms it. When neither is hovered, it hides.
- *  - Esc and any scroll dismiss immediately.
- */
+/** Blame gutter CM6/DOM glue; label logic is pure in `blame.ts`. A module-level `Compartment` in
+ * every view makes toggling a `reconfigure`, so buffer, undo and scroll survive. The popover
+ * shows after ~150 ms, has a grace period to travel into it, and Esc or scroll dismisses it. */
 
 import { Compartment, type Extension } from "@codemirror/state";
 import { type EditorView, gutter, GutterMarker } from "@codemirror/view";
@@ -38,10 +20,7 @@ export const POPOVER_SHOW_MS = 150;
 /** Grace period to travel from the marker into the popover before it hides. */
 export const POPOVER_HIDE_MS = 120;
 
-/**
- * The singleton commit popover. Plain DOM (appended to `document.body`), so it
- * is fully testable under jsdom without a CM6 view.
- */
+/** Plain DOM on `document.body`, so it is testable under jsdom without a CM6 view. */
 export class BlamePopover {
   private el: HTMLDivElement | null = null;
   private showTimer: ReturnType<typeof setTimeout> | null = null;
@@ -193,11 +172,8 @@ export function blameGutterExtension(blame: FileBlame): Extension {
   });
 }
 
-/**
- * The toggle seam. `blameSupport` (the empty compartment) goes into every view
- * at creation — BEFORE `lineNumbers()`, which is what puts the blame column on
- * the LEFT of the numbers — and `showBlame`/`hideBlame` reconfigure it in place.
- */
+/** `blameSupport` goes into every view BEFORE `lineNumbers()`, which puts blame on the left;
+ * `showBlame`/`hideBlame` reconfigure it in place. */
 const blameCompartment = new Compartment();
 export const blameSupport: Extension = blameCompartment.of([]);
 

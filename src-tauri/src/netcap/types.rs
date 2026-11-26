@@ -5,11 +5,8 @@ use serde::{Deserialize, Serialize};
 
 pub use super::client::ClientProcess;
 
-/// What kind of traffic a flow is. `tunnel` = a `CONNECT` we did not (or could not) decrypt.
-/// `bypass` = NOT traffic the proxy saw: an agent command that skipped the proxy
-/// (`curl --noproxy '*'`, `NO_PROXY=*`), recorded from the command itself so the table can say
-/// it happened (its [`FlowSummary::bypass`] carries the command). Additive: no proxy path ever
-/// produces it.
+/// Flow kind. `tunnel` = an undecrypted `CONNECT`. `bypass` is NOT proxied traffic: an agent
+/// command that skipped the proxy, recorded from the command ([`FlowSummary::bypass`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FlowProto {
@@ -127,10 +124,8 @@ impl FlowSummary {
         }
     }
 
-    /// A finished `bypass` row for a command that skipped the proxy: nothing went through us,
-    /// so there is no status, no bytes and no duration — only the command and, when it could be
-    /// parsed, its method and URL (host / port / path are filled from the URL for the table's
-    /// Host and Path columns and its host filter).
+    /// A finished `bypass` row: no status, bytes or duration; only the command and, when parsed,
+    /// its method and URL (split into host/port/path for the table and host filter).
     pub fn bypassed(command: &str, method: Option<&str>, url: Option<&str>) -> Self {
         let (host, port, path) = url.map(split_url).unwrap_or_default();
         let mut s =

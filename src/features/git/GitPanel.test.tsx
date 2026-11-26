@@ -1,18 +1,6 @@
-/**
- * GitPanel — the Git rail panel: per-root Changes groups + Pull Requests with
- * an author filter.
- *
- * Only the IPC boundary (`./gitIpc`) is mocked (anti-pattern #4: never mock
- * what you own) — the real gitStore and the real app store are underneath, so
- * a click on a change row is asserted by its EFFECT (an editor tab in the app
- * store), not by spying on the action. Everything is imported through the
- * barrel (`./index`), the same surface `App.tsx` consumes.
- *
- * Nothing here asserts `.not.toThrow()` around a React event
- * handler (React swallows those); instead window `error` /
- * `unhandledrejection` events are collected and asserted empty where a handler
- * could plausibly blow up (the fire-and-forget PR open).
- */
+/** Only `./gitIpc` is mocked; the real stores sit underneath, so effects are asserted, not
+ * spies. React swallows handler throws, so window `error`/`unhandledrejection` events are
+ * collected and asserted empty instead of `.not.toThrow()`. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

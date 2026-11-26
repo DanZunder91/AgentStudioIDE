@@ -1,36 +1,6 @@
-/**
- * The center layout across a restart — two bugs.
- *
- *   1. A tab or view that was renamed lost its new name when the app was closed
- *      and reopened.
- *   2. With two views open for the same project and one agent in each, every
- *      agent landed in a single view after the app was closed and reopened.
- *
- * Both are one gap: nothing wrote the center layout down. `ViewSnapshot.name`,
- * `Tab.customTitle` and `AgentNode.customTitle` lived only in the JS heap, and
- * `rebuildTerminalTabs` had no record of which view a terminal came from, so it
- * dumped every restored terminal into the focused leaf of the view on screen.
- *
- * ── What "a restart" means here ──────────────────────────────────────────────
- * `restart()` below is not a metaphor. It does exactly what a real relaunch does,
- * in `bridge.ts`'s order:
- *
- *   persist  → the blob the running app would have written to layout-prefs.json
- *   reset    → a fresh JS heap: no views, no tabs, no agents (the process died)
- *   load     → `applyCenterLayout(prefs)`   — the arrangement, leaves still empty
- *   snapshot → `applyFleetSnapshot(agents)` — the roots Rust re-spawned
- *   rebuild  → `rebuildTerminalTabs(metas)` — the PTYs, placed back into panes
- *
- * The one thing the harness decides is WHICH terminals come back: Rust re-spawns
- * pinned roots under the same id and nothing else, so `restart({ survivors })` is
- * where "this agent was pinned, that shell was not" is expressed.
- *
- * ── Falsification ───────────────────────────────────────────────────────────
- * Reverting step 1 of `rebuildTerminalTabs` (the `pendingRestore` placement loop)
- * so it falls through to the old "focused leaf of the active view" path turns the
- * headline test red with the original symptom. Dropping `views`/`activeViewId` from
- * `layoutPrefsBlob` turns every restore test red.
- */
+/** The center layout across a restart: renamed tabs/views keep names, agents return to their own
+ * views. `restart()` replays a real relaunch in bridge.ts's order; Rust re-spawns only pinned
+ * roots, so `restart({ survivors })` says which terminals come back. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -117,11 +87,8 @@ const terminalOf = (tabId: TabId): TerminalId => {
   return ref.terminalId;
 };
 
-/**
- * The AUTHORITATIVE tree of a view: the live `layout` for the ACTIVE one, whose
- * snapshot in `views` is stale by design (`LayoutState.views`). Reading the
- * snapshot instead is the classic way to assert against yesterday's arrangement.
- */
+/** A view's authoritative tree: the live `layout` for the active view, whose `views` snapshot is
+ * stale by design (`LayoutState.views`). */
 const treeOf = (viewId: ViewId): PaneNode => {
   const s = state();
   if (viewId === s.activeViewId) return s.layout;
@@ -138,10 +105,7 @@ const lastSaved = (): LayoutPrefs => {
   return calls[calls.length - 1][0] as LayoutPrefs;
 };
 
-/**
- * Launch an agent into the ACTIVE view, exactly as the ⚡ quick-launch does:
- * a fleet row plus its agent-terminal tab. Its TerminalId IS its AgentId.
- */
+/** Launch an agent into the active view as ⚡ quick-launch does; its TerminalId IS its AgentId. */
 function launchAgent(id: string, cwd = `/w/${id}`): AgentId {
   const agentId = asAgentId(id);
   useAppStore.setState((s) => {
@@ -168,12 +132,8 @@ const meta = (id: TerminalId, agentId?: AgentId): TerminalMeta => ({
   ...(agentId ? { agentId } : {}),
 });
 
-/**
- * A REAL restart: persist, drop the whole heap, then replay boot in bridge.ts's
- * order. `survivors` names the terminals Rust brought back — a pinned root comes
- * back under its own id; an unpinned agent and any plain shell do not.
- * Defaults to "every terminal that was open", i.e. everything was pinned.
- */
+/** A real restart: persist, drop the heap, replay boot in bridge.ts's order. `survivors` are the
+ * terminals Rust brings back (pinned roots, same id); defaults to every open terminal. */
 function restart(options: { survivors?: TerminalId[] } = {}): void {
   const before = state();
   const prefs = layoutPrefsBlob(before);
@@ -410,13 +370,8 @@ describe("restore — terminals that did not survive", () => {
   });
 
   it("writes the corrected layout back after a restore", () => {
-    // 🔴 SEAM. `bridge.ts` boots as
-    // applyCenterLayout → fleet_snapshot → registerFleetRoots → rebuildTerminalTabs,
-    // and that third step persists (via `syncFolderOrder`) while the restored views
-    // are still EMPTY. `layout-prefs.json` then holds two views, both
-    // `"terminals": []`, after a relaunch that had restored them correctly on screen.
-    // Quit before touching anything and that becomes the truth — a restore that
-    // erases what it restored. The placement pass must write the corrected blob.
+    // Boot persists (`registerFleetRoots` → `syncFolderOrder`) while restored views are still
+    // empty, so a quit then would save empty views; placement must write the corrected blob.
     const agentId = launchAgent("agent-1");
     const prefs = layoutPrefsBlob(state());
     resetStore();
@@ -636,11 +591,7 @@ describe("applyCenterLayout — reading a file that may be wrong", () => {
 /* ══════════════════════ every change is written down ══════════════════════ */
 
 describe("persistence triggers — an unwritten change is a lost change", () => {
-  /**
-   * Every action that changes what the blob holds must persist in its WRAPPER
-   * (never inside the producer). The table is the guardrail: a future action that reshapes the
-   * layout and forgets this is exactly how bug 1 and bug 2 happened.
-   */
+  /** Every action that changes the blob must persist in its wrapper, never inside the producer. */
   const cases: Array<[string, () => void]> = [
     ["openTerminalTab", () => void act().openTerminalTab({ cwd: "/w/a" })],
     ["closeTab", () => act().closeTab(act().openTerminalTab({ cwd: "/w/a" }))],

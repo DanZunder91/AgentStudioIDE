@@ -1,25 +1,8 @@
-/**
- * `terminalsBusy` — the one IPC the close gate asks before it kills a terminal.
- *
- * Three behaviours, and only one of them is the happy path. The other two are
- * the reason the wrapper exists at all:
- *
- *   - **the empty short circuit** — a pane with no terminals must not cost a
- *     round trip, and (more importantly) must not reach Rust with an empty id
- *     list, where "none of these are busy" and "I could not tell" look alike;
- *   - **the rejection arm** — a backend hiccup resolves to `[]`, i.e. "nothing
- *     is busy", so a broken IPC can never strand the user in a tab that refuses
- *     to close. The wrapper's own header states that track: the cost of being
- *     wrong here is one lost terminal, the cost of the other failure mode is an
- *     app that stops responding to its own ✕.
- */
+/** The empty short circuit and the rejection arm (→ `[]`) are why the wrapper exists. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The wrapper's ONLY dependency — mocked at the Tauri boundary, exactly as
-// `layoutPrefsIpc.test.ts` does it. (This factory is a frozen copy
-// of the module's surface; `invoke` is the only export this module imports, so
-// if that ever changes, this factory has to change with it.)
+// Factory mock: a frozen copy of the module's surface (`invoke` only); grow it if imports grow.
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
@@ -35,10 +18,7 @@ beforeEach(() => {
 
 describe("terminalsBusy", () => {
   it("short-circuits an empty id list WITHOUT invoking", async () => {
-    // The pane ✕ on a pane of editor tabs computes `[]`. Asking Rust "are any of
-    // these zero terminals busy?" is a round trip whose only possible answer is
-    // the one we already have — and it is on the path of a click the user is
-    // waiting on.
+    // Zero terminals: no round trip on the path of a click the user is waiting on.
     await expect(terminalsBusy([])).resolves.toEqual([]);
     expect(invoke).not.toHaveBeenCalled();
   });

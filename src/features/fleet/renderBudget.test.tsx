@@ -1,21 +1,6 @@
-/**
- * The rail's re-render budget — cmux issue #2586's exact failure mode.
- *
- * They shipped a workspace sidebar where every list row subscribed to a store,
- * and it pegged a core at 100%. We have the same shape (a list of rows over a
- * store) plus something they did not: a fleet of agents each emitting telemetry
- * continuously. Correct rendering is table stakes; rendering ONLY what changed
- * is the actual requirement, and no ordinary assertion can see it — a wasteful
- * rail and a frugal one produce identical DOM.
- *
- * ── How the measurement works ────────────────────────────────────────────────
- * `AgentRow` is `memo(AgentRowImpl)`, so the question is whether `AgentRowImpl`'s
- * body RUNS — not whether the DOM changed. Mocking its child gives us exactly
- * that signal: `<AgentStatusPill>` is only re-created when the row body runs, and
- * being un-memoized it re-renders whenever it is. So one spy call = one row
- * render. Everything else here is the real component, the real store, and the
- * real subscriptions — a stub would only measure the stub.
- */
+/** A wasteful rail and a frugal one produce identical DOM, so count renders: the mocked,
+ * un-memoized `<AgentStatusPill>` is created only when `AgentRowImpl`'s body runs, so one spy
+ * call = one row render. Everything else is real. */
 
 import { act, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -126,10 +111,7 @@ describe("render budget — one event, one row", () => {
 
 describe("render budget — the activity firehose", () => {
   it("an activity tick re-renders NOTHING", () => {
-    // `activity` is the highest-frequency event in the system: every agent,
-    // continuously, forever. It moves `lastActivityAt` — a field no row
-    // displays. A row selecting the whole AgentNode would re-render on every
-    // one of them; selecting scalars means this costs zero renders.
+    // `activity` only moves `lastActivityAt`, shown by no row: scalar selects mean zero renders.
     seedFleet(20);
     render(<LeftRail />);
     pill.rendered.mockClear();
@@ -233,10 +215,7 @@ describe("render budget — a wide + deep fan-out tree", () => {
   });
 
   it("a deep status change re-renders only the node and its ancestors, not the fleet", () => {
-    // A grandchild finishing changes its own status AND every ancestor's
-    // roll-up — so g0 + c0 + root re-render (3), the depth of the chain. The
-    // other 18 depth-1 siblings and their rows do NOT: their roll-ups are
-    // unchanged. This is the roll-up cost, and it is bounded by depth, not N.
+    // A grandchild's status change re-renders its ancestor chain (3 rows): bounded by depth, not N.
     buildTree();
     render(<LeftRail />);
     pill.rendered.mockClear();

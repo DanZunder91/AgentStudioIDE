@@ -1,11 +1,3 @@
-/**
- * `<FolderGroupRow>` — the folder-group header.
- *
- * Rendered in isolation: it names the folder, counts + rolls up its agents,
- * discloses the group, and carries a per-folder `+` that launches another agent
- * in that folder.
- */
-
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

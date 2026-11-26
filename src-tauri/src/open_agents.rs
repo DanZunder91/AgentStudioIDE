@@ -1,59 +1,6 @@
-//! Open agents come back after a restart — phase 1 of "agents survive a restart".
-//!
-//! Agents are sometimes still working when the window or the app is closed (for example to
-//! update), so the app should reopen with every agent that was working before, and should
-//! not kill the agents, so the conversations can continue. Both halves are planned:
-//! **phase 1 (this module)** re-opens every agent that was open, in
-//! its tab, on the same conversation (`claude --resume <session id>`); **phase 2** (a
-//! background process so the agents keep RUNNING while the app is closed — a
-//! daemon) is designed separately. Phase 1 does not keep a process alive: an agent that
-//! was mid-turn when the app quit was interrupted, and it says so (see
-//! [`RestoredAgent::was_working`]).
-//!
-//! **What comes back.** Every ROOT agent the supervisor SPAWNED (⚡ quick-launch, New
-//! agent, Recover session…, ↻ Resume) — pinned or not, working or idle — under the same
-//! agent id, so the center-layout restore (`layout-prefs.json`, keyed on that id) puts
-//! it back in its own view, pane and tab. **Out of scope for phase 1:** plain consoles
-//! (a shell has no conversation to resume) and a `claude` typed by hand into a console
-//! (an ad-hoc root — its process is a child of the shell, not ours to
-//! re-launch). Sub-agents need nothing: they re-materialise from the root's transcript.
-//!
-//! **The registry** is `open-agents.json` in the app-config dir — next to
-//! `pinned-agents.json`, NEVER the repo and NEVER `~/.claude`. The
-//! supervisor actor is its only writer (one fact, one writer), and
-//! it writes only on:
-//! - **spawn** — upsert `{agentId, cwd, runtime, sessionId}` (a restore that had to fall
-//!   back to a fresh conversation records the NEW session id here, so the next launch
-//!   resumes the new one, not the dead one);
-//! - **the user closing the agent** (`terminal_close`: its tab ✕, the row ✕, a closed
-//!   pane) — remove;
-//! - **the agent's own process ending** (`/exit`, a crash) — remove: the user ended it;
-//! - **the app shutting down** — ONE write recording which agents were working, so the
-//!   next launch can say "it was interrupted" honestly. Never per status tick.
-//!
-//! **The shutdown rule.** When the app quits, the PTYs die with it — and those exits are
-//! NOT the user ending their agents. So `lib.rs` raises the supervisor's shutting-down
-//! flag on the main window's destruction / `RunEvent::ExitRequested` / `RunEvent::Exit`,
-//! BEFORE anything can tear a PTY down; from then on neither a child exit nor a close
-//! removes an entry. A crash never removes anything either: nothing runs to remove it.
-//!
-//! **No renames here.** An agent's name is persisted with the center layout
-//! (`serializeCenterLayout`), keyed on the same agent id this registry restores — a
-//! second copy here would be two writers for one fact.
-//!
-//! **The seam phase 2 plugs into.** All of the above sits
-//! behind one small writer API, [`Registry`] — `record` / `remove` / `record_working` /
-//! `entries_to_restore` — owned by exactly one party: the supervisor actor in phase 1,
-//! the background host in phase 2. The shutting-down flag has exactly one setter,
-//! [`ShutdownFlag::raise`] (phase 1: the app quitting, via
-//! `SupervisorHandle::begin_shutdown`; phase 2: the host's "Stop all agents"). And
-//! the restore takes the ids that are ALREADY RUNNING as an input — empty in phase 1,
-//! the host's live agents in phase 2 — so nothing that survived is launched twice.
-//!
-//! **Testability.** A [`Registry`] is built on an EXPLICIT path ([`Registry::at`]) or
-//! none at all ([`Registry::inert`] — never writes); the supervisor gets a path only from
-//! `lib.rs`'s real boot (`spawn_supervisor_with_store`). `cargo test` never sees the real
-//! config dir.
+//! Re-opens every spawned root agent after a restart, in its tab, on the same conversation.
+//! `open-agents.json` (app config dir) has ONE writer, the supervisor: spawn upserts, a user
+//! close or process end removes; after [`ShutdownFlag::raise`] (quitting) nothing is removed.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -83,10 +30,8 @@ pub struct OpenAgent {
     /// The runtime's session id — the key to `claude --resume`. Internal: it never
     /// crosses to the frontend ([`RestoredAgent`] has no such field).
     pub session_id: String,
-    /// Was it mid-turn (`running` / `waiting_input`) when the app last shut down
-    /// cleanly? Written only by the shutdown write ([`record_working`]) and reset to
-    /// `None` by every spawn, so after a crash it is honestly unknown. `#[serde(default)]`
-    /// so a file written before the field existed still loads.
+    /// Mid-turn at the last clean shutdown? Set only by [`record_working`], reset to `None` on
+    /// every spawn, so after a crash it is honestly unknown. Defaulted for older files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub was_working: Option<bool>,
 }
@@ -105,9 +50,7 @@ pub enum RestoreOutcome {
     Dormant,
 }
 
-/// What the frontend's "Resumed after restart" marker is drawn from — one per agent
-/// the boot restore brought back, until that agent's next turn (or its end).
-///
+/// One agent the boot restore brought back, for the "Resumed after restart" marker.
 /// Frontend contract: `invoke<RestoredAgent[]>('restored_agents')`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,10 +63,8 @@ pub struct RestoredAgent {
     pub was_working: Option<bool>,
 }
 
-/// "The app is shutting down": once raised, the registry forgets nothing — every exit
-/// from then on is the quit's doing, not the user ending an agent. Shared (an `Arc`)
-/// between the registry that reads it and the code that may raise it, so raising it is
-/// immediate and needs no message: it must hold BEFORE the next exit is handled.
+/// "The app is shutting down": once raised, no exit removes a registry entry. A shared atomic
+/// so raising is immediate: it must hold BEFORE the next exit is handled.
 #[derive(Debug, Clone, Default)]
 pub struct ShutdownFlag(Arc<AtomicBool>);
 
@@ -269,14 +210,9 @@ fn record_working(path: &Path, working: &HashMap<String, bool>) -> bool {
     changed && pinned_agents::write_json_atomic(path, &list).is_ok()
 }
 
-/// Merge the two registries into ONE restore list — one entry per agent id.
-///
-/// Open agents first, in spawn order; then pins that are not open (a pinned agent the
-/// user ended with `/exit` still comes back — that is what a pin means). An
-/// agent in both is restored ONCE, from the open entry: it is written on every spawn,
-/// so its session id is the current one, where a pin's is whatever it was when the
-/// user pinned (a fresh-fallback restore minted a new one since). An id in
-/// `already_running` is left out entirely (phase 2: the host kept it alive).
+/// Merge both registries, one entry per agent id: open agents first (spawn order), then pins
+/// not open. An agent in both restores from the open entry (current session id). Ids in
+/// `already_running` are left out.
 pub fn plan_restore(
     open: &[OpenAgent],
     pins: &[PinnedAgent],
@@ -303,10 +239,8 @@ pub fn plan_restore(
     plan
 }
 
-/// The restore ladder for one agent, as a pure decision: the folder is gone → dormant
-/// (a PTY cannot start in a missing dir, and silently dropping the agent would lose it);
-/// a saved conversation exists → resume it; otherwise → a fresh `claude` in the same
-/// folder (`claude --resume` errors on an id with no transcript).
+/// Restore ladder: missing folder → dormant (a PTY can't start there); transcript exists →
+/// resume; else a fresh `claude` in the folder (`--resume` errors on an id with no transcript).
 pub fn choose_rung(cwd_exists: bool, transcript_exists: bool) -> RestoreOutcome {
     if !cwd_exists {
         RestoreOutcome::Dormant
@@ -324,16 +258,9 @@ pub(crate) fn store_path(app: &tauri::AppHandle) -> PathBuf {
 
 // ── Boot + command glue (thin; the logic above and in the supervisor is tested) ────
 
-/// Re-open every agent from the last session. Called ONCE from `lib.rs`'s `setup`, a
-/// path `cargo test` never runs, so reading the real stores here is safe.
-///
-/// The restore is ENQUEUED, synchronously, as one supervisor message — before the
-/// webview exists, so before any `fleet_snapshot` it could send. The actor is a FIFO,
-/// so the frontend's first snapshot always contains every restored agent and the
-/// layout restore can put each back in its pane. (The old pinned restore spawned
-/// detached tasks and relied on winning that race.) The actor — the registry's one
-/// owner — reads the open entries itself and runs the ladder, where the adapter that
-/// knows how to find a transcript lives. Nothing is already running in phase 1.
+/// Re-open the last session's agents; called once from `setup` (never under `cargo test`).
+/// Enqueued synchronously as one FIFO supervisor message before the webview exists, so the
+/// first `fleet_snapshot` already contains every restored agent.
 pub fn restore_on_boot(app: &tauri::AppHandle, supervisor: &SupervisorHandle) {
     let pins = pinned_agents::load(&pinned_agents::store_path(app));
     if let Err(e) = supervisor.restore(pins, HashSet::new()) {
@@ -341,11 +268,8 @@ pub fn restore_on_boot(app: &tauri::AppHandle, supervisor: &SupervisorHandle) {
     }
 }
 
-/// The agents the boot restore brought back, for the "Resumed after restart" marker.
-/// An agent leaves the list at its next turn, when it ends, or when it is closed — so a
-/// webview reload re-reads the truth rather than resurrecting a stale marker.
-///
-/// Frontend contract: `invoke<RestoredAgent[]>('restored_agents')`.
+/// Agents the boot restore brought back; one leaves at its next turn, end or close, so a reload
+/// re-reads the truth. Frontend contract: `invoke<RestoredAgent[]>('restored_agents')`.
 #[tauri::command]
 pub async fn restored_agents(
     supervisor: tauri::State<'_, SupervisorHandle>,

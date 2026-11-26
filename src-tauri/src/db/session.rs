@@ -1,32 +1,6 @@
-//! The live-session registry — `ws.rs`'s idiom.
-//!
-//! A `LazyLock<Mutex<HashMap<…>>>` rather than Tauri managed state, exactly like
-//! `ws.rs::CONNECTIONS`, for the same reason given there: it keeps the commands free of a
-//! `State<…>` parameter and therefore callable from a test without standing up an `AppHandle`.
-//!
-//! ## What the webview holds, and what it does not
-//!
-//! It holds a **session id** — an opaque ULID. Never a DSN, never a credential, never a socket.
-//! The resolved password lives in the [`crate::db::engine::ResolvedConfig`] that opened the
-//! session and in the session's own redaction list, both inside this process. A future
-//! XSS in this app (a renderer with a permissive CSP and dozens of IPC commands) can therefore
-//! ask us to *use* a connection; it cannot read the password behind it.
-//!
-//! ## The lock discipline, which is the only subtle part
-//!
-//! Two locks, and the outer one is never held across an `await`:
-//!
-//! * `SESSIONS` is a **std** `Mutex` over the map. Every use is a lock → clone an `Arc` →
-//!   unlock. Holding a std mutex across `.await` is the classic way to deadlock a tokio
-//!   runtime, so the map's guard never outlives a single statement.
-//! * each session is a **tokio** `Mutex` over its connection, which *is* held across the await
-//!   that runs a query — that is the point of it. One connection cannot serve two concurrent
-//!   queries, and serialising them is more honest than opening a second connection the user did
-//!   not ask for.
-//!
-//! The `Option` inside that inner mutex exists because `sqlx`'s `close` consumes the
-//! connection: `db_close` takes the box out and leaves `None`, so a query racing a close gets a
-//! clean `not-found` instead of a use-after-close.
+//! Live-session registry (`ws.rs`'s idiom: a `LazyLock<Mutex<HashMap>>`, so commands need no
+//! `State`). The webview holds only an opaque session id. The std map lock is never held across
+//! `.await`; each session's tokio mutex is. The inner `Option` lets `db_close` take the connection.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -45,17 +19,9 @@ pub struct LiveSession {
     pub limits: Limits,
     /// `None` once closed — see the module doc on why this is an `Option`.
     pub session: Arc<AsyncMutex<Option<Box<dyn DbSession>>>>,
-    /// 🔴 **Beside the mutex, deliberately — not inside it.**
-    ///
-    /// `db::query` holds `session`'s lock for the whole of `run`. Anything reachable only through
-    /// the session is therefore unreachable *exactly while a query is running*, which is the only
-    /// moment a cancel is wanted: a cancel behind this lock would wait for the statement it was
-    /// asked to stop. That is why an earlier version had no reachable `db_cancel` even though
-    /// three engines had complete cancel implementations.
-    ///
-    /// Taken once at [`insert`], before the session goes behind the lock. `None` means the engine
-    /// has no server-side cancel (MongoDB, Redis, DynamoDB) — a structural answer, so the command
-    /// can say so without a round trip.
+    /// Kept beside the session mutex, not inside it, because `db::query` holds that lock for the
+    /// whole run. Taken once at [`insert`]; `None` = no server-side cancel (MongoDB, Redis,
+    /// DynamoDB).
     pub cancel: Option<Arc<dyn DbCancel>>,
 }
 
@@ -243,12 +209,7 @@ mod tests {
         (Box::new(s), cancelled)
     }
 
-    /// 🔴 **THE property that makes `db_cancel` possible at all.**
-    ///
-    /// `db::query` holds the session mutex for the whole of `run`. If the cancel path went through
-    /// the session, it would block behind the very statement it was asked to stop — which is why
-    /// three engines once had complete, correct cancel code that no caller could reach. This
-    /// asserts the handle is usable **while the session lock is held**.
+    /// `db::query` holds the session mutex for the whole run, so cancel must work while it is held.
     #[tokio::test]
     async fn a_cancel_handle_works_while_a_query_holds_the_session_lock() {
         let (session, cancelled) = cancellable();
@@ -349,14 +310,8 @@ mod tests {
 
     /* ─────────────────────────── the stale-connection fix ─────────────────────────── */
 
-    /// 🔴 **THE ordering property of the fix, and the reason it is safe.**
-    ///
-    /// A cached session is a socket held for the life of the app, and a laptop suspend, a pooler's
-    /// idle timeout or a server restart closes it without telling us. So the query path proves the
-    /// connection is alive **before** the statement goes out — and that ordering is not a detail,
-    /// it is the entire safety argument: because nothing is sent until liveness is proven, nothing
-    /// is ever *re*-sent. Reverse the two lines and you have a retry, and a retried `INSERT` that
-    /// had already committed applies the user's write twice.
+    /// Liveness is proven before the statement goes out, so nothing is ever re-sent; reversed, a
+    /// committed `INSERT` could be retried and applied twice.
     #[tokio::test]
     async fn the_query_path_proves_the_connection_is_live_before_it_sends_the_statement() {
         let s = FakeSession::new();
@@ -401,13 +356,8 @@ mod tests {
         take(&id);
     }
 
-    /// 🔴 **What the user is shown when the reconnect itself fails — and what they must NOT be.**
-    ///
-    /// The message used to be the dead socket's own `UnexpectedEof`, rendered as advice about
-    /// SSL modes and connection poolers. It is about a socket that no longer exists, and it sent
-    /// the user to check a host and a port that were fine. Here `run` is armed with exactly that
-    /// error: if the query path ever reached it on a session whose reconnect failed, the assertions
-    /// below would show the old message coming straight back.
+    /// `run` is armed with the dead socket's `UnexpectedEof`; if the query path reached it after a
+    /// failed reconnect, that misleading message would show.
     #[tokio::test]
     async fn a_failed_reconnect_surfaces_the_reconnect_error_and_never_reaches_the_statement() {
         let s = FakeSession {
@@ -456,12 +406,8 @@ mod tests {
         take(&id);
     }
 
-    /// Editing a connection must leave NOTHING alive on the old one (the bug: after the database
-    /// URL was edited, a reopened query console was still using the old URL).
-    ///
-    /// `db_connection_upsert` calls `invalidate_sessions`; before it did, only DELETE cascaded
-    /// over live sessions, so an edit updated the record while the socket dialled from the
-    /// previous host stayed registered — and the console kept querying down it.
+    /// Editing a connection must leave nothing alive on the old one: `db_connection_upsert` calls
+    /// `invalidate_sessions`.
     #[tokio::test]
     async fn invalidating_a_connection_deregisters_and_closes_every_session_it_opened() {
         let (a, a_closed) = fake();

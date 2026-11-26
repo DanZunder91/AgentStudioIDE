@@ -1,33 +1,6 @@
-//! The Windows process table, as bytes → facts. **Pure, and compiled on every OS** (the shape
-//! of `netmachine/wintable.rs`, so a platform nobody runs locally is still tested): everything
-//! here is decided from buffers and a memory-reader closure, so it is tested on a Mac or Linux
-//! box with hand-written bytes. Only the API calls that fill those buffers live behind
-//! `cfg(windows)` ([`super::winproc`]).
-//!
-//! | piece | input | used for |
-//! |---|---|---|
-//! | [`split_command_line`] | the command line string | `RawProc.argv` — the rules of `CommandLineToArgvW` (cross-checked against the real API by a Windows test) |
-//! | [`unicode_in_buffer`] | the buffer `NtQueryInformationProcess(ProcessCommandLineInformation)` filled | the command line |
-//! | [`params_of`], [`cwd_at`], [`env_at`], [`console_at`] | the PEB address + a reader of the target's memory | cwd, environment, whether it has a console |
-//! | [`parse_env_block`] | the UTF-16 `K=V\0…\0\0` block | `read_env` (the env never leaves Rust) |
-//! | [`sid_string`], [`uid_of_sid`] | the token's user SID bytes | the "uid" Windows does not have |
-//! | [`filetime_to_epoch_ms`] | `GetProcessTimes` creation time | `started_ms` |
-//! | [`listener_fds`], [`console_fds`] | TCP rows, the console handle | the `Fd` table the classifier reads |
-//! | [`std_handles_at`] | the PEB address + a reader | the handle values of stdout / stderr |
-//! | [`parse_handle_snapshot`], [`access_writes`] | the buffer `NtQueryInformationProcess(ProcessHandleInformation)` filled | which handles are files opened for writing |
-//! | [`device_of`] | `FILE_FS_DEVICE_INFORMATION.DeviceType` | disk file, pipe, socket, console or `NUL` — asked before any name |
-//! | [`std_fd`], [`fds_of`] | what fds 1/2 point at, the open files, the listeners | the `Fd` table, with `File` fds the log-file rules read |
-//! | [`sanitize_ppids`] | the snapshot | a parent pid that was reused by a younger process is cut |
-//! | [`terminate_refusal`] | a pid | which pids `sigterm` never touches |
-//!
-//! **Layouts (64-bit — x64 and ARM64 share them, and an x64 program emulated on ARM64 Windows
-//! has the same native PEB).** `PEB.ProcessParameters` and `RTL_USER_PROCESS_PARAMETERS
-//! .CommandLine` are in the public headers (`winternl.h`) and their offsets are asserted against
-//! `windows-sys`'s structs by a Windows test. `CurrentDirectory`, `Environment` and
-//! `EnvironmentSize` are not public; their offsets are the ones every process tool uses (phnt,
-//! Process Hacker), stable since Vista, and are proved by live Windows tests that read a real
-//! child's cwd and an env marker back. A 32-bit (WOW64) target keeps its own 32-bit copy of the
-//! parameters, so its cwd/env are **not read** (the 64-bit copy may be stale) — never misread.
+//! The Windows process table as bytes → facts: pure, tested on every OS with hand-written
+//! bytes; API calls live in [`super::winproc`]. Undocumented PEB offsets are phnt's, proved by
+//! live tests; a 32-bit (WOW64) target's cwd/env are not read, never misread.
 
 use super::logfiles::{Fd, FdKind};
 use super::os::RawProc;
@@ -101,10 +74,8 @@ pub fn unicode_header(b: &[u8]) -> Option<(usize, u64)> {
     Some((usize::from(u16_at(b, 0)?), u64_at(b, 8)?))
 }
 
-/// The string a `UNICODE_STRING` at the start of `buf` describes, when its `Buffer` points back
-/// INTO `buf` — what `NtQueryInformationProcess(ProcessCommandLineInformation)` returns. `base`
-/// is `buf`'s own address. A pointer outside the buffer, or a length past its end, is `None`:
-/// never a read outside what the API wrote.
+/// The string a leading `UNICODE_STRING` describes, if its `Buffer` points back INTO `buf` (at
+/// address `base`). Out-of-buffer pointers or lengths are `None`: never read past the API's write.
 pub fn unicode_in_buffer(buf: &[u8], base: u64) -> Option<String> {
     let (len, ptr) = unicode_header(buf)?;
     if len == 0 {
@@ -176,10 +147,8 @@ pub fn std_handles_at(params: u64, read: Reader<'_>) -> Option<[u64; 2]> {
     ])
 }
 
-/// May this value from another process be passed to `DuplicateHandle`? Not `0` (none), and not
-/// a negative one: `-1` (`INVALID_HANDLE_VALUE`, a detached process's std handle) means "the
-/// current process" to `DuplicateHandle` — it would hand us a handle to the target process
-/// itself — and `-2`… are the other pseudo-handles. Every real handle value is positive.
+/// May this handle value go to `DuplicateHandle`? Only if positive: `0` is none, `-1` means the
+/// current process (a handle to the target itself), `-2`… are other pseudo-handles.
 pub fn duplicable(value: u64) -> bool {
     (value as i64) > 0
 }
@@ -229,12 +198,8 @@ pub fn access_writes(access: u32) -> bool {
     access & (0x2 | 0x4) != 0
 }
 
-/// What a file handle is, from `FILE_FS_DEVICE_INFORMATION.DeviceType`. The query behind it
-/// (`NtQueryVolumeInformationFile(FileFsDeviceInformation)`, also what `GetFileType` asks) is
-/// answered without waiting for I/O already pending on the handle — measured on a
-/// pipe with a pending synchronous read, a console with a pending read and a file whose
-/// handle waited on a byte-range lock — so it is asked of every handle BEFORE anything that can
-/// block (a name query blocks behind all three).
+/// A handle's kind from `DeviceType`. Its query never waits on pending I/O (measured on pipe,
+/// console and locked file), so it is asked BEFORE anything that can block, like a name query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Device {
     /// A file on a local or network file system — the only kind whose name is ever asked.
@@ -362,18 +327,8 @@ pub fn parse_env_block(units: &[u16]) -> Vec<String> {
         .collect()
 }
 
-/// A Windows command line → argv, by the rules of `CommandLineToArgvW` (what the C runtime and
-/// every program on the machine use):
-///
-/// - **argv\[0\]** (the program) ends at the next space/tab, or — when it starts with `"` — at
-///   the next `"`, with no escapes at all (`"C:\Program Files\x.exe"`).
-/// - **The rest**: space/tab outside quotes separates; `"` toggles quoting; `2n` backslashes
-///   before a `"` are `n` backslashes (and the quote toggles), `2n+1` are `n` and a literal `"`;
-///   backslashes not before a quote are literal; inside quotes `""` is a literal `"` that also
-///   ends the quoted run (the pre-2008 rule `CommandLineToArgvW` keeps).
-///
-/// Differs from the API on one input only: an empty line is `[]` here, where the API answers
-/// with the CALLER's own path.
+/// Windows command line → argv by `CommandLineToArgvW` rules (`argv[0]` has no escapes; `2n`/
+/// `2n+1` backslashes before `"`; `""` inside quotes). Only difference: empty line → `[]`.
 pub fn split_command_line(line: &str) -> Vec<String> {
     let s: Vec<char> = line.chars().collect();
     let blank = |c: char| c == ' ' || c == '\t';
@@ -485,12 +440,8 @@ pub fn sid_string(b: &[u8]) -> Option<String> {
     Some(out)
 }
 
-/// The "uid" of a Windows user: FNV-1a (32-bit) of the user SID's string form. Windows has no
-/// uids; procscan's callers compare `uid_of(pid) == my_uid()` and pass `my_uid()` to `list`, and
-/// a stable number derived from the SID keeps every one of those call sites unchanged. Two SIDs
-/// colliding would need a 1-in-2³² accident between the handful of accounts on one machine — and
-/// even then another user's process can neither be opened for its token nor terminated without
-/// administrator rights, so the hash is never the only guard.
+/// Windows "uid": FNV-1a of the SID string, so uid-comparing callers stay unchanged. A collision
+/// is ~1 in 2³², and other users' processes can't be opened or killed without admin anyway.
 pub fn uid_of_sid(sid: &str) -> u32 {
     sid.bytes().fold(0x811c_9dc5u32, |h, b| {
         (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
@@ -515,11 +466,8 @@ pub fn listener_fds(rows: &[TcpRow], pid: u32) -> Vec<Fd> {
         .collect()
 }
 
-/// The FALLBACK for fds 1 and 2, used only when their handles could not be examined
-/// ([`fds_of`]), from `RTL_USER_PROCESS_PARAMETERS.ConsoleHandle`: attached to a console → both
-/// are that console (`console: "terminal"`); no console (`0`, a GUI program) or one of
-/// `CreateProcess`'s placeholders (`-1` detached, `-2` new console, `-3` no window — values
-/// that are never a real handle) → no fds (`console: "none"`).
+/// Fallback for fds 1/2 when their handles can't be examined: an attached console → both are it
+/// (`terminal`); no console or a `CreateProcess` placeholder (`-1`/`-2`/`-3`) → none.
 pub fn console_fds(console_handle: Option<u64>) -> Vec<Fd> {
     let attached = console_handle.is_some_and(|h| (h as i64) > 0);
     if !attached {
@@ -534,10 +482,8 @@ pub fn console_fds(console_handle: Option<u64>) -> Vec<Fd> {
         .collect()
 }
 
-/// Windows reuses pids and never re-parents: a process whose parent exited keeps the parent's
-/// old pid, which a younger, unrelated process may now hold. A parent that started AFTER its
-/// child is that reuse — the link is cut (`ppid = 0`, as for an orphan), so a process is never
-/// placed under an IDE terminal or a `claude` it does not descend from.
+/// Windows reuses pids and never re-parents: a parent that started AFTER its child is a reused
+/// pid, so the link is cut (`ppid = 0`) and nothing is placed under a parent it never had.
 pub fn sanitize_ppids(procs: &mut [RawProc]) {
     let started: HashMap<u32, Option<i64>> = procs.iter().map(|p| (p.pid, p.started_ms)).collect();
     for p in procs.iter_mut() {

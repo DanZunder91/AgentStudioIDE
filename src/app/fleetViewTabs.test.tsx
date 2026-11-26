@@ -1,11 +1,5 @@
-/**
- * The two fleet-view TABS (Agent Logs, Network) —
- * the store actions, the titlebar buttons that call them, and `<Pane>`'s routing.
- *
- * Pinned: both are **singletons** (a second click re-focuses, never mints a twin),
- * each button calls ITS action (a store test cannot see which action a
- * button calls), and `<Pane>` renders the right panel for each kind.
- */
+/** Fleet-view tabs (Agent Logs, Network): store actions, titlebar buttons, `<Pane>` routing. Both
+ * are singletons; each button must call its own action, which a store test cannot see. */
 
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";

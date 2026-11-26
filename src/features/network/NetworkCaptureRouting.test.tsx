@@ -1,16 +1,4 @@
-/**
- * The capture guide's live routing state — "Capture this app" for Postman can show nothing
- * captured because Postman is not routed through the proxy, and the guide must say so.
- *
- * 1. The guide says, live, whether the app's requests arrive — derived from the flows (Postman
- *    Helper inside Postman.app counts) — with a "show them" link into IDE traffic.
- * 2. A per-app "decrypt its HTTPS" switch in the Certificate section → `netcap_set_app_decrypt`,
- *    reflecting the `decryptApps` Rust RETURNS.
- * 3. A moved port is a warning in the IDE-traffic header and in the open guide; the guide says
- *    the port is stable across restarts.
- *
- * Only `./netcapIpc` / `./netmachineIpc` are mocked; stores, formatters, AppPicker are real.
- */
+/** Only `./netcapIpc` / `./netmachineIpc` are mocked; stores, formatters and AppPicker are real. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

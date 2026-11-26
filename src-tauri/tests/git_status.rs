@@ -1,14 +1,5 @@
-//! `git_status::git_status_scoped` — HEAD-vs-working-tree status for the file
-//! tree's git decorations (git & pull requests).
-//!
-//! Built against **real repositories constructed with `git2` itself** (init,
-//! explicit signatures, commits) — never by shelling out to `git` (tests stay hermetic;
-//! the zero-install principle applies to tests too; the one shelling test in
-//! this repo, `git_branch`, is a known flake we do not multiply).
-//!
-//! The scope guard is exercised through the same explicit-roots pattern as
-//! `git_blame`'s tests: `git_status_scoped(path, roots)` with a canonicalized
-//! temp root.
+//! `git_status::git_status_scoped` (HEAD vs working tree, for file-tree decorations) against
+//! real repos built with `git2`, never shelling out; scope via canonicalized temp roots.
 
 use std::path::{Path, PathBuf};
 
@@ -98,10 +89,8 @@ fn change_pairs(status: &RepoStatus) -> Vec<(String, GitChangeStatus)> {
         .collect()
 }
 
-/// `rel` is written git-style (`sub/inner.txt`); the product joins it component by component
-/// so the answer uses native separators, and so does this. (On Windows a single
-/// `join("sub/inner.txt")` keeps the `/` — it used to pass only because the root was a verbatim
-/// `\\?\` path, under which nothing was compared as the UI would see it.)
+/// `rel` is git-style (`sub/inner.txt`); join it per component so separators are native, as
+/// the product does (on Windows a single `join` keeps the `/`).
 fn abs(d: &TempDir, rel: &str) -> String {
     rel.split('/')
         .fold(d.path().to_path_buf(), |p, c| p.join(c))

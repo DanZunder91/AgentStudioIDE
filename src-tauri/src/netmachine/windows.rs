@@ -1,17 +1,6 @@
-//! Windows glue: every second, read the kernel's TCP and UDP tables with their owning pids
-//! (`GetExtendedTcpTable` / `GetExtendedUdpTable`, iphlpapi) and name the pids from one process
-//! snapshot (Toolhelp). No administrator rights, no prompt, nothing installed, no child process
-//! (zero-install, no OS permission; and a child would be one more console window —
-//! `crate::spawn`).
-//!
-//! Everything that can be decided without Windows is in [`super::wintable`] (pure, tested on
-//! every OS). This file is only the API calls, kept as small as they can be. Its tests run on
-//! Windows alone, against the real tables.
-//!
-//! **No byte counts.** Windows keeps per-connection counters only after an administrator
-//! enables them (`SetPerTcpConnectionEStats`); we never ask. `has_bytes` is false and the
-//! status carries [`NO_BYTES_REASON`](super::wintable::NO_BYTES_REASON), the same shape as
-//! Linux without `ss`.
+//! Windows glue: each second read the TCP/UDP owner-pid tables and name pids from one Toolhelp
+//! snapshot; no admin, no child process. Logic lives in [`super::wintable`]. No byte counts
+//! (admin-only EStats), so status carries [`super::wintable::NO_BYTES_REASON`].
 
 use super::wintable::{
     assemble, parse_tcp4, parse_tcp6, parse_udp4, parse_udp6, strip_exe, TcpRow, UdpRow, BACKEND,

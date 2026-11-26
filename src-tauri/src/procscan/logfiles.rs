@@ -1,19 +1,6 @@
-//! Where a dev app's output can be read: its console kind and
-//! the log files it offers. Pure over the fd table the platform glue read ([`Fd`]);
-//! table-tested on every OS.
-//!
-//! **Console** (`console`), from fds 1 and 2: a regular file on either → `file` (the one
-//! case the IDE can read); else a tty → `terminal`; else a pipe/socket → `pipe`; else
-//! (`/dev/null`, closed) → `none`.
-//!
-//! **Log files** (`logFiles`), in this order:
-//! 1. fd 1 / fd 2 redirected to a regular file (`kind: "stdout"` / `"stderr"`; one file on
-//!    both is listed once, as `stdout`);
-//! 2. every other regular file the process has open **for writing** that looks like a log
-//!    ([`looks_like_log`], `kind: "log"`).
-//!
-//! At most [`MAX_LOG_FILES`] — a process with hundreds of open `.log` files is a log
-//! shipper, and the card is not the place to list them.
+//! A dev app's console kind (from fds 1/2: file, terminal, pipe or none) and offered log files
+//! (redirected stdout/stderr, then other log-like files open for writing, at most
+//! [`MAX_LOG_FILES`]). Pure over [`Fd`]; table-tested.
 
 use serde::{Deserialize, Serialize};
 
@@ -109,16 +96,9 @@ const NOT_LOGS: &[&str] = &[
     "idx", "pack", "mmap", "ldb", "sst", "mdb", "parquet", "rlib", "rmeta", "o",
 ];
 
-/// Log-shaped names: `*.log`, `*.out`, `*.err`, `*.output`, rotated `app.log.1` /
-/// `app.log.2026-09-28`, `*.txt` in a `log`/`logs` dir — or any file (not [`NOT_LOGS`])
-/// under `~/Library/Logs`, `/tmp` or `/var/folders` (macOS's per-user temp), where a
-/// service redirected by hand usually writes.
-///
-/// **A Windows path** (`C:\…`, `\\server\share\…` — what `GetFinalPathNameByHandleW` gives, minus
-/// `\\?\`) is split on both separators and compared without case, and its temp folder is the
-/// user's (`%USERPROFILE%\AppData\Local\Temp\`, where `%TEMP%` points and Claude Code's task
-/// output lives); a device path (`\\.\…`) is never a log. A path starting with `/` is read
-/// exactly as before, even with a `\` in a file name.
+/// Log-shaped: `*.log`, `*.out`, `*.err`, `*.output`, rotated logs, `*.txt` in a `log(s)` dir,
+/// or any non-[`NOT_LOGS`] file in user log/temp dirs. Windows paths split on both separators and
+/// compare case-insensitively; device paths are never logs; `/` paths are read unchanged.
 pub fn looks_like_log(path: &str, home: Option<&str>) -> bool {
     let b = path.as_bytes();
     let windows =

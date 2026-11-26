@@ -1,19 +1,5 @@
-/**
- * previewKinds — the single frontend answer to "what rendered view does this
- * path get" (Markdown/CSV, HTML/images).
- *
- * Two things here are load-bearing beyond the ordinary table lookups:
- *
- *  1. `hasTextSource` is what keeps a raster image away from `read_file`, which
- *     rejects binary and produced *"Can't preview this file."* —
- *     while still giving an SVG the CodeMirror buffer its Source↔Image toggle
- *     needs. It is tested in both directions, per format.
- *  2. The image list is a MIRROR of Rust's `image_mime`
- *     (`src-tauri/src/fs_tree.rs`), never a second authority. There is no
- *     codegen between them, so the coupling is a test — the same idiom
- *     `LSP_SERVER_NAMES` uses against `registry.rs::spec_for`. The last
- *     `describe` block reads the Rust file off disk and pins the subset.
- */
+/** Load-bearing: `hasTextSource` keeps raster images away from `read_file` (both directions, per
+ * format), and the TS image list is pinned as a subset of Rust's `image_mime`, read off disk. */
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -166,12 +152,7 @@ describe("isSvgPath", () => {
 });
 
 describe("hasTextSource", () => {
-  /**
-   * 🔴 The predicate raster tabs turn on. A raster tab must NOT ask
-   * `read_file` for its bytes: Rust rejects it as a binary file and the tab
-   * lands in the *"Can't preview this file."* state. So: false for a
-   * raster, true for absolutely everything else.
-   */
+  /** Raster tabs must not ask `read_file` for bytes: Rust rejects binary files. */
   it("is false for every raster image, which has no text to load", () => {
     for (const ext of RASTER) {
       expect(hasTextSource(`/photos/shot.${ext}`), ext).toBe(false);
@@ -228,10 +209,7 @@ describe("hasZoom", () => {
   });
 
   it("is false for html because CSS `zoom` cannot reach into the sandboxed cross-origin iframe, so the control would move the % label without moving the page", () => {
-    // Pinned WITH its reason so a future change has to argue with it rather
-    // than read this as an oversight. If HTML zoom is ever added, the honest route
-    // is the protocol handler injecting a zoom hook into the served document —
-    // a deliberate step, not a flip of this table row.
+    // Deliberate (see `hasZoom`): HTML zoom would need the protocol handler to inject a zoom hook.
     expect(hasZoom("html")).toBe(false);
   });
 });
@@ -240,21 +218,11 @@ describe("hasZoom", () => {
 // The mirror pin.
 // ---------------------------------------------------------------------------
 
-/**
- * Read from disk, from the repo root (`process.cwd()` under vitest — the same
- * idiom `cspReporter.test.ts` uses to read `tauri.conf.json`; `new URL(…,
- * import.meta.url)` is not a `file:` URL here because the module graph is
- * served over http by Vite).
- */
+/** From the repo root (`process.cwd()`): `import.meta.url` is not a `file:` URL under Vite. */
 const RUST_SOURCE = resolve(process.cwd(), "src-tauri/src/fs_tree.rs");
 const TS_SOURCE = resolve(process.cwd(), "src/features/editor/previewKinds.ts");
 
-/**
- * Extensions Rust's `image_mime` will serve, parsed out of its match block.
- *
- * Throws rather than returning `[]` if the shape it expects is gone: a check
- * that silently ran over an empty set reads exactly like a passing check.
- */
+/** Extensions in `image_mime`'s match block; throws if its shape is gone (an empty set passes). */
 function rustImageExtensions(): Set<string> {
   const src = readFileSync(RUST_SOURCE, "utf8");
   const fnAt = src.indexOf("fn image_mime(");
@@ -303,16 +271,8 @@ function rustImageExtensions(): Set<string> {
   return exts;
 }
 
-/**
- * Extensions the TS side treats as images, derived from `previewKinds.ts`'s own
- * source rather than from a hand-copied list — otherwise adding one to the
- * module without adding it here would leave the pin passing over a stale set.
- *
- * Every string literal in the module (comments stripped, so prose cannot inject
- * a phantom extension) is offered to the real `isImagePath`; the ones it accepts
- * ARE the TS image surface. That also makes the parse self-checking: a literal
- * this returns is one the shipping predicate genuinely calls an image.
- */
+/** TS image extensions derived from the module's own string literals (comments stripped), each
+ * offered to the real `isImagePath`, so the pin never runs over a stale hand-copied list. */
 function tsImageExtensions(): Set<string> {
   const src = readFileSync(TS_SOURCE, "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -324,11 +284,7 @@ function tsImageExtensions(): Set<string> {
   return exts;
 }
 
-/**
- * Extensions Rust serves that the TS side deliberately does not surface.
- * Empty today, and it should stay that way: an entry here is a decision that
- * needs a reason written next to it, not a place to silence drift.
- */
+/** Rust-only image extensions: empty, and any entry needs a written reason beside it. */
 const RUST_ONLY_ALLOWED: readonly string[] = [];
 
 describe("the image list mirrors Rust's image_mime", () => {

@@ -1,13 +1,5 @@
-/**
- * CloseTabShortcut — the Cmd/Ctrl+W wiring. Two platform paths:
- *   • non-macOS — a webview keydown listener (Ctrl+W) closes the active tab.
- *   • macOS — the native menu emits `menu://close-tab`; we listen for it (the
- *     webview never sees Cmd+W there).
- *
- * The store, the Tauri event bridge, and platform detection are mocked at the
- * module boundary so both paths are drivable in jsdom. `closeActiveTab`'s real
- * behaviour is covered separately in `app/store.test.ts`; here we test the wiring.
- */
+/** Store, Tauri event bridge and platform detection are mocked so both platform paths run in
+ * jsdom; `closeActiveTab` itself is covered in `app/store.test.ts`. */
 
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -118,10 +110,8 @@ describe("CloseTabShortcut — macOS (native menu)", () => {
 });
 
 describe("CloseTabShortcut — one window, not every window (tab tear-off)", () => {
-  // Rust sends "Close Tab" to the FOCUSED window only (menu.rs `close_tab_target`), but a
-  // Tauri listener left on the default `Any` target receives every `emit_to` whatever
-  // label it names — so the target is the half of the fix that lives here. Without it,
-  // one Cmd+W in a torn-off window also closed the main window's active tab.
+  // Rust sends Close Tab to the focused window only, but a listener on the default `Any`
+  // target receives every `emit_to`: the target label is the half of the fix that lives here.
   afterEach(() => {
     delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });

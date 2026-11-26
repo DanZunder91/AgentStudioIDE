@@ -1,11 +1,6 @@
-//! **Parent-before-child emit order** (M3). `diff_fanout` used to sort deltas by id,
-//! so a depth-2 sub-agent's `subagent_spawned` could reach the UI before its depth-1
-//! parent's; the UI, attaching children by `parentId`, would drop the orphan. The fix
-//! orders deltas shallowest-first. This drives the real tailer over the depth-2 fixture
-//! and checks every child's event followed its parent's.
-//!
-//! In its own binary: it sets `HOME` (process-global) to redirect the transcript
-//! glob, so it must not share a process with another `HOME`-mutating test.
+//! Parent-before-child emit order: the UI attaches children by `parentId` and drops orphans,
+//! so deltas go shallowest-first; checked through the real tailer over the depth-2 fixture.
+//! Own binary: it sets the process-global `HOME`.
 
 mod common;
 

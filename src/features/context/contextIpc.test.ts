@@ -1,8 +1,4 @@
-/**
- * `contextIpc` — the context-window wire. The command NAME, the exact argument object
- * (serde ignores a misspelt key, so a typo fails as silence), the rejection passthrough,
- * and the error-code splitter are the whole contract.
- */
+/** serde ignores a misspelt key, so the exact argument object is pinned: a typo fails silently. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

@@ -1,12 +1,4 @@
-/**
- * `httpIpc` — the API client's send command, at the wire.
- *
- * A thin wrapper, and thin wrappers are exactly where the command *name* and the
- * arg *shape* are the whole contract: get either wrong and Rust rejects at
- * runtime with types none the wiser. `sendHttp`'s real exercise is driven through
- * `<ApiRequestView>` (with the module mocked); this pins the marshalling against
- * the real `invoke`.
- */
+/** Command name and arg shape are the whole contract with Rust; pinned against the real invoke. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

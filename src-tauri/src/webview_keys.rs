@@ -1,29 +1,6 @@
-//! WebView2's own browser shortcuts, switched off in the app's windows — **Windows only**
-//! (a Windows mechanism beside nothing, because WKWebView on macOS and
-//! WebKitGTK on Linux have no browser accelerators to begin with).
-//!
-//! **Why.** WebView2 is Edge, and by default it answers Edge's keys inside the IDE window:
-//! `Ctrl+R` / `F5` **reload the whole app** (every unsaved editor buffer, the layout, the
-//! in-memory stores — gone, with no prompt), `Ctrl+P` opens the print dialog over the IDE,
-//! `Ctrl+F` / `F3` open Edge's find bar on top of the IDE's own find, `Ctrl+Shift+I` / `F12`
-//! reach DevTools where those are enabled (and `F12` is the IDE's Go-to-definition). macOS
-//! has none of this: a WKWebView has no browser shortcuts.
-//!
-//! **The setting.** `ICoreWebView2Settings3::AreBrowserAcceleratorKeysEnabled = false`. Per
-//! Microsoft's documentation it turns off exactly the keys that reach *browser features*
-//! (find, print, reload, zoom, DevTools, back/forward/search) and leaves editing and movement
-//! keys (`Ctrl+C/V/X/A/Z`, Home/End, PgUp/PgDn) alone. It does **not** stop the key reaching
-//! the page: `keydown` still fires, so every IDE shortcut (`Ctrl+F`, `Ctrl+S`,
-//! `Ctrl+Shift+F/O`, `Ctrl+W`, `F12`, `F3`, a terminal's `Ctrl+C/V`) is handled by the IDE
-//! exactly as before — only Edge's own action behind the key is gone. Zoom is already off:
-//! Tauri's `zoomHotkeysEnabled` defaults to `false` (`IsZoomControlEnabled`), which also
-//! keeps `Ctrl+wheel` for the preview's own zoom.
-//!
-//! **Where.** Tauri 2.11 exposes no builder option for it (wry has
-//! `with_browser_accelerator_keys`, but `tauri-runtime-wry` never passes it through), so it
-//! is set on the live controller from a plugin's `on_webview_ready` — which runs for the main
-//! window AND every tear-off window (`tearoff.rs`), and any window added later, with no call
-//! site to forget.
+//! Windows only: turns off WebView2's browser accelerators (`Ctrl+R`/`F5` reload the whole
+//! app, losing unsaved buffers; print, find, DevTools); `keydown` still reaches the page.
+//! Tauri has no option for it, so a plugin's `on_webview_ready` sets it for every window.
 
 /// Whether this build switches WebView2's browser accelerator keys off. Windows only; a
 /// constant so the policy is asserted by a test on every OS.

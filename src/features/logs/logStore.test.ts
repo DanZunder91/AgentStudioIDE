@@ -1,12 +1,3 @@
-/**
- * logStore — the dedicated diagnostics-log store + its pure helpers.
- *
- * Covers: append (id/ts stamping + ordering), the ring-buffer cap, clear,
- * show/hide/toggle, the level/text filter setters, the module-level
- * logInfo/logEvent/logWarn/logError helpers, `logAgentEvent`'s per-event mapping,
- * `filterEntries`, and the `formatTime`/`formatEntry` formatters.
- */
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentEvent, AgentId } from "../../app/types";

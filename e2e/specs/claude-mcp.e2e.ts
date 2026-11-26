@@ -1,16 +1,5 @@
-/**
- * "Add Agent Studio to Claude Code" from the Settings menu, in the real app.
- *
- * The item runs Claude Code's own `claude mcp get|add|remove` (src-tauri/src/agent_ctl/mcp.rs).
- * Here `claude` is the E2E stub (`AGENTSTUDIO_CLAUDE_BIN` → e2e/fixtures/claude-stub.sh), which
- * records its argv and exits 0 without printing what `claude mcp get` prints. So the path under
- * test is the real one — the click, the Tauri command, the binary resolution, the spawn, the
- * reading of the answer, the item's text — and the stub's argv shows exactly what Claude Code
- * would have been asked to do: add THIS app's binary, by absolute path, with `mcp`.
- *
- * Its argv lines carry no `--session-id` / `--resume`, so the restart spec, which reads agent
- * launches off the same log, never sees them.
- */
+/** Settings' "Add Agent Studio to Claude Code" with `claude` stubbed (claude-stub.sh logs argv).
+ * Its argv has no `--session-id`/`--resume`, so the restart spec reading that log ignores it. */
 import fs from "node:fs";
 import path from "node:path";
 
@@ -29,10 +18,7 @@ function mcpRuns(): string[] {
 
 const item = () => $('[data-testid="settings-claude-mcp"]');
 
-/**
- * Wait until the item has a new answer — not "checking", not "working", and not `previous` (the
- * answer before a click) — and return its state.
- */
+/** Wait for an answer that is not "checking", "working" or `previous`, and return it. */
 async function settled(previous = ""): Promise<string> {
   let state = "";
   await browser.waitUntil(

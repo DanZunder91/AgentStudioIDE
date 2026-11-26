@@ -1,19 +1,6 @@
-/**
- * LeftRail — the fleet, grouped by folder.
- *
- * Header carries two launch controls:
- *   - ⚡ quick-launch — no dialog, spawns in the most-recent project (or the
- *     workspace root, or `.`);
- *   - `+` open project — native folder picker → open that folder as a project
- *     with a first agent (and make it the workspace root).
- *
- * Per-folder `+` lives on each folder header (see `<FolderGroupRow>`). All three
- * launch surfaces funnel through `useLaunchAgent`, so recents stay in sync.
- *
- * This replaces the old standalone `<WorkspaceControl>` picker: folders are now
- * shown as group headers and the header `+` is the project picker, so there is
- * one folder model, not two.
- */
+/** The fleet grouped by folder. Header: ⚡ quick-launch (most recent project, else workspace root,
+ * else `.`) and `+` open project (folder picker; it becomes the workspace root). Every launch
+ * surface goes through `useLaunchAgent`. */
 
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -50,14 +37,7 @@ export function LeftRail() {
     launchAgent(quickLaunchTarget);
   };
 
-  /**
-   * The titlebar used to show `basename(workspaceRoot)`, which was removed: in a
-   * multi-root app it named one project arbitrarily and scoped
-   * nothing (see the comment in `App.tsx`). The one genuinely useful thing it hinted
-   * at — *where a new agent will start* — belongs here instead, on the control that
-   * actually decides it. A tooltip naming the folder beats a passive label naming a
-   * different concept.
-   */
+  /** Names where a new agent will start, on the control that decides it. */
   const quickLaunchLabel =
     quickLaunchTarget === "."
       ? "Quick-launch an agent in the current folder"
@@ -89,11 +69,7 @@ export function LeftRail() {
         </div>
       </div>
       <AgentTree />
-      {/* The usage strip is the rail's FOOTER, not a header. Last in document
-          order and pinned to the bottom by `margin-top:auto`, so it stays put
-          whether the agents list is empty or overflowing. Self-contained:
-          mounting it is the whole integration — it owns its store, its 5s
-          polling (paused while the window is hidden) and its refresh button. */}
+      {/* The footer: last in order, pinned by `margin-top:auto`; owns its store and polling. */}
       <UsageLimits />
     </aside>
   );

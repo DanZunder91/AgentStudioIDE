@@ -1,18 +1,5 @@
-/**
- * CsvTable — a read-only table view of CSV text.
- *
- * Pure and self-contained: give it the raw file text, it renders a scrollable
- * table (the VS Code / GitHub CSV-preview shape). `CodeEditor` mounts it; this
- * component owns only the rendering + its parser.
- *
- * Conventions:
- *   - The FIRST row is the header (`<thead>`); the rest are the body (`<tbody>`).
- *     A single-row file therefore renders as a header with an empty body — the
- *     common case is a header-only CSV, and showing it as the header reads best.
- *   - Ragged rows never crash: the column count is the widest row, and every
- *     row is padded with empty cells to that width (missing cells render empty).
- *   - Empty or whitespace-only input renders a calm empty state, not a crash.
- */
+/** Read-only CSV table. The first row is the header; ragged rows are padded to the widest row;
+ * empty input renders an empty state. */
 
 import { parseCsv } from "./csvParse";
 import "./csvTable.css";

@@ -1,29 +1,6 @@
-/**
- * Agent Village — the data layer: every Claude Code agent on this machine as a
- * {@link VillageAgent}, whichever side of the IDE it runs on.
- *
- *   - IDE agents come straight from the store (`agents` + `rootAgentIds`) — no new
- *     listener; the bridge already keeps the forest live.
- *   - Which tool an IDE agent is using comes from the Agent Logs stream: its `tool`
- *     lines carry the (sub-)agent's own id and a `"<Tool>: <summary>"` text, and only
- *     the tool NAME is kept (never its arguments — a Bash command can carry a secret).
- *     The same lines are COUNTED per agent (`toolCalls`): each is a model round-trip,
- *     which the LANs show as a packet (they move only when agents
- *     communicate).
- *   - External agents come from the Rust `list_external_agents` scan, polled while the
- *     village is on screen. Their calls are counted best-effort (`countExternalCalls`).
- *   - Each agent's LANGUAGE (the City's neon sign): the files its tool calls
- *     named, voted by extension through `projectLanguages.json` — the very table Rust tallies
- *     external transcripts with. An IDE agent's votes come from the same Agent Logs `tool` lines
- *     (`"Edit: /a/b.rs"` → rust), seeded once from the stream's ring (`logstream_snapshot`) so an
- *     agent that worked before the Village opened has its language at once; its whole tree (the
- *     root and every sub-agent) carries the tree's winner, as an external session does. No
- *     project folder is ever read (a cwd under ~/Documents would raise a macOS permission
- *     prompt), and only the id is kept — never a path.
- *
- * The pure mappers are exported for the engine, the panel and their tests; the hook is
- * the only thing with side effects.
- */
+/** Every agent on this machine as a {@link VillageAgent}: IDE ones from the store, external ones
+ * from the Rust scan. Agent Logs yields tool NAMES only (a Bash command can carry a secret).
+ * Language is voted by extension; no project folder is read (macOS would prompt), no path kept. */
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -52,21 +29,14 @@ export function activityForTool(tool: string | null): "typing" | "reading" | "th
   return READING_TOOLS.has(tool) ? "reading" : "typing";
 }
 
-/**
- * The house key: a folder's basename. Both origins use the basename so one folder is one
- * house (Rust sends external folders as basenames already — privacy). Handles
- * either separator and a trailing one; a root path (`/`) keeps itself rather than
- * becoming an unnamed house.
- */
+/** House key: a folder's basename for both origins (Rust sends external ones as basenames, for
+ * privacy). Either separator, trailing one ok; `/` keeps itself. */
 export function folderOf(cwd: string): string {
   const parts = cwd.split(/[\\/]/).filter((p) => p !== "");
   return parts.length > 0 ? parts[parts.length - 1] : cwd;
 }
 
-/**
- * The tool NAME of an Agent Logs `tool` line — `"Edit: /a/b.ts"` → `"Edit"`, a bare
- * `"TodoWrite"` → itself. Null for an empty text. Everything after the name is dropped.
- */
+/** Tool NAME of an Agent Logs `tool` line (`"Edit: /a/b.ts"` → `"Edit"`); null for empty text. */
 export function toolFromLogText(text: string): string | null {
   const head = text.split(":", 1)[0].trim().split(/\s+/, 1)[0];
   return head === "" ? null : head;
@@ -77,11 +47,8 @@ export function toolFromLogText(text: string): string | null {
 /** Extension (lowercase, no dot) → the language it votes for: the table Rust reads too. */
 const EXTENSIONS: ReadonlyMap<string, string> = new Map(Object.entries(projectLanguages.extensions));
 
-/**
- * The language a path's extension votes for, or null (no extension, a dotfile, a directory, or a
- * language that does not vote — Markdown, TOML, JSON…). Either separator, any case. The twin of
- * Rust's `language_of_path` (external_agents/language.rs), case for case.
- */
+/** The language a path's extension votes for, or null (none, dotfile, dir, non-voting language).
+ * Twin of Rust's `language_of_path` (external_agents/language.rs), case for case. */
 export function languageOfPath(path: string): string | null {
   const name = path.split(/[\\/]/).pop() as string;
   const dot = name.lastIndexOf(".");
@@ -89,10 +56,7 @@ export function languageOfPath(path: string): string | null {
   return EXTENSIONS.get(name.slice(dot + 1).toLowerCase()) ?? null;
 }
 
-/**
- * The tools whose Agent Logs line names the file they worked on (`"Edit: /a/b.rs"` — Rust's
- * `summarize_tool_use`). A Grep / Glob line carries its PATTERN, not a path, so it never votes here.
- */
+/** Tools whose line names a file (Rust's `summarize_tool_use`); Grep / Glob carry a pattern. */
 const FILE_TOOLS = new Set(["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 /** The language an Agent Logs `tool` line's file votes for, or null. */
@@ -102,12 +66,8 @@ export function languageOfLogText(text: string): string | null {
   return languageOfPath(text.slice(text.indexOf(": ") + 2));
 }
 
-/**
- * The fresh `tool` lines of agents `known` to the fleet in one batch: only lines past `afterId` —
- * the stream's ids are monotonic per app run, so this is the Agent Logs store's own dedupe (a
- * replayed line, or a duplicate inside the batch, is never seen twice). Returns them in id order
- * and the highest id seen.
- */
+/** Fresh `tool` lines of `known` agents past `afterId` (ids are monotonic per app run: the Agent
+ * Logs store's dedupe), in id order, plus the highest id seen. */
 function freshToolLines(
   lines: readonly LogLine[],
   afterId: number,
@@ -127,10 +87,7 @@ function freshToolLines(
 /** Votes per agent, per language. */
 export type LanguageVotes = Record<string, Record<string, number>>;
 
-/**
- * Each known agent's language votes in one batch of log lines, past `afterId` (the dedupe of
- * `countToolLines`, on a cursor of its own). Returns the votes and the highest id seen.
- */
+/** Each known agent's language votes past `afterId` (its own cursor), plus the highest id seen. */
 export function countLanguages(
   lines: readonly LogLine[],
   afterId: number,
@@ -170,12 +127,8 @@ function winner(votes: Readonly<Record<string, number>>): string | null {
   return best;
 }
 
-/**
- * Each IDE agent's language: its TREE's winner — the root's votes plus every sub-agent's — on the
- * root and every agent under it, exactly as an external session's language is its transcript's and
- * all its sidecars' (a sub-agent that only Greps still works on the Rust project). A tree with no
- * vote is absent. Forest order and cycle-safety as `fromIdeAgents`.
- */
+/** Each IDE agent carries its TREE's winning language (root + every sub-agent), as an external
+ * session does. A tree with no vote is absent; order and cycle-safety as `fromIdeAgents`. */
 export function treeLanguages(
   agents: Record<string, AgentNode>,
   rootIds: string[],
@@ -217,15 +170,9 @@ function ideActivity(node: AgentNode, tool: string | null): VillageActivity {
   }
 }
 
-/**
- * The IDE's fleet as village agents, in forest order (each root, then its sub-agents
- * depth-first) — the same order as the rail, and stable across renders.
- *
- * Dismissed agents need no filter: `dismissAgent` removes them from the forest, and the
- * tombstone list only stops late telemetry re-creating them. A child id missing from
- * `agents` (a race mid-snapshot) is skipped, as is a cycle, defensively. `languages` =
- * `treeLanguages`; an agent it has no entry for has `language: null` (unknown).
- */
+/** The IDE fleet in forest order (the rail's; stable). Dismissed agents are already gone from the
+ * forest; a missing child id (mid-snapshot race) or a cycle is skipped. No `languages` entry: null
+ * language. */
 export function fromIdeAgents(
   agents: Record<string, AgentNode>,
   rootIds: string[],
@@ -260,11 +207,8 @@ export function fromIdeAgents(
   return out;
 }
 
-/**
- * The external scan as village agents. Keys are namespaced so they can never collide with an
- * AgentId. `calls` = `countExternalCalls` over this scan; an agent it has no count for has
- * `toolCalls` absent (unknown).
- */
+/** The external scan as village agents, keys namespaced so they never collide with an AgentId;
+ * no `calls` entry leaves `toolCalls` absent (unknown). */
 export function fromExternal(
   report: ExternalAgentsReport,
   calls: Readonly<Record<string, ExternalCallCount>>,
@@ -294,22 +238,13 @@ export interface ExternalCallCount {
   calls: number;
 }
 
-/**
- * Sub-agent launches (the launch group of Rust's `never_blocks`). While a parent waits on one,
- * its `lastActivityMs` moves with its SUB-AGENTS' writes — Rust dates a session by its newest
- * file, sub-agents' included — which is their traffic, counted on their own rows; the launch
- * itself shows on the LAN as the sub-agent's task.
- */
+/** Sub-agent launches (Rust's `never_blocks` launch group): a waiting parent's `lastActivityMs`
+ * moves with its sub-agents' writes, which are their traffic, not the parent's. */
 const LAUNCH_TOOLS = new Set(["Agent", "Task", "Workflow"]);
 
-/**
- * External agents' tool calls — BEST EFFORT. The scan carries no tool lines, only each agent's
- * pending tool and when its transcript last changed, so a scan in which `lastActivityMs`
- * advanced while a tool (not a sub-agent launch) is pending counts ONE call. Several calls
- * between two polls therefore show as one, and a call made and answered between two polls (no
- * tool pending at either) as none. An agent's first scan starts it at 0; one missing from a scan
- * is forgotten, and starts at 0 again if it comes back.
- */
+/** External tool calls, BEST EFFORT: a scan where `lastActivityMs` advanced with a tool (not a
+ * launch) pending counts ONE, so calls between polls may merge or vanish. A new or returning agent
+ * starts at 0. */
 export function countExternalCalls(
   prev: Readonly<Record<string, ExternalCallCount>>,
   report: ExternalAgentsReport,
@@ -323,13 +258,9 @@ export function countExternalCalls(
   return out;
 }
 
-/**
- * IDE agents first (in the order given — forest order), then external ones, parents
- * before children, siblings by key: Rust's scan order is a directory walk, which is not a
- * promise, and a village whose characters reshuffle on every poll would teleport them.
- * A duplicate key keeps its first occurrence; an external agent whose parent is not in
- * the scan is placed as a root.
- */
+/** IDE agents (forest order), then external ones parents first, siblings by key: Rust's walk
+ * order is no promise and a reshuffle would teleport characters. First duplicate wins; orphans are
+ * roots. */
 export function mergeAgents(ide: VillageAgent[], ext: VillageAgent[]): VillageAgent[] {
   const out: VillageAgent[] = [];
   const seen = new Set<string>();
@@ -362,12 +293,8 @@ export function mergeAgents(ide: VillageAgent[], ext: VillageAgent[]): VillageAg
   return out;
 }
 
-/**
- * The tool calls per agent in one batch of log lines: every `tool` line of an agent `known` to
- * the fleet, counting only lines past `afterId` — the stream's ids are monotonic per app run, so
- * this is the Agent Logs store's own dedupe (a replayed line, or a duplicate inside the batch, is
- * never counted twice). Returns the counts and the highest id seen.
- */
+/** Tool calls per `known` agent in one batch, only past `afterId` (ids are monotonic per app run:
+ * the Agent Logs store's dedupe). Returns the counts and the highest id seen. */
 export function countToolLines(
   lines: readonly LogLine[],
   afterId: number,
@@ -424,14 +351,9 @@ export interface VillageAgentsState {
   lastScanAt: number | null;
 }
 
-/**
- * Every agent on this machine, live. Reads the store for IDE agents, follows the Agent
- * Logs stream for their tools, and polls the external scan while `includeExternal` is on
- * and the window is visible. All listeners and timers are released on unmount, and a
- * scan that resolves after unmount is dropped. Never throws: a failed scan becomes
- * `externalError`; a log stream that cannot be subscribed to leaves tools unknown, so
- * running agents show as "thinking".
- */
+/** Every agent, live; polls the external scan only while `includeExternal` and visible. Releases
+ * everything on unmount and drops late scans. Never throws: a failed scan is `externalError`; no
+ * log stream leaves tools unknown (agents show as "thinking"). */
 export function useVillageAgents(opts: UseVillageAgentsOptions): VillageAgentsState {
   const { includeExternal, pollMs = 3000 } = opts;
   const agents = useAppStore((s) => s.agents);

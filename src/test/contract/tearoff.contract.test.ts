@@ -1,14 +1,6 @@
-/**
- * The TS half of the tab tear-off contract — `goldens/tearoff.json` was WRITTEN BY RUST
- * (`src-tauri/tests/tearoff_contract.rs`) from the real registry and `TornTab::key`, and
- * Rust proves it reads every value back byte for byte. This file proves the page agrees:
- *
- *  - `tabKey` derives the key Rust derived, for every kind;
- *  - every object carries EXACTLY the fields the TS types name (hand-written tables,
- *    never read off the code under test), so a field added on one side only is red;
- *  - the golden's tabs go through the real ADOPTER, and the real DESCRIBER gives back the
- *    very objects Rust wrote — the page produces what Rust consumes, and vice versa.
- */
+/** TS half of the tear-off contract; Rust writes `goldens/tearoff.json` (tearoff_contract.rs).
+ * Field tables are hand-written, never read off the code under test, so a field added on one side
+ * only is red. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

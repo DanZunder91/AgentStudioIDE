@@ -1,9 +1,6 @@
-//! How captured headers are stored: **verbatim**. Nothing
-//! is hidden (this supersedes the original redact-at-capture rule). Every value,
-//! `Authorization`, cookies and API keys included, is kept exactly as it crossed the proxy, in
-//! wire order, so the detail view shows the real request and Copy as cURL replays it. The UI's
-//! optional "Mask secrets" button hides credential values on screen only. Flows live in memory
-//! only (the 5 000-flow ring); nothing here is ever written to disk.
+//! Captured headers are stored VERBATIM (credentials included, wire order) so the detail view
+//! and Copy as cURL are real; "Mask secrets" hides values on screen only. Flows live in memory
+//! only (the 5 000-flow ring), never on disk.
 
 use hyper::HeaderMap;
 

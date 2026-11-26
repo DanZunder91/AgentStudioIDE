@@ -1,26 +1,6 @@
-//! Persisted API-client request **history**: an
-//! append-only log of every HTTP request the built-in API client has executed, so
-//! the user can review past calls and re-run them.
-//!
-//! **WHERE it lives — the secret-safety guarantee:** exactly like
-//! [`crate::api_store`], this file is written to the OS **app config dir**
-//! (`~/.config/agent-studio/api-history.json` on the fallback path) and NEVER inside a
-//! workspace/repo — no git operation can reach it. Just as important: a recorded
-//! request keeps its `{{VAR}}` placeholders **literal** (the frontend snapshots the
-//! pre-substitution request), so a resolved secret is never written here. The token
-//! itself only ever lives in an [`crate::api_store::Environment`].
-//!
-//! **No limit, no cache:** every execution is appended; the store
-//! is never capped or deduplicated. It is small text and the UI rewrites it
-//! wholesale, the same way [`crate::api_store`] does.
-//!
-//! **Robustness over correctness of the file:** a missing, unreadable, or corrupt
-//! store is treated as an empty [`HistoryStore`], never an error — loading history
-//! must not be able to break UI startup. (Same contract as `api_store` /
-//! `recent_projects`.)
-//!
-//! [`load`]/[`save`] operate on an explicit path so they are unit-testable against a
-//! temp dir; the `#[tauri::command]`s are the thin glue resolving that path.
+//! Append-only, uncapped API-client request history. Lives in the OS app config dir, NEVER in a
+//! workspace, and keeps `{{VAR}}` placeholders literal so no resolved secret is written here.
+//! A missing or corrupt store loads as empty: history must never break UI startup.
 
 use std::path::{Path, PathBuf};
 
@@ -31,10 +11,8 @@ use crate::api_store::HttpHeader;
 /// File name inside the config dir.
 const FILE_NAME: &str = "api-history.json";
 
-/// One executed request + its outcome. The request fields (`method`/`url`/`headers`/
-/// `body`) are the **literal** template as typed — `{{VAR}}` placeholders are kept,
-/// never the resolved secret. Exactly one of the outcome sides is set:
-/// on success `status`/`status_text`/`duration_ms`/`size_bytes`; on failure `error`.
+/// One executed request + outcome. Request fields are the literal template (`{{VAR}}` kept).
+/// Outcome: `status`/`status_text`/`duration_ms`/`size_bytes` on success, else `error`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryEntry {
@@ -84,12 +62,8 @@ pub fn load(path: &Path) -> HistoryStore {
     serde_json::from_str::<HistoryStore>(&text).unwrap_or_default()
 }
 
-/// Write `store` to `path` as pretty JSON, creating the parent dir if needed.
-///
-/// Same writer as [`crate::api_store::save`]: history keeps
-/// headers as typed, so a literal `Authorization: Bearer …` entered without a `{{VAR}}`
-/// lands here. Atomic temp → `sync_all` → `rename`, then owner-only `0600` — not
-/// encryption, just no other users on a shared machine and no half-written file.
+/// Write `store` as pretty JSON with [`crate::api_store::save`]'s writer (atomic, then `0600`):
+/// literal headers like `Authorization: Bearer …` can land here.
 fn save(path: &Path, store: &HistoryStore) -> std::io::Result<()> {
     // `store_file`: locked, a unique temp per write (born 0600 on unix), the
     // temp removed on failure, and on Windows a retried rename over a briefly-held file.
@@ -144,10 +118,7 @@ pub fn api_history_load(app: tauri::AppHandle) -> HistoryStore {
     load(&store_path(&app))
 }
 
-/// Persist the whole `store` blob, replacing whatever was there (wholesale, like
-/// `api_store_save`). A write failure surfaces as `Err(String)`; never panics.
-///
-/// Frontend contract: `invoke('api_history_save', { store })`.
+/// Replace the whole store. Frontend: `invoke('api_history_save', { store })`.
 #[tauri::command]
 pub fn api_history_save(app: tauri::AppHandle, store: HistoryStore) -> Result<(), String> {
     save(&store_path(&app), &store).map_err(|e| e.to_string())

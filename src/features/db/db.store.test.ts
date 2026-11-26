@@ -1,19 +1,6 @@
-/**
- * The `db` store slice — load, upsert, delete, connect, disconnect, and the tab.
- *
- * `dbIpc` is mocked at the module boundary, the way `collections.store.test.ts` mocks
- * `apiStoreIpc`: every one of these actions IS an IPC call plus a reduction, and the point
- * of the tests is the pairing — that the effect happens in the WRAPPER and only the result
- * lands in state.
- *
- * The invariant these tests exist to defend, over and above the reducers: **the DB store is
- * written by Rust, not mirrored here.** There is no `persistDbStore` counterpart to
- * `persistApiStore`, and there must not be: `db_connection_upsert` is the only writer
- * because it is the thing that validates, splits credentials out of a raw URL server-side,
- * and mints the Vault variable. A store that could write the file could write a
- * password into it. So "persistence fires in the wrapper" is asserted as *the upsert IPC
- * fires in the wrapper and its returned record is what state adopts*.
- */
+/** dbIpc is mocked: each action is an IPC call plus a reduction. Rust alone writes the DB store
+ * (db_connection_upsert validates, splits credentials, mints the Vault var), so there is no
+ * persistDbStore and state only adopts the record the upsert returns. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -243,12 +230,8 @@ describe("upsertDbConnection", () => {
 /* ─────────────────────────────── delete ──────────────────────────────────── */
 
 describe("upsertDbConnection — an edit invalidates the live session", () => {
-  /**
-   * THE bug: after the database URL was edited, a query console
-   * opened afterwards still used the old URL. The record was updated and the SESSION was not, and
-   * `DbConsoleTab` reads the session — so the console kept every query on the socket dialled
-   * from the old host while the row displayed the new one.
-   */
+  /** DbConsoleTab reads the session, so editing the URL must drop it, or the console keeps
+   * querying the old host. */
   it("drops the session mirror and the cached subtree, so the console reconnects on the NEW record", async () => {
     const before = conn({ id: "a", host: "old-host" });
     db().hydrateDbStore([POSTGRES_ENGINE], { connections: [before], version: 1 });
@@ -489,10 +472,7 @@ describe("deleteDbConnection", () => {
 
 describe("openDbSession", () => {
   it("🔴 opens in ONE dial and records the version and latency it returned", async () => {
-    // This used to assert a PROBE followed by an OPEN — two complete dials, two TLS handshakes,
-    // two authentications, the first connection discarded, purely to learn the server version.
-    // Against a remote Atlas cluster that roughly doubled the time to open. `db_open` now returns
-    // what answered.
+    // One dial: db_open returns what answered, so no separate version probe.
     db().hydrateDbStore([POSTGRES_ENGINE], { connections: [conn({ id: "a" })], version: 1 });
     dbIpc.dbOpen.mockResolvedValue(OPENED);
 
@@ -538,13 +518,8 @@ describe("openDbSession", () => {
   });
 
   it("shows Rust's OWN prose for a failed open, not a sentence mapped from the code", async () => {
-    // Rewritten with the one-dial change. It used to be "does NOT open a session it
-    // already knows will fail" — a property of the probe-then-open shape, which no longer exists:
-    // there is only the open, so there is nothing to skip. What had to be PRESERVED is the message
-    // quality, because the probe path rendered `DbTestResult.error` verbatim while a rejection is
-    // ordinarily reduced to its code. `db_open` rejects with the same `DbError.message` that
-    // `test_connection` copies into that field, so the detail is exactly as safe and strictly more
-    // specific.
+    // db_open rejects with the same DbError.message test_connection used, so showing the detail
+    // is just as safe and more specific than the bare code.
     db().hydrateDbStore([POSTGRES_ENGINE], { connections: [conn({ id: "a" })], version: 1 });
     dbIpc.dbOpen.mockRejectedValue("network: Could not reach db.internal on port 5432.");
 
@@ -563,10 +538,7 @@ describe("openDbSession", () => {
   });
 
   it("falls back to a sentence of its own when the rejection carried no reason", async () => {
-    // The same property the old "a failed probe reported no reason" case protected — never a blank
-    // error pane — reached through the shape that exists now: a bare code with no detail. The
-    // fallback text changed with the mechanism (it is `dbErrors`' sentence for the code rather than
-    // `TEST_FAILED_FALLBACK`), and that is the point of asserting it rather than deleting the case.
+    // A bare code with no detail still yields a non-blank error: dbErrors' sentence for it.
     db().hydrateDbStore([POSTGRES_ENGINE], { connections: [conn({ id: "a" })], version: 1 });
     dbIpc.dbOpen.mockRejectedValue("network");
 
@@ -613,10 +585,7 @@ describe("openDbSession", () => {
   });
 
   it("records the version and latency the OPEN reported, whatever engine answered", async () => {
-    // Was "keeps a null latency out of the record rather than inventing one" — a `DbTestResult`
-    // property (its latency is null when the server was never reached). `DbOpened` only exists on
-    // success and always carries a measured number, so the null case it guarded cannot arise; what
-    // is worth keeping is that both values come from the wire rather than being invented here.
+    // Both values come from the wire, never invented here.
     db().hydrateDbStore([POSTGRES_ENGINE], { connections: [conn({ id: "a" })], version: 1 });
     dbIpc.dbOpen.mockResolvedValue({
       sessionId: "sess-a",

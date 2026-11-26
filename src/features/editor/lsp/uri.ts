@@ -1,15 +1,5 @@
-/**
- * `file://` URI ↔ OS path (M5). LSP speaks `file://` URIs; our tabs
- * and `read_file` speak OS paths. A single tested pair here is the whole seam —
- * the classic gotchas are Windows drive letters (`file:///C:/…`), spaces, and UNC
- * shares (`file://srv/share/…`).
- *
- * 🔴 The drive letter comes back UPPER-case whatever the server wrote. rust-analyzer and
- * typescript-language-server both send `file:///c%3A/…` (VS Code's convention), while the
- * file tree, git status and every canonical path from Rust say `C:\…`. Tabs dedupe and the
- * Files rail selects by exact path, so a lower-case `c:\…` from go-to-definition opened a
- * SECOND tab on a file that was already open, one the tree could not select.
- */
+/** `file://` URI ↔ OS path. The drive letter is returned UPPER-case: servers send `c%3A`, but
+ * Rust paths say `C:\`, and tabs dedupe and the Files rail selects by exact path. */
 
 /** Percent-encodes each segment (spaces etc.), keeps `/` + `:`. */
 function encodeSegments(slashed: string): string {

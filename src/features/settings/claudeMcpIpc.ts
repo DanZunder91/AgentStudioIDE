@@ -1,14 +1,6 @@
-/**
- * Agent Studio's tools in Claude Code: the IPC behind the Settings menu's "Add Agent Studio to
- * Claude Code".
- *
- * Rust (`agent_ctl::mcp`) runs Claude Code's own `claude mcp get|add|remove`, so Claude writes
- * its own config, and only on the user's action; the same three exist on the command line as
- * `agent-studio mcp status|install|uninstall`.
- *
- * These wrappers never reject. A failed IPC becomes a `failed` report whose message says what
- * went wrong, so the menu item always has a reason to show instead of a spinner that never ends.
- */
+/** IPC behind "Add Agent Studio to Claude Code": Rust (`agent_ctl::mcp`) runs `claude mcp
+ * get|add|remove`, so Claude writes its own config, only on the user's action. Never rejects: a
+ * failed IPC becomes a `failed` report with a message, so the item never spins forever. */
 import { invoke } from "@tauri-apps/api/core";
 
 /** Mirrors `agent_ctl::mcp::McpState`. */

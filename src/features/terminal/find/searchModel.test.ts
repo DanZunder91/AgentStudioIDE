@@ -1,8 +1,3 @@
-/**
- * The pure logic of find-in-terminal: platform shortcut matching,
- * the k/N counter, and the exact ISearchOptions handed to @xterm/addon-search.
- * These are the parts a regression would silently corrupt — tested hard.
- */
 
 import { describe, expect, it } from "vitest";
 

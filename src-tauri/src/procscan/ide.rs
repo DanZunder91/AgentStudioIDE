@@ -1,38 +1,6 @@
-//! **Apps the IDE's own terminals and agents started**: apps started inside an IDE terminal
-//! appear on the list as their own separate rows, such as `cargo gazelle`.
-//!
-//! An earlier version dropped the IDE's whole process tree. Now every process is **placed**
-//! by walking its parent chain ([`place`]), and a dev app gains `origin` / `terminalId` /
-//! `agentId` / `launchedBy` on the wire.
-//!
-//! # The terminal table — [`IdeTerminals`]
-//!
-//! The supervisor actor owns the terminals; procscan runs on a blocking worker every 3 s.
-//! They share one `Arc<RwLock<Arc<HashMap<pid, IdeTerminal>>>>`: the actor rebuilds the map
-//! after each message and **writes only when it changed** (so the lock is taken for a
-//! pointer swap a handful of times per terminal lifetime, never per keystroke); a scan takes
-//! the read lock for one `Arc` clone. Neither side ever holds it across work, so the actor
-//! loop cannot stall on a scan. Keyed by the PTY child's pid — the terminal's shell, or for
-//! an agent spawned with `+` the `claude` CLI itself (it *is* the PTY child there).
-//!
-//! # Placement rules (in walk order, starting at the process itself)
-//!
-//! | reached first | placement |
-//! |---|---|
-//! | an IDE terminal's PTY child pid | [`Placement::Ide`] — `terminalId`, `launchedBy` = terminal title; `agentId`/`launchedBy` = the terminal's **bound** root agent when a `claude` CLI process is on the chain (the PTY child counts) |
-//! | the IDE's own pid (not via a terminal) | [`Placement::Internal`] — the IDE's tooling (LSP servers, `docker logs`, the usage probe): dropped |
-//! | nothing (the chain ends) | [`Placement::External`] |
-//!
-//! Independently of where it lands, a process whose **nearest shell-or-`claude`
-//! ancestor-or-self is the `claude` CLI** is one of claude's own helpers (its ripgrep, its
-//! MCP/node workers) → [`Placement::ClaudeHelper`], dropped. A dev app the agent launched
-//! through its Bash tool has a shell between it and claude (`claude → zsh -c … → node
-//! server.js`), so it is kept. That relies on the Bash tool wrapping every command in a
-//! compound shell line (it appends its own `&& pwd -P >| …` cwd probe), which stops the
-//! shell from `exec`-ing into the command; an agent that `exec`s a server directly from
-//! claude would be read as a helper — the price of not guessing by name.
-//!
-//! The `claude` CLI itself ([`is_claude_cli`]) is dropped wherever it runs.
+//! Places each process by its parent chain ([`place`]): an IDE terminal's tree gets `origin`,
+//! `terminalId`, `agentId`; the IDE's own → dropped; else external. If the nearest shell-or-claude
+//! ancestor is `claude`, it is a claude helper (dropped). [`IdeTerminals`]' lock never spans work.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -111,22 +79,9 @@ pub struct Attribution {
     pub tty: Option<String>,
 }
 
-/// Is this the `claude` CLI? The native install (`~/.local/bin/claude` →
-/// `~/.local/share/claude/versions/<v>`), anything whose argv[0] is `claude` (node sets
-/// `process.title`), or the npm package run by node (`node …/@anthropic-ai/claude-code/cli.js`).
-///
-/// A NAME inside a macOS app bundle (`….app/Contents/…`) is never the CLI: the Claude desktop
-/// app's binary is `/Applications/Claude.app/Contents/MacOS/Claude`, and the case-insensitive
-/// match took it — and every Electron helper under it — for agents.
-///
-/// **Windows**: the native install is `%USERPROFILE%\.local\bin\claude.exe`
-/// (`.exe` is dropped before the name is compared — measured on a real install), the npm
-/// package is `node.exe …\node_modules\@anthropic-ai\claude-code\cli.js` (either separator).
-/// The Windows desktop app's binary is also `claude.exe`, so the same rule as the macOS bundle
-/// applies to its install folders — `…\AnthropicClaude\…` (Squirrel) and `…\WindowsApps\…`
-/// (Store): never the CLI. (Those two paths are reasoned from how the desktop app installs,
-/// not observed on a machine with it installed.) Its embedded Claude Code,
-/// `%APPDATA%\Claude\claude-code\<v>\claude.exe`, IS the CLI, as on macOS.
+/// Is this the `claude` CLI (native install, argv[0] `claude`, or node running the npm package)?
+/// Never a name in a macOS `.app` bundle or the Windows desktop app's install folders (that app
+/// is also `Claude`/`claude.exe`); its embedded `claude-code\<v>\claude.exe` is the CLI.
 pub fn is_claude_cli(exe: Option<&str>, argv: &[String]) -> bool {
     // A process whose executable IS the Windows desktop app is not the CLI, whatever its
     // argv[0] says (an Electron helper may be started as a bare `claude.exe`).

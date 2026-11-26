@@ -1,10 +1,4 @@
-/**
- * TabBar — the tab strip of one leaf pane.
- *
- * `features/terminal` is mocked at the module boundary: importing the real one
- * would construct xterm instances and open PTYs over Tauri IPC, neither of
- * which belongs in a jsdom unit test.
- */
+/** TabBar, with `features/terminal` mocked (the real one builds xterm and opens PTYs over IPC). */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -28,11 +22,7 @@ import { resetFleetStore } from "../test/fleet-harness";
 import { resetStore } from "../test/store-harness";
 import { TAB_DND_MIME, TabBar } from "./TabBar";
 
-/**
- * Feeds TabBar exactly what <Pane> feeds it — its leaf's `tabIds`/`activeTabId`,
- * live from the store — so store writes made by the component under test are
- * reflected back the way they are in the app.
- */
+/** Feeds TabBar its leaf's live `tabIds`/`activeTabId` from the store, as <Pane> does. */
 function LiveTabBar({ paneId }: { paneId: PaneId }) {
   const node = useAppStore((s) => findNode(s.layout, paneId));
   if (!node || node.type !== "leaf") return null;
@@ -374,10 +364,8 @@ describe("TabBar — tab kinds", () => {
   });
 
   it("renders a diff tab with the diff (+/−) icon, not the file or terminal glyph", () => {
-    // The third sighting of this trap (after metrics and db-console). A diff tab
-    // sits beside the editor tab for the same file, so the icon is half of what
-    // tells them apart — the "↔ HEAD" title suffix is the other half, and both
-    // are asserted here so removing either one goes red.
+    // A diff tab sits beside the same file's editor tab: the icon and the "↔ HEAD" suffix tell
+    // them apart, so both are asserted.
     actions().openDiffTab("/w/src/main.rs");
     renderTabBar();
 

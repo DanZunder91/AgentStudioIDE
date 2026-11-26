@@ -1,18 +1,6 @@
-/**
- * QueryEditor tests.
- *
- * ── The seam: real CodeMirror, a fake tokenizer ──────────────────────────────
- * `@codemirror/*` is NOT mocked — the keymap, the update listener and the
- * controlled-document reconciliation are the things whose contract we have to
- * satisfy, and a mocked view would prove only that the test agrees with itself.
- * `../../editor/shiki` IS mocked, exactly as `highlight.test.ts` does it: Shiki is
- * third-party, we are not testing its tokenizer, and a fake token stream lets the
- * colour assertion name a concrete colour at a concrete offset.
- *
- * jsdom cannot lay CM6 out; nothing here needs it to (decoration ranges and keymaps
- * are state, not pixels). `cmTestKit.stubGeometry` supplies the two geometry APIs
- * CM6's measure cycle calls — see its header.
- */
+/** Real CodeMirror: its keymap, update listener and controlled-document contract are under test.
+ * Shiki is mocked (as in highlight.test.ts) so colour assertions are concrete;
+ * cmTestKit.stubGeometry supplies the geometry APIs CM6's measure cycle calls. */
 
 import { cleanup, render } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
@@ -52,12 +40,7 @@ function tokens(line: Array<{ content: string; color?: string }>) {
   return { tokens: [line] };
 }
 
-/**
- * The colour decorations currently in the view, as comparable spans. Asserted on the
- * STATE rather than on rendered `<span style>`s: jsdom has no layout, so CM6's
- * viewport measure paints nothing to query — and a decoration's range is the thing
- * the bridge actually computes.
- */
+/** Read from STATE, not rendered spans: jsdom has no layout, so CM6 paints nothing to query. */
 function spansOf(view: EditorView): Array<{ from: number; to: number; color?: string }> {
   const out: Array<{ from: number; to: number; color?: string }> = [];
   const iter = (view.state.field(shikiField) as RangeSet<never>).iter();
@@ -91,11 +74,7 @@ function select(offset: number, head: number = offset): void {
   viewOf().dispatch({ selection: { anchor: offset, head } });
 }
 
-/**
- * A sample buffer with mixed keyword case.
- * Line 2's `FRom` and the two commented-out lines are part of it, and they matter: the
- * comments are what a naive splitter turns into extra statements.
- */
+/** Mixed keyword case; the commented-out lines are what a naive splitter turns into statements. */
 const SAMPLE_BUFFER = [
   "SELECT * FROM widgets;",
   "SELECT * FRom booking;",

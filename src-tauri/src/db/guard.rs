@@ -1,44 +1,13 @@
-//! Statement splitting and the row-returning test.
-//!
-//! ## Why a splitter exists at all
-//!
-//! The whole no-type-mapping design rests on the driver's **text** protocol, and
-//! `sqlx::raw_sql` accepts multiple `;`-separated statements. That means we lose the free
-//! backstop a prepared statement gave us ("the server refuses a second statement"). It is
-//! replaced deliberately rather than left to the accident, so:
-//!
-//! * [`split_statements`] is how `db_query` knows whether the user asked for one statement or
-//!   five, which is what makes `allowMultiStatement` a real control instead of a decoration.
-//! * It is also how each [`crate::db::result::DbResultSet`] gets labelled with **the statement
-//!   that produced it**. The driver's stream says "here is the end of a result set"; only the
-//!   split text can say *which* statement that was.
-//!
-//! ## What it is NOT
-//!
-//! It is **not** a security boundary, and nothing in this feature treats it as one. Read-only
-//! is enforced by the *server*, which is the only place it cannot be talked around by a
-//! cleverer string. A splitter that is confidently wrong about one exotic quoting form would
-//! be a vulnerability; a splitter that is wrong about it while the server refuses the write
-//! anyway is a cosmetic bug. That ordering is the whole reason `SET SESSION CHARACTERISTICS AS
-//! TRANSACTION READ ONLY` is issued as its own round trip at connect and never prepended to
-//! user SQL — see [`crate::db::engine`].
-//!
-//! ## The lexical forms it does understand
-//!
-//! `-- line comments`, `/* nested /* block */ comments */`, `'single quoted'` with `''`
-//! doubling, `E'escape\'strings'` with backslash escapes, `"quoted identifiers"` with `""`
-//! doubling, and `$$dollar quoted$$` / `$tag$…$tag$` bodies. Those are the forms that actually
-//! appear in a console, and every one of them can contain a `;` that is not a terminator.
+//! Statement splitting (for `allowMultiStatement` and per-statement result labels) and the
+//! row-returning test. Not a security boundary: read-only is the server's ([`crate::db::engine`]).
+//! Understands `--`, nested `/* */`, `''`, `E'\''`, `""` identifiers and `$tag$` bodies.
 
 use crate::db::engine::Limits;
 use crate::db::error::DbError;
 use crate::db::model::DbRunMode;
 
-/// Split `text` into statements, dropping empty ones and trailing semicolons.
-///
-/// Whitespace and comments outside a statement are dropped; whitespace and comments *inside*
-/// one are preserved verbatim, because the statement is echoed back to the user next to its
-/// result and rewriting their SQL would be a small lie.
+/// Split `text` into statements, dropping empty ones, trailing semicolons and whitespace/comments
+/// between them; text inside a statement is kept verbatim since it is echoed beside its result.
 pub fn split_statements(text: &str) -> Vec<String> {
     let bytes: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
@@ -200,34 +169,9 @@ fn is_only_comments(s: &str) -> bool {
     true
 }
 
-/// Whether `statement` is expected to return rows.
-///
-/// Needed because the simple-query protocol tells us "this result set ended" but not "this
-/// result set had a shape": a `SELECT` matching zero rows and a `CREATE TABLE` are the same
-/// event on the wire. So the *kind* of an empty result comes from the leading keyword — a
-/// display decision only, never a permission one.
-/// The multi-statement refusal, shared by every engine.
-///
-/// `None` means "go ahead". `Some(err)` is a `blocked` error whose sentence says which of the
-/// two reasons applied — asking for one statement and finding several, or asking for a script on
-/// a connection that has not opted in.
-///
-/// 🔴 **The sentences name the way out, and which way out depends on `limits`**.
-/// The old Statement-mode message said *"Run it as a script to execute more
-/// than one"* unconditionally — and the Script button is **disabled** whenever
-/// `allow_multi_statement` is off (`DbConsole.tsx`), so on exactly the connection the default
-/// creates, the advice pointed at a control the user cannot press. A refusal that names an
-/// unreachable action is the same defect as one that names the wrong cause.
-///
-/// The buttons are named rather than their shortcuts: `⌘⏎` is `Ctrl+⏎` off macOS, and this string
-/// is built in Rust where the platform is not the user's.
-///
-/// **Not a security boundary.** Read-only is, and it is the server's. This is what stops one
-/// stray semicolon from sending a second statement the user never meant to run.
-///
-/// Extracted here when the MySQL engine landed: it was inline in the Postgres
-/// session, and a second copy is how two engines end up disagreeing about when a script is
-/// refused — with each engine's own tests passing.
+/// The multi-statement refusal, shared by every engine: `None` = go ahead, else a `blocked` error
+/// naming the reason and a way out reachable under `limits` (Script is disabled without
+/// `allow_multi_statement`). Buttons, not shortcuts, are named. Not a security boundary.
 pub fn multi_statement_refusal(
     statements: &[String],
     mode: DbRunMode,
@@ -256,34 +200,9 @@ pub fn multi_statement_refusal(
     }
 }
 
-/// Statements that would turn a read-only session back into a writable one.
-///
-/// 🔴 **This exists because "read-only is server-enforced" was measured to be overstated, on
-/// BOTH engines** (against the fixtures):
-///
-/// ```text
-/// run 1:  SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE   → SET
-/// run 2:  INSERT INTO tracks …                                     → INSERT 0 1   ← it landed
-/// ```
-///
-/// The session-level setting is a *default for subsequent transactions*, and the user's own SQL
-/// can change it. Postgres happens to refuse the same pair inside ONE batch — a multi-statement
-/// batch is a single implicit transaction whose access mode is already fixed — and MySQL does
-/// not, but across two round trips on one session both engines allow it. Our console sends each
-/// run on the same session, so that is a path a user can reach, not a theoretical one.
-///
-/// So this is the honest split, and both halves matter:
-///
-/// * The **server** setting is what stops every accidental write, which is what read-only is for.
-/// * This filter is what stops the one-liner that undoes it. It is a **client-side speed bump**,
-///   not a boundary: a determined user can spell a mode change in a way this does not recognise
-///   (a stored procedure, a `DO` block, an obscure synonym), and if they do, the write succeeds.
-/// * The only unconditional boundary is a **read-only account** — grants the server enforces
-///   without reference to session state. `EngineSpec::server_enforced_read_only` and the UI badge
-///   are worded against that reality rather than against the setting.
-///
-/// Returns `Some(err)` for the first offending statement, naming it, so the user can see which
-/// line of a script was the problem.
+/// Statements that turn a read-only session writable (a later run on the same session could then
+/// write). A client-side speed bump, not a boundary: the only unconditional one is a read-only
+/// account. Returns an error naming the first offending statement.
 pub fn read_only_escape(statements: &[String]) -> Option<DbError> {
     for statement in statements {
         if changes_transaction_access_mode(statement) {
@@ -308,12 +227,8 @@ pub fn first_line(statement: &str) -> String {
     format!("{head}…")
 }
 
-/// Does `statement` change the transaction access mode (or the setting that seeds it)?
-///
-/// Matched on a whitespace-normalised, upper-cased form so `set   session\n transaction  read
-/// write` is caught as readily as the canonical spelling. Deliberately **broad**: a false
-/// positive costs a read-only user one confusing refusal on a statement they can rewrite, while a
-/// false negative silently re-enables writes on a connection whose badge says read-only.
+/// Does `statement` change the transaction access mode (or the setting that seeds it)? Matched on a
+/// normalised upper-case form, deliberately broad: a false negative re-enables writes.
 fn changes_transaction_access_mode(statement: &str) -> bool {
     let normalised: String = {
         let mut out = String::with_capacity(statement.len());
@@ -352,6 +267,8 @@ fn changes_transaction_access_mode(statement: &str) -> bool {
     false
 }
 
+/// Whether `statement` is expected to return rows, from its leading keyword: on the wire an empty
+/// `SELECT` and a `CREATE TABLE` look the same. A display decision only, never a permission one.
 pub fn is_row_returning(statement: &str) -> bool {
     let first = leading_keyword(statement);
     matches!(
@@ -419,14 +336,8 @@ mod tests {
         multi_statement_refusal(&statements, mode, &limits(allow))
     }
 
-    /// 🔴 **The multi-statement refusal bug**, at the layer that writes the words. Two statements
-    /// were refused with a sentence naming both guards; this function had written the precise one
-    /// and it never reached the screen. It is now a `blocked` error whose detail the panel renders
-    /// (`DbError::blocked`), so what it says has to be right.
-    ///
-    /// The half worth a test of its own: **the way out depends on the connection.** The Script
-    /// button is disabled unless `allowMultiStatement` is on, so the old unconditional *"run it as
-    /// a script"* pointed at a dead control on precisely the connection our defaults create.
+    /// The Script button is disabled unless `allowMultiStatement` is on, so the refusal must not
+    /// point at it on a default connection.
     #[test]
     fn a_multi_statement_refusal_names_a_control_the_user_can_actually_reach() {
         let opted_in = refusal(2, DbRunMode::Statement, true).expect("refused");

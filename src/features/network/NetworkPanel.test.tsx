@@ -1,7 +1,4 @@
-/**
- * NetworkPanel — the rendered surface over a mocked IPC seam (only `./netcapIpc` is
- * replaced; the store, formatters, filter and export are the real ones).
- */
+/** Only `./netcapIpc` is mocked; the store, formatters, filter and export are the real ones. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
