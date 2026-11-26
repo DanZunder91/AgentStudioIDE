@@ -126,7 +126,7 @@ keeping DOMPurify exactly where it is.
 
 ### `img-src 'self' data: https: http:` — remote images ALLOWED, deliberately
 Three sources, each with a reason:
-- `'self'` — the `/vite.svg` favicon and any bundled asset.
+- `'self'` — any bundled asset.
 - `data:` — **required.** `MarkdownPreview.tsx` inlines local images by calling
   `readImageDataUrl` (`src/features/workspace/workspaceIpc.ts:46` → the scoped Rust
   command `read_image_data_url`, `src-tauri/src/fs_tree.rs:258`), which returns
