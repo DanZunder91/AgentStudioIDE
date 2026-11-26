@@ -426,3 +426,95 @@ it("exited agent — Resume and a copyable tab", async () => {
   await settle(500);
   await shot("08-agent-exited");
 });
+
+/*
+ * Agents drive Agent Studio: a Claude Code session uses the API-client tools through the
+ * `agent-studio` command, and the app shows it. Imports are dynamic so these blocks stay
+ * self-contained at the end of the file.
+ */
+
+it("agent api tools — Claude Code runs agent-studio api/http, the app shows the results", async () => {
+  const F = await import("./agentApiFixtures");
+  const { dispatchAgentCtl } = await import("../../src/features/agentctl/dispatch");
+  // The history file the tools append to (`history_store.rs`): the user's earlier sends, then
+  // each agent send as it happens. `apiHistory` makes the rail re-read it.
+  const t0 = Date.now();
+  const history = F.earlierHistory(t0);
+  h.ipc.handle("api_store_load", () => F.AGENT_API_STORE);
+  h.ipc.handle("api_history_load", () => ({ entries: [...history] }));
+
+  const ids = await boot({ noSession: true });
+  const terminalId = String(ids.rate);
+  // The agent's terminal on top, the pane its request tab opens in below. (Side by side, the
+  // request bar has no room left for the URL.)
+  let below!: PaneId;
+  act(() => {
+    const L = useAppStore.getState().layoutActions;
+    below = L.splitPane((useAppStore.getState() as unknown as { focusedPaneId: PaneId }).focusedPaneId, "column");
+    L.resizePane((useAppStore.getState() as unknown as { layout: { id: PaneId } }).layout.id, [0.555, 0.445]);
+  });
+  await settle(500);
+  const resize = h.ipc.calls("terminal_resize").filter((c) => String(c.args.terminalId) === terminalId);
+  const size = resize[resize.length - 1]?.args ?? {};
+  console.log(`[media] agent terminal: ${String(size.cols)}x${String(size.rows)}`);
+  const s = F.agentApiSession(Number(size.cols ?? 100), Number(size.rows ?? 24));
+  const pty = ptyById.get(terminalId);
+  const write = async (text: string) => {
+    pty?.send(text);
+    await settle(150);
+  };
+  const ctl = (kind: string, fields: Record<string, unknown>) =>
+    act(() => dispatchAgentCtl({ kind, terminalId, ...fields }));
+
+  await write(s.prompt);
+  history.push(F.listEntry(t0 - 40_000));
+  await write(s.list);
+  ctl("apiHistory", { historyIds: [history[history.length - 1].id] });
+  history.push(F.burstEntry(t0 - 25_000));
+  await write(s.burst);
+  ctl("apiHistory", { historyIds: [history[history.length - 1].id] });
+  await write(s.open);
+  act(() => useAppStore.getState().layoutActions.focusPane(below));
+  ctl("httpOpen", F.OPEN_EVENT);
+  await write(s.summary);
+  await settle(300);
+
+  // The user presses Send in the tab the agent opened.
+  const user = userEvent.setup();
+  h.setHttpResponse(F.BURST_RESPONSE);
+  await user.click(screen.getByTestId("api-send"));
+  await screen.findByTestId("api-status");
+  await shot("10-agent-api-tools");
+});
+
+it("settings — Claude Code has Agent Studio's tools", async () => {
+  const F = await import("./agentApiFixtures");
+  const { forgetClaudeMcpRuns } = await import("../../src/features/settings/claudeMcpRuns");
+  // The real mouse (Playwright): a click with it leaves no keyboard-focus ring on the gear.
+  const { userEvent: mouse } = await import("vitest/browser");
+  forgetClaudeMcpRuns();
+  h.ipc.handle("claude_mcp_status", () => F.MCP_INSTALLED);
+  await boot({ hideRight: true, noSession: true });
+  await mouse.click(screen.getByRole("button", { name: "Settings" }));
+  const item = await screen.findByTestId("settings-claude-mcp");
+  await settle(300);
+  if (item.getAttribute("data-state") !== "installed") throw new Error("the Claude MCP item is not in its added state");
+  // Crop: the popover under the titlebar, and the window to its left from the agent's tab on.
+  const box = screen.getByTestId("settings-popover").getBoundingClientRect();
+  const tab = screen.getAllByRole("tab").find((t) => t.textContent?.includes("Add rate limiting"));
+  const left = Math.round(tab?.getBoundingClientRect().left ?? box.right - 820);
+  const frame = document.createElement("div");
+  Object.assign(frame.style, {
+    position: "fixed",
+    left: `${left}px`,
+    top: "0px",
+    width: `${window.innerWidth - left}px`,
+    height: `${Math.round(box.bottom + 24)}px`,
+    pointerEvents: "none",
+    zIndex: "9999",
+  });
+  document.body.appendChild(frame);
+  await settle(300);
+  await page.screenshot({ path: `${OUT}/11-claude-code-setting.png`, element: frame });
+  frame.remove();
+});
