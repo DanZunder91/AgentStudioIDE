@@ -1,8 +1,4 @@
-/**
- * NetworkButton — the titlebar affordance that opens the capture-proxy flow table.
- * Mirrors `<MetricsButton/>`:
- * one store action, the destination is a singleton TAB.
- */
+/** Opens the singleton Network tab via one store action, mirroring `<MetricsButton/>`. */
 
 import { useEffect } from "react";
 

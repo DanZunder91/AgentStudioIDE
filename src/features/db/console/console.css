@@ -1,10 +1,5 @@
-/* ── database client: the query console + results grid ─────────
-   Tokens come from App.css (--bg-app/-surface/-elev, --text, --text-dim, --border,
-   --accent, --mono), with the same light-scheme fallbacks csvTable.css declares.
-
-   The table half deliberately mirrors `csvTable.css`'s header / zebra / border
-   treatment: this grid replaces that component but keeps its LOOK, so the two tables in
-   this app read as siblings rather than as two unrelated tables. */
+/* Query console + results grid. Tokens from App.css with csvTable.css's light fallbacks; the
+   table mirrors csvTable.css's look so the two read as siblings. */
 
 .db-console {
   --db-bg: var(--bg-app, #0d1117);
@@ -130,11 +125,8 @@
   background: rgba(248, 81, 73, 0.08);
 }
 
-/* ── the INTERNAL split ───────────────────────────────────────────────
-   Two flex children whose `flex-grow` is the divider's fraction, plus a 6px
-   grabber. `flex-basis: 0` + `min-height: 0` is what makes grow the ONLY thing
-   deciding the ratio — without the basis, content height leaks into it and the
-   divider stops being the source of truth. */
+/* Internal split: flex-grow is the divider's fraction; flex-basis: 0 + min-height: 0 keep
+   content height out of the ratio. */
 .db-console__split {
   flex: 1 1 auto;
   display: flex;
@@ -218,39 +210,18 @@
   gap: 1px;
 }
 
-/* One statement's outcome.
-
-   🔴 The original bug, from `SELECT * FROM widgets`: a 1-row result
-   drew a 56px table inside a 400px output pane — a black void underneath it, and the
-   horizontal scrollbar sitting ON TOP of the only row, which was sliced in half. Two
-   distinct bugs, one cause. A scroll container's scrollbar is taken out of its own
-   CONTENT box, so a box that is exactly as tall as its content pays for the bar with
-   its last row; and a content-tall scroll box also has `clientHeight === scrollHeight`,
-   which is the input `visibleWindow` windows on — so virtualisation had quietly stopped
-   windowing anything and a 500-row result was rendering all 500 rows.
-
-   So: a `rows` result takes a SHARE of the output pane and scrolls inside it, while
-   prose results (a message, an affected count) stay exactly as tall as their text. */
+/* A rows result takes a SHARE of the pane and scrolls in it: a content-tall box let the
+   scrollbar eat the last row and stopped windowing (clientHeight === scrollHeight). Prose
+   results stay as tall as their text. */
 .db-result {
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
   border-bottom: 1px solid var(--db-border);
 }
-/* A table gets the room — and its floor is stated HERE, in px, on the one box in the
-   chain that may carry a minimum.
-
-   The first version of this fix left `min-height` at the flex default (`auto`) all the
-   way down, expecting the scroll box's own minimum to push back up as a min-content
-   contribution. `DbConsole.browser.test.tsx` failed it: `expected 12032 to be less than
-   12000` — Chromium resolves a *scroll container's* min-content height to its full
-   content height, so a 500-row table's 12 000px travelled up the chain as a minimum and
-   nothing shrank at all. Hence one explicit floor here, and `min-height: 0` on every box
-   below it.
-
-   The number is comfort, not arithmetic: ≈ the table header, five rows and the
-   horizontal scrollbar. What actually keeps the bar off the data is the box being
-   TALLER than its content, which the flex fill above provides. */
+/* The one px floor in the chain (comfort: header, ~5 rows, scrollbar). Boxes below use
+   min-height: 0, as Chromium takes a scroll container's full content height as its minimum
+   (DbConsole.browser.test.tsx). */
 .db-result[data-kind="rows"] {
   flex: 1 1 auto;
   min-height: var(--db-grid-floor);
@@ -365,27 +336,9 @@
   background-clip: content-box;
 }
 
-/* `box-sizing: border-box` on the cells below is LOAD-BEARING, not tidiness. Without
-   it a cell's 1px border is added outside its `height`, so a 22px row measured 23px
-   in Chromium — while `visibleWindow` does its spacer maths in 22. One px per row is
-   500px of drift over 500 rows: a scrollbar that lies. jsdom cannot see it (no
-   layout); `DbConsole.browser.test.tsx` measured it, and mutating the property back
-   turns that test red. `separate` + `border-spacing: 0` is belt-and-braces on top —
-   it keeps row stacking free of collapsed-border rounding — not the fix itself. */
-/* `width: 0` + `min-width: 100%` + `table-layout: fixed` is the recipe that makes the
-   `<col>` widths AUTHORITATIVE, and it is not the obvious spelling.
-
-   🔴 It used to say `width: max-content`, and that is the deeper half of the original
-   bug. A table sized by `max-content` is measured from its CELL
-   CONTENT, and fixed layout then treats the `<col>` widths as mere RATIOS of that width
-   — so `columnWidthsCh`'s 48ch cap was never enforced by anything. A 66-character hash
-   and a 100-character code blew the table out to ~1700px in a 1000px pane, which is why
-   three columns needed a horizontal scrollbar at all, and why a dragged width was
-   silently overruled (measured: a 120px drag moved the column 0px).
-
-   Under fixed layout the used table width is `max(specified width, sum of the column
-   widths)` (CSS 2.1 §17.5.2.1), so `width: 0` says "be exactly as wide as your columns"
-   and `min-width: 100%` adds "…but fill the pane if they leave room". */
+/* border-box cells are load-bearing: a border outside height made 22px rows measure 23px,
+   drifting from visibleWindow. width: 0 + min-width: 100% + fixed layout make <col> widths
+   authoritative (CSS 2.1 §17.5.2.1); max-content made them mere ratios. */
 .db-grid table {
   border-collapse: separate;
   border-spacing: 0;
@@ -402,10 +355,7 @@
 .db-grid th,
 .db-grid td {
   box-sizing: border-box;
-  /* The fallback must track `ROW_HEIGHT_PX`. It is unreachable in practice — the grid
-     always publishes the property — but a stale number here is a row height that
-     disagrees with the windowing maths the moment it ever is reached, which is the
-     drift `--db-row-h` exists to prevent. Found at 22 while verifying the installer. */
+  /* The fallback must track ROW_HEIGHT_PX, or it disagrees with the windowing maths. */
   height: var(--db-row-h, 24px);
   padding: 0 8px;
   border-right: 1px solid var(--db-border);
@@ -453,13 +403,6 @@
   font-size: 10px;
 }
 
-/* The column-resize grab strip: the right edge of each header cell. Invisible until
-   you go looking for it — a permanent grab bar on every column would out-shout the
-   data — and `position: sticky` on the `th` is what makes this `absolute` box land
-   inside it rather than at the table's edge. */
-/* The whole header label is the sort control. A button rather than a click
-   handler on the <th> so it is reachable by keyboard and announced as pressable;
-   the resize grip stays a separate target beside it. */
 .db-grid__find {
   display: flex;
   align-items: center;
@@ -518,6 +461,7 @@
   color: var(--bg-app, #1e2127);
 }
 
+/* The label is a button (keyboard-reachable, announced); the resize grip is a separate target. */
 .db-grid__sort {
   display: flex;
   align-items: baseline;
@@ -543,6 +487,7 @@
   min-width: 0.75em;
 }
 
+/* Invisible until hovered; the sticky th is what puts this absolute strip at its right edge. */
 .db-grid__resize {
   position: absolute;
   top: 0;
@@ -575,10 +520,8 @@
   color: var(--db-dim);
 }
 
-/* ── the three honesty states ─────────────────────────────────────────
-   NULL, the empty string, and whitespace-only must be TELLABLE APART at a glance
-   — the entire text protocol exists to preserve that distinction, so losing it in
-   CSS would waste the backend's whole design. */
+/* NULL, "" and whitespace-only must be tellable apart at a glance: the text protocol exists to
+   keep them distinct. */
 
 /* SQL NULL: a dim italic chip that is visibly not data. */
 .db-grid__null {

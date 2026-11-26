@@ -1,17 +1,6 @@
-//! One spawned language server: piped-stdio process + the framing tasks around it.
-//!
-//! **Not a PTY**: LSP speaks plain stdio pipes; a TTY's echo/line
-//! discipline would corrupt the protocol. We use `tokio::process` with stdin/stdout
-//! piped and four tasks:
-//!   - **read**: server stdout → [`FrameDecoder`] → `Channel<String>` (deframed bodies)
-//!   - **write**: client bodies (mpsc) → [`framing::encode`] → server stdin
-//!   - **stderr**: drained + logged (an unread pipe would eventually block the server)
-//!   - **wait**: reaps the child on natural exit *or* an explicit stop, then reports
-//!     `ServerExited` to the actor exactly once — so a server that dies mid-session
-//!     is surfaced, never a zombie or a hang.
-//!
-//! The relay stays dumb: it frames bytes and manages the process. It never parses a
-//! JSON-RPC message.
+//! One language server over piped stdio (not a PTY: echo/line discipline would corrupt LSP).
+//! Tasks: read (deframe → `Channel`), write (encode → stdin), drain stderr (an unread pipe
+//! blocks the server), wait (reap, report `ServerExited` once). Never parses JSON-RPC.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -42,10 +31,8 @@ pub struct LspServer {
 }
 
 impl LspServer {
-    /// Enqueue one client→server JSON-RPC body (the Transport's `send`).
-    ///
-    /// Non-blocking so a wedged server can never stall the actor: a full queue or a
-    /// closed writer is a plain `Err`, not backpressure.
+    /// Enqueue one client→server body. Non-blocking so a wedged server can't stall the actor:
+    /// a full queue or closed writer is a plain `Err`.
     pub fn send(&self, message: String) -> Result<(), String> {
         use mpsc::error::TrySendError;
         self.stdin_tx.try_send(message).map_err(|e| match e {
@@ -63,16 +50,9 @@ impl LspServer {
     }
 }
 
-/// The language server's command, ready to spawn: piped stdio, cwd `cwd` (the project root).
-///
-/// **Windows: no program is ever looked up in the project folder.** A `.bat` server
-/// (`registry::launch_for`) runs under `cmd.exe`, and cmd looks for
-/// every bare command the script runs (`java` in Gradle's start script, when `JAVA_HOME` is
-/// unset) in the current directory before `PATH`. That directory is the opened repo, so a
-/// repo could ship a `java.exe` and have it run on opening a `.kt` file.
-/// `NoDefaultCurrentDirectoryInExePath` turns that lookup off in cmd and in `CreateProcess`'s
-/// search. It is set for every server, not only batch ones: a server that starts helpers by
-/// bare name gets the same protection where its runtime honours it.
+/// The server command with piped stdio and cwd = the project root. On Windows
+/// `NoDefaultCurrentDirectoryInExePath` is set for every server: cmd.exe would otherwise run a
+/// repo's own `java.exe` (searched in the cwd before `PATH`) when a `.bat` server starts.
 pub(crate) fn command(bin: &Path, args: &[String], cwd: &Path) -> Command {
     let mut cmd = Command::new(bin);
     cmd.args(args)
@@ -90,9 +70,7 @@ pub(crate) fn command(bin: &Path, args: &[String], cwd: &Path) -> Command {
     cmd
 }
 
-/// Spawn `bin args` with cwd `cwd`, wire up the framing tasks, and return the handle.
-///
-/// `channel` receives deframed server→client bodies; `notify` receives exactly one
+/// Spawn and wire the framing tasks. `channel` gets deframed bodies; `notify` gets exactly one
 /// [`LspMsg::ServerExited`] when the child ends (naturally or via [`LspServer::shutdown`]).
 pub fn spawn(
     bin: &Path,

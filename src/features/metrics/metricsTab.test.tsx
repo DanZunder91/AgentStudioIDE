@@ -1,21 +1,6 @@
-/**
- * The metrics TAB — the store action and the pane's `TabView` case.
- *
- * Deliberately here and **not** in `src/app/store.test.ts` / `src/components/Pane.test.tsx`:
- * those two files are shared by every feature. A feature's own
- * tests live with the feature; what they cover is the shared file's new lines, which is
- * what makes the coverage gate meaningful either way.
- *
- * What is pinned:
- *   - `openMetricsTab` is a **singleton** — it does not dedupe by a key like
- *     `openEditorTab`/`openSessionPickerTab`, it re-focuses the one tab there is;
- *   - re-opening it with a different project **re-points** the existing tab, because a
- *     dashboard still labelled with the previous project would show the wrong numbers
- *     under the right title;
- *   - the tab is a real tab: it lands in the focused leaf, activates, is closable, and
- *     survives with the layout;
- *   - `<Pane>` renders `<MetricsPanel>` for it, handing over the ref's cwd.
- */
+/** Lives with the feature, not in the shared `store.test.ts` / `Pane.test.tsx`. `openMetricsTab`
+ * is a singleton that re-points the existing tab to the new project (a stale label would mislabel
+ * the numbers). */
 
 import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";

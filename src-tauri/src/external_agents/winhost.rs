@@ -1,31 +1,6 @@
-//! **Where an outside `claude` runs, on Windows** — the host app, and bringing its window to
-//! the front.
-//!
-//! macOS names the host by its `.app` bundle and focuses it with `open`
-//! ([`super::host_from_exe`]). Windows has no bundles; what it has is a process tree and
-//! top-level windows. So:
-//!
-//! - **The host** ([`host_of_windows`]) is found by walking the `claude` process's parent
-//!   chain. The first ancestor that is a known GUI host by its executable's name (Windows
-//!   Terminal, VS Code, Cursor, JetBrains IDEs… — [`KNOWN_HOSTS`]) wins; for a multi-process
-//!   host (VS Code's terminals hang off a helper `Code.exe`, not the window's), the walk keeps
-//!   climbing through same-named ancestors to the one that owns a window. Failing that, the
-//!   first ancestor that owns a visible top-level window — including a shell, which is how a
-//!   classic console window shows up (Windows reports the console's client as the window's
-//!   process). Console hosts, `claude`'s own helpers and shells without a window are walked
-//!   through; `explorer.exe` and the session's system processes END the walk (everything a
-//!   user starts from the Start menu hangs off Explorer, which is not the host). Windows does
-//!   not re-parent orphans, so a "parent" that started after its child is a reused pid and
-//!   ends the walk too.
-//! - **Focus** ([`focus_window`]): the host pid's first visible, unowned, non-tool top-level
-//!   window in Z order (a titled one preferred) is restored if minimised and handed to
-//!   `SetForegroundWindow`. The IDE is the foreground process at the moment of the click,
-//!   which is exactly the case Windows allows — no privilege, no prompt, no UI Automation.
-//!   Before acting, the pid's image path must still be the one the scan saw, so a pid reused
-//!   since the scan is `no-host`, never somebody else's window.
-//!
-//! The decisions ([`host_of_windows`], [`pick_window`], [`role`]) are plain functions over
-//! plain data, tested on every OS; only [`os`] calls Windows.
+//! Windows host app for an outside `claude`: walk its parent chain to a known GUI host
+//! ([`KNOWN_HOSTS`]) or the first ancestor with a visible window, stopping at Explorer, system
+//! processes or a reused pid. [`focus_window`] re-checks the image path; only [`os`] calls Windows.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -554,9 +529,6 @@ mod tests {
         assert!(!same_image(r"C:\a\Code.exe", r"C:\b\Code.exe"));
     }
 
-    /// The real thing: a window owned by a process we start (a WinForms form in a child
-    /// PowerShell) is found by that pid, minimised, and restored by the focus — and a pid
-    /// with no window, or a pid whose image is not the expected one, is `no-host`.
     /// A child process killed when the test ends, pass or panic.
     #[cfg(windows)]
     struct Reaped(std::process::Child);
@@ -569,6 +541,7 @@ mod tests {
         }
     }
 
+    /// Also: a pid with no window, or whose image is not the expected one, is `no-host`.
     #[cfg(windows)]
     #[test]
     fn on_windows_a_childs_window_is_found_by_pid_and_restored() {

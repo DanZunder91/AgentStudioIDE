@@ -1,9 +1,5 @@
-/**
- * The tear-off contract's pure half: a tab's cross-window identity (`tabKey`), which kinds
- * may leave a window (`canTearOff`), and the terminals a main-window reload must skip
- * (`heldTerminalIds`). The Rust half of `tabKey` is pinned against the same golden in
- * `src/test/contract/tearoff.contract.test.ts`.
- */
+/** The tear-off contract's pure half: `tabKey`, `canTearOff`, `heldTerminalIds`. The Rust half of
+ * `tabKey` is pinned against the same golden in `src/test/contract/tearoff.contract.test.ts`. */
 
 import { describe, expect, it } from "vitest";
 

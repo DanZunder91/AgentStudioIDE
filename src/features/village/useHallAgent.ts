@@ -1,11 +1,6 @@
-/**
- * Whose context window the Seats hall seats — the Village's Seats house and the City's hall under
- * the lounge: the agent selected in the rail. The reading is the Context card's (`contextStore`), taken the
- * card's own way and no other: on selection (and when the picture comes back on screen), and again
- * when the agent's turn ends (`noteAgentStatus`) — never on a timer. Each read is one local
- * `claude -p --resume … "/context"` (no model call, no tokens; read-only — the app never writes `~/.claude`), and the
- * store's single-flight folds the card's and the hall's reads of one agent into one process.
- */
+/** The hall shows the rail-selected agent's context, read as the Context card does: on selection,
+ * on coming back on screen and at turn end (`noteAgentStatus`), never on a timer. Each read is one
+ * read-only `claude -p --resume … "/context"`; `contextStore` single-flights card and hall. */
 
 import { useEffect, useMemo } from "react";
 
@@ -22,10 +17,7 @@ export function hallAgentOf(agent: AgentNode | null): HallAgent {
   return { kind: "ready", agentId: agent.id, label };
 }
 
-/**
- * The hall's agent, reading its context while `enabled` (the Village or the City on screen). The
- * returned object is stable until the selection or its name changes.
- */
+/** Reads only while `enabled`; the result is stable until the selection or its name changes. */
 export function useHallAgent(enabled: boolean): HallAgent {
   // The agent OBJECT (a stable reference until it changes), never a freshly built one per call.
   const agent = useAppStore((s) => {

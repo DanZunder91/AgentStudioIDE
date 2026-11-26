@@ -1,20 +1,6 @@
-/**
- * `<DiffView>` — the `diff` center tab (Git ▸ Compare with HEAD).
- *
- * `@codemirror/merge` is mocked at the module boundary, the way `mermaid` is in
- * `MarkdownPreview.test.tsx` and for the same reason: a `MergeView` needs real
- * layout, and under jsdom it constructs but never lays out, so every claim about
- * what it *shows* would be vacuous. What IS testable here — and is the whole
- * point of mocking rather than skipping — is the **configuration** this component
- * hands it: which side is HEAD, that both sides are genuinely read-only, the
- * collapse thresholds, that no revert controls are asked for, and that the view
- * is destroyed on unmount. The real thing is driven in `diffView.browser.test.tsx`.
- *
- * ⚠️ A `vi.mock` factory does not grow new exports: the one below is a FROZEN
- * COPY of this module's imports from `@codemirror/merge`. If `DiffView.tsx` ever
- * imports something else from that package, add it here in the same change —
- * otherwise the break lands as an "Unhandled Error" beside a green run.
- */
+/** `@codemirror/merge` is mocked (jsdom never lays it out); this pins the config handed to it, and
+ * `diffView.browser.test.tsx` drives the real view. The mock is a frozen copy of `DiffView.tsx`'s
+ * imports from it: add any new import here, or it fails as an "Unhandled Error". */
 
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -240,11 +226,8 @@ describe("DiffView", () => {
   });
 
   it("ignores a diff for the PREVIOUS path that lands after the new one", async () => {
-    // The out-of-order case the `stale` guard actually earns its keep on: two
-    // requests in flight, the ABANDONED one answering last. Without the guard it
-    // overwrites the current answer with one tagged for the old path, and the
-    // view — which only trusts an answer about the file it is showing — drops
-    // back to "Loading the diff…" over a file it already has.
+    // Two requests in flight, the abandoned one answering last: without the `stale` guard it would
+    // overwrite the current answer and drop the view back to loading.
     const resolvers = new Map<string, (d: FileDiff) => void>();
     ipc.handle(
       "git_file_diff",

@@ -1,15 +1,6 @@
-/**
- * The hand-off, at the store: a tab DESCRIBED, RELEASED without being closed, sent — and
- * on the other side ADOPTED back into a store (docs/design/tab-tearoff.md).
- *
- * The registries are mocked at their module boundary (their own crossing — the buffer and
- * the PTY — is driven for real in `features/editor/tearoffBuffer.test.tsx` and
- * `features/terminal/abandon.test.ts`); the store is real, and the Tauri IPC is the mock
- * that plays Rust. What this file pins is the CHOREOGRAPHY: nothing is killed by a move, a
- * terminal comes back through the reattach path and never a spawn, an editor's buffer is
- * seeded before its tab exists, a failed send puts the tab back, and every arrival is
- * idempotent.
- */
+/** Hand-off choreography at the store (docs/design/tab-tearoff.md): nothing killed by a move,
+ * terminals reattach (never spawn), buffers seed before the tab, failed sends re-adopt, arrivals
+ * are idempotent. Registries mocked (crossings: `tearoffBuffer.test.tsx`, `abandon.test.ts`). */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

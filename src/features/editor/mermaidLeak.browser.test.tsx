@@ -1,49 +1,6 @@
-/**
- * The mermaid error-graphic leak — layer 5, the real-browser tier (testing-strategy §1).
- *
- * The bug: opening a markdown
- * file whose mermaid diagrams fail to parse filled the app with mermaid's red
- * *"Syntax error in text / mermaid version 11.16.1"* graphic — stacked many
- * times over, overlapping the left rail and the terminal, persisting across
- * screens and surviving the source file being fixed. Only an app restart
- * cleared them.
- *
- * `mermaid.render(id, text)` called with no container argument builds every
- * diagram in a temp `<div id="d{id}">` appended to **`document.body`** — a
- * sibling of `#root`, outside React, which nothing in this app would ever
- * remove. On a parse failure it paints the graphic there and then does
- * `if (parseEncounteredException) { throw … }` **one statement above** its own
- * `removeTempElements()`, with no `finally`. Our `catch` swallowed the
- * rejection and drew the calm inline note, so the user got both.
- *
- * ── Why this file, and why this tier ─────────────────────────────────────────
- *
- * 🔴 No test in this repo had ever run real mermaid. It is `vi.mock`ed in
- * `MarkdownPreview.test.tsx` and `previewZoomSeam.test.tsx`, the browser-tier
- * zoom suite pre-bakes post-hydration markup by hand, and the one
- * invalid-diagram test used `mockRejectedValue` — which BY CONSTRUCTION cannot
- * leak, and asserted only within the RTL container, a *sibling* of the leaked
- * div. That is precisely why this bug shipped: every instrument pointed away
- * from the thing that broke.
- *
- * So this file runs the REAL library and asserts on `document.body`. It lives in
- * the browser tier rather than beside the jsdom suite because real mermaid under
- * jsdom needs polyfills to run at all — a constructable `CSSStyleSheet` and
- * `SVGElement.prototype.getBBox` — and a regression test for "what the library
- * actually does" that only holds in a hand-patched environment is the kind of
- * test that produced this bug in the first place. Chromium has both, for real,
- * along with the SVG layout every diagram type measures itself with. The mocked
- * jsdom suite keeps its own half: it pins OUR sweep by reproducing the leak
- * deterministically (see "a failed diagram leaves nothing on document.body"
- * there). Between them, each fix is falsifiable on its own:
- *
- *   - drop `suppressErrorRendering` → the last test here goes red (it calls
- *     `mermaid.render` DIRECTLY, so our sweep is not in the path at all);
- *   - drop the `finally` sweep → the jsdom suite goes red.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts \
- *        src/features/editor/mermaidLeak.browser.test.tsx`
- */
+/** Real mermaid in a real browser, asserting on `document.body`: `mermaid.render` without a
+ * container paints its error graphic into a body-level temp div and throws before removing it.
+ * The last test pins `suppressErrorRendering`; the jsdom suite pins our `finally` sweep. */
 
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -54,11 +11,7 @@ import { MarkdownPreview } from "./MarkdownPreview";
 // A fenced-block delimiter kept out of the template literals below.
 const F = "```";
 
-/**
- * A real failure mode, reduced: a `;` inside a `Note` line, which the
- * sequence grammar reads as a statement separator. Real mermaid rejects this
- * with a jison parse error whose `hash.loc.first_line` is 5.
- */
+/** A `;` inside a `Note` line, which the sequence grammar reads as a separator: a parse error. */
 const BAD = [
   "sequenceDiagram",
   "    participant A",
@@ -80,11 +33,8 @@ const view = (text: string): React.JSX.Element => (
   </div>
 );
 
-/**
- * Temp nodes stranded on the body, however they got there. Keyed on the id
- * shape mermaid derives from the ids WE pass (`d` + `mdp-mermaid-N`) — never on
- * a class or on `svg path.error-icon`, which would be a global DOM stomp.
- */
+/** Stranded temp nodes, keyed on the id mermaid derives from ours (`d` + `mdp-mermaid-N`), never on
+ * a global class or `svg path.error-icon`. */
 const stranded = (): Element[] =>
   Array.from(document.body.querySelectorAll('[id^="dmdp-mermaid-"]'));
 
@@ -124,11 +74,8 @@ describe("mermaid leak — real library, real browser", () => {
   });
 
   it("does not accumulate them across mount / unmount cycles", async () => {
-    // The graphic stuck on every screen, even after the file was fixed.
-    // `Pane` mounts only the ACTIVE tab, so every switch away and back re-runs
-    // the hydration with a fresh monotonic id — and mermaid's own
-    // `removeExistingElements` only reclaims a node of the SAME id, so before
-    // the fix the count grew without bound for as long as the app was open.
+    // Each tab switch re-hydrates with a fresh id, and mermaid only reclaims a node of the same id,
+    // so a leak grows with every pass.
     for (let pass = 0; pass < 3; pass++) {
       const { container, unmount } = render(view(fenced(BAD, BAD)));
       await waitFor(() =>
@@ -184,14 +131,8 @@ describe("mermaid leak — real library, real browser", () => {
   });
 
   it("mermaid ITSELF strands nothing, with our sweep out of the path", async () => {
-    // 🔴 The isolation test for `suppressErrorRendering`, and the only one that
-    // can falsify it: every assertion above is also satisfied by our own
-    // `finally` sweep, so removing the flag alone would leave them green.
-    //
-    // Mounting the component first is what applies our config — `initMermaid`
-    // is module-global and idempotent, and this is the same module instance the
-    // component imports. Then the library is driven DIRECTLY, so nothing of
-    // ours can clean up after it.
+    // Only this test can falsify `suppressErrorRendering`: our `finally` sweep satisfies the rest.
+    // Mounting first applies our module-global config; then the library is driven directly.
     const { container } = render(view(fenced(BAD)));
     await waitFor(() =>
       expect(container.querySelector(".markdown-preview__diagram-error")).not.toBeNull(),

@@ -1,16 +1,5 @@
-/**
- * revealInEditor — opening a file and placing the cursor at a location.
- *
- * The registry is mocked at the module boundary (CM6 needs a real DOM; the
- * cursor/scroll half lives in the browser tier). What is pinned here is the
- * ROUTING: which paths get a buffer waited on, and which must not.
- *
- * The image case is the reason this file exists. `whenViewReady` polls every
- * 30 ms for a full 5 SECONDS before resolving null (`EditorRegistry.ts`), and
- * quick-open searches FILENAMES — so a `.png` hit is an everyday case, not an
- * edge one. Before images skipped the wait, every image opened from quick-open or Find-in-Files
- * left a five-second dangling promise behind it.
- */
+/** Routing only (registry mocked; cursor/scroll is in the browser tier): which paths wait for a
+ * buffer. Images must not: `whenViewReady` polls for 5 s before resolving null. */
 
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -59,11 +48,7 @@ describe("revealInEditor", () => {
     expect(registry.whenViewReady).toHaveBeenCalledWith("/w/src/main.rs");
   });
 
-  /**
-   * 🔴 The raster guard. A raster has no buffer to put a cursor in, so waiting for
-   * one is five seconds of nothing. The tab must still open — quick-open's job is
-   * to show you the file.
-   */
+  /** A raster has no buffer to wait for, but the tab must still open. */
   it("opens a raster image WITHOUT waiting five seconds for a buffer it will never get", async () => {
     await act(async () => {
       await revealInEditor("/w/assets/logo.png", 1);
@@ -72,10 +57,7 @@ describe("revealInEditor", () => {
     expect(registry.whenViewReady).not.toHaveBeenCalled();
   });
 
-  /**
-   * An SVG keeps its CodeMirror buffer (it is the one image that is also text),
-   * so a Find-in-Files hit inside one must still land on the matching line.
-   */
+  /** An SVG keeps its buffer (it is also text), so a Find-in-Files hit still lands on its line. */
   it("still waits for the buffer on an SVG, which does have text source", async () => {
     await act(async () => {
       await revealInEditor("/w/assets/icon.svg", 4);

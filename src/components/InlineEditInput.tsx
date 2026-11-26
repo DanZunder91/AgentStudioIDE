@@ -1,19 +1,6 @@
-/**
- * InlineEditInput — a one-line rename field, shared by tab labels and agent rows.
- *
- * Rendered in place of a label while editing. Contract:
- *   - prefilled with the current display name, text pre-selected
- *   - Enter or blur → `onCommit(value)`   (empty clears — the caller decides)
- *   - Esc → `onCancel()`, no save
- *
- * All pointer/key events are stopped from propagating, so typing, clicking, or
- * pressing Enter/Esc inside the field never selects a row, activates/closes a
- * tab, or starts a drag — the same discipline the disclosure caret uses.
- *
- * `resolvedRef` guards the Enter/Esc→unmount→blur race: React fires `blur` when
- * a focused input unmounts, so without the flag an Esc-cancel would be followed
- * by a blur-commit and the cancel would be silently undone.
- */
+/** One-line rename field (tabs, agent rows): prefilled and selected; Enter/blur commits (empty is
+ * the caller's call), Esc cancels; events never propagate. `resolvedRef` guards the unmount-blur
+ * React fires after Enter/Esc, which would otherwise undo a cancel with a commit. */
 
 import { useCallback, useRef, useState, type KeyboardEvent } from "react";
 

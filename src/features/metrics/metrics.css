@@ -1,32 +1,6 @@
-/* ── Claude metrics — the dashboard tab ───────────────────────────────────────
-
-   A DESTINATION, not chrome. Unlike `usage.css` (10–11px type in a 260px rail),
-   this surface is a full pane and may breathe — but it must stay legible in a
-   narrow window, so every row wraps and every grid is `auto-fit` rather than a
-   fixed column count.
-
-   Visual hierarchy, deliberately steep:
-     hero value      44px / 300 weight   ← the only display-size number
-     token values    22px / 500
-     KPI values      18px / 500
-     table + labels  11–12px
-   Six equally-weighted tiles is a table dump; one hero carrying the page is a
-   dashboard.
-
-   ── the palette, computed not eyeballed ────────────────────────────────────
-   `--accent #3b82f6` on the card surface `--bg-elev #1c2128` passes all five
-   checks (contrast, both CVD simulations, the dark lightness band) and is the
-   ONLY series colour the chart needs today — it is single-series. The validated
-   second hue for future parent-vs-children bars is **#d97430**, NOT the
-   brighter #e8873c, which failed the dark lightness band at L 0.715. It is
-   recorded here so nobody "restores" the brighter value when a second series lands.
-
-   The three tone values below are RE-DECLARED locally, with `usage.css` named as
-   their origin: reusing another feature's `:root` declaration would create a CSS
-   load-order dependency between two independent features, and
-   duplicating three hex values with a pointer is the cheaper correctness. They
-   were chosen for monotonic L* under deuteranopia and protanopia — see the long
-   note in `usage.css` for the measurements. */
+/* Metrics dashboard tab: a full pane, so rows wrap and grids `auto-fit`; one 44px hero over
+ * smaller values. A second chart hue, if needed: #d97430 (#e8873c fails the dark L band). Tones
+ * are re-declared from `usage.css` to avoid a cross-feature load-order dependency. */
 :root {
   --metrics-ok: #2ea043;
   --metrics-warn: #dea82c;
@@ -54,10 +28,8 @@
   opacity: 0.72;
 }
 
-/* ── row 0: the honesty header ──────────────────────────────────────────────
-   ONE filter row above everything it scopes (no per-chart filters). Wraps
-   rather than scrolls: a header that clips its own Rescan
-   button in a narrow pane is a broken header. */
+/* ── row 0: the honesty header ──
+ * One filter row above everything it scopes; it wraps so Rescan never clips. */
 .metrics__header {
   display: flex;
   flex-wrap: wrap;
@@ -111,10 +83,7 @@
   color: var(--text);
   font-weight: 600;
 }
-/* "This project" with nothing selected. Visibly unavailable rather than absent, so the
-   toggle's shape does not jump when an agent is selected — and it keeps its `title`, so
-   the REASON is reachable by hover and by AT. A control that errors when clicked is worse
-   than one that says it cannot be clicked. */
+/* Disabled, not absent: the toggle keeps its shape and its `title` keeps the reason reachable. */
 .metrics__window:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -189,18 +158,9 @@
   opacity: 0.65;
 }
 
-/* ── the scrolling body ─────────────────────────────────────────────────────
-   ONE vertical scroller for the whole dashboard, so nothing nests a second
-   scrollbar. Horizontal overflow is contained per-section (the table), never
-   here — the page body must never scroll sideways. */
-/* ── tier 1: the account block ───────────────────────────────────────────────
-   Visually SEPARATE from the body below it, and deliberately so: these numbers cover
-   every device, the ones below cover this machine, and a reader must never have to work
-   out which block a figure belongs to. The bottom border is the boundary between the two
-   claims — it is doing semantic work, not decoration.
-
-   Sized between the header and the hero: present, readable, and never competing with the
-   one display-size figure on the page. */
+/* ── tier 1: the account block ──
+ * All-device numbers, kept visibly apart from this machine's below: the bottom border is the
+ * boundary between the two claims. */
 .metrics__account {
   flex: 0 0 auto;
   padding: 10px 16px 12px;
@@ -285,6 +245,7 @@
   color: var(--metrics-warn);
 }
 
+/* One vertical scroller for the dashboard; sideways overflow is contained per section. */
 .metrics__body {
   flex: 1 1 auto;
   min-height: 0;
@@ -355,10 +316,9 @@
   color: var(--metrics-danger);
 }
 
-/* ── row 1: the hero ───────────────────────────────────────────────────────
-   Proportional figures on purpose (`tabular-nums` is scoped to the table): at
-   44px, tabular digits look mechanically spaced. The value is `line-height: 1`
-   so the block's height is the type's height and the label sits tight to it. */
+/* ── row 1: the hero ──
+ * Proportional figures on purpose (`tabular-nums` is the table's alone); `line-height: 1` keeps
+ * the label tight. */
 .metrics__hero {
   display: flex;
   flex-direction: column;
@@ -554,10 +514,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ── row 5: the top-turns table ────────────────────────────────────────────
-   🔴 `tabular-nums` HERE AND ONLY HERE. Columns of figures must align; the hero
-   and the tiles read better proportional. Scrolls inside its own container so
-   the page body never scrolls sideways. */
+/* ── row 5: the top-turns table ──
+ * The only `tabular-nums` (columns must align); scrolls in its own box so the body never scrolls
+ * sideways. */
 .metrics__table {
   width: 100%;
   border-collapse: collapse;

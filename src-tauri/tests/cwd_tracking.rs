@@ -1,14 +1,6 @@
-//! End-to-end test for terminal cwd tracking.
-//!
-//! Drives the **real** pipeline — a real `/bin/sh` in a real PTY, the real per-
-//! terminal cwd poller, and `pty::cwd::process_cwd` against the live shell pid — to
-//! prove the real scenario: open a terminal, `cd` into a repo the app never
-//! explicitly opened, and the ad-hoc-detection hook is installed at that repo's git
-//! root so a `claude` typed there is recognised.
-//!
-//! **Safety:** every path here is a throwaway temp dir; the
-//! test asserts the user's global `~/.claude` is byte-identical before and after.
-//! Nothing in the cwd tracker ever writes outside a repo's own `.claude/`.
+//! Terminal cwd tracking end to end: real `/bin/sh` in a real PTY, the real poller and
+//! `process_cwd`; `cd` into an unopened repo installs the hook at its git root. Temp dirs
+//! only; the global `~/.claude` must stay byte-identical.
 
 mod common;
 
@@ -34,10 +26,8 @@ mod supported {
         // user knob). Set before the terminal opens: the poller reads it at start.
         std::env::set_var("AGENTSTUDIO_CWD_POLL_MS", "50");
 
-        // Two temp repos (a bare `.git` dir is enough — `git_root` reads it
-        // directly). Canonicalize so the shell's real, symlink-resolved cwd (what
-        // `process_cwd` returns) matches the paths we assert against (macOS
-        // `/var/folders` / `/tmp` → `/private/...`).
+        // Two temp repos (a bare `.git` dir suffices for `git_root`), canonicalized to match the
+        // shell's symlink-resolved cwd (macOS `/tmp` → `/private/...`).
         let base =
             std::env::temp_dir().join(format!("agentstudio-cwd47-e2e-{}", ulid::Ulid::new()));
         std::fs::create_dir_all(&base).unwrap();

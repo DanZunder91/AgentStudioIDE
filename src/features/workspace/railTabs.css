@@ -1,14 +1,6 @@
-/* railTabs.css — feature-local styling for the rail strip's overflow trigger + menu.
-   The strip itself (`.rail__tabs` / `.rail__tab`) stays in App.css —
-   shared shell chrome — this file adds only what the seventh tab's
-   overflow answer needs, the same split `settings.css` uses for the titlebar gear.
-
-   Geometry constraints, because they are the point:
-   `.rail` is `overflow-x: hidden`, so anything wider than the rail is silently
-   CLIPPED, not scrolled. The menu therefore anchors to the STRIP (full width) and
-   pins BOTH horizontal edges — `left: 0; right: 0` + margins — so it can never
-   poke past the rail no matter how long a label gets; labels wrap instead. The
-   browser tier asserts the menu's live box stays inside the rail's. */
+/* The rail strip's overflow trigger + menu; the strip itself stays in App.css. `.rail` clips
+   (`overflow-x: hidden`), so the menu anchors to the full-width strip and pins both edges; labels
+   wrap. The browser tier asserts the menu stays inside the rail. */
 
 /* The strip is the menu's containing block. Supplementing App.css's rule from here
    (not editing it) is deliberate: `position: relative` exists only for this menu,
@@ -23,10 +15,8 @@
   display: inline-flex;
 }
 
-/* The "⋯" trigger inherits everything from `.rail__tab` (same glyph size, same
-   padding, same active underline via `rail__tab--active`); nothing extra needed.
-   The class below exists as a hook for tests and future styling, and to keep the
-   budget honest: the trigger MUST cost exactly TRIGGER_W = TAB_W = 17px. */
+/* Styled entirely by `.rail__tab`; this hook keeps the budget honest: the trigger MUST cost
+   exactly TRIGGER_W = TAB_W = 17px. */
 .rail__tab--overflow {
   /* intentionally empty — styled entirely by `.rail__tab` */
 }

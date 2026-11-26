@@ -1,56 +1,5 @@
-/**
- * ImageViewer — layer 5, the real-browser tier (testing-strategy §1, §7.5).
- *
- * Every claim here is a GEOMETRY claim, so this file is the only place any of
- * them can live: under jsdom `getBoundingClientRect()` is 0×0, no stylesheet is
- * applied and no image is ever decoded, so "the picture doubles at 200%" would
- * be vacuously green there. `ImageViewer.test.tsx` pins the arithmetic and the
- * wiring; this is where the pixels are.
- *
- *   1. **A wide image FITS the pane at 100% and is exactly 2× that at 200%** —
- *      the contract in one claim, and the reason `--img-zoom` exists.
- *      Two-sided on purpose: a plain `max-width: 100%` passes the
- *      first half and pins the picture forever, `max-width: none` passes the
- *      second and overflows at 100%. Only `calc(100% * var(--img-zoom))` passes
- *      both.
- *   2. **A small icon is NOT blown up to fill the pane, and still zooms** — the
- *      other half of "natural size at 100%". A 96px badge is 96px on a 568px
- *      pane, and 384px at 400%.
- *   3. **An SVG with only a `viewBox` is pinned and zooms.** The trap that the
- *      probe for this file actually caught: an `<img>` whose source has no
- *      intrinsic size is STRETCHED to its containing block by the engine, and a
- *      containing-block-shaped width is inert under `zoom` — measured here
- *      before the fix, such an SVG was 568px wide at 100% *and at 200%*. The
- *      component pins the decoded intrinsic width instead. This claim is the
- *      only detector for that whole class of bug, because the picture LOOKS
- *      right at 100%.
- *   4. **Fit zooms a too-tall image OUT until it fits** — the 50%
- *      case. Two-sided: the zoom must have gone DOWN, and the image must end up
- *      filling the constraining axis rather than merely being small.
- *   5. **Fit zooms a small image IN until it fills** — the 200% case, the
- *      same rule read the other way. `Math.min(1, ratio)` — the obvious "fit" —
- *      passes claim 4 and reds this one.
- *   6. **The Fit control is the same size ON SCREEN at every zoom.** Nested
- *      `zoom` multiplies, so the control carries `zoom: calc(1 / var(--img-zoom))`
- *      to cancel the stage's exactly. Without that line the button is 4× its
- *      design size at 400%, sitting on top of the picture the user zoomed in to
- *      see — and jsdom, which applies no CSS at all, cannot see it.
- *   7. **The transparency checkerboard holds its tile size on screen** — the
- *      same cancellation, applied to a `background-size`. A fixed `12px` tile
- *      would be a 48px slab at 400%.
- *   8. **The zoomed picture really overflows, and ctrl+drag really pans it** —
- *      scroll bounds only exist under a layout engine; jsdom's scroll box is
- *      inert and has to be stubbed, so this is the only tier where the pan is
- *      moving anything real.
- *
- * The fixtures are SVG data URLs built by the component itself from `svgText`,
- * which keeps the whole suite off the image IPC (there is nothing to mock) and
- * makes every intrinsic size an explicit part of the fixture rather than a
- * property of some checked-in binary.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts \
- *        src/features/editor/imageViewer.browser.test.tsx`
- */
+/** Geometry claims only a real layout engine can check; arithmetic and wiring are in
+ * `ImageViewer.test.tsx`. Fixtures are SVG data URLs from `svgText`, so no image IPC is mocked. */
 
 import { useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -107,12 +56,7 @@ const fitButton = (): HTMLElement => screen.getByTestId("image-fit");
 /** The live zoom, read off the stage. Numeric, never string (Chromium rounds to 6 digits). */
 const zoomNow = (): number => Number(screen.getByTestId("image-stage").style.zoom);
 
-/**
- * Wait for the image to be DECODED and its intrinsic width pinned. Both halves
- * matter: `complete` says the bytes are in, the inline `width` says the `load`
- * handler's state has been committed — and every size assertion below is about
- * that committed width.
- */
+/** `complete` means the bytes are in; the inline `width` means `onLoad`'s state was committed. */
 async function ready(): Promise<HTMLImageElement> {
   const img = image();
   await waitFor(() => {
@@ -122,13 +66,8 @@ async function ready(): Promise<HTMLImageElement> {
   return img;
 }
 
-/**
- * The pane's CONTENT box in device px, measured exactly the way `onFit` measures
- * it: `clientWidth`/`clientHeight` already exclude a scrollbar, and the 16px
- * padding has to come off by hand or the picture would be fitted to a box 32px
- * bigger than the space it can actually occupy. Re-measured at every use, since
- * a fit can retire a scrollbar and hand the pane back its width.
- */
+/** Measured like `onFit`: `clientWidth` excludes the scrollbar, the padding comes off by hand.
+ * Re-measure every time, since a fit can retire a scrollbar. */
 function paneBox(): { width: number; height: number } {
   const el = container();
   const style = getComputedStyle(el);
@@ -168,10 +107,7 @@ describe("ImageViewer — real geometry (Chromium)", () => {
 
     rerender(view(WIDE, 2));
 
-    // Half 2 — "i zoom": exactly twice as big on screen, and now overflowing,
-    // which is what ctrl/cmd+drag is for. A plain `max-width: 100%` reds this
-    // line — the cap would shrink with the stage's zoomed CSS width and pin the
-    // picture at widthAt1 forever.
+    // A plain `max-width: 100%` fails here: the cap would shrink with the zoom and pin the picture.
     expect(img.getBoundingClientRect().width).toBeCloseTo(widthAt1 * 2, -1);
     expect(el.scrollWidth).toBeGreaterThan(el.clientWidth);
   });
@@ -190,10 +126,8 @@ describe("ImageViewer — real geometry (Chromium)", () => {
   });
 
   it("an SVG with only a viewBox is pinned to its decoded size, not stretched inert", async () => {
-    // The trap this file's probe caught. An <img> whose source has no intrinsic
-    // size is stretched to its containing block by the engine — a
-    // containing-block-shaped width, which is exactly what `zoom` cannot move.
-    // Before the pin this measured 568px at BOTH zoom levels.
+    // An <img> with no intrinsic size is stretched to its containing block, which `zoom` can't
+    // move; without the pin this measured 568px at both zooms.
     const { rerender } = render(view(NO_INTRINSIC_SIZE, 1));
     const img = await ready();
 
@@ -258,10 +192,8 @@ describe("ImageViewer — real geometry (Chromium)", () => {
   it("the transparency checkerboard holds its tile size on screen at every zoom", async () => {
     const { rerender } = render(view(SMALL, 1));
     const img = await ready();
-    // Computed styles come back in the element's OWN CSS px, so the on-screen
-    // size is `tile * zoom` — parsed numerically, never string-compared.
-    // A fixed `12px` tile would read 12 at both zooms here and be
-    // a 48px slab on screen at 400%.
+    // Computed styles are in the element's own CSS px, so on screen is `tile * zoom`, compared
+    // numerically.
     const onScreenAt1 = tilePx(img) * 1;
     expect(onScreenAt1).toBeGreaterThan(0);
 

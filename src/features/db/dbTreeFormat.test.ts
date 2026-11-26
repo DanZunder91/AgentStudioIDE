@@ -1,13 +1,5 @@
-/**
- * `dbTreeFormat` — the tree's decisions, tested without a DOM.
- *
- * Every expectation here is written LITERALLY: not one of them is computed from
- * the function under test, or from the same table the function reads. That matters most for
- * `browseQuery`, where the value IS the risk — a wrong `LIMIT` or an unquoted identifier is a
- * bill on someone's production server, and a test that asserted
- * `browseQuery(...) === \`SELECT * FROM ${qualifiedTableName(...)} LIMIT ${limit}\`` would pass
- * for any of them.
- */
+/** Expectations are literal, never computed from the code under test: for `browseQuery` a wrong
+ * `LIMIT` or an unquoted identifier lands on someone's production server. */
 
 import { describe, expect, it } from "vitest";
 
@@ -328,12 +320,8 @@ describe("browseQuery — the statement a double-click runs", () => {
   });
 
   it("is PartiQL for DynamoDB — a double-quoted table, no qualifier, and no LIMIT", () => {
-    // Three differences from the SQL engines, and each one is a real property of PartiQL rather
-    // than a style choice:
-    //   • the table name MUST be double-quoted (a bare identifier is a syntax error there),
-    //   • there is no database or schema to qualify it with (a region contains tables),
-    //   • **PartiQL has no LIMIT clause** — the row cap is applied by the request's paging, so
-    //     emitting one would put a statement in the editor that the service rejects outright.
+    // PartiQL: the table name must be double-quoted, there is no database/schema to qualify it, and
+    // there is no LIMIT clause (paging caps rows; the service would reject one).
     expect(
       browseQuery("dynamodb", { database: "", schema: null, name: "tracks" }, 500),
     ).toBe('SELECT * FROM "tracks";');

@@ -1,9 +1,6 @@
-/* View strip — the TOP-LEVEL bar of layouts.
-   Owned by src/components/**, like panes.css, and reuses the same CSS vars
-   declared in src/App.css. Deliberately the same idiom as `.pane-tab` one level
-   up: the difference is WHERE the accent sits (top, not bottom) and that the
-   active chip takes the pane header's surface colour, so it reads as holding up
-   the strip beneath it rather than as a second, competing tab row. */
+/* View strip, the TOP-LEVEL bar of layouts: the `.pane-tab` idiom one level up (App.css vars),
+ * with the accent on top and the active chip in the pane header's colour so it holds up the
+ * strip beneath rather than competing with it. */
 
 .view-bar {
   display: flex;

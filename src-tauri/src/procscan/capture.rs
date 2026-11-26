@@ -1,31 +1,6 @@
-//! **Is an IDE app's HTTP captured?** (An app launched with every proxy variable stripped —
-//! `env -u HTTP_PROXY -u HTTPS_PROXY …` — sends none of its traffic to the Network view, and
-//! without this flag nothing would say so.)
-//!
-//! `DevApp.captured` for an `origin: "ide"` app:
-//!
-//! | its environment | `captured` |
-//! |---|---|
-//! | unreadable (macOS hides Apple's platform binaries' env; empty = hidden) | `null` |
-//! | the IDE is not injecting a proxy (not running, capture off, a corporate proxy) | `null` |
-//! | `NO_PROXY`/`no_proxy` has a `*` entry (bypass everything) | `false` |
-//! | **both** schemes point at the live proxy — `HTTP_PROXY` or `http_proxy`, and `HTTPS_PROXY` or `https_proxy` — at loopback:`<port>` | `true` |
-//! | anything else (stripped, another port, another host) | `false` |
-//!
-//! DECIDED: both schemes are required. An app with only `HTTP_PROXY` still sends every HTTPS
-//! call direct, and HTTPS is most of what a service calls; "captured" must mean "its calls
-//! show", not "one of them might". Either spelling counts per scheme: tools differ on which
-//! one they read (curl reads only lowercase `http_proxy`), and the IDE sets both. On Windows a
-//! name is one variable in any case (`Https_Proxy` is `HTTPS_PROXY`), so names match without case
-//! there ([`captured_with`]).
-//!
-//! DECIDED: what cannot be seen from the env is not guessed. A per-request `curl --noproxy
-//! '*'`, or a client that ignores the proxy variables, is invisible here — the env is the
-//! contract the IDE controls, and the flag reports exactly that.
-//!
-//! 🔴 A process environment holds secrets: it is read in Rust ([`super::os::read_env`]), turned into
-//! this one boolean, and dropped. No value, no key list, ever reaches the wire, a log line or a
-//! failure message.
+//! `DevApp.captured` for an IDE app: `null` if its env is unreadable or we inject no proxy;
+//! `true` only if BOTH `HTTP(S)_PROXY` (either case) point at our loopback port and `NO_PROXY`
+//! has no `*`. The env holds secrets: read in Rust, reduced to this bool, never sent or logged.
 
 /// The captured-ness of one app (module doc). `env` = its environment, `None` when the OS
 /// would not give it; `port` = the port the IDE's proxy is injecting, `None` when it injects
@@ -111,7 +86,7 @@ mod tests {
 
     const OURS: &str = "http://t-term-1:x@127.0.0.1:4711";
 
-    /// The flag table (module doc), hand-written expectations.
+    /// The flag rules (module doc), hand-written expectations.
     #[test]
     fn the_flag_table() {
         let all = env(&[

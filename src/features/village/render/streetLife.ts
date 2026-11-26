@@ -1,21 +1,6 @@
-/**
- * Agent Village — the City's PASSERS-BY (engine/streetLife.ts; people walk
- * along the street too, some of them — not all — under an umbrella when it rains, and an agent goes
- * to buy something at the vending machine).
- *
- * A passer-by is a character sprite from the bank (its sheet and hue, the waiters' few), walking or
- * standing — with NO agent marker and no bubble: it is not an agent. Back to front, one walker is:
- *
- *   1. at a vending machine, what the purchase shows ON the machine (`drawVend`): the coin slot's glint as
- *      it pays, the pressed button blinking, the can landing in the tray and travelling to the hand;
- *   2. its umbrella's stick (render/umbrella.ts), behind the body;
- *   3. its shadow and sprite — on the subway stairs drawn `sink` px lower and CUT at the sidewalk's line,
- *      so it sinks out of sight going down and rises coming up (no shadow there);
- *   4. the can it bought, in its hand or raised to its mouth for a sip;
- *   5. its umbrella's canopy over its head.
- *
- * Lit like everything outdoors: the outdoor grade and the lights pass go over it (render/ambience.ts).
- */
+/** Passers-by: bank sprites with no agent marker. Back to front per walker: the purchase on the
+ * machine (`drawVend`), umbrella stick, shadow + sprite (cut at the sidewalk on the subway stairs),
+ * the can, the canopy. The outdoor grade and the lights pass go over them. */
 
 import { VEND } from "../engine/streetLife";
 import type { WalkerDrink, WalkerVend } from "../villageTypes";
@@ -71,11 +56,7 @@ export function canSpot(x: number, y: number, dir: 1 | -1, sip: boolean): { x: n
   return { x: Math.round(x) + (dir > 0 ? at.dx : -at.dx - CAN.w + 1), y: Math.round(y) - at.up };
 }
 
-/**
- * A purchase, drawn on the machine: the coin slot's glint while paying; the pressed button blinking white;
- * the can in the tray (bouncing as it lands); the can travelling to the buyer's hand. Once the buyer
- * holds it, its can is the drink's (`drawWalker`).
- */
+/** A purchase, drawn on the machine; once the buyer holds the can, `drawWalker` draws it. */
 export function drawVend(ctx: DrawTarget, cam: Camera, v: WalkerVend, holder: { x: number; y: number; dir: 1 | -1 }): void {
   const b = v.bottom;
   if (v.t >= PAY_GLINT[0] && v.t < PAY_GLINT[1]) rect(ctx, cam, v.x0 + COIN.dx, b - COIN.up, 1, 2, GLINT);

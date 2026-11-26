@@ -1,16 +1,6 @@
-/**
- * ⌘F / Ctrl+F in the Logs view — the real panel over the real stores;
- * only the Tauri seam and the xterm-owning terminal module are mocked (the
- * `AgentLogsPanel.test.tsx` harness).
- *
- * jsdom notes that shape these tests: `focus()` collapses the document
- * selection, so every seeding test orders the gesture the way it really happens — focus,
- * THEN select, THEN the key. And jsdom has no layout: the list's geometry is stubbed
- * (`geometry`) and the reveal is asserted on the REAL scroll element's `scrollTop` (the
- * `alog-list` box the app scrolls — a test that scrolls the wrong element is green under every
- * build), whose setter jsdom does store. The
- * browser tier (`agentLogsFind.browser.test.tsx`) is where the pixels are checked.
- */
+/** ⌘F in Logs over the real panel and stores (`AgentLogsPanel.test.tsx` harness). jsdom's
+ * `focus()` collapses the selection, so tests focus, THEN select, THEN key; reveal is asserted on
+ * the REAL `alog-list` box's `scrollTop`. Pixels: `agentLogsFind.browser.test.tsx`. */
 
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

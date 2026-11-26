@@ -1,18 +1,6 @@
-/**
- * EditorRegistry — the non-React owner of every CodeMirror 6 view (M4).
- *
- * Mirrors the TerminalRegistry contract: instances OUTLIVE their React
- * components. `attach`/`detach` move a view's DOM in and out of the visible tree
- * but keep the editor — its buffer, undo history, selection, scroll, and edit
- * mode — alive, so switching tabs and back never drops a user's edits. Only a
- * tab CLOSE disposes (detected on detach: no editor tab left for the path) — and
- * even then the undo stack is parked in `undoHistory.ts` so reopening an
- * unchanged file picks it back up.
- *
- * It drives the reactive `editors` store slice (status / editable / editing /
- * saveError / savedAt) and the tab's dirty dot, but the heavy buffer never
- * enters React state — the store holds only lightweight flags.
- */
+/** Non-React owner of every CM6 view; like TerminalRegistry, views outlive their components so a
+ * tab switch keeps buffer, undo and scroll. Only a tab close disposes, parking undo in
+ * `undoHistory.ts`. The store holds only lightweight flags, never the buffer. */
 
 import { EditorState, StateEffect, type Extension } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
@@ -61,13 +49,8 @@ interface Entry {
   shikiId: string | null;
   editable: boolean;
   rehighlightTimer: ReturnType<typeof setTimeout> | null;
-  /**
-   * The file's on-disk identity as of the last read or write we did.
-   *
-   * `diskWatch` compares this against a fresh stamp to tell "an agent changed
-   * this" from "we changed this ourselves". Kept beside the buffer, because the
-   * buffer is what it describes.
-   */
+  /** Disk identity as of our last read/write; `diskWatch` compares it to tell an outside change
+   * from our own. */
   stamp: FileStamp | null;
 }
 
@@ -87,12 +70,8 @@ export function ensureEditor(path: string): void {
   if (entries.has(path)) {
     // Entry + store slice: the normal preserved buffer (tab switch) — keep it.
     if (useAppStore.getState().editors[path]) return;
-    // Entry WITHOUT its slice: an orphan. Some close path removed the tab and
-    // its slice while no <CodeEditor> was mounted (a background tab has none),
-    // so detach → dispose never ran. Left alone, this early-return would skip
-    // initEditor/readFile and the editor would show "Loading…" forever; and
-    // resurrecting the stale buffer would skip the disk read. Drop it, load
-    // fresh. (closeTab/closePane now dispose eagerly — this is the backstop.)
+    // An orphan (entry, no slice) from a close while no <CodeEditor> was mounted: drop it and
+    // load fresh, or it shows "Loading…" forever. A backstop; close paths dispose eagerly.
     dispose(path);
   }
   const entry: Entry = {
@@ -118,11 +97,8 @@ export function ensureEditor(path: string): void {
   );
 }
 
-/**
- * A buffer arriving from another window (tab tear-off): the baseline the dirty flag compares
- * against, and the state JSON (selection + undo stack) to resume — `null` when there is none
- * or it does not describe `text` (see `seedEditor`).
- */
+/** A buffer from another window (tear-off): the dirty baseline and the state JSON to resume
+ * (`null` when there is none or it does not describe `text`). */
 interface Seed {
   baseline: string;
   state: unknown | null;
@@ -142,58 +118,24 @@ function createView(entry: Entry, text: string, seed?: Seed): void {
     blameSupport,
     lineNumbers(),
     bracketMatching(),
-    // Undo/redo (bug: undo stopped working after a save, and sometimes only two
-    // undo steps were available). This editor shipped with NO CodeMirror
-    // history at all, so Cmd/Ctrl+Z fell through the contenteditable to WebKit's
-    // own native undo stack — which is shallow, and is truncated every time CM6
-    // rewrites decorations (i.e. on every 50 ms Shiki re-highlight while typing).
-    // Hence only two steps.
-    //
-    // `minDepth: 500` rather than the default 100: it must be possible to undo
-    // nearly all, or all, of the edits made, and 500 events of text is cheap.
-    //
-    // It sits in the BASE list, never inside a compartment: `CodeEditor`'s blame
-    // effect re-runs on every successful save and dispatches
-    // `blameCompartment.reconfigure(...)`, which would drop a history living
-    // inside it — the same bug rebuilt, and only after a save.
+    // CM history is required: without it Cmd/Ctrl+Z falls to WebKit's shallow native undo.
+    // `minDepth: 500` so nearly all edits can be undone. In the BASE list, never a compartment: the
+    // blame reconfigure on every save would drop it.
     history({ minDepth: 500 }),
     keymap.of([
       // Cmd/Ctrl+S saves; preventDefault stops the browser's own save dialog.
       { key: "Mod-s", preventDefault: true, run: () => (void save(entry.path), true) },
-      // Cmd/Ctrl+W closes this file's tab. Needed because on macOS the native
-      // menu accelerator that drives Cmd/Ctrl+W (menu://close-tab) never fires
-      // while CodeMirror's contenteditable holds focus — the editable element
-      // absorbs the key equivalent, so the menu item is silent and the tab
-      // wouldn't close (the shortcut did not close an open file). Handling
-      // it here closes the tab before the key escapes to WebKit; preventDefault
-      // also lets the non-mac window fallback skip it (it ignores handled events).
+      // A focused contenteditable swallows the macOS menu's Cmd/Ctrl+W, so close the tab here;
+      // preventDefault lets the non-mac window fallback skip it.
       { key: "Mod-w", preventDefault: true, run: () => (closeActiveTab(), true) },
-      // ...and the same reason puts undo/redo HERE rather than trusting the native
-      // Edit menu (`src-tauri/src/menu.rs`, which binds Cmd+Z to `.undo()`).
-      // The empirically-observed rule: a focused `contenteditable`
-      // swallows the key equivalent, so the menu item stays silent and the key
-      // reaches WebKit's own shallow undo instead. `historyKeymap` binds
-      // Mod-z/Mod-y (mac: Mod-Shift-z) with preventDefault, so CM6 wins the key
-      // before it can escape. Do NOT "fix" this by editing menu.rs — that Edit
-      // menu is still what gives the app's plain <input>s their undo.
-      // BEFORE defaultKeymap so nothing downstream can shadow it.
+      // Undo/redo here for the same reason: the Edit menu's Cmd+Z never reaches CM6. Do NOT edit
+      // menu.rs instead (it gives plain <input>s undo). Before defaultKeymap so nothing shadows it.
       ...historyKeymap,
       ...defaultKeymap,
     ]),
-    // The other half of the same fix, for the path a keymap cannot see.
-    //
-    // If Cmd+Z ever arrives as a native EDIT-MENU undo rather than as a keydown
-    // (menu.rs binds `.undo()`; whether the accelerator or the focused webview
-    // wins on macOS is genuinely contested — menu.rs's own comment claims the
-    // menu, the opposite has been observed for Cmd+W in this exact stack),
-    // WebKit performs its own contenteditable undo and mutates the DOM behind
-    // CodeMirror's back. CM6's DOM observer then reads the mangled DOM back in
-    // as if the user had typed it — which is precisely the flaky
-    // two-step undo. CM6 does NOT handle these input types itself (there is
-    // no `historyUndo` anywhere in @codemirror/view), so map them onto the real
-    // history commands here. Cheap, and it closes the hypothesis we cannot
-    // settle with a test. Do NOT delete this as redundant with the keymap above:
-    // the two cover different delivery paths for the same keystroke.
+    // If Cmd+Z comes as a native Edit-menu undo rather than a keydown, WebKit edits the DOM behind
+    // CM6; map those input types onto the history commands. Not redundant with the keymap: it is a
+    // different delivery path for the same keystroke.
     EditorView.domEventHandlers({
       beforeinput: (event, view) => {
         if (event.inputType === "historyUndo") {
@@ -219,12 +161,8 @@ function createView(entry: Entry, text: string, seed?: Seed): void {
     }),
   ];
 
-  // Reopening a file the user closed: pick the undo stack back up, but ONLY when
-  // the text on disk is byte-for-byte what it was at close time (see
-  // undoHistory.ts — history events are document POSITIONS, so replaying them
-  // onto a file an agent rewrote would splice text at the wrong offsets). A
-  // read-only entry never had an editable history to park. A buffer arriving from
-  // another window brings its own stack instead (already checked against `text`).
+  // Restore a parked undo stack only if the text is unchanged since close: history events are
+  // positions (undoHistory.ts). A tear-off seed brings its own, already-checked stack.
   const restored = seed ? seed.state : entry.editable ? takeUndo(entry.path, text) : null;
   const state = restoredState(restored, extensions) ?? EditorState.create({ doc: text, extensions });
   const view = new EditorView({ state });
@@ -236,12 +174,7 @@ function createView(entry: Entry, text: string, seed?: Seed): void {
   attachLsp(entry.path, view, languageId);
 }
 
-/**
- * Rebuild a state (doc + selection + undo stack) from its JSON, or `null` to start fresh.
- * A JSON that will not load is a lost undo stack, never a buffer that fails to open — the
- * text itself is always in hand. (A parked stack is this realm's own and always loads; a
- * stack carried from another window is the one that could, in principle, not.)
- */
+/** A JSON that won't load loses the undo stack, never the buffer: the text is always in hand. */
 function restoredState(json: unknown | null, extensions: Extension[]): EditorState | null {
   if (!json) return null;
   try {
@@ -285,21 +218,14 @@ export function detach(path: string): void {
 export function dispose(path: string): void {
   const entry = entries.get(path);
   if (!entry) {
-    // 🔴 Not a no-op, even with no buffer to tear down. A RASTER image tab
-    // deliberately never calls `ensureEditor` — `read_file` rejects a PNG
-    // as "binary file" — so it has a store slice and no `Entry`. Returning here
-    // before the drop below leaked `editors[path]` on every close, and a reopen
-    // would then inherit the previous tab's zoom. `disposeEditor` is a plain
-    // `delete`, so calling it for a path that has no slice is free.
+    // Still drop the slice: a raster image tab has one but no `Entry`, and a leaked slice hands
+    // a reopen the old zoom. `disposeEditor` is a plain delete.
     editorActions().disposeEditor(path);
     return;
   }
   if (entry.rehighlightTimer) clearTimeout(entry.rehighlightTimer);
-  // A close must not silently throw the undo stack away (undo must work even
-  // after a save or a close). Park it BEFORE destroy() — the history lives inside the
-  // view's state and goes with it. `detach()` deliberately does NOT do this: a
-  // detached view stays alive and keeps its own history, so snapshotting there
-  // would only park a stack that is still in use.
+  // Park the undo stack BEFORE destroy(), which takes the history with it. Not in `detach()`: a
+  // detached view stays alive with its own history.
   if (entry.editable && entry.view) {
     rememberUndo(
       path,
@@ -312,18 +238,11 @@ export function dispose(path: string): void {
   editorActions().disposeEditor(path);
 }
 
-/* ──────────────── tab tear-off: a buffer leaves / arrives ────────────────
- * docs/design/tab-tearoff.md §3: every window is its own realm, so an editor moving to
- * another window has to carry its buffer — re-reading the file there would silently drop
- * the user's unsaved edits. These three are that crossing; `app/tearoff` drives them.
- */
+/* Tab tear-off (docs/design/tab-tearoff.md §3): an editor moving windows carries its buffer,
+ * since re-reading the file there would drop unsaved edits. `app/tearoff` drives these. */
 
-/**
- * Describe `path`'s buffer for another window: its text, the baseline the dirty flag
- * compares against, the disk stamp, the stale flag and — with `history` — the selection and
- * undo stack as CodeMirror state JSON. `null` while the file is still loading (no view yet):
- * there are no edits to carry, and the receiver reads the file itself.
- */
+/** `path`'s buffer for another window: text, baseline, stamp, stale flag, plus selection and
+ * undo with `history`. `null` while loading: no edits to carry; the receiver reads the file. */
 export function exportEditor(path: string, opts: { history: boolean }): EditorBuffer | null {
   const entry = entries.get(path);
   const view = entry?.view;
@@ -337,17 +256,8 @@ export function exportEditor(path: string, opts: { history: boolean }): EditorBu
   };
 }
 
-/**
- * Build `path`'s editor from a buffer that arrived from another window, instead of reading
- * the file — the receiving half of `exportEditor`. Call BEFORE the tab exists, so the
- * `<CodeEditor>` that mounts for it finds a ready buffer (`ensureEditor` keeps an entry that
- * has its slice). Replaces any orphan buffer this window had for the path.
- *
- * The carried undo stack is used only if it describes exactly `text` — history events are
- * document positions (undoHistory.ts), so a stack replayed onto other text would splice at
- * the wrong offsets; one that does not match, or does not parse, is dropped and the buffer
- * starts with an empty history. The dirty flag needs the tab: the caller sets it after.
- */
+/** Builds the editor from a carried buffer; call BEFORE the tab exists. Its undo stack is kept
+ * only if it describes exactly `text` (positions); the caller sets the dirty flag after. */
 export function seedEditor(path: string, buffer: EditorBuffer): void {
   if (entries.has(path)) abandon(path);
   const entry: Entry = {
@@ -380,11 +290,8 @@ function carriedState(buffer: EditorBuffer): unknown | null {
   }
 }
 
-/**
- * Tear this window's buffer for `path` down WITHOUT parking its undo stack — the stack went
- * with the tab to another window (`dispose` parks it for a reopen here, which would hand a
- * second, stale copy of the same history to a later tab in this window).
- */
+/** Disposes WITHOUT parking undo: the stack left with the tab, and parking would leave a stale
+ * second copy for a later tab here. */
 export function abandon(path: string): void {
   const entry = entries.get(path);
   if (entry) {
@@ -395,15 +302,9 @@ export function abandon(path: string): void {
   editorActions().disposeEditor(path);
 }
 
-/**
- * Show `text` in `path`'s EXISTING buffer — an editor tab arrived from another window for a
- * file this window already has open, and `app/tearoff/handoff.ts` decided its text wins.
- * Applied as an ordinary transaction, like `reloadFromDisk`: what the buffer held stays in
- * its undo history, one Cmd/Ctrl+Z away, so neither copy is thrown away. Baseline and stamp
- * stay this window's (its disk watcher is the current one here), and the dirty flag follows
- * from them through `onDocChanged`. Waits for a buffer still loading. Resolves whether the
- * text changed.
- */
+/** Applies carried text to the EXISTING buffer as a normal transaction, so the old text stays
+ * one undo away. Baseline and stamp stay this window's. Waits for a loading buffer; resolves
+ * whether the text changed. */
 export async function applyCarriedText(path: string, text: string): Promise<boolean> {
   const view = await whenViewReady(path);
   // The tab may have closed (or closed and reopened) while the buffer loaded.
@@ -413,11 +314,7 @@ export async function applyCarriedText(path: string, text: string): Promise<bool
   return true;
 }
 
-/**
- * Be told about every edit to any buffer in this window (tab tear-off's holdings report
- * follows unsaved text with it, so a crashed window loses at most the last debounce).
- * Returns the unsubscribe.
- */
+/** Every edit to any buffer here; tear-off follows unsaved text with it. Returns unsubscribe. */
 export function onEditorEdit(listener: (path: string) => void): () => void {
   editListeners.add(listener);
   return () => {
@@ -444,21 +341,8 @@ export async function save(path: string): Promise<boolean> {
   }
 }
 
-/**
- * Re-read `path` from disk into its open buffer — for when something OUTSIDE the
- * editor rewrote the file. The first caller is a confirmed `Git ▸ Revert changes…`:
- * without this the tab would keep showing the content the user just threw away.
- *
- * Applied as a NORMAL CM6 transaction rather than a fresh state, deliberately: the
- * replacement lands in the undo history, so Cmd/Ctrl+Z takes the user's edits back
- * even after a revert discarded them on disk — the editor's undo stack outlives a
- * destructive git operation, which is the behaviour IntelliJ has and the reason a
- * rollback there is not terrifying.
- *
- * No-op when the buffer already matches disk (reverting a file with no working-tree
- * changes), so a refresh can never dirty a tab or push a bogus undo step. A read
- * failure leaves the buffer untouched: a stale-but-real buffer beats a blanked one.
- */
+/** Re-reads disk into the open buffer (e.g. after a Git revert) as a normal transaction, so
+ * Cmd/Ctrl+Z restores the edits. No-op when equal; a failed read leaves the buffer as is. */
 export function reloadFromDisk(path: string): void {
   const entry = entries.get(path);
   if (!entry?.view) return;
@@ -512,23 +396,15 @@ export function getView(path: string): EditorView | null {
   return entries.get(path)?.view ?? null;
 }
 
-/**
- * The current buffer text for `path` — the live document, so it reflects unsaved
- * edits (the markdown/CSV rendered preview reads this when toggled on). Returns
- * null when no view exists yet (still loading), which the caller renders as a
- * loading state. Reads through the same `state.doc` the editor and `save` use, so
- * the preview can never disagree with what would be saved.
- */
+/** The live document (unsaved edits included), via the same `state.doc` as `save`; null while
+ * loading. */
 export function currentText(path: string): string | null {
   const view = entries.get(path)?.view;
   return view ? view.state.doc.toString() : null;
 }
 
-/**
- * Ensure the editor for `path` exists and resolve its view once loaded — the
- * backing of `Workspace.displayFile` (cross-file go-to-definition). Resolves null
- * if the file never loads within `timeoutMs`.
- */
+/** Ensures the editor and resolves its view once loaded (`Workspace.displayFile`); null after
+ * `timeoutMs`. */
 export function whenViewReady(path: string, timeoutMs = 5000): Promise<EditorView | null> {
   ensureEditor(path);
   const existing = getView(path);
@@ -545,16 +421,8 @@ export function whenViewReady(path: string, timeoutMs = 5000): Promise<EditorVie
   });
 }
 
-/**
- * The root the server for this FILE should index.
- * Rust asks `lsp_project_root` — the outermost `Cargo.toml` ancestor bounded
- * by the file's own workspace root, so a crate in a subfolder (`src-tauri/`,
- * `crates/api/`) and a cargo workspace both resolve correctly, and a file from
- * project B never gets a server rooted at project A. If the command fails
- * (path raced out of scope), fall back to the file's CONTAINING workspace
- * root, then to the old primary-root behavior, so intelligence degrades
- * rather than disappears.
- */
+/** Rust's `lsp_project_root` first; if it fails (path raced out of scope), the file's containing
+ * workspace root, then the primary root, so intelligence degrades rather than disappears. */
 async function lspRootFor(languageId: string, path: string): Promise<string | null> {
   const s = useAppStore.getState();
   const containing = containingWorkspaceRoot(workspaceRoots(s), path);
@@ -565,11 +433,7 @@ async function lspRootFor(languageId: string, path: string): Promise<string | nu
   }
 }
 
-/**
- * The longest workspace root that PREFIXES `path` (path-segment-wise), or null. Either
- * separator, and case-insensitive for Windows paths — this was `root + "/"`, which no
- * `C:\repo\src\x.rs` ever started with, so on Windows the fallback never found a root.
- */
+/** Longest root prefixing `path` by segment; either separator, case-insensitive for Windows. */
 export function containingWorkspaceRoot(roots: string[], path: string): string | null {
   let best: string | null = null;
   for (const root of roots) {
@@ -583,11 +447,8 @@ export function containingWorkspaceRoot(roots: string[], path: string): string |
 /** Attach the LSP client + code navigation to the editor, if the language has a server. */
 function attachLsp(path: string, view: EditorView, languageId: string): void {
   if (!hasLspServer(languageId)) return; // no server for this language → intelligence off
-  // Main window only (tab tear-off): every window is its own JS realm, so a client here would
-  // start a SECOND server process for a root the main window may already be indexing — a
-  // second rust-analyzer, at its full memory cost. A detached editor edits, saves and
-  // highlights; go-to-definition stays with the main window until Rust shares one server
-  // per (language, root) across windows (recorded in the tear-off ADR).
+  // Main window only (tear-off): each window is its own realm, so a client here would start a
+  // second server for a root already indexed; see the tear-off ADR.
   if (!isMainWindow()) return;
   void lspRootFor(languageId, path).then((root) => {
     if (!root) return;
@@ -605,14 +466,7 @@ function attachLsp(path: string, view: EditorView, languageId: string): void {
   });
 }
 
-/**
- * Dispose every live view — for test isolation (this module is a singleton).
- *
- * The undo cache is a singleton too, and `dispose` fills it, so this clears it
- * afterwards: without that, a snapshot parked by one test would be handed to the
- * next test that happens to open the same path with the same text. A test that
- * means to exercise close→reopen must therefore call `dispose(path)`, not this.
- */
+/** Test isolation. Also clears the undo cache, so close→reopen tests must call `dispose(path)`. */
 export function disposeAll(): void {
   for (const path of [...entries.keys()]) dispose(path);
   clearUndoCache();

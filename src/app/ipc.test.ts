@@ -1,38 +1,6 @@
-/**
- * The Tauri command surface (`src/app/ipc.ts`) — the UI↔Rust contract.
- *
- * `vitest.config.ts` scopes `ipc.ts` coverage to "the terminal suite that
- * drives them"; this is that suite. It is the repo-resident replacement for the
- * throwaway CDP harness the M1 terminal agent ran, covering the parts that
- * survive without a real xterm.
- *
- * ── What is deliberately NOT here ────────────────────────────────────────────
- *
- * `TerminalRegistry` / `useTerminal` / `TerminalView` are absent on purpose:
- * they construct xterm instances, measure character cells and mount a WebGL
- * renderer. jsdom has no layout engine (every element is 0x0) and no WebGL, so
- * a jsdom "test" of them would assert a fiction. Those invariants — detach keeps
- * scrollback, unmount does not dispose, ResizeObserver→fit→resize debouncing,
- * WebGL→DOM fallback — belong to the real-app/E2E tier. They were
- * verified out-of-band against headless Chrome under both a real WebGL2 context
- * and none.
- *
- * ── The one contract this file cannot assert ─────────────────────────────────
- *
- * `terminal_write` sends `data` as a `Uint8Array`. Tauri's real IPC serializer
- * (`processIpcMessage`) converts a *nested* typed array into a JSON number
- * array, which serde deserializes into Rust's `Vec<u8>`. That conversion is the
- * single most breakable part of the contract — plain `JSON.stringify` would
- * turn a Uint8Array into `{"0":104,"1":105}` and serde would reject it.
- *
- * It cannot be asserted here: `mockIPC` *replaces* `__TAURI_INTERNALS__.invoke`
- * and hands the callback the raw args object, so the serializer never runs (the
- * same reason `channelIdOf` has to accept an un-serialized `Channel` instance).
- * So this file pins **our** side of that contract — that we hand the serializer
- * a real `Uint8Array` and do not "helpfully" pre-convert it — and the
- * end-to-end byte form was verified separately against Tauri's actual
- * serializer.
- */
+/** The Tauri command surface (`ipc.ts`). xterm-backed classes need a real browser (jsdom has no
+ * layout or WebGL), so they live in the E2E tier. `mockIPC` bypasses Tauri's serializer, so only
+ * our side of `terminal_write` is pinned: we hand it a real `Uint8Array`, never pre-converted. */
 
 import { Channel } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -281,13 +249,9 @@ describe("writeTerminal", () => {
 
     const args = ipc.lastCall("terminal_write")!;
     expect(args.terminalId).toBe(TID);
-    // The load-bearing assertion. Tauri's serializer turns a nested Uint8Array
-    // into a JSON number array -> serde Vec<u8>. Pre-converting to number[]
-    // here would still work, but an Array.from() per keystroke is waste; and
-    // handing over a plain object would serialize to {"0":..} and break Rust.
-    //
-    // ArrayBuffer.isView, not toBeInstanceOf: TextEncoder is Node-realm under
-    // jsdom, so an instanceof check would fail for the wrong reason.
+    // Load-bearing: Tauri serializes a nested Uint8Array to a number array (serde `Vec<u8>`);
+    // a plain object would become {"0":..}. `ArrayBuffer.isView`, not instanceof: jsdom's
+    // TextEncoder is Node-realm.
     expect(ArrayBuffer.isView(args.data)).toBe(true);
     expect(Array.isArray(args.data)).toBe(false);
     expect(Array.from(args.data as Uint8Array)).toEqual([108, 115]);

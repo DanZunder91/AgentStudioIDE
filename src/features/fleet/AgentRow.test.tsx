@@ -1,15 +1,5 @@
-/**
- * `<AgentRow>` on its own terms.
- *
- * `LeftRail.test.tsx` drives the rail end-to-end and `renderBudget.test.tsx`
- * counts this component's executions — but neither renders the row directly, so
- * two of its branches were unreachable from both: the vanished-record guard
- * (a race the rail cannot stage, because `flattenFleet` only ever emits rows for
- * agents that exist) and the keyboard alternates.
- *
- * Rendering the row in isolation is what makes those testable, and is the right
- * unit anyway: this is the component the whole fleet is made of.
- */
+/** The row in isolation: the vanished-record guard and keyboard alternates are unreachable from
+ * the rail-level suites. */
 
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -206,11 +196,7 @@ describe("AgentRow — content", () => {
 
 describe("AgentRow — a record that vanishes underneath it", () => {
   it("renders nothing for an agent with no record", () => {
-    // The rail cannot stage this — `flattenFleet` only emits rows for agents it
-    // holds — but the row is a separate component reading the store on its own,
-    // so between the parent's flatten and this render the record can be gone
-    // (removeAgent, or a snapshot that dropped it). Returning null beats
-    // throwing on `status` of undefined.
+    // The record can vanish between the parent's flatten and this render; null beats a throw.
     const { container } = renderRow("ghost");
     expect(container).toBeEmptyDOMElement();
   });
@@ -362,14 +348,8 @@ describe("AgentRow — dismiss ✕", () => {
   });
 
   it("dismisses WITHOUT firing the row's select — stopPropagation", async () => {
-    // The ✕ sits inside the row, whose onClick selects. Without stopPropagation
-    // the click bubbles and selectAgent runs too. It happens to no-op (the agent
-    // is already gone by the time it bubbles), so asserting the end-state proves
-    // nothing — count the handler's invocations and assert it never fires. That
-    // is the actual contract: the ✕ dismisses, it does not select.
-    //
-    // The action is injected via setState rather than vi.spyOn because Immer
-    // autofreezes the actions object (spyOn → "Cannot redefine property").
+    // The ✕ must not select (a bubbled select would no-op, so count invocations). Injected via
+    // setState: Immer autofreezes the actions object, so vi.spyOn cannot redefine it.
     fleet().applyAgentEvent(started("a1"));
     const realSelect = useAppStore.getState().agentActions.selectAgent;
     let selectCalls = 0;

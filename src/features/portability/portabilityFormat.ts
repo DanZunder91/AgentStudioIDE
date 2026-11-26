@@ -1,26 +1,6 @@
-/**
- * portabilityFormat — every decision and every sentence the share-a-config dialogs
- * make, with no DOM in sight.
- *
- * ── Why this file exists ─────────────────────────────────────────────────────
- * The interesting parts of this feature are not React. They are: *which* mode is the
- * default, *when* the Export button is allowed to be enabled, *what* a structure-only
- * bundle leaves behind, and *how honestly* an import describes a file nobody signed.
- * Each of those is a pure function of data, so each one is pinned by a test that needs
- * no render, no fake timers, and no `screen`. The dialogs are then thin: they read
- * these values and lay them out.
- *
- * ── The copy is code ─────────────────────────────────────────────────────────
- * The passphrase is the weak link of a sealed bundle, and a bundle proves nothing about
- * its author. Neither statement is enforceable in Rust — the only
- * place a user ever learns them is the sentence they read. So the sentences live here
- * as named constants with tests against their literal text, exactly like a validation
- * rule. Changing one is a deliberate act with a red test, not a drive-by edit.
- *
- * ── Literal expectations ─────────────────────────────────────────────────────
- * Nothing here reads its own expectation from the data it formats. The tests spell out
- * the strings; `portabilityFixtures.ts` holds inputs only.
- */
+/** Every decision and sentence of the config-bundle dialogs, pure so tests need no render.
+ * The copy is code: what users learn about passphrases and unsigned bundles lives only in these
+ * sentences, so they are named constants tested against their literal text. */
 
 import {
   MAX_BUNDLE_BYTES,
@@ -46,14 +26,8 @@ export interface ExportSelectable {
   detail: string | null;
 }
 
-/**
- * An environment, plus the one bit the export dialog needs that a name cannot give it:
- * whether this machine actually **holds a value** for each variable.
- *
- * That flag is what makes the structure-mode "left out" list truthful. A variable the
- * sharer never filled in has no value to withhold, and listing it as withheld would
- * teach the recipient to look for something that was never there.
- */
+/** `hasValue` keeps the structure-mode "left out" list truthful: a never-filled variable has no
+ * value to withhold. */
 export interface ExportEnvironmentSummary {
   id: string;
   name: string;
@@ -76,14 +50,8 @@ export interface ExportSelection {
 
 /* ═════════════════════════════ the mode choice ═══════════════════════════════ */
 
-/**
- * The default, named once so the dialog cannot disagree with the design.
- *
- * The safe mode is the default. This is the single most consequential
- * line in the feature — a default of `sealed` would mean the common case ships live
- * credentials — so it is a constant with its own test rather than an initial-state
- * literal buried in a `useState`.
- */
+/** The safe mode is the default (a `sealed` default ships live credentials in the common case);
+ * a named constant with its own test, not a `useState` literal. */
 export const DEFAULT_EXPORT_MODE: BundleMode = "structure";
 
 export interface ModeChoice {
@@ -94,13 +62,8 @@ export interface ModeChoice {
   blurb: string;
 }
 
-/**
- * Structure first, deliberately: reading order is a default too.
- *
- * The blurbs name the *consequence*, not the mechanism. "Safe to paste in Slack" and
- * "your secret values travel inside it" are things a person can act on; "AES-256-GCM"
- * is not, and reassures in the wrong direction.
- */
+/** Structure first: reading order is a default too. Blurbs name consequences, not mechanisms
+ * ("AES-256-GCM" reassures in the wrong direction). */
 export const MODE_CHOICES: ModeChoice[] = [
   {
     value: "structure",
@@ -129,38 +92,19 @@ export function modeBlurb(mode: BundleMode): string {
 
 /* ═════════════════════════════ the passphrase ════════════════════════════════ */
 
-/**
- * 🔴 The most important text in this feature.
- *
- * The format's stated limitation is that PBKDF2 is weaker than Argon2id against GPU
- * cracking and that a weak passphrase remains the weak link. A dialog that shows a
- * padlock and the word "encrypted" tells the user the opposite of that. So this says
- * the mechanism out loud: the attack is **offline**, which is the fact that makes a
- * short passphrase fatal here in a way it is not on a login form with rate limiting.
- *
- * It deliberately does NOT say "military-grade", "secure", or name a cipher.
- */
+/** The attack is offline (PBKDF2, GPU cracking), so a weak passphrase is fatal; this says so
+ * instead of showing a padlock. Never "military-grade", "secure", or a cipher name. */
 export const PASSPHRASE_TRUTH =
   "Encryption does not make a weak passphrase safe. Whoever ends up with this file can " +
   "guess at the passphrase offline, as fast as their hardware allows, for as long as they " +
   "like — there is nothing here to slow them down or lock them out. A short or guessable " +
   "passphrase is the only thing between them and these values.";
 
-/**
- * The practical follow-through. Advice without a mechanism is decoration; each clause
- * here removes a specific failure we can name.
- */
 export const PASSPHRASE_ADVICE =
   "Use several random words rather than one clever word, and send the passphrase through a " +
   "different channel than the file — a passphrase pasted under the attachment protects nothing.";
 
-/**
- * The honest note about the key derivation, without a number in it.
- *
- * The iteration count lives in Rust and travels inside the file; repeating it here
- * would be a second copy free to drift. What the user needs
- * is the *shape* of the guarantee, and that does not change when the count is raised.
- */
+/** No iteration count: it lives in Rust and travels in the file; a copy here would drift. */
 export const KDF_NOTE =
   "The file records how its key was derived (PBKDF2-HMAC-SHA256), so a recipient can judge " +
   "what they were sent. It is deliberately slow, but weaker against GPU cracking than newer " +
@@ -173,15 +117,8 @@ export interface PassphraseState {
   message: string | null;
 }
 
-/**
- * Judge the passphrase pair. Not a strength meter — `MIN_PASSPHRASE_LENGTH` is a hard
- * floor that Rust enforces too, and a meter would imply that clearing a
- * bar makes the value safe. The message counts *up to* the floor rather than scoring
- * past it, on purpose.
- *
- * An empty box says nothing: nagging someone who has not started typing is noise, and
- * the Export button is already disabled to carry that information.
- */
+/** Not a strength meter: `MIN_PASSPHRASE_LENGTH` is a hard floor Rust enforces too, and a meter
+ * implies clearing a bar makes it safe. An empty box says nothing (Export is already disabled). */
 export function passphraseState(passphrase: string, confirm: string): PassphraseState {
   if (passphrase === "") return { ok: false, message: null };
   if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
@@ -221,13 +158,8 @@ export interface SelectionCounts {
   variablesWithValue: number;
 }
 
-/**
- * Count what is ticked, ignoring ids that are not in `source`.
- *
- * The filter is not paranoia: the selection is held across a re-render, and a store
- * that drops a connection while the dialog is open would otherwise inflate the count
- * and promise the recipient something the bundle cannot contain.
- */
+/** Ignores ids not in `source`: a connection dropped while the dialog is open must not inflate
+ * the count. */
 export function selectionCounts(source: ExportSource, selection: ExportSelection): SelectionCounts {
   const envs = source.environments.filter((e) => selection.environmentIds.includes(e.id));
   const seen = new Map<string, boolean>();
@@ -253,12 +185,7 @@ export function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-/**
- * Join with commas and a final "and", so a summary reads as a sentence rather than a
- * comma-separated log line. Exported because every caller below guards the empty case
- * itself, which would otherwise leave the `[]` arm of this function unreachable — and an
- * untestable line is a line nobody can be sure about.
- */
+/** Exported so the `[]` arm is testable: every caller guards the empty case itself. */
 export function joinClauses(parts: string[]): string {
   if (parts.length === 0) return "";
   if (parts.length === 1) return parts[0];
@@ -289,12 +216,7 @@ export const WITHHELD_INTRO =
   "These values are NOT in the file. The recipient has to supply each one before this " +
   "config works:";
 
-/**
- * The sentence for a structure export that withholds nothing.
- *
- * Worth its own string rather than hiding the block: "nothing was left out" and "we did
- * not check" look identical when the answer is an absent list.
- */
+/** Its own sentence: "nothing left out" and "not checked" look the same as an absent list. */
 export const WITHHELD_NONE =
   "Nothing is being withheld — none of the selected environments holds a value on this machine.";
 
@@ -304,13 +226,8 @@ export const REDACTED_HEADER_NOTE =
   `"${REDACTED_PLACEHOLDER}", so an imported request fails loudly instead of quietly sending ` +
   `an empty credential.`;
 
-/**
- * The variable names whose **values** stay behind in `structure` mode, sorted.
- *
- * This is the entire fix for the likeliest support complaint in this feature: someone
- * shares a config, the recipient's requests 401, and neither of them knows why. One
- * list at export time turns that into a checklist.
- */
+/** Names whose values stay behind in `structure` mode, sorted: tells the sharer up front why the
+ * recipient's requests would 401. */
 export function withheldVariableNames(
   source: ExportSource,
   selection: ExportSelection,
@@ -327,12 +244,7 @@ export function withheldVariableNames(
 
 /* ═════════════════════════════ the export call ═══════════════════════════════ */
 
-/**
- * Why Export is disabled, or `null` when it is not.
- *
- * A reason rather than a boolean, so a disabled button is never a dead end the user has
- * to guess at — the same rule the connection dialog's error summary follows.
- */
+/** A reason, not a boolean: a disabled button must never be a dead end. */
 export function exportBlockedReason(
   mode: BundleMode,
   counts: SelectionCounts,
@@ -348,15 +260,8 @@ export function exportBlockedReason(
   return state.ok ? null : state.message;
 }
 
-/**
- * Build the wire options.
- *
- * Two contract details are load-bearing. The id arrays are always **explicit**, never
- * omitted: `types.ts` reads an absent array as "include all", so relying on absence
- * would silently export the things the user just un-ticked. And `passphrase` is omitted
- * entirely outside `sealed` mode, because the contract says it is *rejected* there —
- * sending `passphrase: ""` would be an error, not a no-op.
- */
+/** Id arrays are always explicit (`types.ts` reads absence as "include all"); `passphrase` is
+ * omitted outside `sealed`, where the contract rejects it (even `""`). */
 export function toExportOptions(
   mode: BundleMode,
   label: string,
@@ -375,23 +280,13 @@ export function toExportOptions(
 
 /* ═════════════════════════════ describing a bundle ═══════════════════════════ */
 
-/**
- * `1753689600000` → `"2025-07-28 08:00 UTC"`.
- *
- * UTC and ISO-ish on purpose: a locale-formatted date is a test that fails on somebody
- * else's machine, and a bundle's timestamp is a forensic detail, not prose.
- */
+/** `"2025-07-28 08:00 UTC"`: UTC on purpose (locale formats vary by machine; it is forensic). */
 export function formatTimestamp(ms: number): string {
   const iso = new Date(ms).toISOString();
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 }
 
-/**
- * 🔴 What the file *claims*, phrased as a claim.
- *
- * There is no signing, so "verified export from Alice" would be a lie the
- * UI tells on the attacker's behalf. Every verb here is reported speech.
- */
+/** Reported speech only: nothing is signed, so "verified" would be a lie told for the attacker. */
 export function provenanceSentence(header: BundleHeader): string {
   const named = header.label.trim() === "" ? "" : ` and calls itself "${header.label.trim()}"`;
   return (
@@ -406,10 +301,7 @@ export const UNVERIFIED_NOTE =
   "it says about itself is only a claim — trust it exactly as much as you trust wherever you " +
   "got the file.";
 
-/** The four content kinds, as clauses. Shared by the header and the result summaries. */
-/// Takes only the four fields both count types share, structurally — so one implementation serves
-/// `BundleCounts` (what a file holds) and `ImportCounts` (what an import wrote) without either
-/// needing to know about the other's extra fields.
+/** The four content kinds as clauses; structural, so `BundleCounts` and `ImportCounts` share it. */
 function contentClauses(counts: {
   dbConnections: number;
   dbQueries: number;
@@ -428,27 +320,15 @@ function contentClauses(counts: {
   return parts;
 }
 
-/**
- * `"2 database connections, 1 request and 1 environment"`, or `"nothing"`.
- *
- * The four content kinds only. `referencedVariables` is deliberately left out here: in a
- * `BundleHeader` it counts names the contents *refer to*, which is a different statement
- * from "this file contains N things" and belongs in the variables block.
- */
+/** The four content kinds only: `referencedVariables` counts names the contents refer to, which
+ * belongs in the variables block. */
 export function describeCounts(counts: BundleCounts): string {
   const parts = contentClauses(counts);
   return parts.length === 0 ? "nothing" : joinClauses(parts);
 }
 
-/**
- * Like `describeCounts`, but for an `ImportResult`, where variables *are* items that got
- * written.
- *
- * Takes `ImportCounts`, not `BundleCounts`. The first version took the latter and read
- * `referencedVariables` as "variables written" — which it is not; it counts distinct names a
- * *file* mentions. The receipt therefore said "3 variables" for an import that wrote none. Two
- * meanings needed two types, and `types.ts` now has both.
- */
+/** For an `ImportResult`, where variables are written items. Takes `ImportCounts`: a header's
+ * `referencedVariables` counts names a file mentions, not variables written. */
 export function describeChange(counts: ImportCounts): string {
   const parts = contentClauses(counts);
   if (counts.variables > 0) {
@@ -457,13 +337,8 @@ export function describeChange(counts: ImportCounts): string {
   return parts.length === 0 ? "nothing" : joinClauses(parts);
 }
 
-/**
- * Whether the file carries values, from the header alone.
- *
- * Readable for a sealed bundle without the passphrase — that bounded disclosure is
- * exactly what `BundleCounts` is for, and it is what lets someone decide whether a file
- * they were sent by accident matters.
- */
+/** From the header alone, so readable for a sealed bundle without the passphrase (the bounded
+ * disclosure `BundleCounts` exists for). */
 export function describeSecretValues(counts: BundleCounts): string {
   if (counts.secretValues === 0) return "It carries no secret values.";
   return `It carries ${plural(counts.secretValues, "secret value", "secret values")}.`;
@@ -500,15 +375,8 @@ export interface VariableSummary {
   message: string;
 }
 
-/**
- * 🔴 The exfiltration risk, stated once, without alarm.
- *
- * An imported request may read `{{PROD_STRIPE_KEY}}` — which the recipient
- * may well hold — while pointing anywhere. Intent is not decidable, so the honest move
- * is to put the two halves ("your value" + "their host") in one sentence and let the
- * person judge. No exclamation marks, no red, no blocking: this is information, and a
- * dialog that cries wolf gets clicked through.
- */
+/** The exfiltration risk, stated once without alarm: "your value" + "their host" in one sentence.
+ * Intent is undecidable, and a dialog that cries wolf gets clicked through. */
 export function variableSummary(plan: ImportPlan): VariableSummary {
   const total = plan.variables.length;
   const alreadyHeld = plan.variables.filter((v) => v.haveLocally).length;
@@ -559,13 +427,7 @@ export interface ItemGroup {
   items: ImportItem[];
 }
 
-/**
- * Group the plan into stable, named sections in `KIND_ORDER`, dropping empty ones.
- *
- * Fixed order rather than order-of-appearance: the review screen is something a person
- * scans for one thing, and a list that reshuffles between two files of the same shape
- * cannot be scanned.
- */
+/** Fixed `KIND_ORDER`, empty groups dropped: a list that reshuffles cannot be scanned. */
 export function groupPlanItems(items: ImportItem[]): ItemGroup[] {
   return KIND_ORDER.map((kind) => ({
     kind,
@@ -587,10 +449,7 @@ export function actionLabel(action: ImportAction): string {
   }
 }
 
-/**
- * The effective action for one item: the user's override if they set one, else the
- * plan's own default.
- */
+/** The user's override if set, else the plan's default. */
 export function effectiveAction(
   item: ImportItem,
   overrides: Record<string, ImportAction>,
@@ -598,14 +457,7 @@ export function effectiveAction(
   return overrides[item.id] ?? item.action;
 }
 
-/**
- * Reduce the UI's overrides to what the contract wants: only the entries that actually
- * differ from the plan's default.
- *
- * Sending every item back would work, but it would make an override indistinguishable
- * from an echo — and the contract's "absent means use the plan's default" then carries
- * no information for a backend that wants to re-plan.
- */
+/** Only entries differing from the plan's default: an override must not look like an echo. */
 export function overrideActions(
   items: ImportItem[],
   overrides: Record<string, ImportAction>,
@@ -620,34 +472,17 @@ export function overrideActions(
 
 export const OVERWRITE_LABEL = "Let incoming values replace secrets I already have";
 
-/**
- * What the switch does, in both positions.
- *
- * A label that only describes the "on" state leaves the default's behaviour implied,
- * and the default is the one almost everyone keeps.
- */
+/** Describes both positions: the default is the one almost everyone keeps. */
 export const OVERWRITE_HINT =
   "Off: variables you already have a value for keep your value and the bundle's value is " +
   "ignored. On: the bundle's value replaces yours wherever it carries one — which is how a " +
   "working setup breaks in a way that is very hard to trace back to an import.";
 
-/**
- * The read-only toggle's label.
- *
- * ⚠️ Replaces `FORCED_READ_ONLY_NOTE`, which was a flat *statement* about connections arriving
- * read-only no matter what the bundle said — accurate while the value was forced, and a lie
- * the moment it became **enforced but optional**. The reasoning
- * still justifies the default; the person on the review screen now gets the decision. Copy that
- * describes a forced behaviour would be describing something the checkbox beside it can switch off.
- */
+/** Read-only is enforced but optional: the default stands, and the importer gets the decision. */
 export const IMPORT_READ_ONLY_LABEL = "Import connections as read-only";
 
-/**
- * What the toggle does in **both** positions, and why the default leans the way it does.
- *
- * The asymmetry is the argument, and it is worth stating rather than implying: turning it back on is
- * one click, and a `DELETE` you did not mean to be able to run is not recoverable.
- */
+/** Both positions, and why the default is on: re-enabling is one click, and an unintended `DELETE`
+ * is not recoverable. */
 export const IMPORT_READ_ONLY_HINT =
   "On (default): connections arrive read-only, because you did not make the sharer's decision — " +
   "a connection that has just landed is new on this machine. Off: each connection keeps whatever " +

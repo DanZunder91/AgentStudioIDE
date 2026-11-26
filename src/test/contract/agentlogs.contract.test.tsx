@@ -1,20 +1,6 @@
-/**
- * SEAM TEST — Agent Logs view. Not a unit test.
- *
- * The lines fed in here were produced by REAL Rust: the supervisor over real PTYs (`/bin/sh`
- * output, lifecycle, agent session lines) and the real `ClaudeAdapter` + `TranscriptToolTail`
- * over the checked-in transcript fixture, stamped by a real `LogHub` and serialised as
- * `logstream_snapshot` / `logstream://lines` would (`src-tauri/tests/contract_goldens.rs`).
- * Only `invoke` and `listen` are mocked, answering with that golden JSON; `logstreamIpc` →
- * `agentLogsStore` (snapshot + event ingest) → `AgentLogsPanel` are the real ones.
- *
- * What the view makes of them: the shell's and the service's lines render RAW,
- * the agents' tool calls pair with their results by `toolUseId` into command blocks headed
- * `$ …`, and the lifecycle lines are dividers. The service's `gazelle · bg`
- * reads `gazelle` with a `service` tag everywhere, a solo shows a stream header instead of
- * hiding the Source column, and a block's output rows repeat its time/level/source dimmed.
- * Expected strings are written by hand, never derived from the golden.
- */
+/** SEAM TEST: lines were produced by real Rust (`src-tauri/tests/contract_goldens.rs`). Only
+ * `invoke` / `listen` are mocked; IPC → `agentLogsStore` → `AgentLogsPanel` are real. Expected
+ * strings are written by hand, never derived from the golden. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,12 +1,5 @@
-/**
- * The marker's words (`restoredMarker.ts`). Asserted against the literal sentences the
- * user reads, never against the module's own helpers: a wrong
- * build that swapped "was working" for "was idle" must go red here.
- *
- * The labels are short by requirement — they sit beside the status pill on a rail row
- * (longer ones were cut mid-word at the default rail width); the
- * "fits" half of that is measured in real layout by `restoredRow.browser.test.tsx`.
- */
+/** Asserted against the literal sentences, never the module's helpers; whether labels fit is
+ * measured in `restoredRow.browser.test.tsx`. */
 import { describe, expect, it } from "vitest";
 
 import { restoredMarkerCopy } from "./restoredMarker";

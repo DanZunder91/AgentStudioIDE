@@ -1,8 +1,5 @@
-/**
- * Logs × dev apps: where an `app` source goes in the sidebar, what an app's click solos,
- * and the selection rule — the pure half by hand, then the store subscription
- * over the REAL agent-logs and procs stores.
- */
+/** Logs × dev apps: sidebar placement, what an app's click solos, and the selection rule (pure
+ * half by hand, then the store subscription over the REAL agent-logs and procs stores). */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

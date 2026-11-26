@@ -1,17 +1,5 @@
-/**
- * Shiki → CodeMirror 6 decoration bridge (M4).
- *
- * The chosen integration is "Shiki tokens → CM6 `Decoration.mark` spans." The
- * design doc sketches it as a `ViewPlugin`; that sketch is explicitly illustrative
- * (its `view.update([])` repaint isn't a real API). The robust realization of the
- * SAME idea for asynchronously-computed decorations is a `StateField` fed by a
- * `StateEffect` — decorations survive doc changes via `.map`, and a single
- * `dispatch` applies them once the (async) grammar + tokenization finish.
- *
- * This is a READ-ONLY viewer with a hard size gate, so we tokenize the whole
- * document once on load rather than viewport-incrementally (the doc's
- * viewport+debounce is an editing-perf concern that does not apply here).
- */
+/** Shiki → CM6 decorations: a `StateField` fed by a `StateEffect`, so async results map through
+ * doc changes. Read-only viewer with a size gate, so the whole doc is tokenized once on load. */
 
 import { RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
@@ -43,11 +31,7 @@ function colorMark(color: string): Decoration {
   return mark;
 }
 
-/**
- * Tokenize the (gated) document with Shiki and push its color spans onto `view`.
- * A failed grammar load or a tokenization error leaves the plaintext render
- * untouched — never throws into the editor.
- */
+/** A failed grammar load or tokenization leaves the plaintext render as is; never throws. */
 export async function applyShikiHighlight(
   view: EditorView,
   shikiId: string,

@@ -1,18 +1,5 @@
-/**
- * The village TAB — the store action, the pane's `TabView` case and the tab strip's glyph.
- *
- * Deliberately here and **not** in `src/app/store.test.ts` / `src/components/Pane.test.tsx`
- * (as `metricsTab.test.tsx` does): those files are shared by every feature, so this feature's
- * tests stay feature-local. What they cover is the shared files' new lines.
- *
- * What is pinned:
- *   - `openVillageTab` is a **singleton** — one machine, one village; a second open
- *     re-focuses the tab there is;
- *   - the tab is a real tab: it lands in the focused leaf, activates, is closable and
- *     re-openable;
- *   - `<Pane>` renders `<VillagePanel>` for it, and the tab strip shows the house glyph
- *     (not the terminal fallback).
- */
+/** Feature-local on purpose, not in the shared `store.test.ts` / `Pane.test.tsx`, though it covers
+ * their village lines. */
 
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";

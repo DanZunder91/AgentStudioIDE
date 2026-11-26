@@ -1,8 +1,5 @@
-/**
- * Agent Logs — the pure half: formatting, the filter, the os_log highlighter, and the
- * row-window arithmetic. No React, no store, no IPC — everything here is table-tested
- * in `agentLogsFormat.test.ts` with expectations written out by hand.
- */
+/** Agent Logs, the pure half: formatting, the filter, the os_log highlighter, row-window
+ * arithmetic. No React, store or IPC; table-tested in `agentLogsFormat.test.ts`. */
 
 import type { AppPickerItem } from "../../components/AppPicker";
 import type { LogLevel, LogLine, RunningApp, SyslogBackend } from "./agentLogsTypes";
@@ -36,21 +33,12 @@ export function formatLineForCopy(line: LogLine): string {
 
 /* ───────────────────────────── display names ─────────────────────────── */
 
-/**
- * Rust labels a background task's stream `<program> · bg` (`logstream/tasks.rs`). `gazelle · bg`
- * was hard to find in the sidebar — the suffix reads as part of the name, not as a
- * kind — so the UI shows `gazelle` with a small `service` tag instead. The
- * wire label stays the KEY everywhere (`data-source`, the filter, the picker's ids, Copy
- * visible): only what the eye reads changes.
- */
+/** Rust's suffix for a background task's stream (`logstream/tasks.rs`). The UI shows a `service`
+ * tag instead, but the wire label stays the KEY everywhere (data-source, filter, picker ids). */
 export const SERVICE_SUFFIX = " · bg";
 
-/**
- * What a source is called on screen. Exactly one trailing ` · bg` is dropped: the suffix is
- * appended once by Rust, so a label that happens to end in two is a program literally named
- * `x · bg`, and it keeps one. A label that is nothing but the suffix is shown as is — an empty
- * name is a worse bug than an odd one.
- */
+/** On-screen source name: exactly one trailing ` · bg` is dropped (Rust appends it once); a
+ * label that is only the suffix is shown as is (an empty name is worse). */
 export function displayName(source: string): string {
   if (!source.endsWith(SERVICE_SUFFIX)) return source;
   const bare = source.slice(0, -SERVICE_SUFFIX.length);
@@ -67,11 +55,8 @@ export function sourceTag(source: string): "service" | null {
 /** How many source colours `agentLogs.css` declares (`--alog-src-0` … `-7`). */
 export const SOURCE_PALETTE_SIZE = 8;
 
-/**
- * Stable palette slot for a source label (FNV-1a, 32-bit). Stable across runs and
- * machines, so "claude · gazelle" is always the same colour — the property that lets a
- * reader track one source by colour alone.
- */
+/** Palette slot for a source label (FNV-1a, 32-bit): stable across runs and machines, so a reader
+ * can track one source by colour. */
 export function sourceColorIndex(source: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < source.length; i++) {
@@ -83,11 +68,8 @@ export function sourceColorIndex(source: string): number {
 
 /* ───────────────────────────── tool rows ──────────────────────────────── */
 
-/**
- * Split a `tool` line into `{ name, rest }`: `"Bash: ls -la"` → `Bash` + `": ls -la"`.
- * A bare tool (`"TodoWrite"`) is all name. Anything that does not look like a tool
- * prefix (a space before the colon, or no colon in prose) gets `name: null`.
- */
+/** Split a `tool` line: `"Bash: ls -la"` → `Bash` + `": ls -la"`; a bare tool is all name;
+ * anything not shaped like a tool prefix gets `name: null`. */
 export function toolParts(text: string): { name: string | null; rest: string } {
   const m = /^([A-Za-z_][\w.-]*)(: [\s\S]*)?$/.exec(text);
   if (!m) return { name: null, rest: text };
@@ -100,10 +82,7 @@ export function toolParts(text: string): { name: string | null; rest: string } {
 export interface ToolHeader {
   /** The tool's name, or null when the line has no `Name: ` prefix (rendered verbatim). */
   name: string | null;
-  /**
-   * The header text: `$ cargo test --lib` (Bash), `Read /work/x.rs`, `Grep "fn parse"`,
-   * a bare `TodoWrite`, or the raw text when it has no tool prefix.
-   */
+  /** Header text: `$ cargo test --lib` (Bash), `Read /work/x.rs`, bare `TodoWrite`, or raw text. */
   label: string;
   /** A Bash call's one-line `description`, shown dimmed after the command. */
   description: string | null;
@@ -111,13 +90,9 @@ export interface ToolHeader {
   full: string | null;
 }
 
-/**
- * Rust's `tool` line shapes (`agent/claude.rs::summarize_tool_use`): text is
- * `Name: <first line>` with ` …` appended when the value spans lines; `detail` is the Bash
- * `description`, and for a multi-line value the whole value — `description\n\nvalue` when
- * both exist. This inverts that: the description and the full value are told apart by
- * whether the text after the (optional) blank line starts with the row's own first line.
- */
+/** Inverts Rust's `tool` line (`agent/claude.rs::summarize_tool_use`): `Name: <first line>`, ` …`
+ * if multi-line; `detail` holds the Bash description and/or the full value, blank-line separated,
+ * told apart by whether the text after the blank line starts with the row's first line. */
 export function toolHeader(line: Pick<LogLine, "text" | "detail">): ToolHeader {
   const { name, rest } = toolParts(line.text);
   if (name === null) return { name: null, label: line.text, description: null, full: null };
@@ -159,21 +134,12 @@ export function resultToolName(text: string): string | null {
   return /^[A-Za-z_][\w.-]*$/.test(name) ? name : null;
 }
 
-/**
- * The invocation line Rust puts first in a result's `detail`: `$ <full command>` for Bash,
- * `<Tool>: <summary>` for every other tool — then a blank line, then the output. The block's
- * header already shows the call, so the output
- * drops it; the shape is checked (not just "the first line") so a result from an older build,
- * or an orphan whose call Rust could not name, keeps its first line.
- */
+/** Rust's first `detail` line of a result (`$ <command>` or `<Tool>: <summary>`, then a blank),
+ * dropped since the header shows the call. Shape-checked so older builds and orphans keep it. */
 const INVOCATION = /^(?:\$ |[A-Za-z_][\w.-]*(?::\s|$))/;
 
-/**
- * A result's output, one entry per line, for the block's nested rows. The full text is
- * `detail` when Rust sent one (the invocation line, a blank, then the first 40 lines with a
- * `… (N more lines)` note last), else the one line after the arrow. Blank output is Rust's
- * own `(no output)`; an empty text is no rows.
- */
+/** A result's output lines: `detail` when sent (invocation, blank, first 40 lines, then a
+ * `… (N more lines)` note), else the line after the arrow. Blank output is Rust's `(no output)`. */
 export function resultOutput(line: Pick<LogLine, "text" | "detail">): string[] {
   let body: string | null = null;
   if (line.detail !== null) {
@@ -199,17 +165,11 @@ export interface Segment {
   text: string;
 }
 
-/**
- * `Name[pid]` / `Name[pid:tid]` (process) or `[com.dotted.id]` / `[com.dotted.id:category]`
- * (subsystem). The subsystem arm demands at least one dot so a plain `[42]` or `[x]` is
- * never mistaken for one.
- */
+/** `Name[pid]` / `Name[pid:tid]` (process) or `[com.dotted.id]` / `[com.dotted.id:category]`
+ * (subsystem); the subsystem arm needs a dot so `[42]` or `[x]` never matches. */
 const OSLOG = /([A-Za-z_][\w.-]*)\[\d+(?::[0-9A-Fa-fx]+)?\]|\[[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+(?::[^\]\s]*)?\]/g;
 
-/**
- * Lightweight os_log highlighting as data, never HTML: the panel renders each segment
- * as a text node inside a span, so a log line can never inject markup.
- */
+/** os_log highlighting as data, never HTML: segments render as text nodes (no markup injection). */
 export function highlightOsLog(text: string): Segment[] {
   const out: Segment[] = [];
   let last = 0;
@@ -223,11 +183,8 @@ export function highlightOsLog(text: string): Segment[] {
   return out;
 }
 
-/**
- * A system-app (`machine`) row: its leading `[subsystem:category]` is highlighted as a
- * subsystem whatever its shape (journald units and dot-less subsystems included — the
- * position, not the dots, says what it is); the rest gets the ordinary os_log pass.
- */
+/** A `machine` row: its leading `[subsystem:category]` is a subsystem by position, whatever its
+ * shape (journald units, dot-less); the rest gets the ordinary os_log pass. */
 export function highlightMachine(text: string): Segment[] {
   const m = /^\[[^\]\n]+\]/.exec(text);
   if (!m) return highlightOsLog(text);
@@ -237,26 +194,15 @@ export function highlightMachine(text: string): Segment[] {
 
 /* ───────────────────────────── the filter ─────────────────────────────── */
 
-/**
- * The filter has no kind toggles any more: the old Output / Tools / System / Tasks /
- * Mac-apps chips sliced one firehose by wire kind, and the Sources sidebar's grouping
- * (Services / Terminals / Agents / Mac apps) is what replaced them. The kinds still exist
- * on the wire and still decide HOW a line renders (raw, block, divider).
- */
+/** No kind toggles (Sources sidebar groups replace them); kinds still decide how lines render. */
 export interface LogFilter {
   query: string;
   levels: Record<LogLevel, boolean>;
-  /**
-   * The Sources control's "IDE terminals & agents" switch. Off hides every line that is
-   * not `machine` — terminal output, tool calls and results, lifecycle — client-side.
-   */
+  /** "IDE terminals & agents" switch; off hides every non-`machine` line, client-side. */
   ide: boolean;
   /** Sources the user unticked. An exclusion list, so a NEW source shows by default. */
   hiddenSources: readonly string[];
-  /**
-   * A positive pick ("Only zsh"), or null. When set it wins over `hiddenSources`, and a
-   * NEW source stays hidden — with every Mac app streaming, "only this one" has to mean it.
-   */
+  /** A positive pick ("Only zsh") or null. Wins over `hiddenSources`; a NEW source stays hidden. */
   onlySources: readonly string[] | null;
 }
 
@@ -264,12 +210,8 @@ export type TextMatcher =
   | { ok: true; test: ((s: string) => boolean) | null }
   | { ok: false; error: string };
 
-/**
- * Compile the text box. `/pattern/flags` is a regex; anything else is a case-insensitive
- * substring. An invalid regex is returned as an error for the toolbar to show — it never
- * throws out of a keystroke. `g`/`y` are dropped: they make `RegExp.test` stateful, which
- * would make every other row match.
- */
+/** `/pattern/flags` is a regex, else a case-insensitive substring. An invalid regex is returned
+ * as an error, never thrown. `g`/`y` are dropped: they make `RegExp.test` stateful. */
 export function compileQuery(query: string): TextMatcher {
   const q = query.trim();
   if (q === "") return { ok: true, test: null };
@@ -291,21 +233,12 @@ export interface FilterResult {
   rows: LogLine[];
   /** Set when the query is an invalid regex; `rows` then ignores the query. */
   error: string | null;
-  /**
-   * Ids of rows the query matched ONLY in their `detail` (the row's own text and source do
-   * not contain it) — the panel marks them, so a hit you cannot see on the row still reads
-   * as a hit. Empty with no query.
-   */
+  /** Ids of rows matched ONLY in `detail`, marked so an invisible hit still reads as one. */
   viaDetail: ReadonlySet<number>;
 }
 
-/**
- * Apply the toolbar. The text query matches a line's text, its source label, OR its
- * `detail` (the bug: a /health call an agent ran could not be found — a multi-line
- * Bash command keeps everything after its first line in `detail`).
- * An invalid regex does not blank the view — the other filters still apply and the error
- * is reported beside the box.
- */
+/** Apply the toolbar. The query matches text, source label OR `detail` (a multi-line Bash command
+ * keeps all but line 1 there). An invalid regex keeps the other filters and reports the error. */
 export function filterLines(lines: readonly LogLine[], f: LogFilter): FilterResult {
   const m = compileQuery(f.query);
   const test = m.ok ? m.test : null;
@@ -332,12 +265,8 @@ export function filterLines(lines: readonly LogLine[], f: LogFilter): FilterResu
   return { rows, error: m.ok ? null : m.error, viaDetail };
 }
 
-/**
- * True while the toolbar narrows the stream by content — a (valid) text query or a level
- * switched off. That is when the sidebar swaps its line counts for match counts.
- * The source pick is deliberately not a "filter" here: it chooses the stream, it does not
- * search it.
- */
+/** True while a valid text query or a switched-off level narrows the stream (the sidebar then
+ * shows match counts). The source pick chooses the stream, so it is not a filter here. */
 export function contentFilterActive(f: LogFilter): boolean {
   const q = compileQuery(f.query);
   if (q.ok && q.test !== null) return true;
@@ -362,12 +291,8 @@ export function sourceSelection(f: SourcePick, sources: readonly string[]): stri
   return sources.filter((s) => !f.hiddenSources.includes(s));
 }
 
-/**
- * Translate an `AppPicker` change back into the filter. From "all except …", unticking
- * or re-ticking ONE source edits the exclusion list (so sources that appear later still
- * show — the view's original rule); anything else ("Only", or ticking from nothing) is a
- * positive pick. From a pick, every change stays a pick.
- */
+/** `AppPicker` change → filter. From "all except …", toggling ONE source edits the exclusion
+ * list (later sources still show); anything else is a positive pick, and a pick stays a pick. */
 export function applySourcePick(
   f: SourcePick,
   sources: readonly string[],
@@ -451,10 +376,8 @@ export function syslogTexts(backend: SyslogBackend | null | undefined): SyslogTe
   }
 }
 
-/**
- * `syslog_apps` → picker rows: `.app` bundles first (stable), path as sublabel, pid count.
- * A row with no pids (a Windows Event Log provider is not a process) shows no count.
- */
+/** `syslog_apps` → picker rows: `.app` bundles first (stable), path as sublabel, pid count
+ * (none for a pid-less row such as a Windows Event Log provider). */
 export function appPickerItems(apps: readonly RunningApp[]): AppPickerItem[] {
   const ordered = [...apps.filter((a) => a.isApp), ...apps.filter((a) => !a.isApp)];
   return ordered.map((a) => ({

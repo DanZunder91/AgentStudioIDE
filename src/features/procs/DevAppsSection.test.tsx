@@ -1,7 +1,5 @@
-/**
- * DevAppsSection — the sidebar group, rendered over the real IPC seam (the section itself starts
- * the `procs_list` poll, so a test that mocked the store would not see that it does).
- */
+/** Over the real IPC seam: the section itself starts the `procs_list` poll, which a mocked store
+ * would hide. */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

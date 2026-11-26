@@ -1,24 +1,6 @@
-/**
- * Agent Village — the Seats HALL. Claude Code's `/context` grid is what the seats
- * mean, shown in the village as characters, in both places. So the Village's Seats house — and, in the City, the Seats hall
- * under the lounge, seen from the back of the room — is a little cinema of `/context`'s own 200 seats — 20 to
- * a row, 10 rows, one seat = 0.5% of the selected agent's context window — in the CLI's order, front
- * row first, left to right:
- *
- *   - a TAKEN seat has a character on it, seen from behind, dressed in its category's colour (the
- *     Context card's palette, `contextHex`): grey system prompt / tools, cyan MCP, orange memory
- *     files, yellow skills, purple messages …;
- *   - a FREE seat is an empty velvet chair;
- *   - a RESERVED seat (the autocompact buffer) has a white card with a ✕ on it — `/context`'s ⛝;
- *   - with NO reading (nothing selected, a sub-agent, not read yet) every chair is grey and the
- *     screen shows a "?" — a missing reading is never drawn as an empty hall.
- *
- * The screen over the front row is the legend: one swatch per category in the hall, and the window's
- * fill bar in the Context card's tone. Our own procedural pixel art, anchored like every prop:
- * (x0, bottom) = the footprint's left and bottom edges, world px.
- *
- * Cost: one fillRect per visible piece — 10 for a taken seat, 11 for a reserved one; about 2,000 for a full hall.
- */
+/** `/context`'s 200 seats (20 a row, one seat = 0.5% of the selected agent's window) in the CLI's
+ * order, front row first. No reading: grey chairs and a "?", never an empty hall. Anchored like
+ * every prop: (x0, bottom) = the footprint's left and bottom edges, world px. */
 
 import { BUFFER_KEY, FREE_KEY, GRID_COLUMNS, GRID_ROWS, contextHex } from "../../context/contextFormat";
 import { hash2 } from "../engine/rng";
@@ -77,10 +59,8 @@ const SHIFT_EVERY_MIN = 7;
 const SHIFT_EVERY_SPREAD = 9;
 const SHIFT_SEC = 0.5;
 
-/**
- * Seat `i`'s top-left corner, relative to the hall's top-left, world px. Row-major, 20 to a row;
- * `left` is the hall's margin (`hallLeft`; the Village's by default).
- */
+/** Seat `i`'s top-left relative to the hall's, world px; row-major. `left` = the hall's margin
+ * (`hallLeft`; the Village's by default). */
 export function seatOrigin(i: number, left = SEATS_LEFT): { x: number; y: number } {
   const col = i % GRID_COLUMNS;
   const row = Math.floor(i / GRID_COLUMNS);
@@ -108,10 +88,8 @@ export function legendOf(cells: readonly string[]): string[] {
   return out;
 }
 
-/**
- * The whole hall, `widthPx` wide (the Village's Seats house and the City's hall: 208 — 13 tiles):
- * aisle carpet, screen, then every seat front row first (nearer rows overlap farther ones).
- */
+/** The whole hall, `widthPx` wide (208 in both views): carpet, screen, then seats front row first
+ * (nearer rows overlap farther ones). */
 export function drawHall(
   ctx: DrawTarget,
   cam: Camera,
@@ -136,10 +114,8 @@ export function drawHall(
   }
 }
 
-/**
- * The screen over the front row: the legend (a swatch per category in the hall) and the window's fill
- * bar in the Context card's tone; with no reading, a dark face and a "?".
- */
+/** The legend (a swatch per category in the hall) and the window's fill bar in the Context card's
+ * tone; with no reading, a dark face and a "?". */
 function drawScreen(ctx: DrawTarget, cam: Camera, sx: number, top: number, hall: HallFrame | null): void {
   rect(ctx, cam, sx, top + 1, SCREEN_W, 12, HALL.screenFrame);
   rect(ctx, cam, sx + 1, top + 2, 118, 10, HALL.screenFace);
@@ -158,10 +134,8 @@ function drawScreen(ctx: DrawTarget, cam: Camera, sx: number, top: number, hall:
   if (filled > 0) rect(ctx, cam, sx + 4, top + 8, filled, 2, METER_TONE[hall.tone]);
 }
 
-/**
- * One seat at (x, y) (its top-left, world px): `key` = the category seated there, `free-space` = an
- * empty chair, `autocompact-buffer` = a reserved one, null = no reading (a grey chair).
- */
+/** `key`: the seated category; `free-space` an empty chair, `autocompact-buffer` a reserved one,
+ * null no reading (a grey chair). (x, y) is the seat's top-left, world px. */
 function drawSeat(ctx: DrawTarget, cam: Camera, x: number, y: number, key: string | null, i: number, timeSec: number): void {
   const unknown = key === null;
   const taken = key !== null && key !== FREE_KEY && key !== BUFFER_KEY;

@@ -1,9 +1,5 @@
-/**
- * Test-only: a recording fake `DrawTarget` (jsdom has no canvas). Every draw
- * call is captured with the context state it was issued under, so tests assert
- * draw ORDER, source rects, colours and alpha — never pixels (that is the
- * browser tier's job, render.browser.test.tsx).
- */
+/** Test-only recording `DrawTarget` (jsdom has no canvas): each call with its context state.
+ * Tests assert order, rects, colours and alpha; pixels are render.browser.test.tsx's job. */
 
 import type { DrawTarget } from "./renderTypes";
 

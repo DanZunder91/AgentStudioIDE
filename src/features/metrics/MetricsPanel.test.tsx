@@ -1,35 +1,6 @@
-/**
- * `MetricsPanel` — the dashboard's rendered surface.
- *
- * 🔴 **The load-bearing test in this file is
- * `no_rendered_element_contains_a_summed_token_total`.** The token-class trap is the
- * thing this whole feature can most plausibly get wrong in a "helpful" future edit
- * ("users keep asking for the total"), and a design doc cannot stop that. A gate can.
- * It sweeps every rendered element's text AND every `title`/`aria-label`, for every
- * pairwise and total sum of the four classes, and fails on any of them.
- *
- * 🔴 **The second load-bearing pair is the two TIER LABELS.** The account block must say
- * "All devices · from your Claude account" and the transcript block must say "This
- * machine" — swapping them, or dropping either, turns a true dashboard into a false one
- * (*a number may never be labelled "all my usage" unless it came from the account*).
- * The dashboard shows machine or account usage; the labels are the answer to "which".
- *
- * 🔴 **And the scope toggle must never offer a control that fails.** "This project" is
- * `disabled` with no agent selected, and the default is "All projects" — the two halves of
- * the no-selection fix.
- *
- * Also covered: four separate token tiles exist as distinct elements; the four states
- * (loading / error / empty / data) each render something composed; a failed rescan over
- * good data keeps the numbers and marks them stale; the hero is the only display-size
- * figure; the toggles and Rescan drive the store; the turn detail expands in place with
- * the corrected footer; a null duration renders a dash and never `0`.
- *
- * Both stores are mocked at the module boundary so this file tests the SURFACE, not the
- * fetch (`metricsStore.test.ts` owns that, and `features/usage` owns its own). `ensureMetrics`
- * is a spy, so the mount effect is observable without an IPC layer. `usageFormat` is NOT
- * mocked — the account chip's exact strings are that module's contract and are worth
- * asserting for real.
- */
+/** Load-bearing: no rendered text, title or aria-label holds any sum of token classes, and the two
+ * tier labels ("All devices · from your Claude account" / "This machine"). Both stores are mocked
+ * at the module boundary; `usageFormat` is real, since its strings are the contract. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
@@ -82,10 +53,7 @@ vi.mock("./metricsStore", () => ({
     selector(storeState.current),
 }));
 
-// `features/usage` is CONSUMED, never modified — this feature owns no part of it. The mock
-// stands in for its store only; the reference-counted poller's own semantics are asserted
-// in `usageStore.test.ts`, and all this panel owes is "start it on mount, release on
-// unmount", which is asserted below.
+// `features/usage` is consumed, never modified; its poller semantics live in `usageStore.test.ts`.
 vi.mock("../usage/usageStore", () => ({
   startUsagePolling: mockStartPolling,
   useUsageStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -129,11 +97,7 @@ function turn(patch: Partial<TurnRow> = {}): TurnRow {
   };
 }
 
-/**
- * A report with realistic proportions for a 24 h window (invented figures), so the
- * summed-total sweep runs against numbers whose sums are big, distinctive and easy to
- * spot if they ever leak.
- */
+/** Realistic 24 h proportions (invented figures), so any leaked sum is big and distinctive. */
 function report(patch: Partial<MetricsReport> = {}): MetricsReport {
   return {
     window: { kind: "last_24h", fromMs: FROM, toMs: FROM + 24 * HOUR },
@@ -186,11 +150,6 @@ function report(patch: Partial<MetricsReport> = {}): MetricsReport {
       linesUnparseable: 0,
       turnsWithoutCliDuration: 5,
       turnsWithoutPromptId: 0,
-      // Replaces the earlier `duplicateSessionIds`/`conflictingSessionIds`: those existed
-      // only for multi-root de-duplication, which was DROPPED because `~/.claude` is not
-      // synced between machines. `scopeFellBackToAll` is what took their
-      // place — the honest report of "you asked for one project without naming one, so
-      // here is everything".
       scopeFellBackToAll: false,
       partial: false,
     },
@@ -233,10 +192,7 @@ beforeEach(() => {
   mockRefresh.mockReset().mockResolvedValue(undefined);
   mockSetWindow.mockReset().mockResolvedValue(undefined);
   setStore({});
-  // Reset the CONSUMED usage store too. Without this, `usageState.current` stayed `{}`
-  // from `vi.hoisted`, so the account row read `snapshot === undefined` and threw —
-  // taking 35 unrelated tests down with it. A mock of a consumed module needs the same
-  // per-test reset discipline as the store under test.
+  // Reset the consumed usage store per test, like the store under test.
   usageState.current = { snapshot: null, error: null, loading: false, refresh: vi.fn() };
 });
 
@@ -632,13 +588,8 @@ describe("the top-turns table", () => {
   });
 
   it("identifies a turn with no label by its session HANDLE, never by inventing text", async () => {
-    // The handle moved into the expanded detail when the ALL-scope privacy rules landed:
-    // in "all" scope a turn carries no prompt text at all, so the collapsed row
-    // identifies turns by project + time and the session handle is detail. Expanding is
-    // therefore part of the claim now, not incidental to it.
-    //
-    // What must NOT change is the honesty: a labelless turn shows a truncated session id,
-    // never a blank cell and never a fabricated title.
+    // In "all" scope a turn has no prompt text, so the session handle lives in the expanded detail;
+    // a labelless turn shows a truncated session id, never a blank or a made-up title.
     setStore({ report: report({ topTurns: [turn({ label: null })] }) });
     render(<MetricsPanel cwd="/work/proj" />);
 
@@ -761,10 +712,6 @@ describe("the honesty header", () => {
   });
 
   it("switches scope through the store and never renders a control that fails", async () => {
-    // `setScope` was in the mock harness but wired to nothing, so no test had ever
-    // CLICKED the toggle — the panel would have thrown on `setScope` being undefined.
-    // That is the same shape of gap that shipped "Could not read your sessions":
-    // a control tested for its label but never for its behaviour.
     const user = userEvent.setup();
     setStore({ report: report(), cwd: "/work/private-client" });
     render(<MetricsPanel cwd="/work/private-client" />);
@@ -823,10 +770,7 @@ describe("the honesty header", () => {
   });
 
   it("renders the ACCOUNT row from the usage store, labelled as all devices", () => {
-    // The dashboard shows machine or account usage. These two labels are the whole
-    // honesty contract: the account row is cross-device (it comes from the CLI), the
-    // block below it is this machine only. Getting them the wrong way round would
-    // make a true number into a false claim.
+    // The account row is cross-device (from the CLI); the block below is this machine only.
     const snapshot: UsageSnapshot = {
       windows: [
         { key: "five_hour", label: "Current session", usedPct: 41, resetsAtMs: 1_785_243_600_000 },
@@ -853,10 +797,7 @@ describe("the honesty header", () => {
     // spawn; that only holds if every consumer releases. This asserts the panel does —
     // the mock's stop function standing in for the real release.
     mockStartPolling.mockReturnValue(mockStopPolling);
-    // RTL's auto-cleanup unmounts every earlier render, and each of those released the
-    // shared poller — so this mock arrives with calls already on it. Clearing here is
-    // what makes the assertion about THIS mount. (It passed in isolation and failed in
-    // the suite, which is the signature of exactly this.)
+    // Earlier renders' cleanup already released the poller; clear so this asserts this mount.
     mockStopPolling.mockClear();
     mockStartPolling.mockClear();
     setStore({ report: report(), cwd: "/work/proj" });
@@ -997,10 +938,7 @@ describe("the mount effect", () => {
   });
 
   it("advances its own display clock, so freshness cannot go stale on screen", async () => {
-    // The second clock: the panel's "now". Read from state and ticked, never read in
-    // the render body — otherwise "Scanned just now" would stay frozen at "just now"
-    // until some *other* state changed, which is the dishonesty this panel exists to
-    // avoid. Driven here with fake timers rather than waited on.
+    // The panel's "now" is ticked state, never read in render; driven with fake timers.
     vi.useFakeTimers();
     const start = new Date(2026, 6, 29, 12, 0, 0).getTime();
     vi.setSystemTime(start);

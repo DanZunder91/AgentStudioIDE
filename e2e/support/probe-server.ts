@@ -1,15 +1,5 @@
-/**
- * A throwaway HTTP server for the Network spec, bound to this machine's NON-loopback IPv4.
- *
- * Why not 127.0.0.1 like http-fixture.ts: IDE terminals get `NO_PROXY=…,localhost,127.0.0.1,::1`,
- * so a loopback request would bypass the capture proxy
- * and the Network view would rightly show nothing. A private interface address (inside the
- * Docker container: the bridge IP) is routed through the proxy, yet the packets never leave
- * the machine — the server and the client are both local.
- *
- * Node's built-in `http` only; the wdio worker (same host/container as the app) runs it, so
- * the spec needs nothing from the image beyond what the IDE terminal already has (curl).
- */
+/** Network-spec server on a non-loopback IPv4: terminals get NO_PROXY for loopback, so 127.0.0.1
+ * would bypass the capture proxy. Packets still never leave the machine. */
 
 import http from "node:http";
 import os from "node:os";

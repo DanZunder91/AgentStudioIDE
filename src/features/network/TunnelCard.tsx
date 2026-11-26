@@ -1,13 +1,6 @@
-/**
- * The detail pane's cards for the two kinds of row that have no request to show:
- *
- * - {@link TunnelCard} — an encrypted tunnel (the bug: a tunnel from `gazelle`
- *   looked unfinished and showed nothing about what it was doing). What the proxy
- *   could not see and why, everything it DID see, repeated connections grouped, and the three
- *   ways to see the requests: decrypt this app, (Rust) build with native roots, or read the app's side in Logs.
- * - {@link BypassCard} — an agent command that skipped the proxy (`curl --noproxy`), with the
- *   command verbatim and the switch that captures agent curls anyway.
- */
+/** Detail-pane cards for rows with no request: {@link TunnelCard} (an encrypted tunnel: what was
+ * and was not seen, and the ways to see requests) and {@link BypassCard} (an agent command that
+ * skipped the proxy, with the switch that captures agent curls anyway). */
 
 import { useState } from "react";
 

@@ -1,8 +1,3 @@
-/**
- * A passer-by's umbrella (render/umbrella.ts): the stick behind the holder, the canopy over its head —
- * as wide as it is open, leaning into the wind, in one of six canopies (one of them clear).
- */
-
 import { describe, expect, it } from "vitest";
 
 import { CANOPIES as ENGINE_CANOPIES } from "../engine/streetLife";

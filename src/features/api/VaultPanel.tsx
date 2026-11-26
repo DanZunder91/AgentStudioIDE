@@ -1,22 +1,6 @@
-/**
- * VaultPanel — the right rail's secrets / environment manager.
- *
- * The "Vault", backed by the M6 durable API store: named ENVIRONMENTS and their
- * key/value variables, which hold live tokens. It drives the exact same `apiActions` the API
- * client's inline env editor uses (add / rename / delete env, set / remove var), so a token
- * entered here is the same token the request send path substitutes — one store, two
- * surfaces (this rail panel is deliberately a fresh view, not a refactor of
- * `<ApiRequestView/>`).
- *
- * Secret-safety: every value typed here persists ONLY through the Rust
- * store under the OS app-data dir, never a repo file. The panel says so, calmly.
- *
- * Hydrates the durable store once on mount if it is not already loaded — the SAME
- * one-shot `loadApiStore()` → `hydrateApiStore` guard `<ApiRequestView/>` uses, so
- * opening the Vault with no API tab ever opened still shows the saved envs. The
- * `cancelled` guard drops a late resolve after unmount; the store flag (not a
- * module latch) re-arms the load between tests via `resetStore`.
- */
+/** Drives the same apiActions as the API client's env editor: one store, two surfaces. Values
+ * persist only via the Rust store in the app-data dir, never a repo file. Hydrates once on mount
+ * (the ApiRequestView guard); the store flag, not a module latch, lets resetStore re-arm it. */
 
 import { useEffect, useState } from "react";
 
@@ -71,13 +55,8 @@ export function VaultPanel(): React.JSX.Element {
   );
 }
 
-/**
- * One environment's editor: its name, its variable rows, and an add-variable
- * form. Variables are keyed by `key` (the wire model), so a NEW variable is added
- * through the form and an existing one's VALUE is edited in place; editing a key
- * is delete-then-add, which the form + the ✕ cover. Mirrors the API client's
- * inline `EnvEditor` exactly, so the two surfaces feel identical.
- */
+/** Variables are keyed by `key` (the wire model): editing a key is delete-then-add. Mirrors the API
+ * client's inline EnvEditor so the two surfaces feel identical. */
 function VaultEnv({ env }: { env: Environment }): React.JSX.Element {
   const renameEnvironment = useAppStore((s) => s.apiActions.renameEnvironment);
   const deleteEnvironment = useAppStore((s) => s.apiActions.deleteEnvironment);

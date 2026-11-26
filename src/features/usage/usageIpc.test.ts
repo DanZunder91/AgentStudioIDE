@@ -1,12 +1,5 @@
-/**
- * `usageIpc` — the usage-limits wire. A thin wrapper, so the command *name*,
- * the (empty) arg shape, and the **rejection passthrough** are the whole contract.
- *
- * The passthrough is the part worth pinning: unlike `pinAgent`/`saveApiStore`, this
- * wrapper deliberately does NOT swallow. A failed usage fetch is information the
- * user needs ("not signed in", "offline"), and the store turns the raw string into a
- * code via `parseUsageError` — which only works if the string arrives untouched.
- */
+/** This wrapper must NOT swallow rejections: the store turns the raw string into a code via
+ * `parseUsageError`, which only works if the string arrives untouched. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

@@ -1,12 +1,6 @@
-/**
- * `layout-prefs.json` keeps ONE writer when there are several windows (tab-tearoff.md §4.2).
- *
- * The file is saved wholesale and non-atomically, which is only sound because the main
- * window is its sole writer. A detached window runs a store holding a different, smaller
- * layout; one save from it would overwrite the main window's views (a lost update). Every
- * persisting store action funnels into `saveLayoutPrefs`, so the page-side guard lives
- * there — Rust refuses the command from any other window too (`layout_prefs.rs`).
- */
+/** `layout-prefs.json` keeps ONE writer (tab-tearoff.md §4.2): saves are wholesale and
+ * non-atomic, so a detached window's save would clobber the main layout. The page-side guard is
+ * in `saveLayoutPrefs`; Rust refuses other windows too (`layout_prefs.rs`). */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

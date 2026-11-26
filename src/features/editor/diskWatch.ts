@@ -1,34 +1,6 @@
-/**
- * diskWatch — notice when an OPEN file changes on disk, and refresh it.
- *
- * The bug: after an agent modified an open .md file, the editor did not show
- * the change until the file was closed and opened again.
- *
- * 🔴 **This product exists to orchestrate agents that edit your files**, so a
- * file changing underneath an open editor is the NORMAL case here, not the edge
- * one. Until now nothing watched: there is no `notify` crate in the Rust tree and
- * no fs subscription in the frontend, so an open buffer showed whatever it read
- * the moment it was opened, forever.
- *
- * ## Why polling a stamp rather than a real watcher
- *
- * A `notify`-based watcher is push-based and more elegant, and it is a whole
- * subsystem: a new dependency through the audit gate, recursive watch lifecycles
- * tied to tab open/close, and a different set of platform quirks on each OS. What
- * is actually needed is far smaller — the set of watched paths is *the open
- * editors*, which is a handful, and one batched `stat` answers all of them. So
- * this polls `file_stamps` on a timer while the window is visible, and checks
- * immediately on focus, which is the moment the user is most likely to look.
- * Recorded as a deliberate track, not an oversight; a real watcher remains the
- * upgrade path if this ever costs too much.
- *
- * ## The rule that matters: never eat unsaved work
- *
- * A **clean** buffer is reloaded silently — that is the common case and the
- * whole point. A **dirty** one is never touched: it is flagged `staleOnDisk` and
- * the editor offers a Reload. Silently overwriting an unsaved edit would be a
- * far worse bug than the staleness it fixes.
- */
+/** Refreshes open files changed on disk by polling `file_stamps` while visible and on focus (a
+ * deliberate choice over a `notify` watcher). Clean buffers reload silently; a dirty one is never
+ * touched, only flagged `staleOnDisk` so the editor offers Reload. */
 
 import { useAppStore } from "../../app/store";
 import { fileStamps, type FileStamp } from "../workspace/workspaceIpc";
@@ -48,12 +20,7 @@ let listening = false;
 /** Re-entrancy guard: a slow tick must not overlap the next one. */
 let checking = false;
 
-/**
- * Compare every open editor against disk, once.
- *
- * Exported so a test — and the focus handler — can drive a single pass without
- * waiting on a timer.
- */
+/** One pass over every open editor; exported for tests and the focus handler. */
 export async function checkOpenFilesOnce(): Promise<void> {
   if (checking) return;
   const paths = openEditorPaths();
@@ -101,10 +68,7 @@ function checkIfVisible(): void {
   if (document.visibilityState === "visible") void checkOpenFilesOnce();
 }
 
-/**
- * Start watching. Idempotent, and returns a stop function — the
- * `startGitPolling` contract, so a StrictMode double-mount cannot start two.
- */
+/** Idempotent and returns a stop function, so a StrictMode double-mount cannot start two. */
 export function startDiskWatch(): () => void {
   if (timer === null) {
     timer = setInterval(checkIfVisible, WATCH_INTERVAL_MS);

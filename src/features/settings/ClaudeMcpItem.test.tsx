@@ -1,17 +1,5 @@
-/**
- * ClaudeMcpItem — "Add Agent Studio to Claude Code" in the Settings menu.
- *
- * Covers what the user sees and what a click runs, for every state Claude Code can be in: asked on
- * mount (disabled, with the reason, until it answers), add → "Remove", remove → "Add", another
- * copy of the app → re-point, an entry in a scope that wins → the reason, no Claude Code →
- * disabled with the reason, a failure → the reason and the same action again (a failed removal
- * offers the removal). And across opens of the menu: a recent answer is shown without asking
- * Claude Code again, a reopen joins the run still going, and an answer that arrived while the
- * menu was closed is shown on the next open.
- *
- * The IPC module is mocked (the runs module is real): these tests are about which action a click
- * runs and what the item says, which a store-level or Rust test cannot see.
- */
+/** The IPC module is mocked (the runs module is real): these tests are about which action a click
+ * runs and what the item says, which a store-level or Rust test cannot see. */
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

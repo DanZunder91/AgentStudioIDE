@@ -1,25 +1,9 @@
-/* ── A/B compare (HTTP lane) ─────────────────────────────────────────────────
-   The second request bar (`CompareBar`) and the side-by-side response surface
-   (`ComparePanel`). Theme variables come from App.css; `api-bar` / `api-method`
-   / `api-url` / `api-status` / `api-error` / `api-add-header` styling is reused
-   from api.css so the B bar and the pills cannot drift from the A bar's.
+/* ── A/B compare (HTTP lane): reuses api.css's bar/pill styles; theme vars come from App.css.
+ * ONE floor (`.compare-split` min-height), everything below shrinkable, so each pane BODY
+ * scrolls. Pixel-asserted by `compare.browser.test.tsx` (jsdom cannot see it). ── */
 
-   ── The layout is load-bearing ──────────────────────────────
-   The whole surface lives inside `.api-view`, a flex column with
-   `overflow-y: auto`. The rule: put ONE explicit floor on ONE box
-   (`.compare-split`, `min-height: 280px`) and make everything below it
-   shrinkable (`min-height: 0` / `min-width: 0` all the way down), so each
-   pane's BODY is the box that scrolls — a wide or long response scrolls inside
-   its own pane, and the tab never scrolls horizontally because of one wide
-   value. Every rule here is asserted, in pixels, by
-   `compare.browser.test.tsx`; the jsdom tier cannot see any of it. */
-
-/* The panel root (`.api-response-panel.compare`). api.css already gives
-   `.api-response-panel` `flex: 1 1 auto; min-height: 0` inside `.api-view`;
-   the SAME values are restated here (plus the column direction the split
-   needs) so the compare surface is self-describing — the browser tier mounts
-   ComparePanel alone, without api.css, and must exercise the real chain.
-   Identical values, so the two files cannot fight. */
+/* Restates api.css's `.api-response-panel` values (identical, so no fight) so the browser tier,
+ * which mounts ComparePanel without api.css, exercises the real chain. */
 .compare {
   display: flex;
   flex-direction: column;
@@ -70,12 +54,8 @@
 }
 
 /* ── the split ────────────────────────────────────────────────────────────── */
-/* No `grid-template-rows: minmax(0, 1fr)` here, DELIBERATELY: it was tried as
-   a row-growth guard (auto rows are content-sized) and the browser tier stayed
-   green without it — in Chromium the pane's `overflow: hidden` already keeps
-   the implicit row from growing to a 400-key tree's height. A rule the tests
-   cannot distinguish is a silent safety net, so it is not
-   shipped; the internal-scroll test is the tripwire if an engine disagrees. */
+/* No `grid-template-rows: minmax(0, 1fr)`: tests can't tell it apart (pane `overflow: hidden`
+ * stops row growth), so it would be a silent net; the internal-scroll test is the tripwire. */
 .compare-split {
   flex: 1 1 auto;
   min-height: 280px;
@@ -159,13 +139,8 @@
   font-size: 12px;
 }
 
-/* `.jsonview` (jsonview.css) is itself `overflow-x: auto`, which in a pane
-   would TRAP a wide value's scrollbar inside the tree — at the bottom of the
-   whole tree, hundreds of rows below the viewport (a scroll box as tall as its
-   content, one level down). Scoped override, not an edit to jsonview.css: inside a compare
-   pane the tree overflows VISIBLY and `.compare-pane__body` is the one box
-   that scrolls, both axes. Falsified: without this line the wide-
-   value assertion reads "expected 480 to be greater than 480". */
+/* `.jsonview` is itself `overflow-x: auto`, which traps a wide value's scrollbar at the tree's
+ * bottom; scoped override so the pane body is the one box that scrolls, both axes. */
 .compare-pane__body .jsonview {
   overflow-x: visible;
 }

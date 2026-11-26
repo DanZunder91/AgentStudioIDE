@@ -1,17 +1,6 @@
-/**
- * SEAM TEST — the level rule table is ONE table in two languages.
- *
- * Rust levels every stream line (`logstream::level::classify_level`); the UI levels the
- * lines INSIDE a command block's output itself (`classifyLine`, agentLogsLevel.ts). If the
- * two disagreed, one line would read W in a service's stream and I in the block that
- * tailed the same file. So a Rust test writes `goldens/level-cases.json` —
- * `[{ line, level }]`, each level computed by the real Rust function — and this test runs
- * `classifyLine` over EVERY case. A value only one side agrees on turns one side red.
- *
- * Never hand-edit the golden; regenerate it from Rust and read the diff. The file is read
- * from disk rather than imported so that its ABSENCE is a named failure, not a module
- * resolution error that hides which side owes what.
- */
+/** SEAM TEST: one level table in two languages. Rust writes `goldens/level-cases.json` from
+ * `classify_level`; `classifyLine` must agree on every case. Never hand-edit it; regenerate. Read
+ * from disk, not imported, so its absence is a named failure. */
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

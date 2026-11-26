@@ -1,18 +1,6 @@
-/**
- * The browser tier pre-bundles every `@tauri-apps/*` module the app imports
- * (`TAURI_DEPS` in `vitest.browser.config.ts`).
- *
- * Without that, a new import of a module from an already-installed package is
- * invisible to Vite's cached dependency scan. Vite finds it mid-run, re-bundles,
- * reloads the page, and unrelated tests fail with "Failed to fetch dynamically
- * imported module" (`@tauri-apps/api/path` was one such import).
- * This test fails at the moment such an import is added, in the fast jsdom
- * suite, instead of as flaky failures in the browser tier on whichever machine
- * happens to have a warm cache.
- *
- * The config is read as text, not imported: importing it would load Playwright
- * and the React plugin into the jsdom suite.
- */
+/** Fails fast when an app `@tauri-apps/*` import is missing from `TAURI_DEPS`: Vite would find it
+ * mid-run, re-bundle and reload, failing unrelated browser tests. The config is read as text:
+ * importing it would load Playwright and the React plugin into jsdom. */
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";

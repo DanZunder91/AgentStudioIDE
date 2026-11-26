@@ -1,32 +1,6 @@
-/**
- * Hand-written fixtures for the share-a-config dialogs.
- *
- * ── These are INPUTS. They are never expectations ────────────────────────────
- * Every value below exists to be *fed* to a formatter or a dialog. No test computes an
- * expectation from this file: the assertions spell their strings out literally, so
- * changing a name here cannot make a wrong assertion pass. If a value in this file
- * matters to production, it is in the wrong file.
- *
- * ── Why hand-written, and not a recording of the real backend ────────────────
- * `portability_inspect` is Rust's. A fixture written against `types.ts` is what lets the
- * UI be finished and tested independently of the command it calls, the same seam the
- * connection dialog uses (`dbFixtures.ts`).
- *
- * ── What each fixture is FOR ─────────────────────────────────────────────────
- * Each one exists to make a specific shape reachable, and they are deliberately
- * awkward rather than tidy:
- *   • `TEST_EXPORT_SOURCE` — a variable (`SHARED_TOKEN`) that appears in TWO
- *     environments, one holding a value and one not; and a variable with no value at
- *     all (`UNSET_WEBHOOK`), which must NOT be listed as withheld.
- *   • `SEALED_HEADER` — non-zero `secretValues`, so the "carries N secret values"
- *     sentence is reachable; `UNLABELLED_HEADER` has `label: ""`.
- *   • `LOCKED_PLAN` — a sealed bundle with `unsealed: false` and, correctly, NO items,
- *     hosts or variables: the header is readable, the contents are not.
- *   • `RICH_PLAN` — one item of every `ImportItem` kind, all three default actions, a
- *     variable the machine already holds and one it does not, and two hosts.
- *   • `BARE_PLAN` — a structure bundle that references nothing and contacts nobody, so
- *     the "no hosts" / "no variables" sentences are reachable.
- */
+/** Hand-written inputs, never expectations: tests spell their strings out. `TEST_EXPORT_SOURCE`:
+ * `SHARED_TOKEN` in two envs (one valued) and a valueless `UNSET_WEBHOOK`, which must not be
+ * listed as withheld. `SEALED_HEADER` has non-zero `secretValues`. */
 
 import type { BundleHeader, ImportPlan, ImportResult } from "./types";
 import type { ExportSource } from "./portabilityFormat";

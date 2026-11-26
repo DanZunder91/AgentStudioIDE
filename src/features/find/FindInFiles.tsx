@@ -1,28 +1,6 @@
-/**
- * FindInFiles — project-wide search, on IntelliJ's "Find in Files" model
- * (frontend half).
- *
- * A self-contained toggleable overlay: it installs its OWN global
- * Cmd/Ctrl+Shift+F listener (toggle + focus the input) and Esc (close), so
- * `App.tsx`'s only addition is a one-line `<FindInFiles/>` mount — the same
- * "component wires itself to the world" pattern as `<LeftRail/>` /
- * `<WorkspaceTree/>`. Locating the hotkey here (rather than in App) also means
- * it lives in the coverage-measured feature set, so its behaviour is gated.
- *
- * The `open` state lives in the store (`findInFilesOpen`) so the
- * Cmd/Ctrl+Shift+F hotkey AND the right rail's Find tab drive the SAME overlay —
- * mirroring `<ShortcutsPanel/>`'s store-driven open. Everything ELSE stays LOCAL:
- * query, the four modifiers, the file mask, results, per-file collapse, loading
- * and error. The search root comes from the shared `<ScopeSelector/>` (`useScope`)
- * — a workspace/folder scope that DEFAULTS to the workspace owning the focused
- * tab (its file, or its terminal's cwd — `contextScope.ts`),
- * else the primary root. Opening a hit still
- * rides the `openEditorTab` action.
- *
- * The search is debounced; results are grouped by file (collapsible), each hit
- * a row that highlights the matched span and, on click, opens the file (see the
- * `revealInEditor` TODO below for landing on the exact line).
- */
+/** Project-wide search overlay (IntelliJ's Find in Files) installing its own Cmd/Ctrl+Shift+F and
+ * Esc listeners. `open` is in the store so the hotkey and the right rail's Find tab share one
+ * overlay; all else is local. The search root comes from `<ScopeSelector/>` (`useScope`). */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -49,28 +27,14 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/**
- * Rust rejects a cancelled walk with the bare message `cancelled` (the
- * `find_cancel` contract). That is a NORMAL outcome — somebody stopped it — so
- * it must never be painted red, and never collapse into "No matches": a search
- * that was stopped has made no claim about the codebase.
- *
- * Matched exactly (trimmed/case-folded) rather than by substring, so a genuine
- * failure that merely *mentions* cancellation still reaches the user.
- */
+/** Rust's bare `cancelled` (the `find_cancel` contract) is a normal stop: never red, never "No
+ * matches". Matched exactly so a real error that mentions cancellation still surfaces. */
 function isCancelled(err: unknown): boolean {
   return errorMessage(err).trim().toLowerCase() === "cancelled";
 }
 
-/**
- * One debounced search run — scheduled, then in flight, then settled.
- *
- * `cancelled` is the pre-existing stale-result guard (it was a closure `let`),
- * promoted to a field so that code OUTSIDE the effect — the Stop button — can
- * flip it. `ids` are the search ids Rust knows this run by: ONE PER ROOT, because
- * a scope of "All workspaces" fans out into one `find_in_files` per root and every
- * leg has to be stopped, not just the first.
- */
+/** One debounced search run. `cancelled` lets the Stop button neuter its reply; `ids` holds one
+ * search id per root, since "All workspaces" fans out and every leg must be stopped. */
 interface SearchRun {
   cancelled: boolean;
   ids: readonly string[];
@@ -81,12 +45,8 @@ function idleRun(): SearchRun {
   return { cancelled: true, ids: [] };
 }
 
-/**
- * Stop one run: neuter its reply AND ask Rust to abandon the walk on every leg.
- * Best-effort by design — `cancelFind` never throws, and the walk stops at its
- * next check, so the caller returns to idle itself rather than waiting on this.
- * Idempotent: the ids are dropped, so a second stop sends nothing.
- */
+/** Neuter the run's reply and ask Rust to abandon every leg. Best-effort (`cancelFind` never
+ * throws), so callers go idle themselves; idempotent because the ids are dropped. */
 function stopRun(run: SearchRun): void {
   run.cancelled = true;
   for (const id of run.ids) void cancelFind(id);
@@ -106,21 +66,13 @@ function splitPath(path: string): { name: string; dir: string } {
   return i < 0 ? { name: path, dir: "" } : { name: path.slice(i + 1), dir: path.slice(0, i) };
 }
 
-/**
- * A hit tagged with the root it came from. `file` is RELATIVE to that
- * root, so the abs path for `revealInEditor` is `${root}/${file}` — the RIGHT
- * repo — and, when the search fanned out over ≥2 roots, the row can show which.
- */
+/** A hit tagged with its root; `file` is relative to it, so the path lands in the right repo. */
 interface RootedMatch extends FindMatch {
   root: string;
 }
 
-/**
- * The fan-out's merged view: every root's hits tagged with their root (root
- * order, Rust order within a root), whether ANY root truncated, and whether to
- * label each result with its repo (only with ≥2 roots — a single root, the
- * default, reads exactly as before).
- */
+/** Every root's hits in root order (Rust order within), whether any root truncated, and whether
+ * to label rows with their repo (only with ≥2 roots). */
 interface MergedResult {
   matches: RootedMatch[];
   truncated: boolean;
@@ -138,10 +90,7 @@ function mergeResults(perRoot: { root: string; res: FindResult }[]): MergedResul
   return { matches, truncated, multiRoot: perRoot.length > 1 };
 }
 
-/**
- * Group matches by (root, file), preserving first-seen order (Rust's order, root
- * by root). Keying on root+file keeps two repos' identically-named files apart.
- */
+/** Grouped by (root, file) in first-seen order, so two repos' same-named files stay apart. */
 interface FileGroup {
   key: string;
   root: string;
@@ -206,31 +155,19 @@ export function FindInFiles(): React.JSX.Element {
   // must never itself cause a render. Starts resting, so it is never null.
   const runRef = useRef<SearchRun>(idleRun());
 
-  // The shared scope (workspace/folder). `scopeRoots` is the set of absolute
-  // roots the search fans out over: one root by default (the workspace of the tab
-  // the user is in), or every open root under "All workspaces". `open`
-  // re-arms the context default on every fresh open.
+  // `scopeRoots`: the roots the search fans out over. `open` re-arms the context default per open.
   const { effectiveScope, scopeRoots, setScope } = useScope(open);
 
-  /**
-   * The requirement: the search runs in parallel, so that it can be killed.
-   * Stop the run that owns the panel — Rust abandons the walk, the
-   * reply (whenever it lands) is neutered, and the panel returns to a calm
-   * "stopped" state IMMEDIATELY rather than waiting on an advisory cancel.
-   *
-   * It deliberately does NOT fall back to "No matches": a stopped search never
-   * finished, so claiming the project has no matches would be a lie.
-   */
+  /** Stop the owning run (Rust abandons the walk, its reply is neutered); show "stopped" at once,
+   * never "No matches": a stopped search made no claim. */
   const cancelSearch = useCallback(() => {
     stopRun(runRef.current);
     setLoading(false);
     setStopped(true);
   }, []);
 
-  // The global hotkey. Installed once: the store actions are stable references,
-  // and closing an already-closed panel is a no-op, so Esc need not read `open`.
-  // `preventDefault` on the toggle keeps the browser's own Find-in-page off our
-  // shortcut.
+  // Installed once: actions are stable and closing a closed panel is a no-op. `preventDefault`
+  // keeps the browser's find-in-page off our shortcut.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -245,11 +182,8 @@ export function FindInFiles(): React.JSX.Element {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [toggleFindInFiles, setFindInFilesOpen]);
 
-  // Focus (and select) the input each time the panel opens, so a re-toggle lands
-  // the cursor ready to type — refs are set at commit, before this effect runs.
-  // No state is reset here: `react-hooks/set-state-in-effect` forbids it, and a
-  // lingering "stopped" banner clears itself — it can only be up while the query
-  // is non-empty, and a non-empty query re-fires the search on reopen.
+  // No state reset here (`react-hooks/set-state-in-effect`). A "stopped" banner needs none: a
+  // non-empty query re-fires the search on reopen.
   useEffect(() => {
     if (open) {
       inputRef.current?.focus();
@@ -257,20 +191,9 @@ export function FindInFiles(): React.JSX.Element {
     }
   }, [open]);
 
-  // Debounced search. Re-runs on any input OR modifier change. Fans out over
-  // every root in `scopeRoots` in parallel (one root by default, all under "All
-  // workspaces") and merges the tagged results. A superseded run is neutered by
-  // ONE shared `cancelled` flag (in `apply`) for the whole batch, so a slow
-  // result that lands after the query moved on cannot overwrite the fresh one —
-  // and the cleanup ALSO calls `find_cancel` on every leg, so
-  // the walk actually stops instead of merely having its answer thrown away.
-  // That one cleanup is the single mechanism behind every way out of a search:
-  // superseding it (query/modifier/scope change), closing the overlay (✕, Esc,
-  // the Cmd+Shift+F toggle, clicking a result) — all of them change a dep, so all
-  // of them stop Rust. An empty query never searches — clearing back to the
-  // resting hint is done eagerly in `onQueryChange` (an effect must not setState
-  // synchronously). `scopeRoots` is a stable reference (memoized in `useScope`),
-  // so it is a safe effect dep.
+  // Fans out over `scopeRoots` (memoized, a safe dep) in parallel. The cleanup sets the batch's
+  // shared `cancelled` flag and calls `find_cancel` per leg; every way out (query/scope change,
+  // close) changes a dep, so it is the one stop. An empty query is cleared in `onQueryChange`.
   useEffect(() => {
     if (!open || scopeRoots.length === 0 || query === "") return;
     // The run owns the panel from the moment it is SCHEDULED, not from when it
@@ -288,11 +211,8 @@ export function FindInFiles(): React.JSX.Element {
       setLoading(true);
       setStopped(false);
       const apply = (settle: () => void) => {
-        // Drop the spinner when the run that owns the panel settles — including a
-        // CANCELLED one, whose reply is the last thing that will ever happen to
-        // it (leaving `loading` true there stranded the panel on reopen, and made
-        // `loading` useless as the Stop button's gate). A superseded run stays
-        // silent: blanking the spinner of the run that replaced it would be worse.
+        // Only the owning run drops the spinner, cancelled ones included (`loading` gates Stop); a
+        // superseded run must not blank its replacement's spinner.
         if (runRef.current === run) setLoading(false);
         if (run.cancelled) return;
         settle();
@@ -436,11 +356,7 @@ export function FindInFiles(): React.JSX.Element {
   );
 }
 
-/**
- * The body under the search bar: one calm state at a time (no root / searching /
- * error / stopped / empty query / no matches / results). Split out so each state
- * is a single `if` rather than a stack of compound `&&` conditions.
- */
+/** One state at a time (no root / searching / error / stopped / empty / no matches / results). */
 function FindResults({
   hasRoot,
   loading,
@@ -465,10 +381,8 @@ function FindResults({
   if (!hasRoot) {
     return <div className="find-panel__status">Open a folder to search.</div>;
   }
-  // A hit's RELATIVE `file` (find_in_files contract) joins to its OWN root — the
-  // absolute path `read_file`/`revealInEditor` require, in the right repo — and in the
-  // root's own separator: `find_in_files` sends `src\a.ts` on Windows, and the tab must be
-  // the tree's `C:\repo\src\a.ts`, never a mixed `C:\repo/src\a.ts` second tab.
+  // Join the relative `file` to its own root in that root's separator: Windows sends `src\a.ts`,
+  // and a mixed `C:\repo/src\a.ts` would open a second tab.
   const toAbs = (m: RootedMatch) => joinPath(m.root, m.file);
   if (loading) {
     // The Stop control sits WITH the spinner, not in the toolbar: it exists only

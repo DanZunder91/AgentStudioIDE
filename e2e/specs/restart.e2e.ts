@@ -1,38 +1,6 @@
-/**
- * Agents survive a restart (phase 1 — docs/design/agent-restart-restore.md, its §7 E2E plan).
- * Agents are sometimes still working when the window or the app is closed (for an update,
- * say), so the app should reopen with every agent that was working before.
- *
- * The real app, the real Rust core, real PTYs — with the E2E stub `claude` (wdio.conf's
- * AGENTSTUDIO_CLAUDE_BIN → e2e/fixtures/claude-stub.sh), which records every launch's argv
- * (support/restart.ts `argvLines`), reports a turn start like Claude's `UserPromptSubmit` hook when
- * it reads `/work`, and otherwise just stays at its prompt.
- *
- *   1. Two agents (⚡ quick-launch) in two panes side by side; the second renamed on its tab. The
- *      first gets a saved conversation (its session id, read off the argv log, as a transcript under
- *      the CONTAINER's `$HOME/.claude/projects` — support/restart.ts, never a real one) and starts a
- *      turn (`/work` → it reads Running), so the two take different rungs and different markers.
- *   2. The main window is CLOSED the way its title bar's ✕ closes it (a `WM_DELETE_WINDOW` — the main
- *      window's `Destroyed`, which raises the shutting-down flag and records who was mid-turn), the app
- *      exits, and `browser.reloadSession()` launches it again (tauri-driver; the app-config dir — with
- *      `open-agents.json` and the layout — is the container's and survives). Both come back: in their
- *      own panes, the rename kept, the first's tab still under its folder's name; the first RESUMED
- *      (`--resume <its id>`) and marked "↻ Resumed · was working" with "…tell it to continue"; the
- *      second REOPENED fresh (a new `--session-id`) and marked "↻ Reopened · new chat". Row and tab
- *      say the same words (the row draws its ↻ in CSS, so its text IS the tab glyph's accessible
- *      name); the tab's ↻ carries the whole sentence as its tooltip. And BOTH terminals are PAINTED —
- *      text pixels in each one's first row, read off the X screen (support/restart.ts
- *      `screenTextPixels`): the resumed one in the unfocused pane used to stay blank (WebKitGTK shows a
- *      WebGL canvas one draw late, so its last draw — the replay — never showed; fixed by
- *      `settleRepaint.ts`).
- *   3. The renamed one is closed by its tab's ✕; `browser.reloadSession()` again — tauri-driver ENDS the
- *      app this time (a crash, as far as the app can tell): only the other comes back, resumed again,
- *      marked honestly ("↻ Resumed", tooltip "…did not close cleanly … if it was, tell it to continue"),
- *      and nothing is launched for the closed one.
- *
- * Stills (support/record.ts), in story order: before the restart, after it (markers), the tooltip, after
- * the second restart. The spec closes what it opened, so the next spec's app starts empty.
- */
+/** Agents survive a restart (docs/design/agent-restart-restore.md §7), with the stub `claude`: a
+ * graceful close resumes the mid-turn agent and reopens the other fresh; a crash restart restores
+ * what remains, marked honestly. Both terminals must be painted on screen. */
 
 import { $, $$, browser, expect } from "@wdio/globals";
 
@@ -59,10 +27,7 @@ const ENTER = "\uE007";
 /** The name the second agent is given on its tab — no doubled letters (WebKitWebDriver drops the second of two identical keys, e2e/README.md). */
 const RENAMED = "release-checker";
 
-/**
- * Text pixels a painted first terminal row holds at least: the stub's banner lights ~400 (calibrated on
- * recorded stills — support/restart.ts `screenTextPixels`); a blank row 0.
- */
+/** The stub's banner lights ~400 (support/restart.ts `screenTextPixels`); a blank row 0. */
 const PAINTED_ROW_PIXELS = 200;
 
 /** `restoredMarker.ts` copy — written out here, so a change of the words is a visible change of this spec. */
@@ -183,10 +148,7 @@ async function waitForApp(): Promise<void> {
   await $('[data-testid="left-rail"]').waitForExist({ timeout: 30_000 });
 }
 
-/**
- * Close a tab by its ✕ (`aria-label="Close <name>"`), confirming the "still working" dialog if it asks.
- * The tab is brought to the front first: an inactive tab's ✕ is hidden until hover.
- */
+/** An inactive tab's ✕ is hidden until hover, so the tab is brought to the front first. */
 async function closeTabNamed(name: string): Promise<void> {
   const tab = await $(`.pane-tab[title="${name}"]`);
   await tab.waitForClickable({ timeout: 10_000 });
@@ -205,10 +167,7 @@ function mirrorPointer(viewport: { x: number; y: number }): void {
   if (main) movePointer({ x: main.x + viewport.x, y: main.y + viewport.y });
 }
 
-/**
- * Recording only: park the real X pointer in the blank lower part of the Files rail, so no native
- * tooltip (a tab's name) hangs in the middle of a still.
- */
+/** Recording only: keeps native tooltips out of the stills. */
 async function parkPointer(): Promise<void> {
   if (!recording()) return;
   const park = await browser.execute(() => ({ x: window.innerWidth - 120, y: window.innerHeight - 160 }));
@@ -322,10 +281,8 @@ describe("Agents survive a restart: every open agent comes back in its own pane 
         relaunched.some((l) => l?.rung === "fresh" && l.session !== first.a && l.session !== first.b),
       { relaunched, first },
     );
-    // THE PROOF that both terminals are PAINTED, from the screen: the first terminal row of each pane
-    // (its xterm screen's top 20 px, on the X display) holds the stub's banner. The resumed agent in the
-    // unfocused left pane used to stay blank here although its output was in memory (0 text pixels
-    // there).
+    // The proof both terminals are painted: each pane's first xterm row on the X display holds the
+    // stub's banner (a WebGL canvas can lag a draw behind memory).
     await parkPointer();
     const rowsAt = await browser.execute(() =>
       Array.from(document.querySelectorAll(".pane"))

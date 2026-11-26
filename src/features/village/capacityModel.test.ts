@@ -1,15 +1,5 @@
-/**
- * capacityModel — the seat estimate (the City lounge card's yardstick), the lounge's bench count
- * and assignment (free / busy, everyone seated), the Seats HALL in both views (in the Village and
- * the City alike — the selected agent's `/context` window as 200 seats: taken / reserved / free, its
- * board and its card in every state), the City's Lounge board and card, the memory, usage and
- * context mappings (0 / 50 / 100 % / unknown), the captions and the hover cards' words, every
- * missing-data state included.
- *
- * Every expected value below is a literal worked out by hand, never read back from the code under test: a
- * reference reading (`REFERENCE`, a realistic `/context` reading) is seated cell by cell in `REFERENCE_CELLS`,
- * counted from `round(tokens / 1m × 200)` with at least one seat per used category.
- */
+/** Every expected value is a hand-worked literal, never read back from the code: `REFERENCE` is
+ * seated in `REFERENCE_CELLS` by `round(tokens / 1m × 200)`, at least one seat per used row. */
 
 import { describe, expect, it } from "vitest";
 
@@ -123,10 +113,7 @@ const many = (n: number): VillageAgent[] => Array.from({ length: n }, (_, i) => 
 /** The wall clock the hall's readings are aged against. */
 const NOW = 1_785_200_000_000;
 
-/**
- * A realistic `/context` reading: claude-opus-5-5,
- * 109.9k / 1m tokens (11%), read three minutes before NOW.
- */
+/** A realistic `/context` reading: claude-opus-5-5, 109.9k / 1m tokens (11%), 3 minutes old. */
 const REFERENCE: ContextUsage = {
   model: "claude-opus-5-5",
   usedTokens: 109_900,
@@ -145,12 +132,9 @@ const REFERENCE: ContextUsage = {
   measuredAtMs: NOW - 3 * 60_000,
 };
 
-/**
- * REFERENCE seated by hand, one seat = 5,000 tokens: system prompt 0.84 → 1; system tools 4.04 → 4;
- * MCP instructions 0.14 → 0, but a used row always gets 1; memory files 0.42 → 0 → 1; skills
- * 1.36 → 1; messages 15.18 → 15 — 23 taken. The buffer 6.6 → 7 reserved. Free = 200 − 23 − 7 = 170,
- * drawn where the CLI prints it (before the buffer).
- */
+/** One seat = 5,000 tokens, rounded, a used row at least 1: 23 taken (prompt 1, tools 4, MCP 1,
+ * memory 1, skills 1, messages 15), buffer 7 reserved, free 200 − 23 − 7 = 170, drawn before
+ * the buffer as the CLI prints it. */
 const REFERENCE_CELLS: string[] = [
   "system-prompt",
   ...Array<string>(4).fill("system-tools"),

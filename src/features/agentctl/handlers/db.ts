@@ -16,11 +16,8 @@ export function agentWho(terminalId: string): string {
 const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 
-/**
- * The result an agent's run opens the console's results with: who ran it from a terminal, and
- * either what came back (with every cut Rust made, so a cut table is not read as the whole
- * answer) or why it did not run.
- */
+/** Console result note for an agent's run: who ran it (from a terminal), and what came back (with
+ * every cut Rust made, so a cut table isn't read as whole) or why it did not run. */
 export function agentRunNote(
   event: AgentCtlEvent,
   results: DbResultSet[],
@@ -50,10 +47,7 @@ export function agentRunNote(
 
 const rowCount = (n: number): string => (n === 1 ? "1 row" : `${n} rows`);
 
-/**
- * What a run brought back, in a few words for the DB panel's notice: the rows read (and whether
- * Rust cut them), the rows a write changed, and whether the database answered with an error.
- */
+/** A run's outcome in a few words: rows read (and if Rust cut them), rows changed, DB error. */
 export function runOutcome(results: DbResultSet[]): string {
   const parts: string[] = [];
   const read = results.filter((r) => r.kind === "rows");
@@ -74,12 +68,9 @@ export function runOutcome(results: DbResultSet[]): string {
   return parts.length === 0 ? "nothing" : parts.join(", ");
 }
 
-/**
- * Open a console for a connection the store may not have loaded yet (it names the tab), with the
- * agent's query typed in when the console is empty (which also unlinks a saved query, so ⌘S
- * cannot write the agent's text over it). A console holding the user's own text is never
- * modified: it is brought to the front as it is, and the DB panel offers the query instead.
- */
+/** Open a console (the connection may not be loaded yet), typing the agent's query only if it
+ * is empty, which unlinks a saved query so ⌘S can't overwrite it. A console with the user's own
+ * text is only brought to front; the DB panel offers the query instead. */
 async function openAgentConsole(
   connectionId: string,
   terminalId: string,
@@ -98,16 +89,9 @@ async function openAgentConsole(
   }
 }
 
-/**
- * Show a connection an agent named in the DB panel, and connect it when `open` says so.
- *
- * The connect waits for the panel's list to be read again: a connection `db connect` has just
- * added is not in it until then, and `openDbSession` on an id the list does not hold fails at
- * once as "That connection or session no longer exists". A connection the panel already has
- * open (or opening) keeps that session: dialling again would replace the session id the
- * console uses and leave the old session, with any transaction the user has open in it,
- * running where nothing shows it.
- */
+/** Show an agent-named connection; connect when `open` says so, after the panel list re-reads
+ * (a just-added id fails `openDbSession`). An open/opening session is kept: re-dialling would
+ * orphan it and any transaction the user has open. */
 async function showAgentConnection(
   connectionId: string,
   terminalId: string,
@@ -125,10 +109,8 @@ async function showAgentConnection(
 }
 
 export const DB_HANDLERS: Readonly<Record<string, AgentCtlHandler>> = {
-  /**
-   * `db_connect`: a connection was added (or an already-saved one re-opened). Connected and
-   * expanded when Rust knows it connects (a passing test, or already saved).
-   */
+  /** `db_connect`: a connection added or re-opened; connected and expanded when Rust knows it
+   * connects (a passing test, or already saved). */
   dbConnection: (e) =>
     void showAgentConnection(
       String(e.connectionId),
@@ -149,11 +131,8 @@ export const DB_HANDLERS: Readonly<Record<string, AgentCtlHandler>> = {
       typeof e.query === "string" ? e.query : null,
     ),
 
-  /**
-   * `db_query`: every run, refused ones included, is told in the DB panel's notice and lands in
-   * the connection's console — opened in the background, so the terminal the user is watching
-   * keeps the focus.
-   */
+  /** `db_query`: every run, refused too, goes to the DB notice and the connection's console,
+   * opened in the background so the watched terminal keeps focus. */
   dbQueryRun: (e) => {
     const results = Array.isArray(e.results)
       ? (e.results as DbResultSet[])

@@ -1,72 +1,6 @@
-/**
- * TRAFFIC — cars, taxis and buses on the City's road (taxis, cars and buses,
- * arriving at random and only as many as it takes to make the city look alive). DECORATION, and said so: no vehicle stands for anything measured — arrivals are
- * a seeded random process, nothing an agent did. A vehicle is never hoverable, never clickable and never
- * counted; only the crossing below ties it to the agents, and only so that it never drives through one.
- *
- * THE ROAD is the street's two middle rows (engine/city.ts: the near sidewalk `street`, the lanes
- * `street + 1` and `street + 2`, the far sidewalk `street + 3`). Japan keeps LEFT. We look at the street
- * from the far sidewalk, across the road at the buildings, so:
- *   - the FAR lane (`street + 1`, along the buildings) drives RIGHT — eastbound, its left hand on the
- *     buildings' side, as a keep-left road has it; we see its vehicles' right flank;
- *   - the NEAR lane (`street + 2`) drives LEFT — westbound; we see its vehicles' left flank (the kerb
- *     side: a bus shows its doors only there, render/vehicles.ts).
- * A vehicle stands on its lane's row like a walker on a tile: the road under its wheels (`VehicleView.y`)
- * is the row's bottom edge, so the draw list z-sorts it with the street by that line.
- *
- * THE STRETCH a vehicle drives is the world ± `MARGIN`, widened to the view ± `PAD` when the view shows
- * more (the road runs on past the world's ends, render/city.ts): it is born upstream of that stretch and
- * leaves downstream of it, so it always enters and leaves off screen. While the view stays within the
- * world ± MARGIN (Fit, any zoom in, a pan inside it) the stretch is the World's, so the traffic does not
- * depend on the camera.
- *
- * ARRIVALS, per lane and on its own seeded stream: one every `ARRIVAL_GAP` seconds (uniform), `NIGHT_GAPS`
- * times as far apart at night; a bus in `1/BUS_EVERY`, a taxi in `1/TAXI_EVERY`, otherwise a car (a third
- * of them a boxy kei car). At most `MAX_PER_LANE` in a lane (a longer queue skips an arrival), and one is
- * held back while the entrance is still taken. Heavy weather (rain, storm, snow, fog) drives everyone at
- * `HEAVY_PACE` of their speed. The first update also lays a lane's worth of vehicles along the road
- * (as if they had been arriving all along), so the City does not open on an empty street.
- *
- * DRIVING, front to back in each lane (no one overtakes): each vehicle aims for its own cruise speed,
- * never faster than lets it stop (`BRAKE`) short of its obstacle — `GAP` behind the vehicle ahead, the
- * crossing's stop line, a person in its lane — and its front is clamped to that obstacle, so two
- * vehicles never overlap and none drives into a person. Accelerating is gentler (`SPEC.accel`).
- *
- * THE CROSSING (`crossingOf`, the zebra in front of the HQ where the commuters cross — engine/commute.ts):
- * it is BUSY while anyone is on it or about to be (`busy`). A vehicle that has not reached its stop line
- * (`STOP_GAP` short of the stripes) then waits there; one past the line still stops short of the walking
- * line (the crossing's middle column, where the commuters walk); one whose body is already over that line
- * clears the stripes at `CLEAR_PACE` (the sim's walkers do not wait for cars, so stopping there would
- * not help) — and so does the convoy nose to tail ahead of it, which would otherwise hold it there. "About to be", from each person's velocity over the last frame (tracked by key; a jump
- * faster than `MAX_PERSON_SPEED` is a rebuild's re-placing, not a walk):
- *   1. it is within `LINGER` of the crossing along the street, from the near sidewalk to the far one —
- *      walking away included: a commuter that changes its mind turns round where it stands (engine/sim.ts)
- *      — or, on the street, its path over the next `HORIZON` seconds gets there (a commuter walking back
- *      along the near sidewalk; from under the street the only way up is the lift, rule 2);
- *   2. it is moving in the lounge's lift shaft (riding up to the kiosk, or down — it may turn
- *      round), or walking an aisle towards it (one standing at its foot — a commuter without a bench —
- *      or walking away is not);
- *   3. anywhere in the lounge it is getting up from its bench (seen the very frame it stands) or stepping
- *      DOWN off it: a commuter on its way out.
- * Anyone standing in a lane stops that lane's vehicles short of it, wherever it is; at the crossing, so
- * does anyone whose path enters the lane within `OBS_HORIZON` (nobody steps into the road elsewhere, and a
- * commuter stepping out of its building's door onto the sidewalk must not brake the traffic).
- * traffic.test.ts drives the real sim's commute (a sub-agent flipping busy/done every few seconds, far
- * more than real agents do) against the traffic for hours of sim time, at 60 and 10 fps, and finds no
- * vehicle ever over a person in its lane; it also walks one commute out and back and finds the crossing
- * busy without a single frame's gap. Each rule above is there because a longer run (72 sim-hours over 10,
- * 30 and 60 fps, 25–60 commuters) found a commuter grazed by a bus without it: one turning round just
- * outside LINGER, one riding back up, one getting up from the bench beside the lift (~0.97 s from its
- * seat to the near lane), one reaching the lift's column on the frame between walking and riding, and a
- * bus held on the stripes behind a slower one.
- *
- * REBUILDS: lanes and the crossing are re-derived from the World every frame; vehicles keep their x and
- * their lane and keep driving — a new street row moves them with it, never a teleport along the road.
- *
- * Deterministic (seeded mulberry32 streams; time only through `update`'s dt) and allocation-free on the
- * steady path: a fixed pool of vehicles, reused scratch arrays, and `vehicles()` returns the same array
- * every frame. A person's track is allocated once, when it is first seen on its feet.
- */
+/** Road traffic is DECORATION; only the crossing ties it to agents. Japan keeps LEFT. The crossing
+ * is busy if someone is on it or about to be: (1) on the street within LINGER or heading there,
+ * (2) in or toward the lounge lift, (3) stepping off a bench. Each fixed a graze in a sim. */
 
 import { TILE, type Ambience, type VehicleKind, type VehicleView, type WeatherKind, type World } from "../villageTypes";
 import { mulberry32, range, type Rng } from "./rng";
@@ -109,13 +43,9 @@ export const STOP_GAP = 3;
 export const MARGIN = 6 * TILE;
 /** World px past the view's edges a vehicle is born and leaves (longer than any vehicle). */
 export const PAD = 80;
-/**
- * A vehicle caught over the walking line of a busy crossing clears the stripes: at CLEAR_PACE × its speed,
- * accelerating CLEAR_PUSH × as hard. The floor of the warning is an outgoing commuter on the bench next to
- * the lounge's lift: ~0.97 s from getting up to stepping into the near lane, less a frame or two to see it
- * move (0.1–0.2 s at the 10 fps the frame clamp allows); a bus caught just over the walking line — even one
- * only pulling away from the stop line — clears it in ≤ 0.7 s this way.
- */
+/** A vehicle over the walking line of a busy crossing clears it at CLEAR_PACE × speed, CLEAR_PUSH ×
+ * acceleration: a bus clears in ≤ 0.7 s, inside the ~0.97 s a bench commuter needs to reach the
+ * near lane. */
 export const CLEAR_PACE = 2;
 export const CLEAR_PUSH = 4;
 /** World px between one vehicle's rear and the next one's front within which they clear the stripes together. */
@@ -128,11 +58,8 @@ export const OBS_HORIZON = 1;
 export const PERSON_HALF = 7;
 /** World px round the crossing's tiles that still count as its landing. */
 export const LANDING = 4;
-/**
- * World px along the street, either side of the crossing, where anyone at all — even walking away —
- * keeps it busy: a commuter that changes its mind on the sidewalk turns round where it stands
- * (engine/sim.ts) and is back on the stripes in a moment.
- */
+/** World px either side of the crossing where anyone, even walking away, keeps it busy: a commuter
+ * changing its mind turns round where it stands (engine/sim.ts). */
 export const LINGER = 6 * TILE;
 /** Faster than this (px/s) a person did not walk there: a rebuild re-placed it. */
 export const MAX_PERSON_SPEED = 300;
@@ -168,12 +95,8 @@ function crossingFor(world: World): ReturnType<typeof crossingOf> {
   return x;
 }
 
-/**
- * A vehicle's depth in the draw list (engine/drawList.ts): the road under its wheels, a quarter px on —
- * in front of anything standing on its row, behind a walker whose feet are on the same line (+0.5). So
- * the far lane is behind the near lane, the near sidewalk's lamps, trees and walkers behind both, and
- * everything on the far sidewalk (its kiosk, the metro entrance, its walkers) in front of both.
- */
+/** Draw-list depth: the road under its wheels + 0.25, in front of anything on its row, behind a
+ * walker on the same line (+0.5). */
 export function vehicleZ(v: Pick<VehicleView, "y">): number {
   return v.y + 0.25;
 }
@@ -262,11 +185,8 @@ export class TrafficFx {
     return this._busy;
   }
 
-  /**
-   * Advance the traffic by `dtSec` (clamped to [0, MAX_DT]) in `world` — nothing at all outside a city —
-   * under `amb` (night and weather; null = a plain day), yielding to `people` (the sim's characters, and
-   * any other walker near the road). `view` is the world-x span on screen.
-   */
+  /** Advance by `dtSec` (clamped to [0, MAX_DT]); nothing outside a city. `amb` null = a plain day;
+   * yields to `people`; `view` is the world-x span on screen. */
   update(dtSec: number, world: World, amb: Ambience | null, people: readonly TrafficPerson[], view: { x0: number; x1: number }): void {
     const city = world.city;
     if (!city) {
@@ -412,11 +332,8 @@ export class TrafficFx {
     return v;
   }
 
-  /**
-   * The first look at a city: lane `l` laid as if vehicles had been arriving all along — from its exit
-   * back upstream, an arrival gap at a car's pace apart (always more than a bus put back from the stripes
-   * to the stop line, and a gap: traffic.test.ts pins it), none over the crossing.
-   */
+  /** First look at a city: lane `l` laid as if vehicles had been arriving all along, an arrival gap
+   * apart (traffic.test.ts pins the spacing), none over the crossing. */
   private lay(l: number, d0: number, d1: number, night: boolean, crossing: ReturnType<typeof crossingOf>): void {
     const dir = dirOf(l);
     const entrance = dir > 0 ? d0 : -d1;
@@ -450,11 +367,9 @@ export class TrafficFx {
 
   // ───────────────────────────── driving ─────────────────────────────
 
-  /**
-   * Lane `l`, front to back: each vehicle aims for its cruise speed (× `pace`), held to what lets it stop
-   * short of the vehicle ahead, the stop line `stop` (lane coordinates) while the crossing is busy and
-   * it has not reached it, and anyone in its lane ahead; then its front is clamped there. Past `exit`, gone.
-   */
+  /** Lane `l`, front to back: each aims for cruise × `pace`, held to stopping short of the vehicle
+   * ahead, the stop line `stop` (while busy and not yet reached) and anyone in its lane; its front
+   * is clamped there. Past `exit`, gone. */
   private drive(l: number, dt: number, dir: 1 | -1, pace: number, stop: number, far: number, exit: number): void {
     const lane = this.lanes[l];
     // While the crossing is busy, the vehicles caught on the stripes clear them — and so does the convoy

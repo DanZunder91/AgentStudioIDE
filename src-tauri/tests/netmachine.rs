@@ -1,11 +1,6 @@
-//! Whole-computer network connections.
-//!
-//! * Hermetic on every OS: a two-sample nettop stream (nettop's exact CSV shape, invented values)
-//!   through the splitter → parser → rate tracker, and the start/stop lifecycle against a fake source.
-//! * Linux, NOT ignored (loopback only, so hermetic): the real `/proc` backend sees both ends of
-//!   a connection this test process opens, attributed to our own pid.
-//! * macOS, `#[ignore]`d local integration (`npm run verify`):
-//!   `macos_real_nettop_sampler_emits_apps_with_bytes`.
+//! Whole-computer network connections. Hermetic everywhere: a nettop CSV stream through splitter,
+//! parser and rate tracker, plus lifecycle against a fake source. Linux: real `/proc` sees our own
+//! loopback connection. macOS: an `#[ignore]`d real-nettop test, run by `npm run verify`.
 
 use agent_studio_scaffold_lib::netmachine::{
     nettop, rates::RateTracker, MachineProto, MachineSample, NetMachine, Platform, RawApp, RawConn,

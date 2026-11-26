@@ -1,18 +1,6 @@
-/**
- * SEAM TEST — dev apps on this machine in the Logs view. Not a unit test.
- *
- * The JSON fed in here was WRITTEN BY RUST (`src-tauri/tests/contract_goldens.rs`): `procs_list`
- * replies (`procs-list.json`), the lines a real app tail pushes into a real `LogHub`
- * (`app-lines.json`), and the replies of the tail / untail / restart commands
- * (`procs-commands.json`). Only `invoke` and `listen` are mocked, answering with those files;
- * `procsIpc` → `procsStore` → `DevAppsSection` / `DevAppCard`, and `logstreamIpc` →
- * `agentLogsStore` → `AgentLogsPanel`, are the real ones.
- *
- * Checked: every golden key and value against the TS contract (`procsTypes.ts`), both ways; the
- * section renders every app with its runtime's text badge (Shell included); the app lines render
- * RAW and sit UNDER their app's row; Stream / Stop / Restart send what Rust expects and use what
- * it answers. Expected strings are written by hand, never derived from the golden.
- */
+/** SEAM TEST: the JSON was written by Rust (`src-tauri/tests/contract_goldens.rs`). Only `invoke`
+ * / `listen` are mocked; IPC, stores and views are real. Golden keys are checked both ways against
+ * `procsTypes.ts`; expected strings are written by hand, never derived from the golden. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

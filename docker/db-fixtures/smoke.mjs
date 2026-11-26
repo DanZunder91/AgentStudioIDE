@@ -1,29 +1,7 @@
 #!/usr/bin/env node
-/**
- * Connectivity smoke for the database-client integration fixture.
- *
- * ── What this is for ─────────────────────────────────────────────────────────
- * "Is my fixture healthy?", answerable BEFORE any Rust driver exists. It talks to
- * each engine with the client that already lives inside that engine's container
- * (`psql`, `mysql`, `clickhouse-client`, `mongosh`, `redis-cli`) via
- * `docker compose exec`, so it needs nothing installed on the host but Docker.
- *
- * That is deliberately the opposite of how the PRODUCT connects: the product
- * never shells out to a CLI, and its drivers are pure-Rust. This script is a
- * developer tool for validating the fixture, and it is not — and must never
- * become — a substitute for the `#[ignore]`d Rust tier that exercises the real
- * drivers (`src-tauri/tests/db_live.rs`).
- *
- * ── Why it is NOT in `npm test` ──────────────────────────────────────────────
- * It needs a running Docker daemon. `npm test` and `cargo test` are hermetic by
- * rule (no network, no daemon, no signed-in CLI), and a Docker-dependent test in
- * the default path turns a red gate into "probably just Docker again". Run it
- * with `npm run db:fixtures:smoke`, on demand.
- *
- * Every check below asserts a LITERAL expected value, never "whatever the fixture
- * happens to contain": a smoke test that reads its expectation from the thing
- * under test proves only that the plumbing is connected.
- */
+/** Fixture smoke via each container's own CLI; never a substitute for src-tauri/tests/db_live.rs.
+ * Not in `npm test` (needs Docker): run `npm run db:fixtures:smoke`. Expectations are literals,
+ * never read from the fixture. */
 
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -85,27 +63,9 @@ const CHECKS = [
     service: "postgres",
     name: "read-only is SERVER-enforced (separate round trip)",
     why: "the read-only boundary, proved against the server rather than asserted",
-    // ⚠️  A measured trap the engine must not fall into:
-    //     `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY` does NOT protect
-    //     statements sent in the SAME simple-query batch as the SET. Postgres wraps
-    //     a multi-statement simple query in one implicit transaction that began
-    //     BEFORE the SET took effect, so the new default does not apply to it:
-    //
-    //       psql -tAc "SET SESSION CHARACTERISTICS …; INSERT …"   →  SET / INSERT 0 1
-    //       psql -c   "SET SESSION CHARACTERISTICS …" -c "INSERT …"
-    //                                                           →  SET / ERROR: cannot
-    //                                                              execute INSERT in a
-    //                                                              read-only transaction
-    //
-    //     Setting read-only "at connect" is correct — but `sqlx::raw_sql()` happily
-    //     takes multiple `;`-separated statements, so prepending the SET to
-    //     the user's script in one call is a natural implementation that would
-    //     silently disable the guardrail. Hence two `-c` flags here: this check
-    //     asserts the mechanism the app must actually use.
-    //
-    // If this ever prints 0 the INSERT SUCCEEDED and the fixture now has a 7th
-    // tracks row, so "reachable + seeded" above starts failing too. That is the
-    // intended blast radius: a broken read-only boundary must be loud.
+    // SET … READ ONLY misses statements in the same simple-query batch (its implicit transaction
+    // began first), so the app must send the SET on its own: hence two `-c`. 0 means the INSERT
+    // ran, and the 7th tracks row breaks the seeded check too: loud on purpose.
     sh: `psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tA -c "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY" -c "INSERT INTO tracks (id,title,ensemble,duration) VALUES (99,'NOPE','duo',1)" 2>&1 | grep -ci "read-only transaction"`,
     expect: "1",
   },

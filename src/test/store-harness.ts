@@ -1,15 +1,6 @@
-/**
- * Shared harness for the layout store: reset + the canonicalization invariants.
- *
- * The invariants live here (not inline in one test file) because they are the
- * spec — they are the highest-value frontend target, and they are
- * asserted from three angles: after every action in the property-based
- * sequences, on `canonicalize`'s output directly, and after component
- * interactions. One definition, three call sites.
- *
- * Source of the rules: `store.ts` `canonicalize()` docblock (a–e) and
- * ARCHITECTURE §4 "the tree is canonicalized after every mutation".
- */
+/** Layout-store harness: reset + the canonicalization invariants (the spec), asserted after
+ * property-test actions, on `canonicalize`'s output and after interactions. Rules: `store.ts`
+ * `canonicalize()` (a–e) and ARCHITECTURE §4. */
 
 import { expect } from "vitest";
 
@@ -28,11 +19,7 @@ import type {
   TabId,
 } from "../app/types";
 
-/**
- * `sizes` are renormalized floats, so an exact `=== 1` is the wrong assertion.
- * Generous vs. IEEE754 drift (~1e-16 per term), still far tighter than any
- * error a real bug would produce.
- */
+/** `sizes` are renormalized floats: loose vs IEEE754 drift (~1e-16 a term), tight vs any bug. */
 export const SUM_TOLERANCE = 1e-9;
 
 /** Reset the module-singleton store to its boot state: one empty focused leaf. */
@@ -51,10 +38,7 @@ export function resetStore(): void {
     // panes and re-place tabs for a layout that no longer exists.
     s.pendingRestore = {};
     s.tabs = {};
-    // The crosshair's "last file tab activated anywhere". Harmless to leave —
-    // `activeFilePath` discards any remembered path no live tab shows, and
-    // `tabs` is cleared right above — but resetting it keeps boot state honest
-    // rather than relying on a selector to launder a leak.
+    // Reset so boot state is honest rather than laundered by `activeFilePath`'s selector.
     s.lastFilePath = null;
     s.workspaceRoot = null;
     s.recentProjects = [];
@@ -79,10 +63,8 @@ export function resetStore(): void {
     s.apiRequests = {};
     s.sequences = {};
     s.apiCollections = [];
-    // Saved-request folders + their disclosure set. Both belong here for the reason the
-    // comments below record twice over: a new key nobody resets is a value that leaks
-    // between tests, and a leaked collapse set makes a "the folder's requests are
-    // visible" assertion pass or fail for reasons the test never mentions.
+    // Every new store key needs a reset here: a leaked collapse set flips "the folder's requests
+    // are visible" for reasons the test never mentions.
     s.apiFolders = [];
     s.collapsedApiFolders = new Set<string>();
     s.apiEnvironments = [];
@@ -99,39 +81,23 @@ export function resetStore(): void {
     s.dbError = null;
     s.dbSessions = {};
     s.dbDialog = null;
-    // The query consoles' buffers and last results. Missing this reset is not theoretical:
-    // it made the "a blank buffer is not a round trip" test read `no-session` left behind by
-    // the test before it — a stale error asserted as a fresh one. The same one-line
-    // omission, for the consumed-usage store, once turned a whole run of unrelated tests red.
+    // A leaked console buffer lets a later test assert a stale `no-session` error as a fresh one.
     s.dbConsoles = {};
-    // The object tree's cache, the saved-query lists, and the "name this query"
-    // dialog. All three are new keys, and this file is where omissions of that exact kind
-    // have already cost red tests and a stale error asserted as a fresh one (see above). The
-    // dangerous one here is `dbTrees`: a leaked cached level makes a lazy-expand test pass
-    // WITHOUT calling `db_children` at all, which is precisely the assertion it exists to make.
+    // A leaked `dbTrees` level lets a lazy-expand test pass without calling `db_children` at all.
     s.dbTrees = {};
     s.dbSavedQueries = {};
-    // …and the hand-arranged table order, for a nastier reason than the others: a leaked
-    // arrangement changes the ROW ORDER of a level, so it does not fail the test that leaked
-    // it — it fails a later, unrelated one as "the wrong row was clicked", which is about the
-    // most expensive shape a test-isolation bug can take.
+    // A leaked arrangement changes a level's ROW ORDER and fails a later, unrelated test as "the
+    // wrong row was clicked".
     s.dbTreeOrders = {};
-    // Find bars are keyed by request/path/connection ids that repeat across
-    // tests; a leaked one re-opens a bar in an unrelated suite's render.
-    // A close left waiting on "are you sure?" would make the NEXT suite's close
-    // gesture look like a replay (the gate treats a non-null pending record as
-    // "the user already answered"), so a leak here shows up as an unrelated test
-    // closing something it never confirmed.
+    // A leaked find bar re-opens in an unrelated render; a leaked pending close reads as "already
+    // answered", so a later close gesture would skip its confirm.
     s.pendingTerminalClose = null;
     s.findBars = {};
     s.scrollOffsets = {};
     s.gridViews = {};
     s.dbSaveQueryPrompt = null;
-    // Shareable config bundles. Reset as a WHOLE slice through its own factory rather
-    // than key by key, because the two failures the comments above record were both a new
-    // key that nobody added here — and this slice's most dangerous stale value is
-    // `overwriteExistingSecrets`, where a leaked `true` from a previous test would make the
-    // security-default assertion pass for the wrong reason.
+    // Reset as a whole slice via its factory so a new key cannot be missed; a leaked
+    // `overwriteExistingSecrets: true` would pass the security-default assertion wrongly.
     Object.assign(s, initialPortabilityState());
   });
 }
@@ -159,13 +125,8 @@ function leavesOfNode(node: PaneNode): LeafNode[] {
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
-/**
- * The structural invariants of a canonical `PaneNode` tree. Holds for anything
- * `canonicalize()` returned, regardless of how it got there.
- *
- * `where` is prepended to failures so a shrunk property-test counterexample
- * says which command in the sequence broke it.
- */
+/** Structural invariants of any `canonicalize()` output; `where` prefixes failures so a shrunk
+ * counterexample names the command that broke it. */
 export function assertTreeInvariants(root: PaneNode, where = ""): void {
   const at = (msg: string) => `${where ? `${where}: ` : ""}${msg}`;
 
@@ -233,11 +194,8 @@ export function assertStoreInvariants(s: LayoutState, where = ""): void {
     at(`focusedPaneId ${s.focusedPaneId} is not an existing leaf`),
   ).toBeDefined();
 
-  // No orphaned tabs, in either direction — ACROSS EVERY VIEW, not just the visible one.
-  //
-  // `s.tabs` is global and a tab may legitimately be parked in an inactive view, so checking
-  // `s.layout` alone would report every such tab as an orphan. Read the live tree for the active
-  // view (its snapshot in `s.views` is stale by design) and the snapshot for every other.
+  // No orphaned tabs either way, across EVERY view: a tab may be parked in an inactive view. The
+  // active view's `s.views` snapshot is stale by design, so read its live tree.
   const inTree = (s.views ?? []).flatMap((v) =>
     allTabIdsInTree(v.id === s.activeViewId ? s.layout : v.layout),
   );

@@ -1,12 +1,5 @@
-/**
- * Real layout: both anchored popovers stay on screen. Near the window's right edge they flip to
- * the trigger's right edge (the Network host picker ran off-window and WebDriver read its rows as
- * blank); near the left edge they stay left-anchored (the Columns menu clipped off the
- * panel when it was right-anchored). Falsified: `setFlip(false)` always → the right-edge case goes
- * red for both components.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/components/popoverFlip.browser.test.tsx`
- */
+/** Real layout: anchored popovers flip to the trigger's right edge near the window's right edge
+ * and stay left-anchored near the left edge, for both components. */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 

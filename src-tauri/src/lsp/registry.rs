@@ -1,16 +1,6 @@
-//! `LanguageId → LspServerSpec` table + server-binary detection.
-//!
-//! Bring-your-own-server, detect-on-PATH, degrade silently (`code-intelligence.md` §3). The
-//! frontend attaches for every language with a row here (`lsp/languages.ts` mirrors
-//! the set); a missing binary degrades to the row's install hint. Adding a language
-//! is one row, not a new code path — rust-analyzer · typescript-language-server ·
-//! pyright · gopls · clangd · jdtls (Java) · kotlin-language-server.
-//!
-//! **The rust-analyzer gotcha:** `~/.cargo/bin/rust-analyzer`
-//! on `PATH` is often a *rustup proxy* that exits non-zero when run outside a managed
-//! toolchain. So for a rustup-managed server we first ask `rustup which` for the real
-//! toolchain binary, and only fall back to PATH. Detection is behind a [`Prober`]
-//! trait so the whole thing is unit-testable with a stub — no rustup, no filesystem.
+//! `LanguageId → LspServerSpec` table and binary detection: bring-your-own-server, degrade to
+//! the row's install hint (`code-intelligence.md` §3); `lsp/languages.ts` mirrors the set. For
+//! rustup-managed servers ask `rustup which` first: the PATH binary is often a rustup proxy.
 
 use crate::spawn::NoWindow as _;
 use std::path::{Path, PathBuf};
@@ -119,13 +109,9 @@ fn spec_unix(language_id: &str) -> Option<LspServerSpec> {
             server_name: "clangd",
             rustup_component: None,
         },
-        // ── JVM family (task: .java/.kt + Spring). ──
-        // Eclipse JDT LS ships a `jdtls` launcher that speaks LSP over stdio and
-        // manages its own workspace data dir — so no args and no init options are
-        // needed for basic navigation (go-to-def / find-usages / hover), which is
-        // what makes a `@Configuration`/`@Bean`/POJO type resolve. (Lombok-generated
-        // members and Spring-Boot-specific intelligence need extra jdtls setup — a
-        // future enhancement, not required for type/symbol navigation.)
+        // ── JVM family ──
+        // `jdtls` speaks stdio LSP and manages its own workspace dir, so navigation needs
+        // no args or init options; Lombok/Spring-Boot intelligence needs extra setup.
         "java" => LspServerSpec {
             command: "jdtls",
             args: &[],
@@ -180,14 +166,9 @@ pub trait Prober: Send + Sync {
     }
 }
 
-/// Resolve `spec`'s binary with `prober`: prefer the rustup toolchain binary for a
-/// rustup-managed server, else PATH / known dirs, else [`Detection::NotInstalled`].
-///
-/// For a rustup-managed server whose component rustup does NOT have, a PATH hit that is
-/// rustup's own proxy is not a server: run, it prints `error: Unknown binary
-/// 'rust-analyzer.exe' in official toolchain …` and exits 1 (seen on Windows — a
-/// dead server instead of the install hint). Every rustup install ships that proxy, so
-/// without this check the hint was unreachable for exactly the users it is written for.
+/// Resolve `spec`'s binary: the rustup toolchain binary for a rustup-managed server, else PATH
+/// or known dirs, else [`Detection::NotInstalled`]. A PATH hit that is rustup's proxy is not a
+/// server (it exits 1), so the install hint stays reachable.
 pub fn detect_with<P: Prober + ?Sized>(spec: &LspServerSpec, prober: &P) -> Detection {
     if let Some(component) = spec.rustup_component {
         if let Some(path) = prober.rustup_which(component) {
@@ -203,11 +184,8 @@ pub fn detect_with<P: Prober + ?Sized>(spec: &LspServerSpec, prober: &P) -> Dete
     }
 }
 
-/// Is `candidate` a rustup proxy? rustup installs its proxies (`cargo`, `rustc`,
-/// `rust-analyzer`, …) in the same directory as `rustup` itself, as links to — or copies
-/// of — that one binary (hard links on Windows, where `ls` in Git Bash shows them as
-/// `-> rustup.exe`). So: a `rustup` beside it that is the same file, or the same size. A
-/// real rust-analyzer is a different program of a different size.
+/// A rustup proxy is a link to (or copy of; hard link on Windows) the `rustup` beside it: same
+/// file or same size. A real rust-analyzer is a different program of a different size.
 pub fn is_rustup_proxy(candidate: &Path) -> bool {
     let Some(dir) = candidate.parent() else {
         return false;
@@ -232,10 +210,8 @@ pub fn is_rustup_proxy(candidate: &Path) -> bool {
 /// The real prober: runs `rustup` and searches the live PATH + known install dirs.
 pub struct SystemProber;
 
-/// Home-relative dirs a GUI launch's thin PATH tends to miss (the M2 `~/.local/bin`
-/// lesson) — where cargo/npm/go/etc. drop server binaries. On Windows home is
-/// `%USERPROFILE%`, so `.cargo/bin` and `go/bin` are the rustup and `go install` defaults
-/// there too.
+/// Home-relative dirs a GUI launch's thin PATH tends to miss, where cargo/npm/go drop server
+/// binaries (on Windows home is `%USERPROFILE%`, same defaults).
 const KNOWN_INSTALL_DIRS: &[&str] = &[
     ".cargo/bin",
     ".local/bin",
@@ -249,12 +225,8 @@ const KNOWN_INSTALL_DIRS: &[&str] = &[
 /// folder on the current drive).
 const KNOWN_ABSOLUTE_DIRS: &[&str] = &["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin"];
 
-/// Windows install dirs a GUI app's PATH can lack, as `(environment variable, subdir)`:
-/// npm's global prefix (`npm i -g` → `typescript-language-server.cmd`, `pyright-langserver.cmd`
-/// — the default prefix is `%APPDATA%\npm`, and the Node installer adds it to the *user*
-/// PATH only), winget's links for portable packages, scoop's shims, and LLVM's installer
-/// (`winget install LLVM.LLVM` → `C:\Program Files\LLVM\bin\clangd.exe`, not added to PATH
-/// unless ticked).
+/// Windows install dirs a GUI app's PATH can lack, as `(env var, subdir)`: npm's global prefix
+/// (on the user PATH only), winget links, scoop shims, and LLVM (not on PATH by default).
 const WINDOWS_ENV_DIRS: &[(&str, &str)] = &[
     ("APPDATA", "npm"),
     ("LOCALAPPDATA", "Microsoft/WinGet/Links"),
@@ -336,10 +308,8 @@ pub fn find_in_dirs(dirs: &[PathBuf], names: &[String]) -> Option<PathBuf> {
     })
 }
 
-/// The file names a server `command` may have, in preference order. Windows: the native
-/// `.exe`, then npm's `.cmd` shim (`npm i -g typescript-language-server` installs only
-/// `.cmd` + `.ps1`), then a `.bat` launcher (jdtls, kotlin-language-server ship one).
-/// Elsewhere the bare name.
+/// File names a server `command` may have, in preference order. Windows: `.exe`, then npm's
+/// `.cmd` shim (npm installs only `.cmd` + `.ps1`), then a `.bat` launcher. Elsewhere bare.
 pub fn file_names(command: &str, windows: bool) -> Vec<String> {
     if windows {
         vec![
@@ -373,23 +343,9 @@ pub struct Launch {
 /// the reason no user text may ever reach a batch file.
 const CMD_META: &[char] = &['%', '!', '^', '&', '|', '<', '>', '"', '\r', '\n'];
 
-/// Turn a detected binary into a [`Launch`]. Off Windows, or for an `.exe`, it runs as
-/// itself with `args`.
-///
-/// **A Windows batch file never runs through cmd.exe when it can be avoided.** An npm
-/// `.cmd` shim — or any launcher in its shape, `<interpreter> "%~dp0<script>" %*` — is
-/// unwrapped to `node <script>` / `<interpreter> <script>`
-/// ([`crate::winshim::unwrap_npm_shim`]) —
-/// shared with the `claude` launch — so the process we kill on stop IS the server (killing a
-/// `cmd.exe` leaves its child running) and no cmd parsing is involved.
-///
-/// **A `.bat`/`.cmd` that is not an npm shim** (jdtls's and kotlin-language-server's
-/// launchers) has no target to read, so it is started as a batch file — std's `Command`
-/// runs it through `cmd.exe /c` with its batch-file quoting. That is safe here only because
-/// what reaches cmd is **fixed**: the registry's static `args` and the path we found. Both
-/// are checked for cmd's metacharacters and refused if they carry one, so no `%VAR%` or `&`
-/// can ever be interpreted. Known limit: stopping such a server kills the `cmd.exe`; the JVM
-/// beneath it sees its stdin close and exits on its own (both servers do on EOF).
+/// A detected binary → [`Launch`]. On Windows an npm-style `.cmd` shim is unwrapped
+/// ([`crate::winshim::unwrap_npm_shim`]) so stop kills the real server. Other `.bat`/`.cmd` run
+/// via cmd.exe: safe only because the fixed args and path are refused if they hold metachars.
 pub fn launch_for(
     bin: &Path,
     args: &[&str],
@@ -548,10 +504,8 @@ mod tests {
         }
     }
 
-    /// The Windows case: rustup has no rust-analyzer component, PATH has
-    /// `~/.cargo/bin/rust-analyzer.exe` — rustup's proxy, which exits 1 when run. That is
-    /// "not installed" (the hint), never a server to spawn. Two-sided: a PATH hit that is
-    /// NOT a proxy is still found, and a non-rustup server is never judged a proxy.
+    /// Windows: rustup lacks the component and PATH holds its proxy → not installed. Two-sided:
+    /// a non-proxy PATH hit is still found; a non-rustup server is never judged a proxy.
     #[test]
     fn a_rustup_proxy_on_path_is_not_an_installed_rust_analyzer() {
         let rust = spec_for("rust").unwrap();

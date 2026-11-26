@@ -1,10 +1,5 @@
-/**
- * The hover card over a village character: who it is, where it lives, whether the IDE
- * runs it, what it is doing and when it last did anything. Positioned by the panel at
- * the pointer (CSS px inside the stage). Never shows prompt text — `title` is already
- * a privacy-safe label. A city CONSOLE (`consoleId`) is a terminal, not an
- * agent: its card says so, in a shell's words.
- */
+/** Hover card at the pointer (CSS px inside the stage). Never shows prompt text: `title` is
+ * already privacy-safe. A city console (`consoleId`) is a terminal, not an agent. */
 
 import type { VillageAgent } from "./villageTypes";
 import { activityText, agoText, consoleActivityText } from "./villageView";

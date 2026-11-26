@@ -1,14 +1,7 @@
-/**
- * A project's badge in the agent rail: a two-letter monogram and a color, both derived
- * from the folder, so the same project looks the same on every launch without storing
- * anything.
- */
+/** Project badges: a monogram and color derived from the folder, stable across launches with
+ * nothing stored. */
 
-/**
- * Colors for project badges. Chosen to stay readable on the rail's dark surface and to
- * stay clear of the status colors (blue running, amber waiting, green done, red error),
- * so a project's color is never read as a state.
- */
+/** Readable on the dark rail and clear of the status colors, so a color never reads as a state. */
 export const PROJECT_COLORS = [
   "#a78bfa", // violet
   "#2dd4bf", // teal
@@ -33,12 +26,8 @@ export function projectColor(path: string): string {
   return PROJECT_COLORS[hash(path) % PROJECT_COLORS.length];
 }
 
-/**
- * Two letters for a folder name: the first letters of its first two words, where words
- * break at `-`, `_`, `.`, spaces, a lower-to-upper case change and a letter/digit change
- * ("AgentStudioIDE" → "AS", "docs-site" → "DS", "to3D" → "T3"). A one-word name gives
- * its first two letters ("gazelle" → "GA").
- */
+/** First letters of the first two words (breaks at `-_.`, spaces, case and letter/digit changes:
+ * "AgentStudioIDE" → "AS", "to3D" → "T3"); one word gives its first two letters. */
 export function projectMonogram(name: string): string {
   const words = name
     .replace(/([a-z])([A-Z])/g, "$1 $2")

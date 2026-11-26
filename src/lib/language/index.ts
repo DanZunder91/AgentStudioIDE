@@ -1,7 +1,4 @@
-// src/lib/language/index.ts
-//
-// Public surface of the language-detection module. Both consumers (the editor
-// grammar loader and the workspace file-tree icons) import from here, keyed by
+// Public surface of language detection (editor grammar loader, file-tree icons), keyed by
 // LanguageId. See docs/design/language-detection.md §11.
 
 export { detectLanguage, detectByFirstLine } from './detect';

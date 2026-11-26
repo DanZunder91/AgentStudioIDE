@@ -1,24 +1,6 @@
-//! Working-tree status for the file tree's git decorations.
-//!
-//! One command, [`git_status`]: given an allowed directory, return the branch plus
-//! every path that differs from `HEAD` — staged and unstaged **unioned**, because
-//! the IDE view is "what differs from HEAD", not git's two-column index/worktree
-//! split. The wire vocabulary is exactly the frontend's existing `GitStatus` union
-//! (`src/app/types.ts`): `modified | added | deleted | untracked`.
-//!
-//! **Security scope.** The root is a user-supplied path, so it goes
-//! through the same server-authoritative guard as every fs command:
-//! [`crate::fs_tree::resolve_in_scope`] against [`crate::fs_tree::allowed_roots`]
-//! — checked *before* anything git-related happens, so an out-of-scope path never
-//! reveals whether it is in a repository (the error is byte-identical for a repo
-//! and a plain directory).
-//!
-//! **Why `git2` and not a subprocess.** Same reasons as `git_blame`: a
-//! GUI-launched app has a minimal `PATH` (`git` may not be findable at all), and
-//! the crate is already in-tree, vendored and network-free.
-//!
-//! Errors are `"<code>"` or `"<code>: <detail>"` with the code from
-//! [`ERROR_CODES`] — the frontend splits on the first `':'`.
+//! HEAD-vs-worktree status (staged + unstaged unioned) for the file tree; values mirror `GitStatus`
+//! in `src/app/types.ts`. Scope-checked via [`crate::fs_tree::resolve_in_scope`] before any git
+//! access. `git2`, not a subprocess (no `git` on a GUI app's `PATH`). Errors: `code[: detail]`.
 
 use std::path::{Path, PathBuf};
 
@@ -53,10 +35,8 @@ pub struct GitChange {
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoStatus {
-    /// The repository's **working-tree root** (canonical, absolute) — the prefix
-    /// every `changes[].path` starts with. Deliberately the repo root rather than
-    /// an echo of the requested directory: the request may name any allowed
-    /// subdirectory, and the caller needs the prefix to relativize paths against.
+    /// Canonical repo working-tree root, the prefix of every `changes[].path`; not the requested
+    /// directory, which may be any allowed subdirectory.
     pub root: String,
     /// The checked-out branch (short SHA when detached, `""` when unreadable) —
     /// via [`crate::git::current_branch`].
@@ -65,14 +45,9 @@ pub struct RepoStatus {
     pub changes: Vec<GitChange>,
 }
 
-/// Status of the repository containing `requested`, confined to `allowed_roots`.
-///
-/// Steps, in order: scope-check the path (out-of-scope fails before any git
-/// access), require a directory, discover the containing repository (walking up —
-/// any allowed dir inside a repo works, and the changes are repo-wide), then run
-/// libgit2's status walk with: untracked included (and recursed into untracked
-/// dirs), ignored excluded, submodules excluded, renames not detected (a rename
-/// reports `deleted` old + `added` new).
+/// Status of the repo containing `requested`, confined to `allowed_roots`; the scope check runs
+/// first. Untracked included (recursed), ignored and submodules excluded, no rename detection
+/// (a rename is `deleted` + `added`).
 pub fn git_status_scoped(
     requested: &Path,
     allowed_roots: &[PathBuf],
@@ -130,21 +105,9 @@ pub fn git_status_scoped(
     })
 }
 
-/// libgit2's status bits → the wire vocabulary, or `None` for "not a change".
-///
-/// Precedence, in order — each rule documented because several bits can be set at
-/// once:
-/// 1. **Worktree deletion wins** (`WT_DELETED`): a file both staged-modified and
-///    deleted on disk is `deleted` — the worktree is what the user sees. The one
-///    exception is `INDEX_NEW | WT_DELETED` (staged brand-new file, then deleted
-///    on disk): it never existed in `HEAD` and no longer exists on disk, so
-///    nothing differs from `HEAD` — `None`.
-/// 2. `INDEX_DELETED`: staged deletion → `deleted`; unless the file is *also*
-///    back on disk untracked (`git rm --cached`) → `untracked`.
-/// 3. `INDEX_NEW` → `added` (staged new; even if since edited — vs `HEAD` it is
-///    an addition either way).
-/// 4. `WT_NEW` → `untracked`.
-/// 5. Content/typechange on either side (and conflicts) → `modified`.
+/// libgit2 bits → wire status, `None` for no change. Precedence: WT_DELETED → deleted (except
+/// INDEX_NEW|WT_DELETED → None); INDEX_DELETED → deleted, or untracked if back on disk;
+/// INDEX_NEW → added; WT_NEW → untracked; content/typechange/conflict → modified.
 fn map_status(s: git2::Status) -> Option<GitChangeStatus> {
     use git2::Status as S;
     if s.contains(S::WT_DELETED) {
@@ -201,11 +164,8 @@ fn detail(msg: &str) -> String {
     short
 }
 
-/// HEAD-vs-working-tree status for the file tree's git decorations.
-///
-/// Frontend contract: `invoke<RepoStatus>('git_status', { root })`. `root` is any
-/// allowed directory (the repo is discovered by walking up). Errors are coded per
-/// [`ERROR_CODES`]; `not-a-repo` is the calm no-repo state the UI hides.
+/// Frontend contract: `invoke<RepoStatus>('git_status', { root })`, `root` any allowed directory.
+/// Errors are coded per [`ERROR_CODES`]; `not-a-repo` is the calm no-repo state the UI hides.
 #[tauri::command]
 pub fn git_status(app: tauri::AppHandle, root: String) -> Result<RepoStatus, String> {
     git_status_scoped(Path::new(&root), &crate::fs_tree::allowed_roots(&app))

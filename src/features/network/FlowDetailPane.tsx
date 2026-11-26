@@ -1,8 +1,5 @@
-/**
- * The detail pane under the flow table: one flow's request and response, fetched on demand
- * with `netcap_flow` (headers and bodies never ride the event stream), plus the two replay
- * actions — Copy as cURL and Open in API client.
- */
+/** One flow's request and response, fetched on demand via `netcap_flow` (bodies never ride the
+ * event stream), plus Copy as cURL and Open in API client. */
 
 import { useEffect, useState } from "react";
 
@@ -27,13 +24,8 @@ import { closeDetail, loadDetail, setDetailTab, setMaskSecrets, useNetworkStore 
 import type { FlowBody, FlowDetail, FlowSummary } from "./networkTypes";
 import { BypassCard, ConnectionFacts, TunnelCard } from "./TunnelCard";
 
-/**
- * The plain-words account of a flow the proxy could not (or chose not to) decrypt — a bare
- * `tls rejected → passthrough` and a disabled Copy as cURL read as the IDE breaking things.
- * Null when there is nothing to explain. For an EXTERNAL source (Postman pointed at us) the
- * fix is not "open a new terminal": it is the CA step of the capture guide,
- * so the sentence says so.
- */
+/** Plain words for a flow the proxy did not decrypt, or null. For an external source the fix is
+ * the capture guide's CA step, not a new terminal. */
 export function flowExplanation(f: FlowSummary): string | null {
   const who = clientName(f);
   const hint = isExternal(f) ? ` ${caStepHint(appOfClient(f.client))}` : "";
@@ -48,10 +40,8 @@ export function flowExplanation(f: FlowSummary): string | null {
   return f.note;
 }
 
-/**
- * The tunnel card's first line: the exact bytes each way, and what the proxy does with them. For
- * an external app the way in is the CA step of its capture guide.
- */
+/** The tunnel card's lead: exact bytes each way and what the proxy does; external apps get the
+ * CA step. */
 export function tunnelLead(f: FlowSummary): string {
   const bytes = `Encrypted tunnel: ${f.reqBytes} B up, ${f.resBytes} B down.`;
   if (f.note) return `${bytes} The proxy relays the bytes without decrypting them, so it can't break the client.`;

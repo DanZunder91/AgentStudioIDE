@@ -1,27 +1,6 @@
-/**
- * extractPath — pull one value out of a parsed JSON response by path (request
- * sequences).
- *
- * A sequence step captures a value from its response (`sessionJwt ← data.jwt`)
- * and later steps use it as `{{sessionJwt}}`. This module is the "←" half, and it
- * is deliberately pure: a path, a parsed value, and an answer.
- *
- * 🔴 **Why every failure carries a REASON, and why `null` is a failure.**
- * `substituteVars` resolves an unknown `{{VAR}}` to the **empty string, silently**
- * — pinned by `substitute.test.ts:21` (`substituteVars("Bearer {{TOKEN}}", {})`
- * is `"Bearer "`). For one hand-edited request that is tolerable. In a chain it is
- * poison: a capture that quietly yields nothing turns "step 2 did not return a
- * token" into "step 3 returns 401 for no visible reason", and the user debugs
- * their API instead of our silence. So a miss is never a value here — it is a
- * `found: false` carrying a sentence that names where the walk stopped, and the
- * runner fails the step with it rather than sending an empty credential.
- *
- * The same rule stated generally: when the data can hold a state
- * the contract cannot express, say so in the OUTPUT rather than collapsing it.
- *
- * No dependency: there is no JSONPath library in this repo and this needs a
- * fraction of one (the app is zero-install).
- */
+/** The capture half of a sequence (sessionJwt from data.jwt). A miss, null included, is
+ * found: false with a reason naming where the walk stopped: substituteVars would silently send ""
+ * and the user would chase a 401. No JSONPath dependency (zero-install). */
 
 /** The result of a capture: a string to substitute, or why there wasn't one. */
 export type Extracted =
@@ -31,14 +10,7 @@ export type Extracted =
 /** One step of a parsed path: an object key or an array index. */
 type Segment = { kind: "key"; name: string } | { kind: "index"; at: number };
 
-/**
- * Parse `a.b[0].c` into segments.
- *
- * Returns null for a path that cannot mean anything — empty, a `[]` with a
- * non-integer inside, an unclosed `[`. The caller turns that into a `found:
- * false` naming the path, because a malformed path is a user typo and deserves
- * to be reported as one rather than silently matching nothing.
- */
+/** null for a meaningless path (empty, non-integer [], unclosed [): a typo the caller reports. */
 function parsePath(path: string): Segment[] | null {
   const trimmed = path.trim();
   if (trimmed === "") return null;
@@ -97,26 +69,14 @@ function segmentLabel(seg: Segment): string {
   return seg.kind === "key" ? seg.name : `[${seg.at}]`;
 }
 
-/**
- * The JSON-ish name of a value, for a reason a human can act on.
- *
- * No `null` arm: every call site has already returned for null, so one here
- * would be unreachable (design the branch out rather than waive it).
- */
+/** No null arm: every caller has already returned for null. */
 function typeName(value: unknown): string {
   if (Array.isArray(value)) return "an array";
   return typeof value === "object" ? "an object" : `a ${typeof value}`;
 }
 
-/**
- * Extract `path` from `root` — the PARSED response body, not the raw text.
- *
- * A leading `body.` is accepted and stripped, because the capture editor shows
- * the path next to the response body and "body.data.jwt" is what a user
- * naturally writes; `data.jwt` means the same thing. Anything else is walked
- * literally, so a real field actually named `body` is still reachable as
- * `body.body`.
- */
+/** root is the PARSED body. A leading "body." is stripped, as users write it; a real field named
+ * body is reachable as body.body. */
 export function extractPath(root: unknown, path: string): Extracted {
   const withoutPrefix = path.trim().replace(/^body\./, "");
   const segments = parsePath(withoutPrefix);

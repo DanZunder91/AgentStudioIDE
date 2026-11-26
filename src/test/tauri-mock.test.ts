@@ -1,19 +1,6 @@
-/**
- * Self-test for the Tauri IPC mock harness.
- *
- * This file exists because `tauri-mock.ts` is *infrastructure other suites will
- * build on* (the M1 terminal suite, the M3 fan-out suite). A harness that
- * silently half-works is worse than none: it yields tests that pass for the
- * wrong reason. So it is driven here against the REAL `@tauri-apps/api/core` —
- * real `invoke`, real `Channel`, real callback registry. Nothing about the
- * boundary under test is itself stubbed.
- *
- * Deliberately depends on nothing but `@tauri-apps/api` and `app/types` (THE
- * contract): the harness must stay provably green independently of the terminal
- * feature and `app/ipc.ts`, which are tested by the terminal feature's
- * own suite. The commands and payload shapes used below are the canonical ones
- * from ARCHITECTURE §2.4.
- */
+/** Drives the IPC mock harness against the REAL `@tauri-apps/api/core`: a half-working harness
+ * passes tests for the wrong reason. Depends only on `@tauri-apps/api` and `app/types` so it stays
+ * green independently of `app/ipc.ts`; commands follow ARCHITECTURE §2.4. */
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -131,10 +118,8 @@ describe("channelIdOf", () => {
 });
 
 describe("ChannelDriver — the streaming PTY plane", () => {
-  /**
-   * The canonical `terminal_open` shape (ARCHITECTURE §2.4): the caller mints a
-   * `Channel<ArrayBuffer>` and Rust pushes coalesced raw PTY bytes into it.
-   */
+  /** Canonical `terminal_open` (ARCHITECTURE §2.4): the caller mints a `Channel<ArrayBuffer>` and
+   * Rust pushes coalesced raw PTY bytes into it. */
   function openWithChannel() {
     const mock = install();
     const pty = mock.channel();

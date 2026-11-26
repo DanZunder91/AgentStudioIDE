@@ -1,32 +1,6 @@
-/**
- * Where things are in the Agent Village / City canvas — for the close-up stills of things that are
- * ONLY pixels and have no product position hook (a project's house, a City floor, the plaza, the
- * skyline, the Seats lounge, a lift), for the STRUCTURE behind each still (who sits where, which props
- * stand where, which building carries which language), and for the moments of the City's COMMUTE
- * (a sub-agent riding a lift, crossing the street — engine/commute.ts). (The capacity buildings, the
- * neon signs and the landmarks' crowns have product hooks — the canvas's `data-capacity-boxes`,
- * `data-neon-boxes` and `data-landmark-boxes`; the spec reads the first itself, and the scene carries
- * the other two, read after the app has painted a frame so they match the camera the scene reports.)
- *
- * How: READ-ONLY, through React's own fiber link on the canvas element (`__reactFiber$…`, present in
- * production builds too): up to the `VillagePanel` component, whose `useState` holds the two
- * `VillageView`s (`{ village, city }`), recognised by shape (`city.capacityBoxes` is a function), not by
- * a minified name. From the live view it reads the public getters `world`, `camera`, `ambience`, the
- * sim's clock (`sim.time`) and `sim.seatFor(key)`; and two things that are private in TypeScript but
- * plain properties at run time: the view's last frame of characters (`VillageView.chars`, the
- * `CharacterView`s the renderer drew) and a commuter's trip in the sim (`VillageSim.chars` → its
- * `state` and `trip` — `Route` + `Cursor`, engine/commute.ts), which is what times a commute still.
- * Tiles are projected to canvas CSS px with the camera's own formula (`render/camera.ts`
- * `worldToScreen`). Nothing is called that changes state.
- *
- * The code that runs in the page is installed ONCE as `window.__e2eVillage` (see {@link install}): the
- * scene, a background TRACKER of one newcomer's places (every frame, so a 0.4 s crossing is never
- * missed between two WebDriver round trips) and in-page WAITS that check their condition on every
- * animation frame. It only reads.
- *
- * This is test-side knowledge of the app's internals, so it is confined to this file. If a product hook
- * for these positions ever lands (a `data-…-boxes` like the capacity one), switch to it.
- */
+/** Test-side, read-only knowledge of Village/City canvas internals (React's fiber link to
+ * VillagePanel's views) for stills with no product hook; confined here, installed as
+ * `window.__e2eVillage`. Switch to a `data-…-boxes` hook if one lands. */
 
 import { browser } from "@wdio/globals";
 
@@ -107,14 +81,8 @@ export interface SceneLounge {
   kiosk: { col: number; row: number } | null;
 }
 
-/**
- * Where a character is, by the City's geography (the commute's stages — engine/commute.ts):
- * `bench` (seated in the lounge), `lounge` (on foot in it), `lounge-lift` (riding it), `far-sidewalk`,
- * `crossing` (on the road at the lounge lift's column), `road` (on the road anywhere else — a commuter
- * never is), `near-sidewalk`, `lift:<building>` (riding that building's lift), `door:<building>`,
- * `floor:<floor key>` (on foot on a floor), `desk:<floor key>` (seated on it), `hq`, `outside`; in the
- * village always `village`.
- */
+/** Place by the City's commute stages (engine/commute.ts), e.g. `bench`, `crossing`,
+ * `lift:<building>`, `desk:<floor key>`; always `village` in the village. */
 export type Place = string;
 
 export interface SceneChar {
@@ -156,11 +124,7 @@ export interface SceneCity {
   } | null;
 }
 
-/**
- * The City's street life over a stretch of REAL frames (`watchLife`): what the traffic (`TrafficFx`) and
- * the passers-by (`StreetLife`) put on screen — decoration, never agents. Counted only while on screen
- * (within the camera's span).
- */
+/** City street life over real frames: decoration, never agents; counted only on screen. */
 export interface LifeWatch {
   frames: number;
   /** Distinct passers-by seen (their serial ids) and the most at once. */
@@ -201,18 +165,10 @@ export interface Scene {
   city: SceneCity | null;
   /** Every character of the last frame. */
   chars: SceneChar[];
-  /**
-   * The neon signs DRAWN this frame — the canvas's `data-neon-boxes` (`VillageView.neonBoxes`, made
-   * from the very draw items the renderer paints): building, language and the sign's box, clipped to
-   * the canvas; a sign off screen is left out. Empty in the village.
-   */
+  /** `data-neon-boxes` drawn this frame, clipped; off-screen signs omitted; none in the village. */
   neon: { building: string; language: string; box: Box }[];
-  /**
-   * The skyline landmarks' CROWNS on screen — the canvas's `data-landmark-boxes`
-   * (`VillageView.landmarkBoxes`: the Skytree's and Tokyo Tower's tip down to their lowest deck, Fuji's
-   * snow cap — the part no building may hide), clipped to the canvas; one off screen is left out. Only
-   * a City in a zone with landmarks (Asia/Tokyo) has any.
-   */
+  /** `data-landmark-boxes` crowns (the part no building may hide), clipped; only in a landmark
+   * zone (Asia/Tokyo). */
   crowns: { kind: string; box: Box }[];
 }
 
@@ -240,18 +196,8 @@ export interface Track {
   entries: TrackEntry[];
 }
 
-/**
- * What an in-page wait waits for (checked on EVERY animation frame):
- *   - `crowd`: at least `street` sub-agents out on the street at once (the far sidewalk, the
- *     crossing, the near sidewalk) — the stream, not only riders stacked in one lift shaft;
- *   - `settled`: every busy sub-agent seated at its desk (and at least one there);
- *   - `umbrella`: a passer-by under an open umbrella on screen (the City's street life, in the rain);
- *   - `place`: the character (`key`, default the tracked newcomer) is at a place starting with `place`;
- *   - `leg`: the character, travelling in direction `dir` (+1 to its desk, −1 back to its bench), is
- *     `leadS` seconds (wall clock, at the sim's measured pace) from the point `at` (0..1) along its
- *     trip's leg `leg` (engine/commute.ts: 2 = the lounge's lift, 3 = the crossing, 6 = its building's
- *     lift). A still taken right then lands ON that point: `leadS` is how long a still takes to be grabbed.
- */
+/** Checked on every animation frame. `leg`: `leadS` s (a still's grab time) before point `at`
+ * along trip leg `leg` (engine/commute.ts: 2 lounge lift, 3 crossing, 6 building lift). */
 export type WaitCond =
   | { kind: "crowd"; street: number }
   | { kind: "settled" }
@@ -277,10 +223,7 @@ export interface WaitResult {
 /** Bumped whenever the page code changes, so a stale install is replaced. */
 const PROBE_VERSION = 5;
 
-/**
- * The page side, installed as `window.__e2eVillage`. Runs IN THE PAGE (serialised by WebDriver):
- * self-contained, constants inlined.
- */
+/** Runs in the page (serialised by WebDriver): self-contained, constants inlined. */
 function install(version: number): void {
   type Obj = Record<string, unknown>;
   type Rct = { col: number; row: number; w: number; h: number };
@@ -663,11 +606,7 @@ function install(version: number): void {
       step();
     });
 
-  /**
-   * Street life over `ms` of real frames (every animation frame): the traffic's vehicles and the
-   * passers-by on screen, read off the view's `TrafficFx.vehicles()` and `StreetLife.walkers()` (private
-   * in TypeScript, plain properties at run time; both return their arrays, nothing is changed).
-   */
+  /** Reads private-in-TS `TrafficFx.vehicles()` / `StreetLife.walkers()`; changes nothing. */
   type Veh = { kind: string; x: number; w: number; seed: number };
   type Walker = { id: number; x: number; umbrella: number; sink: number; vend: unknown };
   const life = (ms: number) =>
@@ -783,11 +722,8 @@ export async function stopTracking(): Promise<void> {
   await browser.execute(() => (window as unknown as ProbeWindow).__e2eVillage.stopTrack());
 }
 
-/**
- * Wait IN THE PAGE (every animation frame) until `cond` holds, up to `timeoutMs`. Long waits are cut
- * into pieces under WebDriver's 30 s script timeout. Resolves with `ok: false` on timeout — the caller
- * decides whether that fails the spec (it carries `detail`, what the page last saw).
- */
+/** Long waits are split under WebDriver's 30 s script timeout. `ok: false` on timeout; the caller
+ * decides, with `detail` (what the page last saw). */
 export async function waitInPage(cond: WaitCond, timeoutMs: number): Promise<WaitResult> {
   await ensureProbe();
   const deadline = Date.now() + timeoutMs;
@@ -852,15 +788,8 @@ export function centredIn(inner: Box, outer: Box): boolean {
 
 /* ── Tokyo's backdrop as PIXELS (render/backdrop.ts: high-rises, the neon canyon, the yokochō shops) ── */
 
-/**
- * The colour classes {@link bandColours} counts, by HSV (value 0..255, saturation 0..1, hue in degrees):
- *   - `neon`: saturated AND bright — a lit tube, a back-lit sign plate, a lantern. The night sky is dark,
- *     a star or the moon is white, and the haze's lit windows (#ffd987, render/city.ts) are only 0.47
- *     saturated — none of them is neon;
- *   - `coloured`: a painted colour that is not the sky's blue — a sign plate, an awning, a shop front by
- *     day. The day sky and Fuji's slopes are blue, the haze and the high-rises pale and greyish, clouds
- *     and snow white — none of them counts.
- */
+/** HSV thresholds chosen so the night sky, stars, the haze's lit windows (0.47 sat), the day sky,
+ * Fuji's slopes, clouds and snow count as neither neon nor coloured. */
 export const PIXEL_CLASSES = {
   neon: { sat: 0.6, value: 170 },
   coloured: { sat: 0.45, value: 120, skyHue: [190, 240] },
@@ -873,13 +802,8 @@ export interface BandColours {
   coloured: number;
 }
 
-/**
- * Classify the canvas's REAL pixels over `boxes` (canvas CSS px; turned into device px with the canvas's
- * own ratio and clipped to it) once the app has painted a frame since the call — {@link PIXEL_CLASSES}.
- * The canvas is the panel's 2D one (VillagePanel's `getContext("2d")`), so `getImageData` reads exactly
- * what the frame painted; the HUD floating over it is DOM, never in it. The pixels are counted in the
- * page (a band is tens of thousands of them, never shipped over WebDriver). Read-only.
- */
+/** Counted in the page (a band is tens of thousands of pixels) on the 2D canvas after a fresh
+ * paint; the DOM HUD is never in it. Read-only. */
 export async function bandColours(boxes: readonly Box[]): Promise<BandColours> {
   return browser.execute(
     async (want: readonly Box[], cls: typeof PIXEL_CLASSES) => {

@@ -1,13 +1,5 @@
-/**
- * `diskWatch` — noticing that an agent changed a file that is open.
- *
- * The bug: after an agent modified an open .md file, the editor did not show
- * the change until the file was closed and opened again.
- *
- * Drives the REAL registry and the REAL store with only the IPC boundary mocked,
- * because the property under test is that a disk change reaches the buffer — a
- * test that stubbed the registry would assert its own stub.
- */
+/** Only the IPC is mocked: the property is that a disk change reaches the real buffer, and a
+ * stubbed registry would only assert its own stub. */
 
 import { render, screen, waitFor } from "@testing-library/react";
 import { act } from "react";

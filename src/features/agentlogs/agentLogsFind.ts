@@ -1,32 +1,6 @@
-/**
- * Agent Logs — ⌘F / Ctrl+F find, the pure half (the logs need a search, opened with Ctrl+F
- * or Cmd+F). No React, no store.
- *
- * The toolbar filter and this bar are different tools on purpose: the filter
- * FILTERS (rows that do not match leave the list); find NAVIGATES (every row stays, the
- * matches are marked and ▲▼ walk them). Both can be on at once — find searches what the
- * filter left.
- *
- * ── What is searched ─────────────────────────────────────────────────────────────
- * The text the stream draws, row part by row part, so a mark can always be painted over
- * the characters it counted:
- *   - a raw row and a divider — their one-line text (`oneLine`), the text cell;
- *   - a block header — its description and its command label, separately (two spans);
- *   - a block's output — EVERY line, folded or not. A hit behind "show N more" is still a
- *     hit: while the bar is open that block is expanded (`findExpansions`), and closing the
- *     bar drops the override, so the user's own fold state was never written and comes
- *     back untouched.
- * Not searched: the Time / Level / Source cells (a find for "19:59" is a filter's job) and
- * the "show N more" control.
- *
- * ── Semantics ────────────────────────────────────────────────────────────────────
- * Case-insensitive by default (`Aa` makes it exact), literal by default (`.*` makes it a
- * regex). Occurrences, not rows: `error error` on one line is two matches, counted
- * non-overlapping left to right — the house rule (`editor/find/findModel.ts`). An empty
- * regex match (`a*` against `bbb`) is skipped, never counted: a zero-width mark can be
- * neither painted nor stepped to. An invalid regex compiles to an error string for the bar
- * to show inline; nothing here throws out of a keystroke.
- */
+/** ⌘F find for Agent Logs, pure. Unlike the filter it NAVIGATES (rows stay, matches marked). It
+ * searches drawn text per row part, every output line folded or not (not Time/Level/Source);
+ * non-overlapping occurrences (`editor/find/findModel.ts` rule), empty matches skipped. */
 
 import { COLLAPSED_OUTPUT_LINES, oneLine, type Segment } from "./agentLogsFormat";
 import type { Stream, StreamEntry } from "./agentLogsStream";
@@ -43,11 +17,8 @@ export type CompiledFind = { ok: true; re: RegExp | null } | { ok: false; error:
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/**
- * The spec as ONE global RegExp (`re: null` = nothing to find). No `u` flag, like the
- * toolbar filter's `/regex/`: `u` rejects escapes people type out of habit (`\-`, `\ `),
- * and a find that refuses a pattern the filter box accepts would be its own bug.
- */
+/** The spec as ONE global RegExp (`re: null` = nothing to find). No `u` flag, like the filter:
+ * `u` rejects habitual escapes (`\-`, `\ `) the filter box accepts. */
 export function compileFind(spec: FindSpec): CompiledFind {
   if (spec.query === "") return { ok: true, re: null };
   const flags = spec.caseSensitive ? "g" : "gi";
@@ -124,11 +95,8 @@ export function findInStream(stream: Stream, re: RegExp): FindMatch[] {
   return out;
 }
 
-/**
- * The blocks find must expand: those with a match behind their fold. `touched` are the
- * blocks the user folded or unfolded by hand while the bar was open — their choice wins,
- * or "show less" would be a dead button for as long as the bar stays open.
- */
+/** Blocks find must expand (a match behind the fold), minus `touched` ones folded by hand
+ * while the bar is open, or "show less" would be dead. */
 export function findExpansions(
   stream: Stream,
   matches: readonly FindMatch[],
@@ -144,11 +112,7 @@ export function findExpansions(
   return out;
 }
 
-/**
- * The visual row a match is drawn on. A match the user folded away by hand (see
- * `findExpansions`) has no row of its own: it lands on its block's "show N more" row, so
- * stepping to it still takes you to the place that hides it.
- */
+/** The visual row a match is drawn on; one folded away by hand lands on its "show N more" row. */
 export function matchRow(stream: Stream, m: FindMatch): number {
   const e = stream.entries[m.entry];
   if (m.part.kind !== "out") return e.offset;
@@ -205,12 +169,8 @@ export function stepCursor(cursor: number, delta: number, total: number): number
   return (((clampCursor(cursor, total) + delta) % total) + total) % total;
 }
 
-/**
- * The `scrollTop` that brings visual row `row` into view, or null when it already is.
- * Index arithmetic — never `scrollIntoView` on a windowed list, whose target row may not
- * be in the DOM at all. Row i sits at `(i + 1) · rowH` under the one-row
- * sticky header; a row out of view is centred, so the lines around the match read too.
- */
+/** `scrollTop` revealing visual row `row`, or null if visible. Index arithmetic (the row may
+ * not be in the DOM); row i sits at `(i + 1) · rowH`, and an out-of-view row is centred. */
 export function revealScrollTop(row: number, scrollTop: number, viewport: number, rowH: number): number | null {
   const top = (row + 1) * rowH;
   if (top >= scrollTop + rowH && top + rowH <= scrollTop + viewport) return null;
@@ -228,11 +188,8 @@ export interface Piece {
   ord: number | null;
 }
 
-/**
- * Split highlight segments at match boundaries. The segments are the text cut by the
- * os_log highlighter; the marks are ranges over the SAME text, so every character ends up
- * in exactly one piece carrying both its colour and its mark.
- */
+/** Split highlight segments at match boundaries (both range over the SAME text), so each
+ * character lands in one piece with its colour and mark. */
 export function markSegments(segs: readonly Segment[], marks: readonly Mark[]): Piece[] {
   const out: Piece[] = [];
   let pos = 0;

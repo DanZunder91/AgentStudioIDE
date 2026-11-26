@@ -1,45 +1,6 @@
-//! Usage limits: the signed-in Claude account's live rate-limit windows, for
-//! the left-rail usage strip. Wire contract: `src/features/usage/usageTypes.ts`.
-//!
-//! ## Where the numbers come from — we ASK THE CLI
-//!
-//! ```text
-//! claude -p --no-session-persistence "/usage"
-//! ```
-//!
-//! and we parse the rows it prints (a sample run — exit 0, ~1 s, no Keychain
-//! prompt):
-//!
-//! ```text
-//! You are currently using your subscription to power your Claude Code usage
-//!
-//! Current session: 20% used · resets Jul 29 at 3:10pm (UTC)
-//! Current week (all models): 40% used · resets Aug 2 at 11am (UTC)
-//! Current week (Fable): 60% used · resets Aug 2 at 10:59am (UTC)
-//! ```
-//!
-//! The **first** implementation of this feature read the OAuth token out of the
-//! macOS login Keychain and called `GET /api/oauth/usage` itself. It worked, but it
-//! made macOS raise a password prompt, because that Keychain item's ACL trusts the
-//! `claude` binary and not ours. The requirement: the app must not raise that prompt
-//! (no OS permission may be required). So the process that already owns the credential is
-//! now the one that reads it, and **this module never touches a token, a Keychain or a socket at
-//! all** — strictly better on privacy, not only on UX.
-//!
-//! `--no-session-persistence` is **load-bearing**: without it every poll writes a
-//! transcript into `~/.claude/projects/…` (the file count increments; at a
-//! 5 s cadence that is ~720 files/hour, and it would also flood the "Recover
-//! session" picker). With the flag the count does not move. **Never drop it.** This
-//! is also the only reason the call is compatible with the rule that the app never
-//! writes `~/.claude`; we only ask a process that owns it a read-only question.
-//!
-//! ## What is testable, and what is not
-//!
-//! [`parse_usage_output`] is the risky half and takes **no I/O and no clock** — `now`
-//! is injected. Its one environmental input is the machine's UTC offset (the CLI
-//! prints local wall-clock time, so nothing else can turn "3:10pm" into an instant);
-//! that is injected too, via [`parse_usage_output_with_offset`], so every parser test
-//! is hermetic and gives the same answer in every timezone.
+//! Account rate-limit windows for the usage strip (wire: `src/features/usage/usageTypes.ts`),
+//! parsed from `claude -p --no-session-persistence "/usage"`: no token, Keychain or socket here.
+//! Never drop `--no-session-persistence`: each poll would write a transcript into `~/.claude`.
 
 use std::process::Stdio;
 use std::sync::LazyLock;
@@ -61,10 +22,8 @@ const NO_SESSION_PERSISTENCE: &str = "--no-session-persistence";
 /// The slash command whose output we parse.
 const USAGE_COMMAND: &str = "/usage";
 
-/// The complete error vocabulary, mirroring `UsageErrorCode` in `usageTypes.ts`.
-/// Every `Err` from [`claude_usage`] is `"<code>"` or `"<code>: <detail>"` with the
-/// code drawn from this list — the frontend splits on the first `':'`, so an
-/// undocumented prefix would render as a raw Rust string.
+/// Every `Err` from [`claude_usage`] is `"<code>"` or `"<code>: <detail>"` from this list, which
+/// mirrors `UsageErrorCode` in `usageTypes.ts`; the frontend splits on the first `':'`.
 pub const ERROR_CODES: [&str; 6] = [
     "cli-missing",
     "not-signed-in",
@@ -74,13 +33,8 @@ pub const ERROR_CODES: [&str; 6] = [
     "unknown",
 ];
 
-/// Lowercase substrings that mean "the CLI is not authenticated". Deliberately a
-/// handful of phrasings rather than one exact string: we have never captured a
-/// signed-out run, so the wording is an assumption, and a missed match only costs a
-/// less specific message (the `parse` code) — while a false positive would be a lie.
-/// That is why `"authenticate"` is listed and `"authenticated"`-safe (`"authenticat"`
-/// would match the *success* word), and why these are only consulted when the run
-/// otherwise failed — never to override a reading that parsed.
+/// Phrasings meaning "not authenticated", a guess (no signed-out run captured). Consulted only
+/// when the run otherwise failed; never `"authenticat"`, which matches the success word.
 const SIGNED_OUT_MARKERS: [&str; 8] = [
     "not logged in",
     "not signed in",
@@ -119,20 +73,12 @@ pub struct UsageSnapshot {
     pub fetched_at_ms: i64,
 }
 
-/// Read the signed-in account's usage windows by asking the local `claude` CLI.
-///
-/// `Err` is one of [`ERROR_CODES`], optionally `": <short detail>"`. A detail never
-/// carries the captured output (only its first line, truncated) — the transcript of
-/// someone's account is not error-message material.
+/// Read the account's usage windows via the local `claude` CLI. `Err` is an [`ERROR_CODES`]
+/// code; a detail never carries the captured output beyond its truncated first line.
 #[tauri::command]
 pub async fn claude_usage() -> Result<UsageSnapshot, String> {
-    // Resolve exactly the way an agent spawn does. A packaged macOS app inherits
-    // roughly `/usr/bin:/bin:/usr/sbin:/sbin`, so a bare `"claude"` would fail for
-    // every real user while working fine under `tauri dev`; `resolve_binary` also
-    // checks `$CLAUDE_BIN`, the official installer path and the Homebrew prefixes, and
-    // `resolve_invocation` turns a Windows npm `claude.cmd` into `node <cli.js>` (a batch
-    // file cannot be spawned directly). Never reimplement it here — a second copy would
-    // drift in the one case we cannot test (see its doc comment).
+    // Resolve exactly as an agent spawn does (packaged apps get a minimal PATH; Windows npm
+    // shims): never reimplement it here, a second copy would drift untested.
     let claude = crate::agent::claude::resolve_invocation()
         .map_err(|_| "cli-missing: the claude CLI could not be found".to_string())?;
     let captured = run_usage_cli(&claude).await?;
@@ -152,16 +98,8 @@ pub struct Captured {
     pub stderr: String,
 }
 
-/// Spawn the CLI, wait (bounded), and capture both streams.
-///
-/// * **stdin is `null`** — `-p` is non-interactive, and a CLI that ever paused for
-///   input would otherwise hang until the timeout on every poll.
-/// * **cwd is the user's home** — stable, always readable, and irrelevant to the
-///   answer (`/usage` is account-scoped). We pass no `--add-dir` and add no env vars
-///   beyond what the process already inherits.
-/// * **`kill_on_drop`** is what makes the timeout non-leaky: `wait_with_output`
-///   consumes the `Child`, so on elapse `tokio::time::timeout` drops the future,
-///   which drops the `Child`, which sends `SIGKILL` and reaps it in the background.
+/// Spawn the CLI with null stdin (never hang on a prompt) and cwd = home, wait bounded, capture
+/// both streams. `kill_on_drop` makes the timeout non-leaky: dropping the `Child` kills it.
 async fn run_usage_cli(
     claude: &crate::agent::claude::ClaudeInvocation,
 ) -> Result<Captured, String> {
@@ -193,10 +131,8 @@ async fn run_usage_cli(
     }
 }
 
-/// Coded error for a failed `spawn`. `NotFound` means the path we resolved has since
-/// gone (an upgrade mid-poll), which is the same user-visible problem as never
-/// finding it; anything else (`PermissionDenied`, resource limits) is not something
-/// we can name honestly, so it is `unknown`.
+/// `NotFound` (the resolved path vanished, e.g. mid-upgrade) is `cli-missing`; any other
+/// spawn failure can't be named honestly, so it is `unknown`.
 fn spawn_error(kind: std::io::ErrorKind) -> String {
     match kind {
         std::io::ErrorKind::NotFound => "cli-missing: the claude CLI could not be run".to_string(),
@@ -204,12 +140,8 @@ fn spawn_error(kind: std::io::ErrorKind) -> String {
     }
 }
 
-/// Turn a finished run into a snapshot or a coded error.
-///
-/// Ordering matters and is deliberate: a **successful, parseable** reading is never
-/// second-guessed by the signed-out heuristic; the markers are consulted only when
-/// the run failed or produced no rows. That way a future release that happens to
-/// print the word "authenticate" in a working `/usage` cannot break the panel.
+/// Turn a finished run into a snapshot or a coded error. A parseable reading is never
+/// second-guessed: signed-out markers are consulted only when the run failed or had no rows.
 fn interpret(
     captured: &Captured,
     now_ms: i64,
@@ -282,26 +214,9 @@ fn now_ms() -> i64 {
 // The machine's UTC offset
 // ---------------------------------------------------------------------------
 
-/// Seconds east of UTC for the current instant, or `None` if it cannot be
-/// determined.
-///
-/// Needed because the CLI prints reset times as **local wall clock** and names the
-/// zone only in prose (e.g. `(UTC)`) — which we deliberately ignore: honouring a
-/// zone *name* would need an IANA tz database we do not ship, and the name is always
-/// the machine's own zone anyway, so the OS offset is both simpler and equivalent.
-///
-/// Sourced from `git2` — `git_signature_now()` computes the local offset (via
-/// `gmtime_r` + `mktime`) and hands it back as `Time::offset_minutes()`. Rust's std
-/// has **no** local-time API, `chrono`/`time` are only transitive here (a direct
-/// dependency is not worth one call), and hand-declaring `localtime_r` + `struct tm`
-/// through FFI is exactly the "hand-transcribed struct layout" that is best kept out
-/// of the codebase. `git2` is already a first-class dependency (git blame) and is maintained,
-/// cross-platform and in-tree, so it costs nothing.
-///
-/// **Documented imprecision:** this is the offset *now*, applied to an instant up to
-/// 7 days away. A DST transition inside that span shifts the computed reset by an
-/// hour. The UI renders a coarse "resets in …" hint, so an hour at a week's distance
-/// is acceptable; getting it exactly right would require a tz database.
+/// Seconds east of UTC now, via `git2` (std has no local-time API); the CLI prints reset times
+/// in local wall clock. A DST change before the reset (up to 7 days out) shifts it an hour,
+/// acceptable for a coarse "resets in …" hint.
 fn local_offset_secs() -> Option<i32> {
     // The name/email are placeholders: libgit2 only rejects empty ones (and angle
     // brackets). Nothing is written anywhere — no repo is even opened.
@@ -320,20 +235,12 @@ fn local_offset_secs() -> Option<i32> {
 // The parser (pure)
 // ---------------------------------------------------------------------------
 
-/// A usage row: `<label>: <number>% used`, optionally `· resets <when>`.
-///
-/// The literal `% used` is what identifies a row, and it is the single most
-/// important guard in this module: the contribution block prints
-/// `80% of your usage came from subagent-heavy sessions`, which also contains a
-/// percent, and must never become a window. Tolerances: any spacing around `%`,
-/// case-insensitive, integer or decimal, and no assumption about what follows.
+/// A usage row: `<label>: <number>% used`, optional `· resets <when>`. The literal `% used` is
+/// the key guard: contribution lines (`80% of your usage came from…`) must never be windows.
 static RE_PCT_USED: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)([0-9]+(?:\.[0-9]+)?)\s*%\s*used\b").expect("static regex"));
 
-/// The reset clause. `resets`/`reset` (and a trailing `at`) are consumed; the middle
-/// dot separator is *not* required, because it is cosmetic and the `Last 24h · …`
-/// line proves the CLI uses it for lists too — a row matcher that keyed on `·` would
-/// be matching decoration.
+/// The reset clause; `·` is not required, since the CLI also uses it in lists (`Last 24h · …`).
 static RE_RESET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\breset(?:s|ting)?\b\s*(.+)$").expect("static regex"));
 
@@ -375,19 +282,13 @@ static RE_DAY_MONTH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^(?:(?:on|at)\s+)?([0-9]{1,2})\s+([a-z]{3,9})$").expect("static regex")
 });
 
-/// A dangling separator left over after the clock was cut off the wording: the
-/// word `at` and/or bare `,`/`-`/`·`. The `at` is OPTIONAL — CLI 2.1.237 writes
-/// `resets Aug 26, 4am` (comma, no `at`), and requiring the word here is exactly
-/// the bug that silently dropped every reset hint on that wording (the head kept
-/// its trailing comma, which `RE_MONTH_DAY`'s `$`-anchored day then refused).
+/// A dangling `at` and/or `,`/`-`/`·` left after cutting the clock. `at` is optional: newer
+/// CLIs write `resets Aug 26, 4am`, and a kept comma would make `RE_MONTH_DAY` refuse the day.
 static RE_TRAILING_AT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)[\s,\-·]*(?:\bat\b)?[\s,\-·]*$").expect("static regex"));
 
-/// Parse `/usage` output into a snapshot, resolving reset times against the machine's
-/// current UTC offset.
-///
-/// The clock is injected (`now_ms`); the offset is the one environmental read, and
-/// [`parse_usage_output_with_offset`] exists so tests never depend on it.
+/// Parse `/usage` output, resolving reset times against the machine's current UTC offset;
+/// tests use [`parse_usage_output_with_offset`] to stay hermetic.
 pub fn parse_usage_output(stdout: &str, now_ms: i64) -> Result<UsageSnapshot, String> {
     parse_usage_output_with_offset(stdout, now_ms, local_offset_secs())
 }
@@ -610,12 +511,8 @@ fn month_from_name(name: &str) -> Option<i64> {
 // Labels + keys
 // ---------------------------------------------------------------------------
 
-/// The CLI's row label, condensed:
-/// `Current session` stays, `Current week (all models)` → `All models`,
-/// `Current week (<Model>)` → `<Model>`.
-///
-/// Anything else passes through **unchanged** — a row the CLI adds tomorrow must
-/// still render, in its own words, rather than be dropped or mangled.
+/// Condense the CLI's row label (`Current week (all models)` → `All models`, `(<Model>)` →
+/// `<Model>`); anything unknown passes through unchanged so a new row still renders.
 fn condense_label(raw: &str) -> String {
     let raw = raw.trim();
     let Some(inner) = week_parenthetical(raw) else {
@@ -643,10 +540,8 @@ fn week_parenthetical(raw: &str) -> Option<&str> {
     (!inner.is_empty()).then_some(inner)
 }
 
-/// A stable slug of the CLI's **original** label: lowercased, runs of
-/// non-alphanumerics collapsed to a single `-`, trimmed. `Current week (all models)`
-/// → `current-week-all-models`. Derived from the raw label (not the condensed one) so
-/// the key survives a change to our display wording.
+/// Stable slug of the CLI's ORIGINAL label (`current-week-all-models`), so the key survives a
+/// change to our display wording.
 fn slugify(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for ch in raw.trim().to_lowercase().chars() {
@@ -806,12 +701,8 @@ Last 24h · 500 requests · 4 sessions
   10% came from long single-agent turns
 ";
 
-    /// A **second** sample, an hour later on the same day. Same three rows, but a
-    /// much richer contribution block — and that block is where the nastiest
-    /// negative cases actually live: `Top subagents: general-purpose 30%, …` has a
-    /// colon before a percent, i.e. exactly a window row's shape minus `% used`.
-    /// Kept alongside the first sample rather than replacing it, so both shapes
-    /// stay pinned.
+    /// Its contribution block holds the nastiest negatives: `Top subagents: general-purpose 30%`
+    /// is a window row's shape minus `% used`.
     const SAMPLE_OUTPUT_2: &str = "\
 You are currently using your subscription to power your Claude Code usage
 
@@ -836,11 +727,8 @@ Last 7d · 3000 requests · 20 sessions
   Top MCP servers: example-mcp 5%
 ";
 
-    /// A **third** sample — a newer CLI on Linux — the shape on which the reset
-    /// tooltip went missing. Two things the first two samples do
-    /// not have: the reset wording is now `resets Aug 26, 4am` (a COMMA between
-    /// date and clock, no `at` — this is what broke the parser), and the session
-    /// row carries no reset clause at all.
+    /// A newer CLI's shape: `resets Aug 26, 4am` (comma, no `at`) and a session row with no
+    /// reset clause.
     const SAMPLE_OUTPUT_3: &str = "\
 You are currently using your subscription to power your Claude Code usage
 
@@ -998,10 +886,7 @@ Last 7d · 2000 requests · 12 sessions
 
     #[test]
     fn the_third_sample_parses_including_the_comma_reset_wording() {
-        // A newer CLI writes `resets Aug 26, 4am` — comma, no `at`. Seen on Linux,
-        // where the tooltip went missing; an older CLI on macOS still
-        // wrote `resets Aug 2 at 11am`, which is why the bug was platform-shaped
-        // while the actual variable was CLI version.
+        // The variable is the CLI version, not the platform: newer CLIs drop the `at`.
         let snap = parse_usage_output_with_offset(SAMPLE_OUTPUT_3, NOW, UTC_OFFSET)
             .expect("the third sample must parse");
         assert_eq!(
@@ -1761,20 +1646,8 @@ Last 7d · 2000 requests · 12 sessions
         assert_eq!(strip_ansi("keeps · dots"), "keeps · dots");
     }
 
-    // ── live smoke: the ONE test that talks to the real CLI ───────────────
-    //
-    // `#[ignore]`d, so `cargo test` (and CI) stay hermetic — no Docker, network or
-    // signed-in CLI — and this one spawns a real `claude`. Run it deliberately after a
-    // CLI upgrade:
-    //
-    //     cargo test --manifest-path src-tauri/Cargo.toml -- --ignored live_smoke
-    //
-    // It exists because every OTHER test here feeds the parser a CAPTURED fixture,
-    // which can only prove we still read the output we saw once. This proves the
-    // whole path against today's CLI: resolve the binary the way an agent spawn
-    // does, run it with the flags we ship, and parse what actually comes back.
-    // The accepted risk of parsing `/usage` is that the CLI's wording is not a
-    // contract; this is how we find out cheaply instead of from a user.
+    // Live smoke, the ONE test against the real CLI (`-- --ignored live_smoke` after an upgrade):
+    // captured fixtures only prove we read output we saw once; `/usage` wording is no contract.
     #[test]
     #[ignore = "spawns the real `claude` CLI — run with --ignored"]
     fn live_smoke_reads_real_usage_from_the_cli() {
@@ -1809,11 +1682,8 @@ Last 7d · 2000 requests · 12 sessions
             .block_on(run_usage_cli(&claude))
             .expect("the CLI ran above");
 
-        // Every usage row the CLI printed was understood: each `<label>: N% used` line
-        // is a parsed window. This used to require a `Current session` window ("every
-        // plan has one"), but a newer CLI can print only the two weekly windows for an
-        // account. The app never depended on that row; the test did. A
-        // shape change still fails here, because its rows stop parsing.
+        // Every `<label>: N% used` line printed must be a parsed window; no specific row is
+        // required (newer CLIs can omit `Current session`).
         let parsed: Vec<&str> = snap.windows.iter().map(|w| w.label.as_str()).collect();
         for line in captured.stdout.lines().map(str::trim) {
             let Some((label, rest)) = line.split_once(':') else {
@@ -1829,12 +1699,8 @@ Last 7d · 2000 requests · 12 sessions
             );
         }
 
-        // The missing-tooltip bug was precisely "rows parse, reset wording does not":
-        // `resets_at_ms` silently `None` on every window while all the assertions
-        // above stay green (a newer CLI changed `Aug 2 at 11am` to `Aug 26, 4am`).
-        // So sniff the raw output: if today's CLI printed any reset wording, and
-        // the machine offset is readable (absolute wording needs one), then at
-        // least one window must have resolved an instant from it.
+        // Rows can parse while reset wording silently doesn't: if the CLI printed reset wording and
+        // the offset is readable, at least one window must resolve an instant.
         if captured.stdout.to_lowercase().contains("reset") && local_offset_secs().is_some() {
             assert!(
                 snap.windows.iter().any(|w| w.resets_at_ms.is_some()),

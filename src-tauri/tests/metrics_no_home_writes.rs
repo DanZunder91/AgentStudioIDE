@@ -1,42 +1,6 @@
-//! 🔴 **`~/.claude` is READ-ONLY for us** — the rule, applied to the
-//! feature most able to violate it.
-//!
-//! The metrics feature reads more of `~/.claude` than anything else in this app: every
-//! project directory, every transcript in the window. The failure this guards against
-//! is a *write* into the developer's real `~/.claude/settings.json` from a code path
-//! `cargo test` exercises — parallel test threads race and leave the file corrupt.
-//! So this file exists to make "the metrics scan never writes there" a
-//! provable, re-runnable claim rather than a promise in a doc comment.
-//!
-//! ## Three assertions, deliberately different in kind
-//!
-//! 1. [`the_full_command_path_writes_nothing_under_a_replica_home`] — the strong,
-//!    fully deterministic one. A **replica** `~/.claude` is built under a tempdir
-//!    `HOME`, fingerprinted (path + size + mtime + content hash of every file), the
-//!    **real `claude_metrics` command** is driven end-to-end (so `home_dir()` and the
-//!    `spawn_blocking` path are the ones under test, not a hand-rolled shortcut), and
-//!    the fingerprint must be identical afterwards — with no new entry anywhere.
-//!    Because the subject is a replica, this test cannot flake and cannot depend on
-//!    the developer's machine.
-//!
-//! 2. [`the_scan_succeeds_against_a_read_only_transcript_root`] — belt and braces at
-//!    the OS level. The replica is chmod'ed read-only and the scan must still produce
-//!    the right numbers. A latent write would not merely be *undetected* here, it
-//!    would fail.
-//!
-//! 3. [`the_real_home_is_not_disturbed_by_a_real_scan`] — the developer's ACTUAL
-//!    `~/.claude`, scanned for real. Content comparison is scoped to the files a
-//!    running `claude` does not itself rewrite (see the note on that test): a
-//!    concurrently running session legitimately appends to `projects/**`,
-//!    `history.jsonl`, `todos/`, `statsig/` and friends every few seconds, and a test
-//!    that failed because the developer had Claude Code open would be exactly the
-//!    non-hermeticity the suite forbids. What it *does* assert holds unconditionally:
-//!    `settings.json` — the user's global config — is byte-identical, nothing
-//!    that existed before is gone, and no cache file was created (the scan writes
-//!    nothing at all, anywhere).
-//!
-//! `HOME` is process-global, so the tests that set it hold [`HOME_LOCK`]; this is its
-//! own test binary for the same reason (`tests/session_index.rs`'s pattern).
+//! `~/.claude` is READ-ONLY for us, checked on the metrics scan (it reads the most): a replica
+//! home stays byte-identical, a read-only root still scans, and the real home's `settings.json`
+//! is unchanged. Own binary holding [`HOME_LOCK`]: `HOME` is process-global.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -191,12 +155,8 @@ fn iso_ms(ms: i64) -> String {
 // 1. The strong, deterministic assertion
 // ===========================================================================
 
-/// Deliberately a **sync** test driving its own runtime with `block_on`, not a
-/// `#[tokio::test]`: [`HOME_LOCK`] is a `std::sync::Mutex` and holding a std guard
-/// across an `.await` is a real hazard (`clippy::await_holding_lock`) even when this
-/// binary's tests happen to be the only ones involved. `block_on` keeps the guard's
-/// lifetime entirely synchronous, so the lint is satisfied by the code being correct
-/// rather than by an allow.
+/// Sync, with its own `block_on`: [`HOME_LOCK`] is a `std` mutex, and holding its guard
+/// across an `.await` is a real hazard (`clippy::await_holding_lock`).
 #[test]
 fn the_full_command_path_writes_nothing_under_a_replica_home() {
     let _guard = HOME_LOCK.lock().expect("home lock");
@@ -326,17 +286,8 @@ fn set_mode(_path: &Path, _mode: u32) {
 // 3. The developer's real ~/.claude
 // ===========================================================================
 
-/// Scan the real `~/.claude` and prove we left it alone.
-///
-/// **Why the content comparison is scoped.** A `claude` running in another window
-/// appends to `projects/**` and rewrites `history.jsonl`, `todos/`, `statsig/`,
-/// `shell-snapshots/` and `__store.db` continuously — often several times a second.
-/// Comparing those would make this gate fail whenever the developer has Claude Code
-/// open, which is a non-hermeticity, not a finding. So this test asserts
-/// the parts that hold unconditionally: **`settings.json` is byte-identical** (the
-/// user's global config), **nothing that existed before is gone**, and
-/// **no cache file was created**. Assertion 1 above carries the full byte-identity
-/// claim, against a replica that cannot be written by anyone else.
+/// Scoped on purpose: a running `claude` rewrites `projects/**`, `history.jsonl` etc.
+/// constantly. Asserts `settings.json` is unchanged, nothing vanished, no cache file created.
 #[test]
 fn the_real_home_is_not_disturbed_by_a_real_scan() {
     let Some(home) = agent_studio_scaffold_lib::agent::claude::home_dir() else {

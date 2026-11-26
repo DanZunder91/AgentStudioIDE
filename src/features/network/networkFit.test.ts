@@ -1,9 +1,4 @@
-/**
- * One row per call (networkFilter.tableFlows / neutralizedBypassOf) and the fit-to-width
- * columns (networkColumns.fitColumns) — each shimmed `curl --noproxy` used to show twice, and
- * at the 1280 px window only Time / Proto / Method / Host were on screen. The real-pixel half is
- * networkColumns.browser.test.tsx.
- */
+/** The real-pixel half of the column fit is networkColumns.browser.test.tsx. */
 
 import { describe, expect, it } from "vitest";
 

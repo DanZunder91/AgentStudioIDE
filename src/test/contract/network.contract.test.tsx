@@ -1,16 +1,6 @@
-/**
- * SEAM TEST — Network view. Not a unit test.
- *
- * The flows, summaries and statuses fed in here were produced by the REAL Rust capture proxy
- * (`src-tauri/tests/contract_goldens.rs` drives it on loopback with real clients) and written
- * as goldens. Only the outer boundary is mocked — `@tauri-apps/api/core` `invoke` and
- * `@tauri-apps/api/event` `listen` answer with that golden JSON. Everything between is real:
- * `netcapIpc` → `networkStore` (snapshot + event upsert) → `NetworkPanel` / `FlowDetailPane`
- * → the formatters, the source resolution and the cURL export.
- *
- * Every expected string is written out by hand — never derived from the golden
- * or from the code under test.
- */
+/** SEAM TEST: flows came from the real Rust capture proxy (`src-tauri/tests/contract_goldens.rs`).
+ * Only `invoke` / `listen` are mocked; IPC, store, panels and formatters are real. Expected strings
+ * are written by hand, never derived from the golden or the code under test. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -399,14 +389,7 @@ describe("the detail pane over real FlowDetails (netcap_flow)", () => {
     expect(within(screen.getByTestId("net-detail")).getAllByRole("alert")[0]).toHaveTextContent("tls rejected → passthrough");
   });
 
-  /*
-   * SEAM BUG (found by this test): Rust records a rejected decrypt handshake as
-   * `proto: "https", method: "CONNECT", path: ""` with no request headers or body (the client
-   * hung up before sending one). `exportable()` only refuses `tunnel`/`ws`/`grpc`, so the row
-   * offers Copy as cURL, which yields `curl -X CONNECT 'https://localhost:8443'` — a command
-   * that replays nothing. Fix, TS side: refuse `method === "CONNECT"` (or `state === "error"`
-   * with no request captured) in `networkExport.ts#exportable`. Flip to `it` when fixed.
-   */
+  /* A rejected TLS handshake is recorded as an `https` CONNECT with no request: no replay. */
   it("SEAM: a tls-rejected CONNECT row does not offer a meaningless `curl -X CONNECT` replay", async () => {
     await open(9);
     expect(curlButton()).toBeDisabled();

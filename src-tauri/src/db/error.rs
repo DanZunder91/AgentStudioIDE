@@ -1,30 +1,6 @@
-//! The database client's error type, its stable codes, and the driver-error mapping.
-//!
-//! ## Two different renderings, and why there are two
-//!
-//! The contract asks for two things from one failure:
-//!
-//! * **Command rejections** carry a stable, greppable code in the app's usual error style —
-//!   `"<code>"` or `"<code>: <detail>"` — so the panel can branch on `invalid-config`
-//!   versus `network` without string-sniffing. That is [`DbError::to_wire`].
-//! * **`DbTestResult.error`** is rendered **verbatim** by the dialog (`describeTestResult`
-//!   in `engineFields.ts` prints it and nothing else), so it has to be a human sentence.
-//!   That is [`DbError::message`].
-//!
-//! One struct produces both, which is what keeps them from drifting into two different
-//! accounts of the same failure.
-//!
-//! ## Redaction is not optional here
-//!
-//! `sqlx`, libpq and every other driver in this family echo the connection string — and
-//! therefore the password — into their error text. Those strings flow into the results pane,
-//! into the diagnostics ring the user can copy and paste into an issue. So **every** error
-//! leaving `db::` goes through [`DbError::redacted`] with the secrets that were in play, and
-//! the live tier proves it against a real wrong-password failure rather than a synthetic
-//! string (`db_live.rs::a_wrong_password_never_appears_in_the_error`).
-//!
-//! The redaction is deliberately in the *error* type rather than at each call site: a call
-//! site can be forgotten, and this one is on the only road out.
+//! DB errors: stable codes for command rejections ([`DbError::to_wire`], `<code>[: <detail>]`) and
+//! a human sentence the test dialog renders verbatim ([`DbError::message`]), from one struct.
+//! Drivers echo the DSN, so every error leaving `db::` goes through [`DbError::redacted`].
 
 use serde::Serialize;
 
@@ -37,19 +13,8 @@ pub enum DbErrorCode {
     NotFound,
     /// The config is invalid before we ever dial.
     InvalidConfig,
-    /// The **statement** cannot be run — it does not parse, it is empty, or the server refused
-    /// it as malformed. Nothing is wrong with the connection.
-    ///
-    /// 🔴 Exists because [`DbErrorCode::InvalidConfig`] used to do double duty for
-    /// "your settings are wrong" and "your statement is wrong", and the frontend maps a code to a
-    /// sentence: SQL typed into a MongoDB console was answered with *"check the host,
-    /// the port, and the settings this engine requires"* — about a connection that had just
-    /// succeeded. Two problems with different fixes must not share a code, because a code is all
-    /// the sentence has to go on.
-    ///
-    /// Where an engine can parse before dialling anything, a statement it cannot read is better
-    /// still as a `message` **result** (see [`crate::db::result::DbResultSet::message`]) — that is
-    /// what a Postgres syntax error already does. This code is for the paths that must reject.
+    /// The statement cannot run (unparseable, empty, or refused as malformed); the connection is
+    /// fine. Kept apart from `InvalidConfig` because the frontend maps each code to one sentence.
     InvalidStatement,
     /// DNS / refused / unreachable.
     Network,
@@ -59,14 +24,8 @@ pub enum DbErrorCode {
     Auth,
     /// A `{{VAR}}` reference has nothing behind it in the Vault.
     SecretMissing,
-    /// A statement that was **refused** rather than run: the read-only guard, the multi-statement
-    /// guard, a command this app never sends, or a server answering "this transaction is
-    /// read-only". Nothing is wrong with the connection and nothing is wrong with the SQL — a
-    /// policy stopped it.
-    ///
-    /// 🔴 **Every message carrying this code is written by us**, and [`DbError::blocked`] is the
-    /// only constructor for it. That is a contract, not a habit: see that function for the
-    /// finding it comes from and for what the frontend is allowed to do with it.
+    /// A statement refused by policy (read-only or multi-statement guard, a server's read-only
+    /// refusal). Every message is our prose, built only via [`DbError::blocked`].
     Blocked,
     /// Exceeded `timeout_ms`.
     Timeout,
@@ -118,48 +77,15 @@ impl DbError {
         Self::new(DbErrorCode::InvalidConfig, message)
     }
 
-    /// The statement cannot be run. **The message is written for the person who typed it** — the
-    /// frontend renders it verbatim for this code instead of substituting a sentence of its own
-    /// (`dbErrors.ts`'s `DETAIL_IS_THE_ANSWER`), because here the detail *is* the actionable part.
-    /// It is still redacted on the way out like every other message, so that is safe.
+    /// The statement cannot run. Written for the person who typed it: the frontend renders it
+    /// verbatim (`dbErrors.ts`'s `DETAIL_IS_THE_ANSWER`). Still redacted on the way out.
     pub fn invalid_statement(message: impl Into<String>) -> Self {
         Self::new(DbErrorCode::InvalidStatement, message)
     }
 
-    /// A statement refused before it produced a result. **The message must be prose WE wrote, for
-    /// the person who typed the statement — never a driver's or a server's own words.**
-    ///
-    /// 🔴 **Why.** A buffer holding two statements was refused with
-    /// *"That statement was blocked before it ran — this connection is read-only, or it does not
-    /// allow multiple statements."* — a sentence naming both guards because it is the only thing
-    /// `dbErrors.ts` can say from a code. `guard::multi_statement_refusal` had written the precise
-    /// one — *"That is 2 statements…"* — and the frontend threw it away, exactly as the earlier
-    /// MongoDB misattribution threw away Mongo's parse advice.
-    ///
-    /// The frontend's fix for that class is `DETAIL_IS_THE_ANSWER`, a short allow-list of codes
-    /// whose detail is rendered verbatim instead of being replaced. `blocked` could not simply
-    /// join it, and **that is what this constructor exists to change**: the code was produced from
-    /// two different places. Our guards wrote sentences meant for the user, while four
-    /// *foreign-error mappers* — sqlx's SQLSTATE `25006`, ClickHouse's error `164`, DynamoDB's
-    /// conflict exceptions and redis's `ReadOnly` — appended **the server's own text**, and driver
-    /// text is precisely what `dbErrors.ts` exists to keep off the screen (libpq and sqlx
-    /// echo the DSN, and [`DbError::redacted`] removes the *password* from it, not the host or the
-    /// user). Adding `auth` to that allow-list was reverted for this reason, and its
-    /// leak test — *"drops a hostile detail entirely"* — is the one that caught it.
-    ///
-    /// So the fix is to make the code mean one thing: **`blocked` carries our prose only.** Those
-    /// four arms now say what *we* know about the refusal and drop the server's echo, which costs
-    /// almost nothing (each one restated "read-only" in worse words, and the result set already
-    /// carries the statement it refers to) and buys a code whose detail is safe to render by
-    /// construction rather than by case-by-case reasoning about what a driver might print.
-    ///
-    /// Enforced, not merely written down: `no_blocked_error_is_built_outside_the_
-    /// constructor_that_owns_the_contract` scans `src/db/` for the raw variant, and each mapper has
-    /// a test feeding it a DSN-bearing server message and asserting none of it survives.
-    ///
-    /// ⚠️ **What it does NOT promise.** The message may quote *the user's own statement* (the
-    /// guards name the line they refused), and it is still redacted on the way out like every other
-    /// message. What it must never contain is text that came from the other end of the socket.
+    /// A refused statement. The message is our prose, never driver or server text, so `blocked`
+    /// details render verbatim safely (drivers echo the DSN); it may quote the user's statement.
+    /// Enforced by `no_blocked_error_is_built_outside_the_…` and per-mapper leak tests.
     pub fn blocked(message: impl Into<String>) -> Self {
         Self::new(DbErrorCode::Blocked, message)
     }
@@ -186,56 +112,16 @@ impl DbError {
         &self.message
     }
 
-    /// `self` with every non-empty secret in `secrets` replaced by `••••`.
-    ///
-    /// Applied on the way out of every fallible path that had a secret in scope. Idempotent,
-    /// and a no-op for empty secrets (so an unset password cannot mask every empty substring
-    /// in the message, which is the obvious way to write this wrong).
+    /// `self` with every non-empty secret in `secrets` replaced by `••••`. Idempotent; empty
+    /// secrets are skipped so they cannot mask every empty substring.
     pub fn redacted(mut self, secrets: &[&str]) -> Self {
         self.message = crate::db::secret::redact(&self.message, secrets);
         self
     }
 
-    /// On an **auth** failure, say which account was dialled — from *our own* fields, not from the
-    /// server's echo.
-    ///
-    /// 🔴 **Why.** On a connection whose user name and password were both
-    /// `gazelle`, PostgreSQL's own sentence — `password authentication failed for user
-    /// "gazelle"` — came back through [`Self::redacted`] as `password authentication failed for
-    /// user "••••"`. The redaction was *correct*: a string equal to the password cannot be printed,
-    /// and it has no way to know that this occurrence happens to be the user name. But the result
-    /// reads as though the app mangled the input, and it destroys the one fact the message existed
-    /// to carry.
-    ///
-    /// So the fix is **reconstruction, not weaker redaction**. We hold `user` ourselves; it is not a
-    /// secret (it is stored in plaintext, shown in the dialog, and never in
-    /// `ResolvedConfig::secrets`), so the sentence can be rebuilt from it and prepended *after* the
-    /// redaction has run over the driver's text. The driver's text still follows, still masked.
-    ///
-    /// ⚠️ **When the user name IS the password, it is still not printed — and the message says
-    /// why.** That case cannot have both properties asked of it (name the user; never print the
-    /// password), because here they are the same string. Rather than pick one silently, the loss
-    /// goes in the output: the message states that the two are identical, which is
-    /// both an honest account of the `••••` the user is looking at *and* the most actionable thing
-    /// we know — it is very often the whole bug.
-    ///
-    /// **And printing it would not have worked anyway — measured, not assumed.** This message
-    /// reaches the user through `DbTestResult.error`, which the dialog renders verbatim via
-    /// `engineFields.ts::describeTestResult` — and that function pipes it through
-    /// `redactSecret(text, secret)` (`engineFields.ts:933`), a *frontend* defence-in-depth pass that
-    /// replaces every occurrence of the typed password with the same `••••`. So a user name equal to
-    /// the password would be re-masked in the webview no matter what Rust emitted. Naming it here
-    /// would have produced the same masked message a second time, for a different reason.
-    ///
-    /// ⚠️ **Where this is visible.** The Test Connection path renders `message` verbatim (see this
-    /// module's header), which is the path the masked message came from. A *rejection* from
-    /// `db_open`/`db_query` is different: `dbErrors.ts::describeDbFailure` substitutes its own
-    /// sentence for every code except `invalid-statement`, so this reconstruction is not shown
-    /// there. Widening `DETAIL_IS_THE_ANSWER` to include `auth` is the frontend-side follow-up, and
-    /// it is deliberately *not* done from here.
-    ///
-    /// `host` is included because "which server" is the other half of "which account", and it is a
-    /// non-secret we also hold.
+    /// On an auth failure, prepend the account and host dialled, from our own non-secret fields,
+    /// after redaction (which masks a server echo of a user equal to the password). A user name
+    /// equal to the password stays masked, and the message says the two are identical.
     pub fn with_auth_identity(mut self, user: &str, password: &str, host: &str) -> Self {
         if self.code != DbErrorCode::Auth {
             return self;
@@ -268,17 +154,9 @@ impl DbError {
 /// Rust and one scrubbed by the frontend's defence-in-depth pass look the same.
 pub const MASK: &str = "••••";
 
-/// Map a `sqlx` error onto our code + prose.
-///
-/// **Not** a catch-all `unknown`: the four codes a user can act on (`auth`, `network`,
-/// `tls`, `invalid-config`) are distinguished, because "check the host, the port and the
-/// network" is useless advice when the real answer is "your password is wrong". SQLSTATE is
-/// the discriminator wherever the server got far enough to send one — it is a standard, so
-/// it survives driver and server upgrades in a way that matching on English does not.
-///
-/// The server's own message is appended for the cases where it is the most informative thing
-/// available (an unknown database names the database; a syntax error names the position).
-/// It is redacted by the caller, never trusted.
+/// Map a `sqlx` error to code + prose, distinguishing `auth`, `network`, `tls`, `invalid-config`
+/// by SQLSTATE where available (stable, unlike English). Server text appended is redacted by the
+/// caller.
 pub fn map_sqlx_error(e: &sqlx::Error) -> DbError {
     use sqlx::Error as E;
     match e {
@@ -300,14 +178,8 @@ pub fn map_sqlx_error(e: &sqlx::Error) -> DbError {
                     DbErrorCode::Auth,
                     format!("That account is not allowed to do this. {server}"),
                 ),
-                // 25006 read_only_sql_transaction — the read-only guardrail firing at the server.
-                //
-                // 🔴 The one arm in this table that does NOT append `server`, and the exception is
-                // deliberate: `blocked` is the code whose detail the panel renders verbatim, so it
-                // carries our prose only (see `DbError::blocked`). Nothing is lost that the user
-                // can use — Postgres says "cannot execute INSERT in a read-only transaction" about
-                // a statement the result set already names — and what replaces it says which
-                // read-only this could be, which the server's sentence never did.
+                // 25006 read_only_sql_transaction: the server-side guardrail. The one arm that does
+                // not append `server`: `blocked` carries our prose only (see `DbError::blocked`).
                 "25006" => DbError::blocked(
                     "The server refused that statement because the transaction is read-only. \
                      Untick \"Read-only\" in this connection's settings if you mean to write — and \
@@ -339,20 +211,9 @@ pub fn map_sqlx_error(e: &sqlx::Error) -> DbError {
                 std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe => {
                     "The server closed the connection. If SSL is off, the server may require it."
                 }
-                // 🔴 **The bug: `Check the host, the port and the
-                // network. (expected to read 5 bytes, got 0 bytes at EOF)` — on a server that was
-                // visibly reachable.** That sentence was the catch-all arm below, and it was
-                // actively misleading: `UnexpectedEof` is raised by `sqlx-core`'s buffered reader
-                // (`net/socket/buffered.rs:290`) only *after* a socket is established, when the
-                // server accepts the connection and then closes it mid-protocol. The host and the
-                // port are the two things we can be sure are FINE. Telling someone to check them is
-                // the same misattribution the `invalid-statement` code was split out to end: a
-                // message whose advice sends the user to the one place the problem is not.
-                //
-                // The `5 bytes` in that message is the giveaway — it is the Postgres/MySQL
-                // message header (1 type byte + a 4-byte length), i.e. the very first thing the
-                // server should have said. So the named causes are the ones that kill a connection
-                // exactly there, and they are all actionable.
+                // `UnexpectedEof` comes only after the socket is up (sqlx-core's buffered reader):
+                // the server closed mid-protocol, so host and port are fine. `5 bytes` is the
+                // message header; the named causes drop a connection at its first reply.
                 std::io::ErrorKind::UnexpectedEof => {
                     "The server accepted the connection and then closed it without answering, so \
                      the host and the port are reachable and something else ended it. The usual \
@@ -467,14 +328,8 @@ mod tests {
         );
     }
 
-    /// 🔴 **The bug.** The app said *"Check the host, the port and the network. (expected to read
-    /// 5 bytes, got 0 bytes at EOF)"* about a server that was visibly reachable — which is rightly
-    /// confusing, because an `UnexpectedEof` can only happen
-    /// **after** a socket is open.
-    ///
-    /// The negative control is the second half: the catch-all sentence must still
-    /// exist for the kinds that really are unreachable, or this test would pass on an
-    /// implementation that simply renamed the default arm.
+    /// Negative control: the catch-all sentence must still apply to truly unreachable kinds, or a
+    /// renamed default arm would pass.
     #[test]
     fn an_eof_mid_protocol_does_not_blame_the_host_and_port_it_just_reached() {
         let m = map_sqlx_error(&sqlx::Error::Io(std::io::Error::new(
@@ -552,10 +407,8 @@ mod tests {
         );
     }
 
-    /// The SQLSTATE table, exercised through a **stub** `DatabaseError` rather than a real
-    /// server, so the mapping is in the hermetic tier while `db_live.rs` proves the codes a
-    /// real Postgres actually sends. That split is `usage.rs`'s exactly: captured fixtures
-    /// can only prove we still read what we once saw, so the live tier proves currency.
+    /// A stub `DatabaseError` keeps the SQLSTATE table hermetic; `db_live.rs` proves the codes a
+    /// real Postgres sends.
     #[derive(Debug)]
     struct StubDbError {
         sqlstate: Option<&'static str>,
@@ -596,11 +449,8 @@ mod tests {
 
     #[test]
     fn the_sqlstate_table_maps_each_state_to_its_own_code() {
-        // The last column is whether the server's own words are *kept*. It is a column rather than
-        // a blanket rule because 25006 is deliberately the one arm that drops them — `blocked` is
-        // the code whose detail the panel renders verbatim, so it carries our prose only
-        // (`DbError::blocked`). Spelling it per row keeps that exception visible here instead of
-        // turning the whole assertion off.
+        // Last column: whether the server's words are kept. Per row because 25006 deliberately
+        // drops them (`DbError::blocked`).
         let cases: &[(
             Option<&'static str>,
             &'static str,
@@ -685,17 +535,8 @@ mod tests {
         }
     }
 
-    /// 🔴 **The constraint that makes the multi-statement refusal bug non-obvious**, pinned.
-    ///
-    /// `blocked` was produced from two places: our guards, whose sentences are written for the
-    /// user, and this SQLSTATE arm, which appended **the server's** text. That is why `blocked`
-    /// could not simply join `dbErrors.ts`'s `DETAIL_IS_THE_ANSWER` — and it is why `auth` was
-    /// added to that list and then reverted, caught by its *"drops a hostile detail
-    /// entirely"* test.
-    ///
-    /// The DSN here is the whole point. [`DbError::redacted`] removes the **password**, so a leak
-    /// test that only checks the password would pass on a message still naming the host, the port,
-    /// the database and the user. This asserts none of it arrives.
+    /// The DSN is the point: [`DbError::redacted`] removes only the password, so this asserts host,
+    /// port, database and user are absent too.
     #[test]
     fn a_read_only_refusal_carries_none_of_the_servers_text_because_the_panel_renders_it() {
         let leaky = "cannot execute INSERT in a read-only transaction \
@@ -725,19 +566,9 @@ mod tests {
         assert!(mapped.message.contains("standby"), "{}", mapped.message);
     }
 
-    /// 🔴 **The invariant every `blocked` message now rests on, made checkable**: a
-    /// rule nobody can check is a rule that erodes, and this one is load-bearing for a *frontend*
-    /// decision that cannot see Rust at all.
-    ///
-    /// Constructing the variant directly is how a driver's words got into a `blocked` message four
-    /// separate times; going through [`DbError::blocked`] puts the contract in front of whoever
-    /// writes the fifth. So the raw form is banned outside this module, and the ban is measured.
-    ///
-    /// ⚠️ **What it does and does not buy.** It catches *drift* — a new engine reaching for the
-    /// familiar `DbError::new`. It cannot catch `DbError::blocked(server_text)`, which is why the
-    /// constructor's doc comment says what it says and why each mapper has its own leak test. Line
-    /// comments are stripped before the scan, so a comment quoting the banned form is not a false
-    /// positive (a scanner of this shape can otherwise trip over its own rule's prose).
+    /// Bans the raw `Blocked` variant outside this module so every `blocked` message goes through
+    /// [`DbError::blocked`]. Catches drift, not `blocked(server_text)`; line comments are stripped
+    /// before the scan.
     #[test]
     fn no_blocked_error_is_built_outside_the_constructor_that_owns_the_contract() {
         // Assembled, so this file does not contain the needle it searches for.
@@ -776,12 +607,8 @@ mod tests {
 
     /* ──────────────────────── naming the account on an auth failure ──────────────────────── */
 
-    /// 🔴 **The bug:** `password authentication failed for user
-    /// "••••"`. The user name and password were both `gazelle`, so the redaction — correctly —
-    /// masked the server's echo of the *user*. The message then read as though the app had mangled
-    /// the input and it destroyed the only fact it existed to carry.
-    ///
-    /// The reconstruction names the account from **our own** field, after the redaction has run.
+    /// User and password are both `gazelle`: the redaction masks the server's echo of the user, so
+    /// the account is named from our own field after redaction.
     #[test]
     fn an_auth_failure_names_the_account_from_our_own_field() {
         let mapped = map_sqlx_error(&db_err(
@@ -810,11 +637,8 @@ mod tests {
         );
     }
 
-    /// ⚠️ **A real-world configuration — password == user name — and the one case where
-    /// "name the user" and "never print the password" cannot both hold**, because they are the same
-    /// string. Rather than pick one silently, the message says which it gave up and why: the
-    /// user name is withheld, the `••••` is explained, and the identity of the string is
-    /// itself the most actionable thing we know.
+    /// Naming the user and never printing the password cannot both hold here, so the user is
+    /// withheld and the `••••` explained.
     #[test]
     fn a_user_name_identical_to_the_password_is_explained_rather_than_printed() {
         let mapped = map_sqlx_error(&db_err(

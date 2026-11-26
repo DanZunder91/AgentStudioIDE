@@ -1,56 +1,24 @@
-/**
- * curlParse — turn a pasted `curl` command into the API client's HTTP request parts
- * (cURL import): paste a curl, get method/url/headers/body filled in,
- * Postman-style. Frontend-only, hand-rolled + fully tested — no external tool, no
- * new dependency (the zero-install principle).
- *
- * Handles the flags everyday curls use: `-X/--request`, `-H/--header` (repeatable),
- * `--url` / a positional URL, `-d/--data[-raw|-binary|-ascii|-urlencode]` (repeatable
- * → joined with `&`, and implies POST when no method is given), `-u/--user` → a
- * Basic `Authorization` header, `-b/--cookie name=value` → a `Cookie` header. Boolean
- * flags it doesn't model (`-L/--location`, `--compressed`, `-k`, `-s`, …) are
- * ignored. Shell quoting is respected: single quotes (literal), `$'…'` (bash's
- * ANSI-C form, which DevTools' "Copy as cURL (bash)" uses for any `'` or `!`), double
- * quotes (with `\` escapes), backslash line-continuations, and bare backslash escapes.
- *
- * Windows: the same paste also reads DevTools' "Copy as cURL (cmd)"
- * (`^"…^"`, `^` continuations) and a PowerShell `curl.exe` command (backtick
- * continuations) — the shell emulation lives in `curlShells.ts`, and
- * `detectCurlDialect` picks which reading applies.
- */
+/** Pasted curl to request parts; hand-rolled, no dependency (zero-install). Reads bash quoting
+ * incl. $'…' (DevTools' bash export); unmodelled boolean flags are ignored. The Windows cmd and
+ * PowerShell forms are emulated in curlShells.ts, picked by detectCurlDialect. */
 
 import { legacyNativeArgv, tokenizeCmd, tokenizePowerShell } from "./curlShells";
 
-/**
- * The scriptblock our PowerShell "Copy as cURL" wraps a command in when an argument
- * needed the C runtime's quoting: it makes PowerShell 7.3+ pass arguments the way
- * 5.1 does (5.1 ignores the variable). Reading it back means "5.1 rules, exactly".
- */
+/** Our PowerShell export's wrapper: makes 7.3+ pass args the way 5.1 does (5.1 ignores the
+ * variable), so reading it back means "5.1 rules, exactly". */
 const PS_LEGACY_WRAPPER =
   /^\s*&\s*\{\s*\$PSNativeCommandArgumentPassing\s*=\s*'Legacy'\s*;([\s\S]*)\}\s*$/i;
 
-/**
- * Does `text` look like a curl command (so the URL field should auto-convert it)?
- * True only for a leading `curl` (or `curl.exe`) FOLLOWED by whitespace — so a real
- * URL, or the word "curl" mid-typing without args, never triggers prematurely — or
- * for our own PowerShell export's legacy-passing wrapper around one.
- */
+/** A leading curl / curl.exe FOLLOWED by whitespace (so a URL or a half-typed word never
+ * triggers), or our PowerShell export's wrapper around one. */
 export function isCurlCommand(text: string): boolean {
   const inner = PS_LEGACY_WRAPPER.exec(text)?.[1] ?? text;
   return /^\s*curl(?:\.exe)?\s/i.test(inner);
 }
 
-/**
- * DevTools' "Copy as PowerShell" — `Invoke-WebRequest`, often after a
- * `$session = New-Object …WebRequestSession` block. Recognised so the paste can say
- * what to copy instead, rather than landing in the URL field as junk.
- *
- * Deliberately NOT parsed: it is a different object model (cookies on a session
- * object, `-ContentType` split from `-Headers @{…}`, bodies as
- * `[Text.Encoding]::UTF8.GetBytes(…)`, `$([char]N)` escapes) — a second PowerShell
- * evaluator for information both cURL forms DevTools offers right beside it
- * already carry, and both of those paste straight in.
- */
+/** DevTools' "Copy as PowerShell", recognised only so the paste can say what to copy instead.
+ * Deliberately not parsed: a different object model, and the two cURL forms DevTools offers
+ * beside it already paste straight in. */
 export function isPowerShellWebRequest(text: string): boolean {
   return /^\s*(?:\$session\s*=\s*New-Object\s+Microsoft\.PowerShell\.Commands\.WebRequestSession\b|Invoke-(?:WebRequest|RestMethod)\s)/i.test(
     text,
@@ -65,18 +33,9 @@ export const POWERSHELL_PASTE_HINT =
 /** Which shell's quoting a pasted curl command was written for. */
 export type CurlDialect = "bash" | "cmd" | "powershell";
 
-/**
- * Which shell wrote this curl? Read from the FIRST line only — the body, which can
- * hold anything, always comes later.
- *
- *   • cmd — DevTools wraps arguments in `^"…^"` (the URL is the first or second
- *     argument), or the line continues with ` ^`. Older DevTools quoted plain
- *     `"…"`, so the continuation is the only sign; it is not trusted when the line
- *     holds a `'`, because a bash body that opens on line one could end it in ` ^`.
- *   • powershell — our legacy-passing wrapper, a backtick continuation, or the
- *     program spelled `curl.exe` (how PowerShell users dodge 5.1's `curl` alias).
- *   • bash — everything else, which keeps every pre-Windows paste reading as before.
- */
+/** Read from the FIRST line only (a body can hold anything). cmd: ^"…^" or a " ^" continuation,
+ * untrusted when the line holds ' (a bash body may end in " ^"). powershell: our wrapper, a
+ * backtick continuation, or curl.exe. bash: everything else. */
 export function detectCurlDialect(text: string): CurlDialect {
   if (PS_LEGACY_WRAPPER.test(text)) return "powershell";
   const firstLine = text.trimStart().split(/\r?\n/, 1)[0];
@@ -130,13 +89,8 @@ const ANSI_C_ESCAPES: Readonly<Record<string, string>> = {
 /** How many hex digits each numeric `$'…'` escape may take. */
 const ANSI_C_HEX: Readonly<Record<string, number>> = { x: 2, u: 4, U: 8 };
 
-/**
- * Read a bash `$'…'` string starting just past its `$'`; returns the text and the
- * index after the closing quote. DevTools' bash export switches to this form for
- * any value holding a `'`, a `!` or a control character — so a JSON body saying
- * "it's" arrives as `$'{"note":"it\'s"}'`, which plain single-quote reading tore in
- * half. An escape bash does not define stays as typed, backslash included.
- */
+/** Reads a bash $'…' from just past "$'"; DevTools' bash export uses it for any value holding
+ * ', ! or a control char. An escape bash does not define stays as typed, backslash included. */
 function readAnsiC(s: string, start: number): { text: string; end: number } {
   let i = start;
   let text = "";
@@ -160,11 +114,8 @@ function readAnsiC(s: string, start: number): { text: string; end: number } {
   return { text, end: i + 1 };
 }
 
-/**
- * Split a curl command into shell-style tokens (quotes stripped). Respects single
- * quotes (fully literal), `$'…'` (ANSI-C escapes), double quotes (with `\` escapes),
- * `\`-newline continuations, and bare `\` escapes; unquoted runs split on whitespace.
- */
+/** Shell tokens, quotes stripped: '…' literal, $'…' ANSI-C, "…" with \ escapes, \-newline
+ * continuations and bare \ escapes; unquoted runs split on whitespace. */
 export function tokenizeCurl(input: string): string[] {
   const tokens: string[] = [];
   let cur = "";
@@ -232,14 +183,8 @@ export function tokenizeCurl(input: string): string[] {
   return tokens;
 }
 
-/**
- * Short flags that take a VALUE — the ones we model, plus ones we only consume.
- *
- * 🔴 The consume-only half is not padding. The loop below treats the first token
- * that is not a flag as the positional URL, so an unmodelled value-taking flag
- * donates its value to the URL: `curl -o out.json https://api` would have opened
- * a request to `out.json`. Consuming the value is what stops that.
- */
+/** Short flags that take a value. The consume-only ones matter: an unmodelled flag's value would
+ * otherwise win the positional-URL slot (curl -o out.json https://api). */
 const SHORT_WITH_VALUE = new Set([
   // modelled
   "X", "H", "d", "u",
@@ -256,26 +201,9 @@ const SHORT_TO_LONG: Record<string, string> = {
   u: "-u",
 };
 
-/**
- * Normalise curl's argument forms into one token per flag and one per value.
- *
- * 🔴 **The `-sX` paste.** `curl -sX POST http://…` filled the URL
- * field with the word **`POST`**. `-sX` is two BUNDLED short flags — `-s` and
- * `-X` — which the old loop saw as one unknown flag and skipped, so `POST` became
- * the first non-flag token and won the positional-URL slot; the real URL arrived
- * second and was dropped. Bundling is ordinary curl (and ordinary POSIX), and it
- * is what every "copy as curl" snippet in a README uses.
- *
- * Three forms are expanded here, all of which reached the old loop as one opaque
- * token:
- *   • `-sX POST`  → `-s` `-X` `POST`   (bundle; a value-taking flag ends it)
- *   • `-XPOST`    → `-X` `POST`        (value attached to the flag)
- *   • `--request=POST` → `--request` `POST`
- *
- * Within a bundle each letter is a boolean until one takes a value; that flag
- * claims the REST of the token, or the next token when the rest is empty. That is
- * curl's own rule, which is why `-H'Accept: x'` (no space) also lands correctly.
- */
+/** Expands bundled (-sX POST), attached (-XPOST) and --flag=value forms to one token each, so a
+ * flag's value never wins the positional-URL slot. In a bundle the first value-taking flag claims
+ * the rest of the token, or the next token when empty (curl's rule). */
 export function normalizeCurlFlags(tokens: string[]): string[] {
   const out: string[] = [];
   for (const tok of tokens) {
@@ -306,30 +234,18 @@ export function normalizeCurlFlags(tokens: string[]): string[] {
       }
       out.push(`-${letter}`);
     }
-    // No trailing "nothing was claimed" guard: a lone `-` is curl's stdin
-    // placeholder and already returned above, so a token that reaches this loop
-    // always has at least one letter to emit. The guard that used to sit here was
-    // unreachable, and the coverage gate is what said so.
+    // A lone "-" (stdin) returned above, so every token here emits at least one letter.
   }
   return out;
 }
 
-/**
- * Does `tok` carry a URL scheme? Used to pick the positional URL.
- *
- * Belt-and-braces beside `normalizeCurlFlags`: even if some future flag form slips
- * an unexpected bare word into the argument list, a token that names a scheme is a
- * far better URL candidate than one that does not. `POST` would never win this.
- */
+/** A token naming a scheme is the better positional-URL candidate: "POST" can never win this. */
 function looksLikeUrl(tok: string): boolean {
   return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(tok);
 }
 
-/**
- * A header string `Name: value` → a header, or null when it has no `:` separator.
- * `Name;` is curl's spelling of a header with an EMPTY value (a bare `Name:` tells
- * curl to remove the header instead) — DevTools writes it for every empty one.
- */
+/** "Name;" is curl's empty-value header (a bare "Name:" removes the header instead); DevTools
+ * writes it for every empty one. */
 function splitHeader(raw: string): ParsedHeader | null {
   const idx = raw.indexOf(":");
   if (idx <= 0) {
@@ -339,11 +255,8 @@ function splitHeader(raw: string): ParsedHeader | null {
   return { name: raw.slice(0, idx).trim(), value: raw.slice(idx + 1).trim() };
 }
 
-/**
- * The argv after the program name, read with the quoting rules of the shell the
- * command was written for. CRs never matter to bash or PowerShell here (and cmd
- * drops them itself), so a paste carrying Windows line endings continues its lines.
- */
+/** The argv after the program name, read with the source shell's quoting. CRs never matter to
+ * bash or PowerShell (cmd drops them), so a CRLF paste still continues its lines. */
 function shellArgs(input: string): string[] {
   const text = input.replace(/\r\n/g, "\n");
   const dialect = detectCurlDialect(text);
@@ -353,11 +266,8 @@ function shellArgs(input: string): string[] {
   } else if (dialect === "powershell") {
     const wrapped = PS_LEGACY_WRAPPER.exec(text);
     const words = tokenizePowerShell(wrapped ? wrapped[1] : text);
-    // Inside our wrapper every argument went out by 5.1's rules, so read them
-    // back exactly that way. Outside it, the C runtime's quoting is applied only
-    // to a word that plainly carries it (`\"`, the 5.1 idiom) — a word like
-    // `'{"a":1}'` is taken as written, which is what its author meant (and what
-    // PowerShell 7.3+ sends).
+    // Inside our wrapper every arg went out by 5.1 rules, so read them back that way. Outside,
+    // CRT quoting applies only to a word carrying \" (the 5.1 idiom); '{"a":1}' stays as written.
     argv = wrapped
       ? legacyNativeArgv(words)
       : words.flatMap((w) => (w.includes('\\"') ? legacyNativeArgv([w]) : [w]));
@@ -367,11 +277,7 @@ function shellArgs(input: string): string[] {
   return argv.length > 0 && /^curl(?:\.exe)?$/i.test(argv[0]) ? argv.slice(1) : argv;
 }
 
-/**
- * Parse a curl command into request parts, or `null` if it has no URL (nothing
- * usable). A leading `curl` token is optional. Method is inferred: an explicit
- * `-X` wins, else POST when a body is present, else GET.
- */
+/** null when there is no URL. Method: explicit -X, else POST when a body is present, else GET. */
 export function parseCurl(input: string): ParsedCurl | null {
   // Bundled (`-sX POST`), attached (`-XPOST`) and `--flag=value` forms all reach
   // the loop below as one opaque token otherwise — see `normalizeCurlFlags`.

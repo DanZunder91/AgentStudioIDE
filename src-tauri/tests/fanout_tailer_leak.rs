@@ -1,24 +1,6 @@
-//! **Security regression: a finished root must not leave a
-//! forever-polling fan-out tailer behind.**
-//!
-//! Dropping a `tauri::async_runtime::JoinHandle` (tokio) *detaches* the task — it
-//! does **not** cancel it. So when a root finishes, its tailer has to be explicitly
-//! `.abort()`ed, or it keeps re-parsing the now-static transcript from `~/.claude`
-//! every poll interval, forever, for every ad-hoc `claude` the user ever ran.
-//!
-//! The sibling test `fanout_tailer_live.rs` already proves the **close/cascade**
-//! abort (there the whole tree is *removed*). This binary covers the two paths where
-//! the node is **retained** (as `done`, for inspection) but the tailer must still
-//! die:
-//!   1. a natural PTY child exit  → `on_child_exited` → `finish_agent_for_terminal`
-//!   2. a clean `SessionEnd`      → `on_session_end`
-//!
-//! The proof in both cases is the same observable: after the root finishes, a brand
-//! new sub-agent appears on disk. A live (leaked) tailer would pick it up and grow
-//! the tree; an aborted tailer never sees it, so the count holds.
-//!
-//! Own binary because it points the tailer at a temporary `~/.claude` via `HOME`
-//! (process-global) and speeds the poll via `AGENTSTUDIO_FANOUT_POLL_MS`.
+//! A finished-but-retained root must abort its fan-out tailer (a dropped tokio `JoinHandle`
+//! detaches), on child exit and on `SessionEnd`: a sub-agent appearing later is never tailed.
+//! Own binary: it sets the process-global `HOME` and `AGENTSTUDIO_FANOUT_POLL_MS`.
 
 mod common;
 
@@ -153,18 +135,11 @@ async fn assert_no_resurrection(sup: &SupervisorHandle, retained: usize) {
     }
 }
 
-/// Both finish paths, run **sequentially in one test** on purpose: each points the
-/// tailer at a private `~/.claude` via the process-global `HOME`, so two parallel
-/// `#[tokio::test]`s in one binary would race (tokio runs tailers on a shared global
-/// runtime). Scenario A's tailer is aborted before scenario B sets a new `HOME`, so
-/// only ever one live tailer reads only ever its own home.
+/// Sequential in one test on purpose: each path sets the process-global `HOME`, and parallel
+/// tests would race; A's tailer is aborted before B moves `HOME`.
 #[tokio::test]
 async fn a_finished_root_leaves_no_polling_tailer_behind() {
-    // ── Path 1 — a natural PTY child exit aborts the tailer. ──────────────────
-    // The ad-hoc root's shell exits on its own → `on_child_exited` →
-    // `finish_agent_for_terminal`. The node is kept as `done` (retained for
-    // inspection), but its tailer must die, so a sub-agent that appears afterwards
-    // is never tailed in.
+    // ── Path 1: a natural PTY child exit (`on_child_exited`) aborts the tailer; node kept `done`.
     {
         let home =
             std::env::temp_dir().join(format!("agentstudio-leak-exit-{}", ulid::Ulid::new()));
@@ -206,10 +181,7 @@ async fn a_finished_root_leaves_no_polling_tailer_behind() {
         std::fs::remove_dir_all(&home).ok();
     }
 
-    // ── Path 2 — a clean `SessionEnd` aborts the tailer. ──────────────────────
-    // The shell lives on, so `SessionEnd` is the *only* signal the `claude` is over.
-    // `on_session_end` marks the ad-hoc root `done` and must abort its tailer, or it
-    // re-parses the static transcript forever.
+    // ── Path 2: a clean `SessionEnd` (the shell lives on) aborts the tailer.
     {
         let home = std::env::temp_dir().join(format!("agentstudio-leak-end-{}", ulid::Ulid::new()));
         std::env::set_var("HOME", &home);

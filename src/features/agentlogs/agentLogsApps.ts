@@ -1,28 +1,6 @@
-/**
- * Agent Logs × dev apps on this machine — the pure glue
- * between the Logs sources (derived from the lines, `agentLogsRunning.ts`) and the dev apps
- * Rust lists (`src/features/procs/`). No React, no IPC.
- *
- * A dev app's stream logs as `kind: "app"` with `source` `<name> · <file>` / `<name> · docker`.
- * The sidebar places each such source UNDER the app that claims it
- * (`devAppForSource` — the name prefix, longest name wins), so the streams started from an app
- * appear under it like services. A source no listed app claims (its app exited; a
- * file tail outlives the process that wrote it) is a row of its own in the same group.
- *
- * **An Apps row IS its log stream.** A Service (a
- * background task an agent started) whose tailed file IS an app's stdout/stderr — Claude's
- * `…/tasks/<id>.output`, the file its `run_in_background` redirects to — belongs to that app.
- * The match is by PATH, never by the service's name: a typical service is
- * `python3 · bg` (the launcher `python3 run_server.py …`, which `execve`d
- * `./target/debug/gazelle`), so only the path can put `gazelle` on it. Such a service stays in
- * the Services group (the flat list stays alongside) but is LABELLED with the app's
- * name, and it is what a click on the app solos — raw gazelle lines, no agent command blocks.
- * Clicking either row selects the app and solos that stream, so both rows read as selected.
- *
- * Selecting an app solos its streams; any OTHER pick (All, a terminal, the toolbar picker, an
- * error badge of another source) deselects the app. What counts as "its" stream is
- * {@link isAppSource}: a tail this UI started for it, or a source named after it.
- */
+/** Pure glue: Logs sources (`agentLogsRunning.ts`) × Rust's dev apps (`src/features/procs/`).
+ * `app` sources sit under the app claiming them by name prefix (longest wins); a Service whose
+ * tailed file IS an app's console belongs to it by PATH, never by name (launchers `execve`). */
 
 import { devAppForSource } from "../procs/procsFormat";
 import type { ActiveStream } from "../procs/procsStore";
@@ -44,19 +22,13 @@ export interface AppSourcePlacement {
   liveKeys: ReadonlySet<string>;
 }
 
-/**
- * The paths an app's CONSOLE goes to: its stdout / stderr files (a `log`-kind file is one it
- * opened, not where it prints — a service tailing that is not "the app's stream").
- */
+/** An app's console files: stdout/stderr (a `log`-kind file is one it opened, not its output). */
 export function consolePaths(app: Pick<DevApp, "logFiles">): string[] {
   return app.logFiles.filter((f) => f.kind !== "log").map((f) => f.path);
 }
 
-/**
- * The listed app whose console a Service source tails (by exact path), or null. When
- * several apps name the path (a parent and a child writing one file), the first listed wins —
- * Rust's order puts the IDE's own apps first, which is the one the user is looking for.
- */
+/** The app whose console a Service tails (exact path), or null. On ties the first listed wins:
+ * Rust lists the IDE's own apps first. */
 export function appForService(source: string, apps: readonly DevApp[], paths: ServicePaths): DevApp | null {
   const tailed = new Set<string>();
   for (const [path, src] of paths) if (src === source) tailed.add(path);
@@ -74,10 +46,8 @@ export function serviceSourcesOf(app: Pick<DevApp, "logFiles">, paths: ServicePa
   return out;
 }
 
-/**
- * Split the `app`-kind sources between the apps that claim them (by name prefix) and the
- * orphans; name the owner of every Service whose tailed file is an app's console (by path).
- */
+/** Split `app` sources between claiming apps (name prefix) and orphans; name the owner of every
+ * Service whose tailed file is an app's console (path). */
 export function placeAppSources(
   sources: readonly RunningSource[],
   apps: readonly DevApp[],
@@ -103,22 +73,15 @@ export function placeAppSources(
   return { byApp, unclaimed, serviceOwners, liveKeys };
 }
 
-/**
- * A stream's row label under its app: the part after `<name> · ` (`server.log`, `docker`) —
- * the app's own row already says whose it is. A source that does not carry the prefix (it
- * cannot, when {@link placeAppSources} put it there, but the label must never be empty) keeps
- * its full name.
- */
+/** Row label under its app: the part after `<name> · `; the full name if the prefix is missing
+ * (a label must never be empty). */
 export function streamLabel(source: string, app: Pick<DevApp, "name">): string {
   const prefix = `${app.name} · `;
   const rest = source.startsWith(prefix) ? source.slice(prefix.length) : "";
   return rest === "" ? source : rest;
 }
 
-/**
- * Is `source` one of `app`'s streams: a tail this UI started for it, a source named after it,
- * or the Service that tails its console.
- */
+/** Is `source` `app`'s: a tail started for it here, named after it, or its console's Service. */
 export function isAppSource(
   source: string,
   app: Pick<DevApp, "key" | "logFiles">,
@@ -131,13 +94,8 @@ export function isAppSource(
   return devAppForSource(source, apps)?.key === app.key;
 }
 
-/**
- * What a click on `app`'s row solos: the Service tailing its console (first: it IS the
- * app's log, running or not, since its lines are the app's), every tail started for it here,
- * plus every RUNNING `app` source it claims in the ring (a tail started before a window reload
- * is not in the procs store, but its lines are still arriving). Empty when it streams nothing
- * — the panel then shows the card with "Pick a log to stream".
- */
+/** What `app`'s row solos: its console Service first (its log, running or not), its tails, and
+ * every RUNNING `app` source it claims (survives a window reload). Empty → "Pick a log" card. */
 export function appSoloSources(
   app: DevApp,
   streams: readonly ActiveStream[],
@@ -154,10 +112,8 @@ export function appSoloSources(
   return out;
 }
 
-/**
- * Should a new source pick keep `app` selected? Only when every source it shows is one of the
- * app's (an empty pick is the app's own "nothing streams yet" state). `null` = All: not the app.
- */
+/** Keep `app` selected only if every picked source is the app's (empty = its "nothing streams
+ * yet" state); `null` (All) deselects it. */
 export function pickKeepsApp(
   only: readonly string[] | null,
   app: Pick<DevApp, "key" | "logFiles">,
@@ -171,11 +127,8 @@ export function pickKeepsApp(
 
 /* ── an agent's running apps ─────────────────────────────────────────────── */
 
-/**
- * Source label → the agent id its lines carry (the first one seen). A root agent's row and its
- * terminal share one label, and their lines carry the root's id, which is what `DevApp.agentId`
- * names — so this is the join between an Agents row and the apps that agent started.
- */
+/** Source label → agent id of its first line. A root agent and its terminal share a label and
+ * the root's id (`DevApp.agentId`): the join between an Agents row and that agent's apps. */
 export function agentIdsBySource(lines: readonly Pick<LogLine, "source" | "agentId">[]): ReadonlyMap<string, string> {
   const out = new Map<string, string>();
   for (const l of lines) if (l.agentId !== null && !out.has(l.source)) out.set(l.source, l.agentId);
@@ -195,11 +148,8 @@ export function appCountLabel(n: number): string {
 
 /* ── the Apps group's "All apps" row ─────────────────────────────────────── */
 
-/**
- * Every app stream at once: what each listed app's click would solo ({@link appSoloSources}, in
- * the list's order), then the orphan `app` streams whose app has exited — no duplicates. Empty
- * when no app streams anything.
- */
+/** Every app stream: each listed app's {@link appSoloSources} in list order, then orphan `app`
+ * streams; no duplicates. */
 export function allAppSources(
   apps: readonly DevApp[],
   streams: readonly ActiveStream[],
@@ -222,13 +172,8 @@ export function isExactPick(only: readonly string[] | null, sources: readonly st
   return sources.every((s) => only.includes(s));
 }
 
-/**
- * The sidebar's own label for whoever launched an IDE app: its agent's source (`claude · gazelle`)
- * when Rust names an agent, else its terminal's (`bash · workspace`). Read from the lines, because
- * the source label IS the sidebar row's name. Null when no line has named it yet. A terminal the
- * user renamed (`renamed`, `agentLogsTitles.renamedTerminalLabels`) is named by its live title
- * (`by gazelle`), exactly as its Terminals row reads.
- */
+/** Sidebar label of whoever launched an IDE app: its agent's source, else its terminal's, read
+ * from the lines (null until one names it). A renamed terminal uses its live title (as its row). */
 export function launcherLabelOf(
   app: Pick<DevApp, "origin" | "agentId" | "terminalId">,
   lines: readonly Pick<LogLine, "agentId" | "terminalId" | "source" | "kind">[],

@@ -1,13 +1,5 @@
-//! `git_blame::blame_scoped` — per-line authorship for the editor gutter.
-//!
-//! Built against **real repositories constructed with `git2` itself** (init,
-//! explicit signatures, commits) — never by shelling out to `git` (a CI runner may
-//! not have it; the zero-install principle applies to tests too). Every commit is
-//! made with an explicit `Signature` + epoch time, so the wire fields (`author`,
-//! `email`, `timeMs`, `summary`, `message`) are asserted against exact values.
-//!
-//! The scope guard is exercised through the same explicit-roots pattern as
-//! `fs_tree`'s tests: `blame_scoped(path, roots)` with a canonicalized temp root.
+//! `git_blame::blame_scoped` against real repos built with `git2` (never shelling out to
+//! `git`), with explicit signatures and times so wire fields are exact; temp roots canonicalized.
 
 use std::path::{Path, PathBuf};
 
@@ -184,13 +176,8 @@ fn two_commits_map_lines_correctly_and_the_table_is_deduped() {
     assert_eq!(grace.summary, "Append gamma");
 }
 
-/// 3a. File modified on disk but NOT staged or committed: blame still succeeds,
-///     and the committed lines stay attributed. Pinned actual
-///     `git2::blame_file` semantics, honestly measured: with default options
-///     (newest commit = HEAD) libgit2 blames **HEAD's content, not the working
-///     tree**, so the appended unstaged line simply does not appear in `lines`
-///     at all (2 entries, not 3). The dirty-buffer overlay is the frontend's
-///     concern.
+/// Measured: default `git2::blame_file` blames HEAD's content, not the working tree, so the
+/// unstaged line is absent (2 entries, not 3); the dirty-buffer overlay is the frontend's job.
 #[test]
 fn an_unstaged_on_disk_edit_is_not_part_of_the_blame() {
     let d = TempDir::new("dirty");
@@ -224,12 +211,8 @@ fn an_unstaged_on_disk_edit_is_not_part_of_the_blame() {
     );
 }
 
-/// 3b. A STAGED-but-uncommitted line: pinned actual behavior, honestly measured —
-///     with default options `git2::blame_file` blames HEAD's content only, so
-///     even a *staged* line is absent from `lines` (it does NOT surface as a
-///     zero-OID hunk in this mode; the wire's `None` mapping stays defensive for
-///     any input libgit2 does mark with the zero OID, per its documentation).
-///     Committed lines stay attributed either way.
+/// Measured: even a staged line is absent (HEAD only, no zero-OID hunk); the wire's `None`
+/// mapping stays defensive for inputs libgit2 does mark with the zero OID.
 #[test]
 fn a_staged_uncommitted_line_is_not_part_of_the_blame() {
     let d = TempDir::new("staged");
@@ -405,23 +388,9 @@ fn a_single_line_file_blames_that_one_line() {
     assert_eq!(blame.commits[0].id, id);
 }
 
-/// 8. **RUSTSEC-2026-0184 regression gate** (the reason we require `git2 >= 0.21`).
-///
-/// Under git2 0.20 a `BlameHunk` obtained from a `blame_buffer()`-created `Blame`
-/// could carry NULL author/committer pointers, and `final_signature()` /
-/// `orig_signature()` built a `Signature` over them unconditionally — dereferencing
-/// null (UB). 0.21 makes all four accessors return `Option<Signature>` and
-/// null-checks the pointer first.
-///
-/// `blame_scoped` uses `blame_file`, so production code is not on that path *today* —
-/// but the dirty-buffer overlay contemplated in `git_blame.rs`'s docs would be, so
-/// this test walks the exact advisory surface: it creates a `Blame` via
-/// `blame_buffer` and calls **every** signature accessor on **every** hunk,
-/// including the not-yet-committed hunk whose signatures are absent.
-///
-/// It is a *compile-time* floor as well as a runtime one: the `Option` matching below
-/// does not type-check against 0.20's bare-`Signature` return, so silently
-/// downgrading `git2` breaks the build instead of quietly reintroducing the UB.
+/// RUSTSEC-2026-0184 gate (why `git2 >= 0.21`): every signature accessor on every
+/// `blame_buffer` hunk, uncommitted ones included, must be a null-checked `Option`; the
+/// matching below also fails to compile against 0.20.
 #[test]
 fn blame_buffer_signatures_are_null_checked_options() {
     let d = TempDir::new("bufsound");

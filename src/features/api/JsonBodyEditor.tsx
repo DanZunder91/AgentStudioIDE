@@ -1,24 +1,6 @@
-/**
- * JsonBodyEditor — an editable request-body field that LOOKS like JSON (the body
- * should look like JSON as well as the response). A transparent `<textarea>` sits over a colored
- * `<pre>` that highlights the same text (the react-simple-code-editor technique) —
- * so it stays fully editable while showing JSON syntax colors, with no new dependency
- * and no CodeMirror instance to manage.
- *
- * 🔴 **Undo is store-backed, not the browser's** (the bug: a change to the
- * request body could not be undone with Command+Z after switching to
- * another window or executing the request). This is a CONTROLLED textarea, and
- * `Pane` unmounts an inactive tab — so switching tabs destroys the node and the
- * native undo stack with it, and a programmatic rewrite (Format, a pasted curl)
- * makes the browser drop it too. Cmd/Ctrl+Z is therefore handled here and served
- * from `bodyHistory` in the store, which outlives both. `preventDefault` stops
- * the browser's own (now empty) undo from also firing.
- *
- * Correctness of the overlay depends on the `<pre>` and `<textarea>` sharing IDENTICAL
- * text metrics (font, size, line-height, padding, wrapping) — both carry `.api-body`
- * + `.json-editor__layer` (see api.css). Scroll is mirrored so the highlight tracks
- * the textarea. Colors reuse the JsonView palette (`jsonview__*`).
- */
+/** A transparent textarea over a highlighted <pre>; both need identical text metrics (api.css).
+ * Undo is store-backed (`bodyHistory`): Pane unmounts inactive tabs and programmatic rewrites drop
+ * the native undo stack, so Cmd/Ctrl+Z is handled here and preventDefaulted. */
 
 import { useRef } from "react";
 
@@ -46,13 +28,7 @@ export function JsonBodyEditor({
 }): React.JSX.Element {
   const preRef = useRef<HTMLPreElement>(null);
 
-  /**
-   * Undo/redo first, then whatever the caller wanted.
-   *
-   * Matched on `key` and the platform modifier only — the same chords
-   * `historyKeymap` binds in the CodeMirror surfaces, so the two editors in this
-   * app do not disagree about what Cmd+Z means.
-   */
+  /** Same chords as CodeMirror's historyKeymap, so the app's editors agree on Cmd+Z. */
   const handleKeyDown = (e: React.KeyboardEvent): void => {
     const mod = e.metaKey || e.ctrlKey;
     const key = e.key.toLowerCase();

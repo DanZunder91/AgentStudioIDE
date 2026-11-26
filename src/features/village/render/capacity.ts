@@ -1,11 +1,5 @@
-/**
- * Agent Village — the capacity art: the Memory building's server racks, the Usage
- * building's two gauges, and the small context bar over an agent's desk. Our own procedural pixel
- * art, anchored like every prop: (x0, bottom) = the footprint's left and bottom edges, world px.
- *
- * A missing reading is drawn as MISSING — a rack's grey dashes, a gauge's dark bands with a "?" —
- * never as an empty (0%) one, which would claim something we do not know.
- */
+/** Capacity art, anchored like every prop: (x0, bottom) = the footprint's left and bottom edges,
+ * world px. A missing reading is drawn as MISSING, never as an empty (0%) one. */
 
 import type { DrawItem, MeterTone, PropReading } from "../villageTypes";
 import type { Camera } from "./camera";
@@ -34,10 +28,8 @@ export const RACK = {
 /** Units per rack, drawn bottom-up (the engine's RACK_UNITS). */
 const UNITS = 8;
 
-/**
- * A server rack: a cabinet two tiles tall with eight unit slots, lit from the bottom up — the
- * agents' share bright, everything else in use dim amber, free units dark. Unknown: grey dashes.
- */
+/** A two-tile rack of eight units lit bottom-up: agents' share bright, other used units dim amber,
+ * free units dark. Unknown: grey dashes. */
 export function drawRack(ctx: DrawTarget, cam: Camera, x0: number, bottom: number, reading: PropReading | undefined): void {
   const r = reading?.kind === "rack" ? reading : null;
   rect(ctx, cam, x0 + 2, bottom - 2, 12, 2, "rgba(0, 0, 0, 0.25)");
@@ -68,10 +60,8 @@ export const GAUGE = {
 /** Bands in a gauge, bottom-up. */
 export const GAUGE_BANDS = 8;
 
-/**
- * A usage gauge: a framed window of eight bands lit bottom-up in proportion to the window's use
- * (a non-zero use lights at least one), in its severity colour. No reading: dark bands and a "?".
- */
+/** Eight bands lit bottom-up in proportion to use (non-zero use lights at least one), in the
+ * severity colour. No reading: dark bands and a "?". */
 export function drawGauge(ctx: DrawTarget, cam: Camera, x0: number, bottom: number, reading: PropReading | undefined): void {
   const meter = reading?.kind === "gauge" ? reading.meter : null;
   rect(ctx, cam, x0 + 2, bottom - 4, 28, 4, GAUGE.plinth);

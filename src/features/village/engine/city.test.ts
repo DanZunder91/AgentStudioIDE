@@ -997,11 +997,8 @@ describe("buildCityWorld — a project building's lift", () => {
 describe("buildCityWorld — a project floor's Wi-Fi router (engine/teamLan.ts)", () => {
   const routers = (w: World) => w.props.filter((p) => p.kind === "router");
   const covers = (p: Prop, c: number, r: number) => c >= p.col && c < p.col + p.w && r >= p.row && r < p.row + p.h;
-  /**
-   * Teams of 1 (a desk of two), 12 and 13 (seven desks); a floor with no sub-agents of its own in a
-   * building that has a team (b2: it gets the building's desks, so it gets a router too); and a
-   * building with no team at all (delta: an agent and a console).
-   */
+  /** Teams of 1 (a desk of two), 12 and 13 (seven desks); b2 has no sub-agents but its building has
+   * a team, so it gets the desks and a router; delta has no team (an agent and a console). */
   const roster = planCity([
     agent("a", "alpha"),
     ...subs("a", 1),

@@ -1,10 +1,4 @@
-/**
- * LspStatus — the calm code-intelligence indicator in the editor header (M5).
- *
- * Two states, both quiet: "rust-analyzer: indexing…" while a query is waiting on
- * the server's first-index (retrying on -32801), and a dismissible "install
- * <server>" hint when the server isn't installed. Otherwise nothing renders.
- */
+/** Editor-header LSP indicator: "indexing…" while retrying -32801, an install hint, or nothing. */
 
 import { useAppStore } from "../../app/store";
 import { detectLanguage } from "../../lib/language";

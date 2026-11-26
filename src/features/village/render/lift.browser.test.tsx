@@ -1,11 +1,5 @@
-/**
- * Layer 5 — the City's lifts against a REAL 2D context in Chromium (render/lift.ts): the shaft really
- * covers the back wall it crosses, a rider really stands inside its car, and the lounge's kiosk stands
- * on the far sidewalk — read back as pixels from a real commute (engine/sim.ts + engine/commute.ts).
- * No sky (no ambience), so every colour is the art's own: nothing grades it.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/lift.browser.test.tsx`
- */
+/** No sky (no ambience), so every colour read back is the art's own. Browser tier:
+ * `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 

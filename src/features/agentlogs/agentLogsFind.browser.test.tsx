@@ -1,15 +1,6 @@
-/**
- * ⌘F in the Logs view — real layout in Chromium.
- *
- * jsdom stores `scrollTop` but lays nothing out, so there a reveal can only be checked as a
- * number. Only here can it be checked as what the user sees: the match's row is inside
- * the list's visible box, below the sticky header, painted. And the assertions read the
- * REAL scroll element — the `alog-list` box the app scrolls — never a wrapper nothing
- * scrolls: the list starts at the tail (follow), the match is 500 rows above
- * it and windowed out of the DOM, so a reveal that did nothing leaves no mark to measure.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/agentlogs`
- */
+/** ⌘F reveal in real Chromium layout: the match row ends up visible below the sticky header,
+ * read on the REAL `alog-list` scroll box. The match starts 500 rows above the followed tail,
+ * windowed out, so a no-op reveal leaves nothing to measure. */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

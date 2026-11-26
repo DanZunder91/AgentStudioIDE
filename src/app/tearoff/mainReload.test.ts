@@ -1,13 +1,6 @@
-/**
- * The seam between `bridge.ts` and tear-off: a MAIN-window reload must not
- * rebuild the terminals a detached window is showing.
- *
- * `fleet_snapshot` lists every PTY in the app, wherever it is on screen. Rebuilding a tab
- * for one a detached window holds would re-attach it HERE — `terminal_reattach` swaps the
- * pump's channel to this window — and the window that was showing it would freeze. Driven
- * through the real `startBridge`, with Rust played by the mocked fleet IPC and the real
- * `tearoff_holdings` wrapper over the IPC mock.
- */
+/** A MAIN-window reload must not rebuild terminals a detached window shows: `terminal_reattach`
+ * would swap the pump's channel here and freeze that window. Driven through the real
+ * `startBridge` and `tearoff_holdings` wrapper over the IPC mock. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

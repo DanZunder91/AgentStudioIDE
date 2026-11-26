@@ -1,50 +1,6 @@
-/**
- * Agent Village — the CITY's sky and street (everything seen as a city that keeps the weather and
- * clock system). The city is seen from the SIDE, so unlike the village it has a sky to paint. Two passes, at two depths of the frame:
- *
- *   - `paintCityBackdrop` — FIRST, under the world: a stepped sky gradient, the warm glow low on
- *     the sun's side, the sun on its arc, the clouds the weather calls for, a hazy far skyline with
- *     its window grid, the street carried on past the world's edges, and the GROUND under it — the
- *     field the lounge is dug into (`paintUnderground`).
- *   - `paintCityNight` — AFTER the grade, clipped to open sky: stars, the moon and the far
- *     skyline's LIT windows, which must stay bright on a dark sky rather than be graded too.
- *
- * The sky's colours change through the day (a flat sky cannot say 4 pm; an evening needs a
- * sunset, with some windows lit after 4 pm): golden hour, sunset, twilight, night and dawn each have their own look, blended minute by minute
- * (`engine/ambience.ts citySky`). The shared outdoor grade (`paintAmbience`) still goes over the
- * whole city — so the trees, lamps and landmarks standing in the sky are lit like the street —
- * and the sky's own colours are painted through the grade's inverse, so it lands on them once.
- *
- * Landmarks (render/landmarks.ts) plug in at three marked points: `paintFarLandmarks`
- * after the sky bands and the sun, before the clouds; `paintLandmarks` after the clouds, before the
- * skyline blocks; `paintLandmarkLights` after the grade, in `paintCityNight`.
- *
- * THE FAR SKYLINE grows with the city (next to a building of seven tall floors, the buildings behind
- * must look somewhat bigger): its tallest block is `skylineMax` (render/skyline.ts) — 3 tiles in a low city, as ever, and a share of the sky in a tall one, 144 px
- * over a seven-floor gazelle. Its blocks keep their look — the 4-px window grid, the panes, each
- * window's own lit threshold — and grow taller, with more floors of windows, and a little wider
- * (`skylineStep`). It is WORLD-LOCKED (the backdrop must never slide about on a zoom): every block is
- * a function of world x alone, so a pan or a zoom moves it exactly with the street
- * (`forEachSkylineBlock`); and nothing of the night sky — no star, nor the rising moon — shows
- * in front of its blocks (`skylineFaceAt`).
- *
- * Everything is our own procedural pixel art, deterministic per world px (hashes, never
- * `Math.random`), and bounded per frame: a dozen sky bands, the clouds of the cells in view
- * (render/clouds.ts), one disc, and the stars /
- * skyline blocks / windows of the visible columns only — and none of the skyline when its band is off
- * screen (`skylineInView`). A block's panes are a strip per window column, not a rect per window
- * (`paneColumns`). COST — the backdrop and the night pass alone, Chromium, the 3-tile skyline before
- * this growth → now:
- *   - a seven-floor city (sky 976 px, its skyline 3× as tall) at Fit, 1280×800 @2x (zoom 1): by day
- *     1.0 → 0.9 ms (4,024 → 2,684 rects); the night pass 0.6 → 1.2 ms (2,123 → 4,916 rects: lit
- *     windows are scattered, one rect each; and each star is looked up against the skyline). At
- *     1280×800 @1x (zoom 0.625, floor bands): 0.26 → 0.36 and 0.49 → 0.98 ms. Zoomed to 2 by the
- *     street: 0.2 → 0.22 and 0.12 → 0.23 ms; zoomed to 2 on gazelle's upper floors (the skyline below
- *     the view): 0.11 → 0.08 and 0.09 → 0.05 ms.
- *   - a low city (HQ and two one-floor projects) at Fit, zoom 1: by day 0.47 → 0.3 ms (2,013 →
- *     1,004 rects), at night 0.24 → 0.18 ms (lit windows are no longer tested against the lounge's
- *     benches, `skylineOccluders`).
- */
+/** The City's sky and street (side view) in two passes: `paintCityBackdrop` under the world, and
+ * `paintCityNight` after the grade, clipped to open sky. Sky colours come from `citySky`, painted
+ * through the grade's inverse. World-locked and deterministic (hashes, never `Math.random`). */
 
 import { CITY_DAY, citySky } from "../engine/ambience";
 import { TILE, type Ambience, type CityInfo, type WeatherKind, type World } from "../villageTypes";
@@ -75,11 +31,8 @@ import {
 import type { DrawTarget } from "./renderTypes";
 import { ROAD } from "./tiles";
 
-/**
- * Colours, exported for the tests. The sky, sun, clouds and skyline are the NOON look — the plain
- * day (`CITY_DAY`); the rest of the day they come from `citySky`. Sky bands run from the top of
- * the sky down to the horizon.
- */
+/** Colours, exported for tests: the NOON look (`CITY_DAY`); other times come from `citySky`. Sky
+ * bands run top → horizon. */
 export const CITY = {
   sky: CITY_DAY.sky,
   skyline: CITY_DAY.skyline,
@@ -104,11 +57,8 @@ export const CITY = {
   dug: "#45301f",
 } as const;
 
-/**
- * World px of the street's four rows — near sidewalk, two lanes, far sidewalk: the ground starts under
- * them (engine/city.ts `STREET_ROWS`). The copies of the street laid beside the world are this tall:
- * the street only, never the lounge under it.
- */
+/** World px of the street's four rows (engine/city.ts `STREET_ROWS`); the street copies laid
+ * beside the world are this tall, never including the lounge. */
 export const STREET_H = 4 * TILE;
 /** World px of turf along the top of the ground, and of each band of soil under it. */
 export const TURF = 4;
@@ -131,13 +81,8 @@ interface Backdrop {
   air: boolean;
 }
 
-/**
- * The backdrop of a city with the Tokyo street theme: the high-rises behind the haze; then the apartments (in the quiet stretches: the open sky between
- * the neon district's clusters, and the city's own span — `quietSpans`), the neon canyon, and the yokochō
- * shops in front, with empty space left between the
- * clusters. Any other city keeps the haze alone, as its street keeps
- * no torii or vending machines: kana signs are Tokyo's (engine/streetTheme.ts `themeFor`).
- */
+/** Tokyo backdrop: towers behind the haze; apartments in the quiet stretches, the canyon and the
+ * shops in front. Other cities keep the haze alone (kana signs are Tokyo's, `themeFor`). */
 const TOKYO: Backdrop = { high: [TOWERS], mid: [APARTMENTS, CANYON, SHOPS], air: true };
 const PLAIN: Backdrop = { high: [], mid: [], air: false };
 const backdropOf = (amb: Ambience | undefined): Backdrop => (themeFor(amb?.zone) === "tokyo" ? TOKYO : PLAIN);
@@ -152,11 +97,8 @@ function clipAir(ctx: DrawTarget, cam: Camera, view: { w: number; h: number }, x
 /** World px per star cell (each holds a star one time in three). */
 const STAR_CELL = 32;
 
-/**
- * A shooting star (at night, every 5 minutes): one per
- * `SHOOTING_PERIOD_MS` window, at a moment within it picked by a hash of the window (so it is not
- * always on the minute), crossing for `SHOOTING_MS`. Seen where the stars are: clear, dark sky.
- */
+/** One shooting star per `SHOOTING_PERIOD_MS` window, at a hashed moment in it, crossing for
+ * `SHOOTING_MS`; seen only in clear, dark sky. */
 export const SHOOTING_PERIOD_MS = 5 * 60_000;
 export const SHOOTING_MS = 1200;
 /** World px the head travels while it crosses, and its tail's length behind it. */
@@ -201,11 +143,8 @@ function horizonY(world: World): number {
 /** The world px under screen x — the backdrop covers the whole view, not just the world. */
 const worldX = (cam: Camera, x: number): number => (x - Math.round(cam.ox)) / cam.zoom;
 
-/**
- * Where the sun or moon is (world px): across the world's width, up an arc peaking near its top.
- * The arc is a sine flattened toward its ends (`sin^0.6`), so a low golden-hour sun still clears
- * the roofs and only drops behind them in the last minutes before it sets.
- */
+/** Sun or moon centre (world px) across the world, up a `sin^0.6` arc, so a low golden-hour sun
+ * clears the roofs until its last minutes. */
 export function bodyCenter(world: World, t: number): { x: number; y: number } {
   const base = horizonY(world) - ARC_BASE;
   const peak = 2 * TILE;
@@ -223,30 +162,19 @@ function disc(ctx: DrawTarget, cam: Camera, cx: number, cy: number, r: number, c
   }
 }
 
-/**
- * The far skyline's block grid (world px) in a city whose tallest block is `top`: every block is
- * 2–4 steps wide. 8 px in a low city; a tall one widens it by the square root of how much taller
- * its skyline is, in whole windows (4 px) — 12 px for a seven-floor gazelle (a skyline
- * 3× as tall). Heights scale by the full factor and widths by its root, so a taller city's blocks
- * read taller (up to 6× as tall as wide, not 3×) without thinning into needles (9×, at the old
- * widths), nor swelling into the slabs of a close-up (the same blocks scaled whole: fewer, nearer).
- */
+/** The skyline's grid step (world px): 8 in a low city, widened by the square root of how much
+ * taller its skyline is, in whole 4-px windows; heights scale fully, so tall blocks read taller
+ * without thinning into needles. */
 function skylineStep(top: number): number {
   return 4 * Math.round(2 * Math.sqrt(top / SKYLINE_BASE));
 }
 
-/**
- * Steps per CHUNK of the skyline's layout: the blocks are laid out afresh from the left edge of every
- * chunk, on a grid fixed in the world — 256 px in a low city, 384 px in a seven-floor one.
- */
+/** Steps per skyline CHUNK: blocks are laid out afresh from each chunk's left edge, on a
+ * world-fixed grid. */
 const CHUNK_STEPS = 32;
 
-/**
- * The width of the skyline block starting at world x (`hh`: its hash) in a chunk ending at `end`:
- * 2–4 steps, by its hash — but never leaving the chunk a sliver of one step (it takes one step more
- * or less) and never crossing into the next chunk (it stops at the chunk's edge, 2–3 steps away then),
- * so a chunk is always filled by whole blocks of 2–4 steps.
- */
+/** Width of the block at world x (`hh`: its hash) in a chunk ending at `end`: 2–4 steps, adjusted
+ * so a chunk never keeps a one-step sliver nor is overrun; chunks fill with whole blocks. */
 function blockWidth(x: number, end: number, step: number, hh: number): number {
   const w = step * (2 + (hh % 3));
   const rest = end - x - w;
@@ -259,22 +187,9 @@ function blockHeight(top: number, hh: number): number {
   return Math.round(top * (0.35 + ((hh >>> 4) % 65) / 100));
 }
 
-/**
- * Walk the far skyline's blocks over world x ∈ [x0, x1), left to right, in a city whose street
- * starts at `horizon`: `visit(x, w, h)` per block that reaches into the span. A block is 35–99 % of
- * the city's tallest, `skylineMax(horizon)` (render/skyline.ts): 3 tiles in a low city, a share of the
- * sky in a tall one (next to a building of seven tall floors, the buildings behind must look
- * somewhat bigger) — taller and a little wider (`skylineStep`), so a taller
- * block simply has more floors of windows.
- *
- * WORLD-LOCKED: every block is a pure function of world x. The walk used to start at the view's left
- * edge, so where a block began depended on where the view did: in two camera positions out of three
- * its left-hand blocks were not the ones a wider view had there (24 px of skyline typically, up to
- * 330), and every pan or wheel zoom re-rolled them (the skyline slid about on every zoom). Now the
- * blocks are laid out from the left edge of each fixed chunk (`CHUNK_STEPS`, `blockWidth`), and the
- * walk starts at the chunk holding x0 — at most a chunk's worth of blocks (≤ 16) walked and skipped.
- * A walk, not a list: it runs twice a frame at night, and the frame allocates nothing it does not have to.
- */
+/** Walk skyline blocks over [x0, x1): `visit(x, w, h)`, each 35–99% of `skylineMax(horizon)`.
+ * WORLD-LOCKED: laid out per fixed chunk, never from the view's edge (that re-rolled blocks on each
+ * pan). A walk, not a list: it runs twice a night frame and must not allocate. */
 export function forEachSkylineBlock(x0: number, x1: number, horizon: number, visit: (x: number, w: number, h: number) => void): void {
   const top = skylineMax(horizon);
   const step = skylineStep(top);
@@ -288,12 +203,8 @@ export function forEachSkylineBlock(x0: number, x1: number, horizon: number, vis
     }
 }
 
-/**
- * World y where the skyline's face begins at world x — the top of the block standing there, or the
- * street's top in the 1-px gap of sky after each block. What a night-sky point at or below it would be
- * painted over is a block, so it is not painted (`paintCityNight`): the same world-locked layout as
- * `forEachSkylineBlock`, from the chunk holding x, with nothing allocated.
- */
+/** World y where the skyline face begins at x (a block's top, or the street's top in the 1-px gap
+ * after it); night-sky points at or below it are not painted. Same layout, no allocation. */
 export function skylineFaceAt(x: number, horizon: number): number {
   const top = skylineMax(horizon);
   const step = skylineStep(top);
@@ -308,42 +219,29 @@ export function skylineFaceAt(x: number, horizon: number): number {
   }
 }
 
-/**
- * Is any of the far skyline's band — `skylineMax` above the street, down to it — on screen? Zoomed in
- * on a tall building's upper floors (or on the lounge under the street) it is not: its blocks and
- * windows are not walked at all, rather than painted off the canvas a few thousand times.
- */
+/** Is any of the skyline's band on screen? If not (zoomed onto upper floors or the lounge) its
+ * blocks and windows aren't walked at all. */
 function skylineInView(cam: Camera, view: { h: number }, horizon: number): boolean {
   return sy(cam, horizon) > 0 && sy(cam, horizon - skylineMax(horizon)) < view.h;
 }
 
-/**
- * Walk the far skyline's WINDOWS over world x ∈ [x0, x1): `visit(x, y)` per window (1 × 2 world
- * px), floor by floor up each block, in columns 4 px apart. The day's panes and the lit windows
- * after the grade are the same grid, so a light always comes on in a pane.
- */
+/** Walk skyline WINDOWS over [x0, x1): `visit(x, y)` per 1×2 px window, columns 4 px apart. Day
+ * panes and night lights share this grid, so a light always lands in a pane. */
 export function forEachSkylineWindow(x0: number, x1: number, horizon: number, visit: (x: number, y: number) => void): void {
   forEachSkylineBlock(x0, x1, horizon, (bx, bw, bh) => {
     for (let y = horizon - bh + 3; y < horizon - 3; y += 5) for (let x = bx + 2; x < bx + bw - 3; x += 4) visit(x, y);
   });
 }
 
-/**
- * Is the window at (x, y) lit when a `share` of the skyline's windows is? Each window has its own
- * fixed threshold (a hash), so the lit set only GROWS as the share rises — the same windows come
- * on first every evening, and the ones lit at sunset are still lit at night.
- */
+/** Each window has its own fixed hashed threshold, so the lit set only GROWS with `share`: the
+ * same windows light first every evening. */
 export function windowLit(x: number, y: number, share: number): boolean {
   return hash(x, y, 5) % 1000 < share * 1000;
 }
 
-/**
- * The sky, the sun, clouds, the far skyline, and the street run on across the whole view.
- * Painted right after the canvas is cleared, before the world's ground: the world's sky
- * tiles are transparent, so this shows through them, and its buildings cover the rest.
- * `ground` is the world's cached ground layer: copies of its street band are laid beside the
- * world so the street runs on seamlessly (without one, flat bands of the same colours).
- */
+/** Sky, sun, clouds, far skyline and the street across the whole view, painted first: the world's
+ * sky tiles are transparent. Copies of `ground`'s street band run the street past the world
+ * (without it, flat bands). */
 export function paintCityBackdrop(
   ctx: DrawTarget,
   amb: Ambience | undefined,
@@ -416,12 +314,9 @@ export function paintCityBackdrop(
       rect(ctx, cam, x, horizon - h, w - 1, h, look.skyline.block);
       rect(ctx, cam, x, horizon - h, w - 1, 1, look.skyline.edge);
     });
-    // …and their windows: a darker 1×2 pane per window. Drawn as each window COLUMN in one strip of
-    // pane down all its floors, then the wall between floors laid back across the block in its own
-    // colour: the very pixels of a pane per window (every piece is ≥ 1 px from PANE_ZOOM up, every
-    // colour opaque), in columns + floors rects a block rather than columns × floors — a tall
-    // city's blocks have three times the floors (`paneColumns`). Zoomed out, a block's panes merge
-    // into a faint band per floor rather than a 1-px checkerboard.
+    // …and their windows: a 1×2 pane per window, drawn as one strip per window COLUMN plus walls
+    // laid back between floors (`paneColumns`): columns + floors rects, not columns × floors.
+    // Zoomed out, panes merge into a faint band per floor.
     if (cam.zoom >= PANE_ZOOM) forEachSkylineBlock(span.x0, span.x1, horizon, (bx, bw, bh) => paneColumns(ctx, cam, look.skyline, horizon, bx, bw, bh));
     else {
       ctx.fillStyle = look.skyline.pane;
@@ -459,14 +354,9 @@ export function paintCityBackdrop(
       ctx.drawImage(ground.image, 0, horizon, ground.w, STREET_H, sx(cam, k * ground.w), hs, ground.w * cam.zoom, STREET_H * cam.zoom);
 }
 
-/**
- * The ground under the street, from world y `top` (the far sidewalk's bottom) to the view's bottom,
- * across the whole view (a green field under the street; the Seats
- * lounge is now dug into it): a strip of turf, then a cutaway of soil in bands darkening with depth,
- * pebbles in it, and darker freshly dug soil round the lounge's walls (the lounge itself — walls,
- * floor — is the world's, painted over this). World-space, so it scrolls with the street. The turf's
- * blades and the pebbles are skipped zoomed out (below `PANE_ZOOM`, where they would be specks).
- */
+/** The ground under the street, from `top` to the view's bottom: turf, soil bands darkening with
+ * depth, pebbles, dug soil round the lounge (the world paints over it). World-space; fine detail
+ * only from `PANE_ZOOM`. */
 function paintUnderground(
   ctx: DrawTarget,
   cam: Camera,
@@ -509,17 +399,9 @@ function paintUnderground(
   rect(ctx, cam, (h.col - 1) * TILE - DUG, h.row * TILE - DUG, (h.w + 2) * TILE + 2 * DUG, (h.h + 1) * TILE + 2 * DUG, CITY.dug);
 }
 
-/**
- * A skyline block's panes — the windows of `forEachSkylineWindow` — as strips: one per window column,
- * from its top floor's pane to its bottom floor's, then the block's colour back over the 3-px wall
- * between each two floors, across the block's face. The same pixels as a pane per window, from
- * PANE_ZOOM up: a strip has its column's own x-extent (forced up to 1 px exactly as a pane is), a
- * 2-px pane and a 3-px wall are ≥ 1.5 screen px so neither is forced (they tile the strip), and a wall
- * runs on to the face's right edge, 4 px past the last column: 1 px past it would do (from the
- * column's left, 2 world px are ≥ 1.5 screen px, so they cover it even forced up to 1 px), and the rest
- * only lays the block's colour over itself. Everything stays on the block's face; its colours are
- * opaque. A block is never under 35 % of 3 tiles (17 px: 3 floors).
- */
+/** A block's panes as one strip per window column, then the block's colour laid back over the 3-px
+ * walls between floors: the same pixels as a pane per window from PANE_ZOOM up (2-px panes and
+ * 3-px walls are ≥ 1.5 screen px, never forced). Everything stays on the block's face. */
 function paneColumns(ctx: DrawTarget, cam: Camera, colors: { block: string; pane: string }, horizon: number, bx: number, bw: number, bh: number): void {
   const top = horizon - bh + 3;
   const bottom = top + 5 * Math.ceil((bh - 6) / 5) - 3;
@@ -539,13 +421,8 @@ function fillWorld(ctx: DrawTarget, cam: Camera, wx: number, wy: number, w: numb
 /** World-px boxes of the props whose art reaches the far skyline (street trees, lamps): lit windows stay behind them. */
 const occluderCache = new WeakMap<World, [number, number, number, number][]>();
 
-/**
- * The boxes every lit window is tested against, once per world: the street's trees and lamps, whose
- * art rises above the street's top. Every lit window walks this list — a tall city lights thousands —
- * so what stands wholly below the street (the lounge, a bench per seat, and its
- * lift) is left out: it can never be in front of the skyline. Nothing outside a building stands
- * higher than the street's own trees, so nothing else is left out.
- */
+/** Per-world boxes every lit window is tested against: street trees and lamps rising above the
+ * street. Things wholly below the street (lounge, benches, lift) are left out: never in front. */
 export function skylineOccluders(world: World): [number, number, number, number][] {
   const cached = occluderCache.get(world);
   if (cached) return cached;
@@ -564,20 +441,9 @@ export function skylineOccluders(world: World): [number, number, number, number]
   return out;
 }
 
-/**
- * Stars, the moon and the far skyline's lit windows — painted AFTER the grade, so the
- * night sky can be dark and these still shine. The caller clips to open sky (above the
- * street, outside every building). Stars and moon follow the light: nothing by day, all of
- * it at night; overcast hides the stars (and dims the moon). The windows follow the clock: the
- * first come on in golden hour, more through sunset and twilight, the most at night
- * (`litShare`), each window at its own fixed threshold (`windowLit`).
- *
- * The backdrop's layers (Tokyo's, `backdropOf`) light up here too, back to front: its HIGH layers
- * before the landmarks' lights, its MID layers last. Each light leaves out what stands in front of its
- * layer (`frontOf`), `street` among it: this frame's street sprites (world boxes — agents, passers-by,
- * vehicles), which a light painted after the grade would otherwise shine through. Nothing of the night
- * sky shows in front of any layer's face, as none shows in front of the haze.
- */
+/** After the grade, clipped to open sky: stars and moon (overcast hides stars), lit windows (by
+ * clock), then backdrop lights, HIGH before the landmarks', MID last, each cut by what stands in
+ * front of its layer (`frontOf`, incl. this frame's street sprites). */
 export function paintCityNight(
   ctx: DrawTarget,
   amb: Ambience,
@@ -605,10 +471,8 @@ export function paintCityNight(
   // No star or moon shows through a landmark's silhouette (Fuji, the towers)…
   const behind = dark > 0 ? landmarkMask(cam, world, view, amb, horizon) : null;
   if (dark > 0 && amb.weather === "clear") {
-    // One chance of a star per 32 px cell of visible sky, twinkling on its own phase — …nor in front
-    // of the far skyline: a star whose pixel falls on a block's face is behind it (a tall city's
-    // blocks stand 9 tiles high). Looking each one up costs ≈ 0.07 ms a night frame at a seven-floor city's
-    // Fit; skipping those above the skyline's band would save that, and nothing anyone can see.
+    // One chance of a star per 32 px cell of visible sky, twinkling on its own phase, never in
+    // front of a skyline block (a star on a block's face is behind it); the lookup costs ≈ 0.07 ms.
     const top = Math.max(-STAR_CELL * 4, -Math.round(cam.oy) / cam.zoom);
     for (let r = Math.floor(top / STAR_CELL); r * STAR_CELL < horizon - TILE; r++)
       for (let c = Math.floor(span.x0 / STAR_CELL); c * STAR_CELL < span.x1; c++) {
@@ -706,10 +570,8 @@ export function paintCityNight(
   }
 }
 
-/**
- * The landmarks of `layers` on screen, as the shapes a backdrop light is cut around (render/backdropLights.ts):
- * each one's box — what `landmarkMask` would cull it by — and the mask itself, pixel by pixel.
- */
+/** On-screen landmarks of `layers` as light-cutting shapes (render/backdropLights.ts): each box
+ * (as `landmarkMask` culls) and its pixel mask. */
 function frontShapes(
   cam: Camera,
   world: World,

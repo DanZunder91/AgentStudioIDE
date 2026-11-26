@@ -1,17 +1,5 @@
-/**
- * JsonView — the collapsible JSON tree viewer (M6 API client). Covers every node
- * kind (typed primitives, objects, arrays, nested, empty), the expand/collapse
- * toggle, and the deep-nesting depth cap — plus the A/B compare surface:
- * clickable key buttons (`onSelectKey`) and the `selectedKey`
- * cross-highlight, whose DOM contract (`data-key` / `data-selected` /
- * `json-key`) the ComparePanel queries directly.
- *
- * And in-tree SEARCH: `searchJsonTree`'s counting rules and
- * the marks/pinning they drive. The counting rules are what the find bar's
- * number means, so they are tested as values here rather than only through the
- * rendered bar (a total asserted from the same walk that produced
- * it would prove nothing, so every expectation below is a hand-counted literal).
- */
+/** ComparePanel queries the DOM contract (data-key / data-selected / json-key) directly. Search
+ * counts are hand-counted literals: a total from the same walk that produced it proves nothing. */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";

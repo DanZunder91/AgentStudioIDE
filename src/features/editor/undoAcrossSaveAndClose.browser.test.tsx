@@ -1,22 +1,6 @@
-/**
- * Layer 5 (testing-strategy §1) — undo after a save and after a close, driven by
- * REAL keystrokes in REAL Chromium.
- *
- * This is the tier that would have caught the original bug. The file editor
- * shipped with no CodeMirror history at all, so Cmd/Ctrl+Z fell straight through
- * the `contenteditable` to WebKit's own native undo — shallow, and clobbered
- * whenever CM6 rewrote decorations (sometimes only two
- * undo steps were available). Under jsdom that difference is invisible: there is no native
- * undo stack there, so a keydown that CodeMirror ignores simply does nothing and
- * a test could only ever have asserted the absence of an effect. Here the key
- * goes through a real keymap on a real focused editable element.
- *
- * The jsdom sibling (`undoAcrossSaveAndClose.test.tsx`) owns the exhaustive
- * cases — depth counting, the cache bounds, the doc-identity guard. This file
- * owns the claim that the *keystroke* works.
- *
- * A green test count is not a green tier: this run must EXIT 0.
- */
+/** Undo after save and close via real keystrokes in Chromium: jsdom has no native undo, so it
+ * cannot tell CM6's keymap from WebKit's. Exhaustive cases are in the jsdom sibling. The run must
+ * exit 0, not just count green. */
 
 import { render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

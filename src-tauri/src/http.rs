@@ -1,46 +1,6 @@
-//! The built-in API client's HTTP engine.
-//!
-//! A single async `http_send` command runs an arbitrary outbound request in the Rust
-//! core (not the webview's `fetch`, which CORS/CSP would hobble and which can't set
-//! headers like `Host`). Requests are **not** URL-scoped — reaching arbitrary hosts is
-//! the whole feature — so the safeguards are the ones that keep a runaway request from
-//! hurting *us*, mirroring `find_in_files`' guardrails:
-//!
-//! * a **30s timeout** ([`REQUEST_TIMEOUT`]) bounds a stuck endpoint,
-//! * an **8 MiB response-body cap** ([`MAX_BODY_BYTES`]) on the *decoded* body, applied while
-//!   reading: the body is read chunk by chunk and reading **stops** as soon as more than the
-//!   cap has arrived, so an endless stream or a small gzip body that inflates to gigabytes
-//!   costs at most the cap in memory and cannot flood the IPC channel / UI (`truncated` flags
-//!   the cut; `size_bytes` is then what was read, a lower bound of the real length),
-//! * no engine error carries the request URL: reqwest appends ` for url (…)` with the URL
-//!   **as sent**, i.e. with every `{{VAR}}` already substituted, and the API history keeps
-//!   the error text ([`map_send_error`]),
-//! * bodies are returned as lossy UTF-8 text (binary responses are not corrupted on the
-//!   wire, just rendered as text for v1).
-//!
-//! HTTP is via `reqwest` with **rustls** and no default TLS, keeping us off the system
-//! OpenSSL (dependency hygiene). `gzip`/`brotli`/`deflate` are decoded
-//! automatically, so the returned body is the decompressed payload.
-//!
-//! **TLS** follows the app-wide policy in [`crate::tls`]: the single `ring`
-//! crypto provider, and certificate verification delegated to the **operating system's
-//! trust store** via `rustls-platform-verifier` — so an internal HTTPS host signed by a
-//! corporate CA, or a laptop behind a TLS-inspecting proxy, works here exactly as it does
-//! in the user's browser. `reqwest` is built with `rustls-no-provider`, which means
-//! [`Client::builder`] **panics** unless a provider was installed first; that is why
-//! [`CLIENT`]'s initializer calls [`crate::tls::install_crypto_provider`] before touching
-//! the builder — and `CLIENT` is the only place a builder is touched (see its doc for the
-//! measured cost of building one per request).
-//!
-//! Only transport failures are `Err` (timeout, connect/DNS, malformed request); an HTTP
-//! error *status* (404, 500, …) is a perfectly normal [`HttpResponse`].
-//!
-//! **Network view.** Every send is recorded into the netcap store
-//! through [`crate::netcap::record`] — a tap, not a proxy round-trip, because this client runs
-//! inside the IDE process and its traffic never crosses the capture proxy. The pending row
-//! shows the request **as sent**: what reqwest and hyper add on top of the user's headers is
-//! reconstructed by [`headers_as_sent`], whose every rule names its source and is proven by
-//! `tests/netcap_record.rs` against a loopback server that echoes what it received.
+//! The API client's HTTP engine (reqwest + rustls, in Rust: no webview CORS/CSP). Not URL-scoped,
+//! so: [`REQUEST_TIMEOUT`], [`MAX_BODY_BYTES`] enforced while reading, and no URL in errors.
+//! Only transport failures are `Err`; an HTTP error status is a normal [`HttpResponse`].
 
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
@@ -53,22 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::netcap::record::{self, Flow, Tap};
 use crate::netcap::FlowProto;
 
-/// The ONE `reqwest::Client` every request goes through, built on first use.
-///
-/// 🔴 **A `Client` owns the connection pool, so building one per request throws the pool
-/// away**: every send would pay a DNS lookup, a TCP connect and a TLS handshake and then drop
-/// the connection, where a shared client re-uses a warm keep-alive connection. On a remote
-/// HTTPS endpoint that is the difference between well over a second and a few hundred
-/// milliseconds per request. Building a client is not free either — it constructs the TLS
-/// stack, and with the platform verifier that touches the OS trust store — so the cost would
-/// be paid even for plain-HTTP requests to localhost.
-///
-/// A `Result`, not a panic: `build()` realistically fails only when no crypto provider is
-/// installed, and this module's contract has always been a mapped error string, never a
-/// crash. The provider install lives INSIDE the closure so no path — `run()`, a test, a
-/// future non-Tauri caller — can reach the builder before it (idempotent; `src/tls.rs`).
-/// A failed first build stays failed on purpose: the closure already did the one thing a
-/// retry could do.
+/// The ONE shared `Client`: it owns the connection pool, so one per request would pay DNS +
+/// TCP + TLS every send. The provider install sits inside so nothing reaches the builder first
+/// (it panics without one). A `Result`, never a panic; a failed first build stays failed.
 static CLIENT: LazyLock<Result<Client, String>> = LazyLock::new(|| {
     crate::tls::install_crypto_provider();
     Client::builder()
@@ -176,14 +123,8 @@ async fn read_capped(resp: &mut reqwest::Response, cap: usize) -> reqwest::Resul
     Ok(body)
 }
 
-/// Turn a reqwest error into a short, human-readable string. Distinguishes the causes a
-/// user can act on (timeout, unreachable host) from the catch-all. `timeout` is the
-/// deadline the request ran under, so the sentence names the one that fired.
-///
-/// 🔴 The URL is dropped from the error before it is formatted: reqwest's `Display` appends
-/// ` for url (<the URL as sent>)`, which is the URL **after** `{{VAR}}` substitution — the
-/// user's Vault values. The console shows this text, the API history file keeps it, and agents
-/// read the history; the request's own URL is shown next to the error everywhere anyway.
+/// Short, human error naming the actionable cause; `timeout` is the deadline that fired. The
+/// URL is stripped: reqwest appends it after `{{VAR}}` substitution, and history keeps this.
 fn map_send_error(e: reqwest::Error, timeout: Duration) -> String {
     let host = e.url().and_then(|u| u.host_str()).map(str::to_string);
     let e = e.without_url();
@@ -230,23 +171,9 @@ fn payload_method(method: &Method) -> bool {
     )
 }
 
-/// The request headers **as sent** — what the Network view's row shows, so it is the request
-/// that reached the server rather than the one that was typed. reqwest exposes no hook on the
-/// bytes, so this is reconstructed; each rule names its source, and `tests/netcap_record.rs`
-/// compares the result with what a loopback server actually received — a wrong rule is a
-/// red test, never a wrong row. `version` is `None` before the response arrives (HTTP/1.1
-/// assumed; `http://` is always 1.1 here) and the real negotiated version after it.
-///
-/// 1. URL userinfo (`http://user:pw@host/`) becomes `authorization: Basic …` — reqwest's
-///    `RequestBuilder::new` inserts it first, and a user `authorization` replaces it in place.
-/// 2. The user's headers, in order (`append`, so duplicates stay); on HTTP/2 hyper drops the
-///    connection-specific ones ([`H2_STRIPPED`], and `te` unless it is `trailers`).
-/// 3. `accept: */*` — reqwest's default header, merged only when no `accept` was set.
-/// 4. `accept-encoding` — tower-http, only when none was set ([`ACCEPT_ENCODING_SENT`]).
-/// 5. `host` — hyper-util's legacy client, **HTTP/1 only**, `host[:port]` with the port omitted
-///    when it is the scheme's default (on HTTP/2 the authority is a pseudo-header).
-/// 6. `content-length` — hyper: on HTTP/1 only when a non-empty body is sent (an empty body is
-///    "no body"); on HTTP/2 also `0` for a method with payload semantics (POST, PUT, PATCH…).
+/// Request headers AS SENT, for the Network view, reconstructed in send order: userinfo Basic
+/// auth (reqwest), user headers (h2 strips [`H2_STRIPPED`]), `accept`, `accept-encoding`, `host`
+/// (HTTP/1 only), `content-length` (hyper). Verified by `tests/netcap_record.rs`.
 fn headers_as_sent(
     map: &HeaderMap,
     method: &Method,
@@ -348,14 +275,8 @@ fn start_flow(tap: &Tap, method: &Method, url: &Url, map: &HeaderMap, body: Opti
     flow
 }
 
-/// Testable core: send `request`, capping the response body at `body_cap` and the whole
-/// exchange at `timeout`, recording the flow into `tap`. The `#[tauri::command]` wrapper
-/// passes the production [`MAX_BODY_BYTES`], [`REQUEST_TIMEOUT`] and the app's tap; tests
-/// inject a tiny cap to exercise truncation without a huge payload.
-///
-/// The deadline is reqwest's per-request timeout rather than a future dropped from outside,
-/// so a timed-out request still ends its Network row as an error instead of leaving it
-/// pending forever.
+/// Testable core: send with `body_cap` and `timeout`, recording into `tap`. The deadline is
+/// reqwest's own timeout, not a dropped future, so a timed-out row ends as an error.
 async fn send_with(
     request: HttpRequest,
     body_cap: usize,
@@ -489,21 +410,14 @@ pub async fn send_via(request: HttpRequest, tap: &Tap) -> Result<HttpResponse, S
     send_with(request, MAX_BODY_BYTES, REQUEST_TIMEOUT, tap).await
 }
 
-/// The same send under a caller's deadline: `timeout` is clamped to [`REQUEST_TIMEOUT`].
-/// Recorded in the Network view like every API-client send. The agent tools
-/// (`agent_ctl::commands::http`) send through here, so an agent's request takes exactly the
-/// path the user's Send button takes.
+/// `send_with` under a caller's deadline, clamped to [`REQUEST_TIMEOUT`]. Agent tools send
+/// through here, so they take exactly the Send button's path.
 pub async fn send_bounded(request: HttpRequest, timeout: Duration) -> Result<HttpResponse, String> {
     send_with(request, MAX_BODY_BYTES, timeout, &Tap::global()).await
 }
 
-/// Send an HTTP request and return its response.
-///
-/// Frontend contract: `invoke<HttpResponse>('http_send', { request })`. The promise
-/// rejects with a plain `String` only on a transport failure (timeout, connect/DNS,
-/// malformed request/URL/method/header); an HTTP error *status* resolves normally as an
-/// [`HttpResponse`]. Bodies are capped at 8 MiB (`truncated` flags it). The flow is
-/// recorded in the Network view as source `API client`.
+/// Frontend: `invoke<HttpResponse>('http_send', { request })`. Rejects only on transport failure;
+/// an HTTP error status resolves. Recorded in the Network view as source `API client`.
 #[tauri::command]
 pub async fn http_send(request: HttpRequest) -> Result<HttpResponse, String> {
     send_via(request, &Tap::global()).await
@@ -603,10 +517,8 @@ mod tests {
         }
     }
 
-    /// A keep-alive server that serves any number of requests per connection and counts
-    /// how many CONNECTIONS it accepted — the observable that distinguishes a shared pool
-    /// from a per-request client. `canned()` is not reusable here on purpose: it says
-    /// `Connection: close`, which orders the client NOT to pool.
+    /// Keep-alive server counting accepted CONNECTIONS (pool vs per-request client). `canned()`
+    /// won't do: its `Connection: close` tells the client not to pool.
     fn spawn_keepalive_server() -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -644,22 +556,15 @@ mod tests {
         (port, connections)
     }
 
-    /// 🔴 A per-request `Client` is a new connection pool for every request: each send pays
-    /// DNS + TCP + TLS handshake and then drops the warm connection on the floor. Two
-    /// sequential sends must arrive on ONE connection; a second accepted connection means the
-    /// pool died with a per-request client again. (The timing itself is not asserted — a
-    /// wall-clock threshold in a shared-runner test is flake, and connection reuse is the
-    /// cause of the slowdown.)
+    /// Two sequential sends must share ONE connection; a second means a per-request client.
+    /// Timing isn't asserted: a wall-clock threshold on a shared runner is flaky.
     #[tokio::test]
     async fn sequential_requests_reuse_one_connection_rather_than_redialling() {
         let (port, connections) = spawn_keepalive_server();
         let url = format!("http://127.0.0.1:{port}/");
 
-        // A VERB MIX on purpose (the fix must cover every method, POST and GET alike,
-        // and the A/B compare too). The pool keys connections by scheme+host+port, never
-        // by method — and every frontend path (a plain send, each half of an A/B compare, a
-        // sequence step) funnels into this same `send` — so GET and POST sharing one
-        // connection here is what proves the fix covers all of them.
+        // A verb mix: the pool keys on scheme+host+port, never method, and every frontend
+        // path funnels into `send`, so GET and POST sharing a connection covers them all.
         for method in ["GET", "POST", "GET"] {
             let mut request = req(method, url.clone());
             if method == "POST" {
@@ -789,10 +694,8 @@ mod tests {
         );
     }
 
-    /// A server that answers 200 with a chunked body of zeros and writes `limit` bytes of it in
-    /// 64 KiB chunks, then holds the connection open without ever ending the body. Returns the
-    /// port and, once the client has hung up (a write failed) or the limit was written, how
-    /// many body bytes the server managed to write.
+    /// Serves 200 with an endless chunked body, writing up to `limit` bytes in 64 KiB chunks.
+    /// Returns the port and, once the client hangs up or the limit is hit, the bytes written.
     fn spawn_streaming_server(limit: usize) -> (u16, oneshot::Receiver<usize>) {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -828,12 +731,8 @@ mod tests {
         (port, rx)
     }
 
-    /// 🔴 An endless response cannot fill memory: reading stops once the 8 MiB cap is passed,
-    /// and the call returns at once with the cap and the flag instead of reading until the
-    /// deadline. Measured, not assumed: the client read at most one chunk past the cap, and the
-    /// server — which would write 256 MiB to a client that kept reading — was cut off long
-    /// before. Falsify: read with `resp.bytes()` again — the call waits for the end of a body
-    /// that never ends and fails with the timeout.
+    /// Reading stops once the 8 MiB cap is passed and the call returns at once, not at the
+    /// deadline. Falsify: read with `resp.bytes()` and it waits for a body that never ends.
     #[tokio::test]
     async fn an_endless_body_is_cut_at_the_cap_and_reading_stops_there() {
         let limit = 256 * 1024 * 1024;
@@ -905,10 +804,8 @@ mod tests {
         assert!(took < Duration::from_secs(5), "returned after {took:?}");
     }
 
-    /// 🔴 No engine error carries the URL: reqwest's text adds ` for url (…)` with the URL as
-    /// sent — `{{VAR}}`s substituted — and the API history keeps the error. A failure while
-    /// sending and one while reading the body, both on a URL holding a credential. Falsify:
-    /// drop `without_url()` in `map_send_error` — both errors end in `for url (…secret…)`.
+    /// Covers a failure while sending and one while reading the body, both on a credential URL.
+    /// Falsify: drop `without_url()` in `map_send_error`.
     #[tokio::test]
     async fn an_engine_error_never_carries_the_url_it_was_sent_to() {
         const SECRET: &str = "sk_live_engine_0123456789";
@@ -976,25 +873,13 @@ mod tests {
     }
 
     // ── live TLS smoke: the ONE http test that leaves the machine ─────────────
-    //
-    // Every test above serves plaintext HTTP/1.1 on 127.0.0.1, which means **the TLS path
-    // would be entirely untested** — and dangerously so: the crypto provider (`ring`,
-    // installed in `crate::tls`) and the trust roots (the OS store, via
-    // `rustls-platform-verifier`) are deliberate choices for this client, and not one
-    // hermetic test could notice either breaking.
-    //
-    // `#[ignore]`d so `cargo test` and CI stay hermetic, exactly like
-    // `usage.rs`'s `live_smoke_reads_real_usage_from_the_cli`. Run it deliberately after
-    // touching any `rustls`/`reqwest`/`tonic`/`tokio-tungstenite` feature:
-    //
-    //     cargo test --manifest-path src-tauri/Cargo.toml -- --ignored live_smoke
+    // The only TLS test (provider + OS trust roots); `#[ignore]`d. Run after any feature change in
+    // rustls/reqwest/tonic/tokio-tungstenite: `cargo test -- --ignored live_smoke` in `src-tauri`.
     #[tokio::test]
     #[ignore = "reaches the public internet over TLS — run with --ignored"]
     async fn live_smoke_https_completes_a_real_tls_handshake() {
-        // `example.com` is IANA-reserved and about as stable an HTTPS endpoint as exists.
-        // A 200 proves the whole chain: provider installed (no panic in `Client::builder`),
-        // handshake negotiated, and the server's chain validated against the OS trust
-        // store. A cert failure surfaces as an `Err` here, never as a status code.
+        // A 200 from IANA's stable `example.com` proves provider, handshake and OS-store
+        // chain validation; a cert failure is an `Err`, never a status.
         let r = send(
             req("GET", "https://example.com/".to_string()),
             MAX_BODY_BYTES,

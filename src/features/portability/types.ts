@@ -1,45 +1,6 @@
-/**
- * Share-a-config bundles — the wire contract.
- *
- * A JSON export and import covering database connections, API keys, and HTTP and gRPC requests
- * with their headers (including the password vault entries they use), so that a configuration can
- * be shared between people who use the app.
- *
- * This file is the **single source of truth** for that format. Rust's `src-tauri/src/portability/`
- * mirrors these shapes with `#[serde(rename_all = "camelCase")]`, and both frontend halves build
- * against it. It is the contract first, on purpose: the three sides agree here or they disagree in
- * a file people email to each other.
- *
- * ════════════════════════════════════════════════════════════════════════════════
- * THE CENTRAL DECISION: two modes, and the safe one is the default
- * ════════════════════════════════════════════════════════════════════════════════
- *
- * A file that carries production database passwords and API keys will be dropped into Slack,
- * attached to a ticket, and committed to a repo. That is not cynicism, it is what happens to
- * config exports. So:
- *
- * - **`structure` (the default)** — everything *except* secret values. A DB connection keeps its
- *   `passwordRef` (`{{PG_PASSWORD}}`); an environment keeps its variable **names** and drops every
- *   value. The recipient fills in their own. This file is safe to paste anywhere, and the export
- *   UI says so plainly.
- *
- * - **`sealed` (opt-in)** — the same contents *with* values, encrypted under a passphrase the
- *   sharer communicates out of band. The plaintext never touches disk.
- *
- * There is deliberately **no third mode that writes secret values in the clear.** Not behind a
- * flag, not behind a confirm. If someone truly needs that, they can decrypt a sealed bundle
- * themselves — the point is that this app never produces such a file, because the moment it can,
- * it is the path of least resistance and it will be the one used.
- *
- * ════════════════════════════════════════════════════════════════════════════════
- * WHAT A BUNDLE PROVES ABOUT ITS AUTHOR: nothing
- * ════════════════════════════════════════════════════════════════════════════════
- *
- * `app` and `label` are **informational metadata, not a signature.** There is no PKI here, so a
- * bundle claiming to come from a colleague proves nothing at all. The import UI must never present
- * provenance as verified, and `ImportPlan` exists precisely because an imported config is
- * untrusted input that a person should read before it lands.
- */
+/** Config-bundle wire contract, the source of truth (Rust `src-tauri/src/portability/` mirrors it).
+ * `structure` (default) drops every secret value, `sealed` encrypts them; no mode ever writes them
+ * in the clear. `app`/`label` are metadata, not a signature: a bundle is untrusted input. */
 
 /* ─────────────────────────────── the bundle ─────────────────────────────── */
 
@@ -51,15 +12,8 @@ export const BUNDLE_VERSION = 1 as const;
 
 export type BundleMode = "structure" | "sealed";
 
-/**
- * What a bundle says about itself **without** being decrypted.
- *
- * Everything here is readable from a sealed bundle too, which is what lets the import dialog
- * describe a file before asking for a passphrase. That is a deliberate, bounded disclosure:
- * counts and a label, never names. A sealed bundle that advertised `PROD_STRIPE_KEY` on the
- * outside would leak the shape of someone's infrastructure to anyone who received the file by
- * accident — so `referencedVariables` lives *inside* the ciphertext (see `BundleContents`).
- */
+/** Readable without decrypting, so the import dialog can describe a sealed file: counts and a
+ * label, never names (`referencedVariables` lives inside the ciphertext). */
 export interface BundleHeader {
   kind: typeof BUNDLE_KIND;
   version: number;
@@ -85,26 +39,15 @@ export interface BundleCounts {
   secretValues: number;
 }
 
-/**
- * The payload. In `structure` mode this sits in the clear under `contents`; in `sealed` mode the
- * identical shape is the plaintext inside `sealed.ciphertextB64` and `contents` is absent.
- *
- * One shape for both modes is the point: the encryption is a wrapper, not a different format, so
- * the import path parses one thing and cannot drift between modes.
- */
+/** In the clear under `contents` in `structure` mode; the plaintext of `sealed.ciphertextB64` in
+ * `sealed` mode. One shape, so the import path cannot drift between modes. */
 export interface BundleContents {
   dbConnections: ExportedDbConnection[];
   dbQueries: ExportedDbQuery[];
   apiRequests: ExportedApiRequest[];
   environments: ExportedEnvironment[];
-  /**
-   * Every `{{VAR}}` name anything in this bundle refers to, deduplicated and sorted.
-   *
-   * Computed at export rather than derived at import, because the exporter knows which references
-   * were live. It is what the import dialog turns into "you will need to supply: PG_PASSWORD,
-   * STRIPE_KEY" — the difference between a config that works and one that fails on first use with
-   * a `secret-missing` error nobody can explain.
-   */
+  /** Every `{{VAR}}` referenced, deduped and sorted; computed at export (the exporter knows which
+   * references were live) and shown at import as the values to supply. */
   referencedVariables: string[];
 }
 
@@ -118,26 +61,14 @@ export interface Bundle extends BundleHeader {
 
 /* ─────────────────────────────── sealing ─────────────────────────────── */
 
-/**
- * The encrypted payload and the parameters needed to open it.
- *
- * Every parameter is in the clear because a decryptor needs them — that is normal and not a leak.
- * They are **recorded rather than assumed** so the iteration count can be raised later without
- * making today's files unreadable.
- */
+/** Parameters are in the clear (a decryptor needs them) and recorded, not assumed, so the
+ * iteration count can be raised without making older files unreadable. */
 export interface SealedPayload {
   kdf: {
     /** `"pbkdf2-hmac-sha256"` — the only value version 1 defines. */
     algorithm: string;
-    /**
-     * PBKDF2 rounds. 600 000 at introduction (OWASP's 2023 guidance for PBKDF2-HMAC-SHA256).
-     *
-     * ⚠️ **Honest limitation, stated in the contract rather than buried:** PBKDF2 is markedly
-     * weaker than Argon2id against GPU cracking. It is used because `ring` is already the whole
-     * binary's crypto provider and Argon2 would be a new dependency; the iteration
-     * count travels in the file so a reader can judge the strength of a bundle they were sent, and
-     * so it can be raised without a format break. A weak passphrase is still the weak link.
-     */
+    /** PBKDF2 rounds (600 000 at introduction, OWASP 2023). Weaker than Argon2id against GPUs;
+     * chosen as `ring` is already the crypto provider. A weak passphrase is still the weak link. */
     iterations: number;
     /** Random per bundle, base64. */
     saltB64: string;
@@ -148,25 +79,14 @@ export interface SealedPayload {
     /** Random per bundle, base64. Never reused: one bundle, one nonce, one key. */
     nonceB64: string;
   };
-  /**
-   * `BundleContents` as JSON, encrypted.
-   *
-   * The AEAD's additional data is the canonical header (`kind|version|mode|createdAtMs|label`), so
-   * a ciphertext cannot be lifted into a bundle that describes itself differently — relabelling a
-   * file as a smaller or friendlier export would otherwise be undetectable.
-   */
+  /** AEAD additional data is the canonical header (`kind|version|mode|createdAtMs|label`), so a
+   * ciphertext cannot be moved into a bundle that describes itself differently. */
   ciphertextB64: string;
 }
 
 /* ────────────────────────── the exported records ────────────────────────── */
 
-/**
- * A DB connection, minus everything that is meaningless or dangerous on another machine.
- *
- * Deliberately **not** the full `DbConnection`: no `createdAt`/`updatedAt` (the importer stamps its
- * own), and no local filesystem paths — a path to a CA file on the sharer's laptop is not a thing
- * the recipient has.
- */
+/** No `createdAt`/`updatedAt` (the importer stamps its own) and no local filesystem paths. */
 export interface ExportedDbConnection {
   id: string;
   name: string;
@@ -175,24 +95,15 @@ export interface ExportedDbConnection {
   /** `null` = the engine's default. See `DbConnection.port` — a mandatory port is what invented
    *  the `:27017` that made an Atlas URI unreachable. */
   port: number | null;
-  /**
-   * `mongodb+srv://` — DNS seed-list discovery.
-   *
-   * 🔴 A bundle that dropped this would **re-create the unreachable-Atlas bug on the recipient's
-   * machine**: they would import a connection that looks right, and it would rebuild as a plain
-   * single-host `mongodb://host:27017`. Rust's `bundle.rs` already carries it; this mirror lagged.
-   */
+  /** `mongodb+srv://` (DNS seed list). Must travel: without it the import rebuilds a plain
+   * single-host `mongodb://host:27017` that cannot reach Atlas. */
   srv: boolean;
   database: string;
   user: string;
   /** `""` or a `{{VAR}}` name. **Never a value** — that is what `environments` is for. */
   passwordRef: string;
   sslMode: string;
-  /**
-   * Carried for information, and **not honoured on import**: an imported connection is forced
-   * read-only regardless (see `ImportPlan`). Present so the recipient can see what the sharer
-   * intended, which is different from acting on it.
-   */
+  /** The sharer's setting, shown to the recipient; kept only when `forceReadOnly` is off. */
   readOnly: boolean;
   rowLimit: number;
   timeoutMs: number;
@@ -216,15 +127,8 @@ export interface ExportedApiRequest {
   name: string;
   method: string;
   url: string;
-  /**
-   * Headers verbatim, including `Authorization`.
-   *
-   * 🔴 A header value may be a literal secret rather than a `{{VAR}}` — the API client does not
-   * force references — so **`structure` mode must redact literal-looking secrets in headers** and
-   * say which ones it redacted. See `REDACTED_PLACEHOLDER`. Getting this wrong is the single most
-   * likely way this feature leaks a credential, because a bearer token in a header does not look
-   * like a password field to any code that is not looking for it.
-   */
+  /** Verbatim, including `Authorization`. A value may be a literal secret, not a `{{VAR}}`, so
+   * `structure` mode must redact literal-looking secrets and say which (`REDACTED_PLACEHOLDER`). */
   headers: { name: string; value: string }[];
   body: string;
   protocol: string | null;
@@ -233,55 +137,27 @@ export interface ExportedApiRequest {
   plaintext: boolean | null;
 }
 
-/**
- * An environment. In `structure` mode every `value` is `null`; in `sealed` mode it is the real
- * value. `null` and `""` are distinguished: `null` means "not exported", `""` means the variable
- * genuinely holds an empty string.
- */
+/** `structure` mode: every `value` is `null` (not exported); `sealed`: the real value. `""`
+ * means the variable genuinely holds an empty string. */
 export interface ExportedEnvironment {
   id: string;
   name: string;
   variables: { key: string; value: string | null }[];
 }
 
-/**
- * What replaces a redacted header value in `structure` mode.
- *
- * A visible marker rather than an empty string, so an imported request fails loudly at send time
- * instead of silently sending `Authorization: ` and returning a confusing 401.
- */
+/** A visible marker, not `""`, so an imported request fails loudly instead of sending an empty
+ * `Authorization` and getting a confusing 401. */
 export const REDACTED_PLACEHOLDER = "{{REDACTED — supply this value}}" as const;
 
 /* ────────────────────────── inspect, then import ────────────────────────── */
 
-/**
- * What `portability_inspect` returns: a **dry run**. Nothing is written by this call.
- *
- * An imported bundle is untrusted input, and the two risks worth showing a person are not
- * hypothetical:
- *
- * 1. **Overwriting their own config.** Matching is by `id`, so a re-import of an earlier export
- *    updates rather than duplicates — and a *different* item that happens to share a name is
- *    created under a suffixed name instead of silently merging.
- * 2. **Exfiltration through a reference they already hold.** An imported request can name
- *    `{{PROD_STRIPE_KEY}}` — which the recipient's Vault may well contain — and point at any host
- *    in the world. Nothing here can judge intent, so the plan lists, per item, **the hosts it will
- *    contact and the variables it will read**, and no imported request is ever auto-run.
- */
+/** `portability_inspect`'s dry run; writes nothing. Matching is by `id` (a different item with the
+ * same name gets a suffixed name). Lists per item the hosts contacted and variables read: an
+ * import can read a secret already held and send it anywhere. No imported request auto-runs. */
 export interface ImportPlan {
   header: BundleHeader;
-  /**
-   * Whether `items`/`hosts`/`variables` are real.
-   *
-   * 🔴 **`false` means one thing only: the bundle is sealed and NO passphrase was supplied.** It
-   * is the "describe this file before asking for a passphrase" case, and the header + counts are
-   * the whole answer.
-   *
-   * A **wrong** passphrase is NOT this — it *rejects*, with `bad-passphrase`. Folding it in here
-   * would make a failed unseal arrive as either a rejection or a resolved-but-empty plan, so every
-   * caller would need both branches and the two paths would inevitably drift. One failure, one
-   * shape.
-   */
+  /** `false` only when the bundle is sealed and no passphrase was supplied (header + counts only).
+   * A wrong passphrase rejects with `bad-passphrase` instead: one failure, one shape. */
   unsealed: boolean;
   items: ImportItem[];
   /** Distinct hosts anything in the bundle would talk to, deduplicated and sorted. */
@@ -296,16 +172,8 @@ export type ImportAction = "create" | "update" | "skip";
 
 export interface ImportItem {
   kind: "dbConnection" | "dbQuery" | "apiRequest" | "environment" | "variable";
-  /**
-   * A **plan-scoped key, unique across every kind** — Rust mints it as `"<kind>:<native id>"`
-   * (`"dbConnection:01J…"`, `"variable:PG_PASSWORD"`).
-   *
-   * 🔴 It has to be namespaced because `ImportChoices.actions` keys on this alone. The native ids
-   * are not from one space: a `variable`'s is its name, an `environment`'s is a uuid, a
-   * `dbQuery`'s is a ULID. Nothing stopped a variable called `01J…` from colliding with a
-   * connection of that id, and the consequence would be one item's "skip" silently applied to
-   * another — a mis-routed override that no error would report.
-   */
+  /** Plan-scoped, unique across kinds: `"<kind>:<native id>"`. Namespaced because
+   * `ImportChoices.actions` keys on it alone, and native ids of different kinds can collide. */
   id: string;
   label: string;
   /** What would happen by default. The user may override per item. */
@@ -318,43 +186,16 @@ export interface ImportItem {
 export interface ImportChoices {
   /** Per-item override, keyed by `ImportItem.id`. Absent means "use the plan's default". */
   actions: Record<string, ImportAction>;
-  /**
-   * Whether an incoming secret value may replace one this machine already has.
-   *
-   * Defaults to **false**: taking someone else's value for a variable you already use is how a
-   * working setup breaks in a way that is very hard to trace back to an import.
-   */
+  /** Defaults to false: taking someone else's value for a variable you use breaks a working
+   * setup in a way that is hard to trace back to an import. */
   overwriteExistingSecrets: boolean;
-  /**
-   * Whether imported DB connections are made read-only.
-   *
-   * 🔴 **Defaults to `true`, and Rust's `serde` default is `true` too** — deliberately, because the
-   * struct is `#[serde(default)]` and an absent field would otherwise deserialise to `false`, i.e.
-   * an older caller would silently import **writable** connections. The safe value has to be the one
-   * that appears when nobody said anything.
-   *
-   * This was originally *forced*; it is now **enforced but optional.** The
-   * original reasoning survives as justification for the default — a connection that has just
-   * arrived is new *on this machine*, and the recipient did not make the sharer's choice —
-   * but it does not justify taking the decision away from the person reading the review screen.
-   *
-   * With it **off**, each connection keeps whatever the bundle says; it does not force everything
-   * writable. And either way the import report records what happened, so a writable import is never
-   * silent.
-   */
+  /** Defaults to `true`, as does Rust's `#[serde(default)]`: an absent field must not mean
+   * writable. Off: each connection keeps what the bundle says; the import report records it. */
   forceReadOnly: boolean;
 }
 
-/**
- * What an import did to each kind of thing.
- *
- * ⚠️ Deliberately **not** `BundleCounts`, which it briefly was. `BundleCounts` describes a *file*
- * and its `referencedVariables` counts distinct `{{VAR}}` **names mentioned**; an import result
- * needs the number of variables **written**. Reusing one type made the receipt read
- * "3 variables" off a field that meant "3 names were referenced" — a wrong number in
- * user-facing copy, and the kind of thing that is invisible until someone checks it against
- * reality. Two meanings, two types.
- */
+/** Not `BundleCounts`: its `referencedVariables` counts names mentioned, while an import result
+ * needs the variables written. */
 export interface ImportCounts {
   dbConnections: number;
   dbQueries: number;
@@ -382,25 +223,12 @@ export interface ExportOptions {
   dbConnectionIds?: string[];
   apiRequestIds?: string[];
   environmentIds?: string[];
-  /**
-   * There is deliberately no `dbQueryIds`. **Saved queries travel with their connection**: a
-   * query's SQL names one server's tables, so exporting it without its connection produces
-   * something the recipient cannot run, and exporting a connection while dropping its queries
-   * silently discards the work that was meant to be shareable in the first place. Selecting a
-   * connection therefore selects its queries, and `BundleCounts.dbQueries` reports how many came
-   * along.
-   */
+  /** No `dbQueryIds`: saved queries travel with their connection (`BundleCounts.dbQueries`). */
   /** Required and non-empty when `mode === "sealed"`; rejected otherwise. */
   passphrase?: string;
 }
 
-/**
- * The floor on a sealing passphrase.
- *
- * Enforced in Rust, not only in the dialog: a short passphrase in front of 600 000 PBKDF2 rounds
- * is still a short passphrase, and the whole value of `sealed` mode rests on it. Not a strength
- * meter — a hard minimum, because a meter is advice and this is the one place advice is not enough.
- */
+/** A hard floor enforced in Rust, not only in the dialog: `sealed` mode's value rests on it. */
 export const MIN_PASSPHRASE_LENGTH = 12 as const;
 
 /** Bundle size ceiling, so a hostile or accidental multi-hundred-MB file cannot hang the webview. */
@@ -408,34 +236,9 @@ export const MAX_BUNDLE_BYTES = 8 * 1024 * 1024;
 
 /* ───────────────────────────── the command surface ───────────────────────────── */
 
-/**
- * 🔴 **The bundle's bytes never cross the IPC boundary, in either direction.**
- *
- * Rust reads and writes the file itself, given a path the user picked with
- * `@tauri-apps/plugin-dialog`. The webview only ever sees a header, a plan, or a result.
- *
- * This is not tidiness. In `sealed` mode the plaintext contains live secrets, and a design where
- * the webview assembles or receives that string puts it in the renderer's heap, in any devtools
- * session, and in whatever a future crash reporter decides to capture. The file path is the only
- * thing that needs to travel, so it is the only thing that does — the same reasoning that keeps
- * `ResolvedConfig` in-process in the DB client.
- *
- * | Command | Args | Returns |
- * |---|---|---|
- * | `portability_export` | `{ options: ExportOptions, destPath: string }` | `BundleHeader` |
- * | `portability_inspect` | `{ srcPath: string, passphrase: string \| null }` | `ImportPlan` |
- * | `portability_import` | `{ srcPath, passphrase: string \| null, choices: ImportChoices }` | `ImportResult` |
- *
- * `portability_inspect` is callable **twice** for a sealed bundle: once with `passphrase: null` to
- * read the header and describe the file (resolving with `unsealed: false`), then again with the
- * passphrase to unseal and produce the full plan. It writes nothing either time, so a wrong
- * passphrase costs nothing but a retry — and a wrong passphrase **rejects** with `bad-passphrase`
- * rather than resolving with an empty plan (see `ImportPlan.unsealed`).
- *
- * Errors are the same `<code>[: detail]` string shape the rest of the app uses, with these codes:
- * `not-a-bundle` · `unsupported-version` · `too-large` · `bad-passphrase` · `tampered` ·
- * `weak-passphrase` · `io` · `unknown`.
- */
+/** Bundle bytes never cross IPC: Rust reads/writes the file at a user-picked path, so sealed
+ * plaintext never reaches the webview. `portability_export`/`_inspect`/`_import` reject with
+ * `<code>[: detail]` strings using these codes. */
 export const PORTABILITY_ERROR_CODES = [
   /** The file parsed as JSON but is not a bundle (wrong or missing `kind`). */
   "not-a-bundle",

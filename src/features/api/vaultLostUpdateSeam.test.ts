@@ -1,32 +1,6 @@
-/**
- * 🔴 SEAM test — the `api-store.json` LOST UPDATE.
- *
- * ── The bug this file exists to keep fixed ──────────────────────────────────────
- * `api-store.json` has TWO writers:
- *   1. the webview, which holds a full in-memory mirror hydrated **once per app run**
- *      (`apiStoreLoaded` gates the panels' mount effect) and rewrites the WHOLE blob on
- *      any collection/Vault action (`persistApiStore` → `api_store_save`); and
- *   2. Rust, which writes the same file when a DB connection's password is saved
- *      `forever` — `db_connection_upsert` → `db::upsert` → `api_store::save`, because
- *      the DB client's Vault **is** this file (one secret store, not two).
- *
- * So: save a DB password, then delete a saved request. The blob save writes the
- * pre-password snapshot the webview has been holding since launch straight over the
- * file, and the password is gone — silently, with no error anywhere, and the user only
- * finds out the next time that connection fails to open.
- *
- * The fix is `refreshApiStore()`, awaited at the end of `upsertDbConnection`: re-read
- * the file Rust just wrote, so the mirror is current before anything can save it back.
- *
- * ── Why it has to be a seam test ────────────────────────────────────────────────
- * Both halves are individually correct and individually 100% covered. The bug lives in
- * the ORDER of two writes to one file across two features, which is precisely what no
- * unit test on either side can see. So the only thing mocked here is the Tauri bridge,
- * and behind it sits a `disk` object that both writers read and write for real.
- *
- * FALSIFIED: removing the `await get().apiActions.refreshApiStore()` line turns
- * the first test red.
- */
+/** Seam test: api-store.json has two writers (the webview's once-hydrated mirror, and Rust saving
+ * a DB password `forever`). upsertDbConnection must await refreshApiStore() or the next blob save
+ * erases the password. Only the Tauri bridge is mocked; a shared `disk` backs both writers. */
 
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 

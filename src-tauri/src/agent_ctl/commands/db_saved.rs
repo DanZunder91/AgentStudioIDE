@@ -1,12 +1,6 @@
-//! `db_queries`, `db_save_query` and `db_console`: the user's saved queries and console, from an
-//! agent.
-//!
-//! * Saved queries go through the DB client's own store ([`crate::db::upsert_saved_query`]: the
-//!   connection must exist, the write is atomic and locked). An agent only ever **adds** one —
-//!   never updates or deletes the user's — so a name that is already taken gets a second query
-//!   beside it (names are not unique in that store) and the reply says so.
-//! * A console is opened by the webview (`dbConsole` event): with the query typed in and **not
-//!   run**, because the point of the tool is that the user reads it and presses Run.
+//! `db_queries`, `db_save_query`, `db_console`. An agent only adds saved queries (names are not
+//! unique, so a taken name gets a second one), never updates or deletes the user's. A console
+//! opens with the query typed in and not run: the user reads it and presses Run.
 
 use serde_json::{json, Value};
 

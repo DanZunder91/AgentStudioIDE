@@ -86,10 +86,8 @@ function skylineBlocks(x0: number, x1: number, horizon = street * TILE): { x: nu
 
 /** Floors of `n`, for a building plan. */
 const floorsOf = (key: string, n: number) => Array.from({ length: n }, (_, i) => ({ key: `floor:${key}${i}`, label: `${key}${i}`, ide: true }));
-/**
- * A reference city: `gazelle`, seven floors of 26 seats (57 rows, two desk rows a
- * floor), left of the centred Capacity HQ; `chat-server`, one floor, right of it. A sky of 976 px.
- */
+/** `gazelle` (seven floors of 26 seats, 57 rows) left of the centred Capacity HQ; `chat-server`
+ * (one floor) right of it. A sky of 976 px. */
 const referenceCity = buildCityWorld(
   [
     { key: "chat-server", label: "chat-server", team: 2, hasIde: true, floors: floorsOf("t", 1) },
@@ -111,12 +109,8 @@ function raster(ctx: RecordingTarget, view: { w: number; h: number }): (string |
   return px;
 }
 
-/**
- * What the far skyline must look like, painted pixel by pixel from its blocks alone, the plain way:
- * each block's face (`w − 1` wide, a 1-px gap of sky after it) and its lit top edge, then a 1×2 pane
- * per window — columns 4 px apart from 2 px in, floors 5 px apart from 3 px under the edge — every
- * rect snapped like the renderer's. `undefined` off the blocks: the sky's, not the skyline's.
- */
+/** The far skyline painted the plain way from its blocks alone, every rect snapped like the
+ * renderer's; `undefined` off the blocks (the sky's, not the skyline's). */
 function skylinePicture(blocks: { x: number; w: number; h: number }[], horizon: number, cam: Camera, view: { w: number; h: number }): (string | undefined)[] {
   const px: (string | undefined)[] = new Array(view.w * view.h);
   const fill = (wx: number, wy: number, w: number, h: number, color: string) => {

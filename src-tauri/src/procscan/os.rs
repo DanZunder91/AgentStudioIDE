@@ -1,24 +1,6 @@
-//! Reading this user's processes ("What the OS allows"). No OS
-//! permission, no install, same-user processes only — another user's process is not
-//! listed at all.
-//!
-//! | need | macOS | Linux | Windows ([`super::winproc`]) |
-//! |---|---|---|---|
-//! | pids | `proc_listpids(PROC_UID_ONLY, uid)` | `/proc/<pid>` owned by our uid | Toolhelp snapshot, token user SID hashed to a uid ([`super::winparse::uid_of_sid`]) |
-//! | ppid, start, uid, zombie | `proc_pidinfo(PROC_PIDTBSDINFO)` | `/proc/<pid>/stat` + `/proc/stat` `btime` | snapshot ppid (a reused one cut), `GetProcessTimes`, `GetExitCodeProcess` |
-//! | exe | `proc_pidpath` | `/proc/<pid>/exe` | `QueryFullProcessImageNameW` |
-//! | argv (+ env, on demand) | `sysctl KERN_PROCARGS2` ([`parse_procargs2`]) | `/proc/<pid>/{cmdline,environ}` | `NtQueryInformationProcess(ProcessCommandLineInformation)` split by Windows rules; env from the PEB |
-//! | cwd | [`crate::pty::cwd::process_cwd`] | same | same (the PEB; not for a 32-bit process) |
-//! | fds | `PROC_PIDLISTFDS` + `PROC_PIDFDVNODEPATHINFO` / `PROC_PIDFDSOCKETINFO` | `/proc/<pid>/fd/*` + `fdinfo` flags + `/proc/net/tcp*` listeners | fds 1/2 = the PEB's std handles, duplicated and asked their device (file → its path); files open for writing from `ProcessHandleInformation`; `GetExtendedTcpTable` listeners |
-//!
-//! The byte parsers ([`parse_procargs2`], [`parse_stat`], [`nul_split`], and Windows'
-//! [`super::winparse`]) are pure and tested on every OS. **The environment is read only by [`read_env`]**, which Restart
-//! calls, and which a scan calls for `origin: "ide"` apps only, to reduce it to
-//! `DevApp.captured` ([`super::capture`]) — the env itself never leaves that call.
-//!
-//! **This module only reads.** The single exception is [`sigterm`], which Restart uses
-//! after an explicit confirm (on Windows, which has no SIGTERM, it is `TerminateProcess` —
-//! [`super::winproc::terminate`]).
+//! Reads this user's processes only, with no OS permission (macOS libproc/sysctl, Linux `/proc`,
+//! Windows via [`super::winproc`]); byte parsers are pure. The env is read only by [`read_env`]
+//! and never leaves it; the one write is [`sigterm`] (Windows: `TerminateProcess`) for Restart.
 
 use super::logfiles::Fd;
 
@@ -130,10 +112,8 @@ mod imp {
 
     pub const AVAILABLE: bool = true;
 
-    // `struct vnode_fdinfowithpath` / `struct socket_fdinfo` (sys/proc_info.h): libc has
-    // the calls but not these structs, so the few fields we need are read from a byte
-    // buffer at offsets measured with `offsetof` against the macOS SDK — identical on
-    // arm64 and x86_64 (both LP64; checked by compiling for both).
+    // libc lacks `vnode_fdinfowithpath`/`socket_fdinfo`, so fields are read at
+    // `offsetof`-measured SDK offsets (identical on arm64 and x86_64).
     const VNODE_FDINFOWITHPATH_SIZE: usize = 1200;
     const OFF_FI_OPENFLAGS: usize = 0;
     const OFF_VST_MODE: usize = 28;
@@ -420,14 +400,8 @@ mod imp {
         bsdinfo(pid).map(|i| i.pbi_uid)
     }
 
-    /// `(ppid, exe)` of ANY live process, whoever owns it — for walking a parent chain
-    /// through a process [`list`] leaves out (iTerm2's setuid-root `login`).
-    ///
-    /// `PROC_PIDTBSDINFO` refuses another user's process (EPERM), so the ppid comes from
-    /// `PROC_PIDT_SHORTBSDINFO`, which the kernel answers for any pid. libc lacks
-    /// `struct proc_bsdshortinfo`, so — as for the fd structs above — the one field is
-    /// read from a byte buffer: `pbsi_pid`, then `pbsi_ppid` (both `uint32_t`), 64 bytes
-    /// in all. The exe may be unreadable (a root process): `None`, and the walk goes on.
+    /// `(ppid, exe)` of ANY live process, to walk chains through ones [`list`] omits (setuid
+    /// `login`). `PROC_PIDT_SHORTBSDINFO` answers for any pid; read from bytes (libc lacks it).
     pub fn parent_and_exe(pid: u32) -> Option<(u32, Option<String>)> {
         const PROC_PIDT_SHORTBSDINFO: i32 = 13;
         const SHORT_SIZE: i32 = 64;

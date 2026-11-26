@@ -1,15 +1,5 @@
-/* ── shareable config bundles: the export/import dialogs ─────────────────────
-   The same visual vocabulary as `db.css` — a `__title`/`__subtitle`/`__section`/
-   `__row`/`__label-text`/`__input`/`__hint`/`__note`/`__error`/`__warning`/`__check`/
-   `__list`/`__actions`/`__btn` set, off the same App.css theme variables with the same
-   literal fallbacks, so the two dialogs read as one app.
-
-   Its OWN block prefix (`pb-`) rather than reusing `.db-dialog__*`: those classes belong
-   to the database feature, and coupling two features to one set of classes makes every
-   change a cross-feature change. Duplicated *declarations* are the cheaper mistake here
-   than a shared class two features both need to change — and the day someone extracts a
-   real shared dialog block,
-   this file is a small, self-contained thing to delete. */
+/* Config bundle dialogs: `db.css`'s visual vocabulary under its own `pb-` prefix, so the two
+   features share no classes and a change never has to cross features. */
 
 .pb-dialog-overlay {
   position: fixed;

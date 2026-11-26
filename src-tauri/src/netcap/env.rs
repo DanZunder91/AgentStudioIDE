@@ -26,11 +26,9 @@ pub const CA_VARS: [&str; 9] = [
     "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH",
 ];
 
-/// Set to `1` so Node's built-in `fetch`/`http` honour `HTTP(S)_PROXY` (loopback is captured).
-/// Honoured by Node ≥ 24.5 and by Node 22 from 22.21 (backported); older Nodes ignore it.
-/// Node 22.21+ then prints `[UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental` at the
-/// start of EVERY process (measured on 22.23.5: the agent is built in `pre_execution`, before
-/// any user code) — silenced by the preload in `NODE_OPTIONS` ([`super::nodewarn`]).
+/// `1` makes Node's built-in `fetch`/`http` honour `HTTP(S)_PROXY` (Node ≥ 24.5, 22.21+).
+/// Node 22.21+ then warns `EnvHttpProxyAgent is experimental` in EVERY process; the preload in
+/// `NODE_OPTIONS` ([`super::nodewarn`]) silences it.
 pub const NODE_USE_ENV_PROXY: &str = "NODE_USE_ENV_PROXY";
 /// Node's options variable. The user's own value is kept; [`super::nodewarn::node_options`]
 /// appends the warning preload to it.
@@ -89,12 +87,9 @@ fn user_node_options(user_env: &[(String, String)], windows: bool) -> Option<&st
         .map(|(_, v)| v.as_str())
 }
 
-/// The terminal a process belongs to, read from its environment: its [`PROXY_URL_VAR`] is
-/// `http://t-<id>:x@127.0.0.1:<port>` ([`proxy_url`]) for THIS proxy's `port`. Attribution
-/// for a client that does not send the URL's credentials (Windows PowerShell 5.1's web
-/// cmdlets answer only a `407` challenge, and the proxy never challenges — a proxy that
-/// refuses breaks clients). `None` for another port, another shape or no variable.
-/// Variable names match case-insensitively (Windows).
+/// The terminal a process belongs to, from its [`PROXY_URL_VAR`] for THIS `port`: attribution
+/// for clients that don't send the URL's credentials (PS 5.1 only answers a 407, which we
+/// never send). Variable names match case-insensitively (Windows).
 pub fn terminal_from_env(env: &[(String, String)], port: u16) -> Option<String> {
     let url = env
         .iter()
@@ -118,11 +113,8 @@ pub fn skipped_reason(user_env: &[(String, String)]) -> Option<String> {
     user_proxy_var(user_env).map(|k| format!("{k} already set in your environment"))
 }
 
-/// `NO_PROXY` = the user's `NO_PROXY` ∪ `no_proxy`, de-duplicated, in their order. Loopback
-/// is deliberately NOT added (loopback is captured): a `curl localhost:8080/health` is
-/// exactly what the user wants to see. Our own hook command opts out itself
-/// (`AGENTSTUDIO_PROXY_STRICT=0 curl --noproxy '*'` — the `0` exempts it from the curl shim), so
-/// its token never transits the proxy.
+/// User's `NO_PROXY` ∪ `no_proxy`, deduped, in order. Loopback is deliberately NOT added (it is
+/// captured); our hook command opts itself out so its token never transits the proxy.
 pub fn no_proxy_union(user_env: &[(String, String)]) -> String {
     let mut out: Vec<String> = Vec::new();
     let user = user_env
@@ -169,10 +161,8 @@ pub struct EnvInputs<'a> {
     /// The Node warning preload ([`super::nodewarn::ensure`]). `None` = `NODE_OPTIONS` is
     /// left alone.
     pub node_preload: Option<&'a Path>,
-    /// Compute for Windows (a parameter, so every OS tests both answers): the shim is NEVER
-    /// put on `PATH` there — Windows PowerShell would try to open the extensionless `curl` as
-    /// a document — only [`SHIM_DIR_VAR`] is exported, for agents' Git Bash
-    /// ([`super::shim`] module doc). `NODE_OPTIONS` is then matched in any case.
+    /// Compute for Windows (a parameter, so every OS tests both): the shim is never on `PATH` there
+    /// (PowerShell opens the extensionless `curl` as a document); only [`SHIM_DIR_VAR`] is set.
     pub windows: bool,
 }
 

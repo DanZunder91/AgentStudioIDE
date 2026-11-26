@@ -1,12 +1,5 @@
-/**
- * The database tools an agent runs from a terminal, seen from the app: `agent-studio db query`
- * shows each run in the connection's console tab WITHOUT taking the pane from the terminal the
- * user is watching, and `agent-studio db console` opens that console, focused, for the user.
- *
- * No database runs in this container, so the connection points at a port nothing listens on
- * (saved with `--force`): the query fails to connect, which is still a run the user must see.
- * The live tier (`db_live_agent_ctl`, `tests/agent_db_tools.rs`) covers real servers.
- */
+/** `db query` runs show in the connection console without taking the pane from the terminal.
+ * No DB runs here, so it targets a dead port (`--force`); `db_live_agent_ctl` covers servers. */
 import { $, browser, expect } from "@wdio/globals";
 import { terminalText } from "../support/real-service";
 import { openTerminalFromEmptyPane, showTerminalTab, typeInTerminal } from "../support/terminal";

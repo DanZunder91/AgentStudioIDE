@@ -1,7 +1,3 @@
-/**
- * The shortcuts data module — the platform modifier + the grouped list that the
- * cheat sheet renders. Pure data, so a plain unit test pins it.
- */
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -184,16 +180,8 @@ describe("shortcutGroups", () => {
     for (const s of preview!.shortcuts) expect(s.keys[0]).toBe(modKey());
   });
 
-  /**
-   * The local-find row used to LIE, and that is why it gets two tests rather
-   * than a tweak. It read *"Find in the current file or terminal"* while a
-   * rendered Markdown preview answered Cmd/Ctrl+F with nothing at all
-   * (`bufferSearch`'s keymap is a listener on CodeMirror's `contentDOM`, and in
-   * rendered mode that host is `display: none` and can hold no focus). Pressing
-   * the key showed it. This file's header makes a binding and
-   * its row a same-commit contract — in both directions: a row that promises
-   * something must have a handler behind it.
-   */
+  /** The rendered Markdown preview answers Mod+F too, so the row must not limit it to
+   * file or terminal: a row's promise must match the handlers behind it. */
   it("no longer claims Mod+F is only for the file or the terminal", () => {
     const local = shortcutGroups()
       .flatMap((g) => g.shortcuts)

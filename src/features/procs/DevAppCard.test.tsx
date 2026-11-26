@@ -1,9 +1,5 @@
-/**
- * DevAppCard (+ its RestartDialog) — every console kind, Stream / Stop with the exact args Rust
- * receives, the pick-file flow, and Restart in the IDE: confirm → prepare → restart →
- * onOpenTerminal, cancel sends nothing, errors are shown. Driven from the BUTTONS over the real
- * IPC seam (a store-level test cannot see which action a button calls), not from the store.
- */
+/** Driven from the buttons over the real IPC seam: a store-level test cannot see which action a
+ * button calls. */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

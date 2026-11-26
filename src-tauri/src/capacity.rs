@@ -1,36 +1,6 @@
-//! Agent Village **capacity**: both the City and the Village show
-//! the agent seats in use and the seats still available, and also the memory available for
-//! agents, since more agents are started whenever the machine has room for them.
-//!
-//! One read-only command, [`machine_capacity`]: how many logical CPUs this machine offers, how
-//! much RAM it has and how much of it is available, and how much of it this user's `claude`
-//! processes hold — plus the processes those started (MCP servers, shells, dev servers).
-//!
-//! The CPU count is returned RAW. The Village turns it into "seats" with Claude Code's own rule
-//! for how many workflow agents run at once (`min(16, max(2, CPUs − 2))`, read off the installed
-//! CLI 2.1.300 and documented under `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS`), so the formula
-//! and the caption that names it as an estimate live side by side in one place
-//! (`src/features/village/capacityModel.ts`).
-//!
-//! | need | macOS | Linux | Windows | other |
-//! |---|---|---|---|---|
-//! | logical CPUs | [`std::thread::available_parallelism`] — the count Node's `os.availableParallelism()`, i.e. Claude Code, reads | same | same | same |
-//! | total RAM | `sysctlbyname("hw.memsize")` | `/proc/meminfo` `MemTotal` | `GlobalMemoryStatusEx` `ullTotalPhys` | — |
-//! | available RAM | `host_statistics64(HOST_VM_INFO64)`: total − (app + wired + compressed), Activity Monitor's "Memory Used" ([`mac_available`]) | `MemAvailable` | `GlobalMemoryStatusEx` `ullAvailPhys` (Task Manager's "Available": free + standby) | — |
-//! | a process's memory | `proc_pidinfo(PROC_PIDTASKINFO)` resident size | `/proc/<pid>/statm` resident pages | `K32GetProcessMemoryInfo` `WorkingSetSize` (limited access) | — |
-//! | which processes | [`crate::procscan::os::list`] + [`crate::procscan::ide::is_claude_cli`] | same | same (the user SID's processes) | — |
-//!
-//! **Reads only.** No file is written, no process is signalled, nothing under `~/.claude` is
-//! touched — the process table and two kernel counters are the whole input. No OS
-//! permission is needed for any of it: every call reads this user's own processes.
-//!
-//! The IDE's own one-shot probes (`claude -p --no-session-persistence "/usage"` every few
-//! seconds, `"/context"` on demand — see `usage.rs`, `context_usage.rs`) are left out
-//! ([`is_probe`]): they are not agents, and counting them would make the agents' figure blink
-//! every time the usage strip polls.
-//!
-//! Resident memory is summed per process, so pages two processes share are counted for both —
-//! the panel says "resident memory", never "exclusive".
+//! Agent Village capacity (read-only): logical CPUs, total/available RAM, and the resident memory
+//! of this user's `claude` processes plus descendants (shared pages count in each process).
+//! CPUs are returned raw; the seat formula lives in `src/features/village/capacityModel.ts`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -79,13 +49,9 @@ pub fn is_probe(argv: &[String]) -> bool {
     (has("-p") || has("--print")) && has("--no-session-persistence")
 }
 
-/// What this user's agents hold, from a process `table`: every `claude` CLI process except
-/// one-shot probes ([`is_probe`]), and every non-`claude` process descended from one of them,
-/// each counted once. `rss` reads one process's resident bytes; a process it cannot read (gone
-/// since the table was taken) still counts as a process, with 0 bytes.
-///
-/// Pure over its inputs, so the accounting is tested on a fake table. Bounded on a malformed
-/// table: a ppid cycle is walked once (`seen`).
+/// Memory of this user's agents: every `claude` CLI process except probes ([`is_probe`]) plus its
+/// non-`claude` descendants, each counted once. An unreadable process counts with 0 bytes; a ppid
+/// cycle is walked once (`seen`).
 pub fn agent_memory(table: &[RawProc], rss: impl Fn(u32) -> Option<u64>) -> AgentMemory {
     let is_claude = |p: &RawProc| is_claude_cli(p.exe.as_deref(), &p.argv);
     let by_pid: HashMap<u32, &RawProc> = table.iter().map(|p| (p.pid, p)).collect();

@@ -1,13 +1,6 @@
-//! Background-task output reaches the Agent Logs **through the live fan-out tailer loop**:
-//! the transcript reports a `run_in_background`
-//! launch → the tailer tails its output file → `SupervisorMsg::TaskLines` → `task` lines
-//! on the launching agent's root terminal. A `Monitor` (no path in its result) is tailed
-//! at the path the real `ClaudeAdapter` derives. No real `claude` runs.
-//!
-//! Its own binary because it points `HOME` (the transcript locator) and `TMPDIR` (the
-//! Claude temp root) at private temp dirs — process globals — and speeds the poll to
-//! 50 ms, the same pattern as `logstream_tailer_live.rs`. Neither the developer's real
-//! `~/.claude` nor their real `claude-<uid>` temp dir is touched.
+//! Background-task output reaches Agent Logs through the live tailer loop (`TaskLines` →
+//! `task` lines on the root terminal); a `Monitor` is tailed at the adapter-derived path. Own
+//! binary: `HOME` and `TMPDIR` (process globals) point at temp dirs; no real `claude` runs.
 
 #![cfg(unix)]
 

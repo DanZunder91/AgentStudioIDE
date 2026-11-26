@@ -1,31 +1,7 @@
 #!/usr/bin/env node
-/**
- * Generates the file-icon artifacts from the hand-curated mapping
- * (`scripts/icons/mapping.mjs`) and the vendored Material Icon Theme SVGs
- * (`src/assets/file-icons/svg/*.svg`):
- *
- *   src/lib/fileIcons/iconMap.generated.ts   — the typed lookup tables (file-icons.md §3)
- *   src/lib/fileIcons/sprite.generated.ts    — the inline SVG sprite (file-icons.md §4)
- *
- * Design: docs/design/file-icons.md. Zero dependencies, on purpose
- * (no svgo — upstream ships svgo-minified files already; we only strip XML
- * declarations, comments and DOCTYPEs).
- *
- * THIS GENERATOR IS THE SANITIZATION GATE. The sprite is injected into the DOM
- * as raw HTML at runtime, so an SVG containing scripts, event handlers or
- * external references must FAIL generation here — there is no later line of
- * defense. The hostile-content scan runs AFTER comment stripping, so a payload
- * split across comments (`<scr<!-- -->ipt>`) cannot reassemble past the check.
- *
- * Output is deterministic (sorted keys, sorted symbols, no timestamps): two
- * runs over the same inputs are byte-identical, which is what lets
- * `generate.test.mjs` pin "committed artifacts cannot drift from their
- * sources" as a plain equality test.
- *
- * Usage: `node scripts/icons/generate.mjs [--out <dir>]`
- *   --out writes both files into <dir> instead of src/lib/fileIcons/ (used by
- *   the drift test; the default is the real thing).
- */
+/** Generates the file-icon *.generated.ts from mapping.mjs and the vendored SVGs (file-icons.md).
+ * THE SANITIZATION GATE: the sprite is injected as raw HTML, so hostile SVG must fail here. Output
+ * is deterministic for the drift test; `--out <dir>` writes elsewhere. */
 
 import fs from "node:fs";
 import path from "node:path";
@@ -46,13 +22,8 @@ export const SPRITE_FILE = "sprite.generated.ts";
 /** Symbol ids become DOM ids (`mi-<id>`); keep them boring and collision-free. */
 const ICON_ID = /^[a-z0-9][a-z0-9_-]*$/;
 
-/**
- * Content that must never reach the DOM via the sprite. Checked case-
- * insensitively against the CLEANED svg source (declarations/comments/DOCTYPE
- * already stripped). `href`/`src` to anything but a local fragment is rejected
- * too: an icon has no business referencing the network, another file, or a
- * data: URI.
- */
+/** Matched case-insensitively AFTER comment stripping, so `<scr<!-- -->ipt>` cannot reassemble;
+ * `href`/`src` may only point at a local fragment. */
 const HOSTILE = [
   ["a <script> element", /<script\b/i],
   ["an inline event handler (on*=)", /\son[a-z]+\s*=/i],
@@ -69,10 +40,7 @@ const fail = (message) => {
   throw new GenerateError(`icons generator: ${message}`);
 };
 
-/**
- * Clean one SVG source and pull it apart into root attributes + inner markup.
- * Throws on anything that cannot be safely inlined into the sprite.
- */
+/** Throws on anything that cannot be safely inlined into the sprite. */
 export function cleanSvg(source, name) {
   let s = String(source).replace(/^\uFEFF/, "");
   s = s.replace(/<\?xml[\s\S]*?\?>/gi, "");
@@ -117,11 +85,7 @@ export function toSymbol(id, { attrs, inner }) {
   return `<symbol id="mi-${id}" viewBox="${attrs.get("viewBox")}"${rest}>${inner}</symbol>`;
 }
 
-/**
- * Validate the mapping against the vendored SVG basenames. Both directions are
- * enforced: a mapping value without an SVG is a broken lookup, and a vendored
- * SVG nothing references is dead weight that would silently ship.
- */
+/** Both directions: a mapped id without an SVG breaks a lookup; an unreferenced SVG ships dead. */
 export function validateMapping(mapping, availableIds) {
   const referenced = new Set();
   const tables = ["fileNames", "fileExtensions", "languageIds"];
@@ -161,18 +125,11 @@ const recordTs = (record, indent) => {
 };
 
 const header = (what) =>
-  `/**
- * ⚠️ GENERATED — do not edit; source: scripts/icons/mapping.mjs (+ the vendored
- * SVGs in ${SVG_DIR.split(path.sep).join("/")}); upstream ${UPSTREAM.tag}.
- * Regenerate with \`node scripts/icons/generate.mjs\`.
- *
- * ${what}
- */`;
+  `/** GENERATED — do not edit: \`node scripts/icons/generate.mjs\` from scripts/icons/mapping.mjs
+ * and the SVGs in ${SVG_DIR.split(path.sep).join("/")} (upstream ${UPSTREAM.tag}).
+ * ${what} */`;
 
-/**
- * The pure core: mapping + {id -> svg source} in, both file bodies out.
- * Deterministic — every collection is sorted before emission.
- */
+/** Pure and deterministic: every collection is sorted before emission. */
 export function generateArtifacts({ mapping = MAPPING, svgSources }) {
   const availableIds = new Set(Object.keys(svgSources));
   validateMapping(mapping, availableIds);
@@ -186,7 +143,7 @@ export function generateArtifacts({ mapping = MAPPING, svgSources }) {
   }
 
   const spriteTs = `${header(
-    "One inline SVG sprite (file-icons.md §4): every vendored icon is a\n * `<symbol id=\"mi-<id>\">`, consumed via `<use href=\"#mi-<id>\">`.",
+    "One inline SVG sprite (file-icons.md §4): each icon is a `<symbol id=\"mi-<id>\">` for `<use>`.",
   )}
 
 export const FILE_ICON_SPRITE: string =

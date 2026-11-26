@@ -1,26 +1,6 @@
-/**
- * Tests for the Tools panel's time primitives.
- *
- * ── Hermetic, and specifically clock- and zone-free ──────────────────────────
- * Nothing here reads `Date.now()` or the host's time zone: `now` and `timeZone` are
- * parameters on every entry point that needs them, and every test passes both. A run
- * on a laptop set to `Pacific/Auckland` must produce the same result as CI in UTC,
- * or the suite is measuring the machine rather than the code.
- *
- * ── Expectations are literals, never re-derivations ──────────────────────────
- * Every expected string and number below was worked out from `Date.UTC` / an
- * independent `Intl` read / plain arithmetic, then written down. No test computes its
- * expectation with the function it is testing, and no test loops a table through the
- * pipeline it came from — both shapes pass no matter what the values are.
- *
- * ── Two-sided, wherever an implementation could fake it ──────────────────────
- * The DST assertions come in summer/winter PAIRS. A single "Paris is UTC+02:00" test
- * is satisfied by a hard-coded constant; the pair is not, because the same zone id has
- * to yield two different offsets depending only on the instant. Same idea for the
- * digit-count boundaries (asserted from both sides), the floor semantics (asserted at
- * both signs) and the relative ladder (asserted at each rung and one millisecond
- * below it).
- */
+/** Clock- and zone-free: every entry point gets `now` and `timeZone`. Expectations are hand-worked
+ * literals, never re-derived by the code under test. DST and boundary checks come in two-sided
+ * pairs, so a hard-coded constant cannot pass. */
 
 import { describe, it, expect } from "vitest";
 import {

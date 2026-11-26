@@ -1,30 +1,11 @@
-/**
- * FindInFiles — the project-wide search panel.
- *
- * `findIpc` is mocked at the module boundary: the real `find_in_files` crosses
- * Tauri, which does not belong in a jsdom unit test (its own marshalling is
- * pinned in `findIpc.test.ts`). What is under test here is the panel's
- * behaviour — the global toggle + focus, the debounced search with the right
- * options, grouped/highlighted results, opening a hit, and the calm empty /
- * error / truncated / no-root states.
- *
- * Open state now lives in the store (`findInFilesOpen`) so the hotkey
- * and the right rail's Find tab drive the SAME overlay; the hotkey-pressing tests
- * below still exercise it end-to-end (the keydown handler calls the store action),
- * and the toggle test also asserts the store flag directly.
- *
- * Fake timers + `fireEvent` (not userEvent) make the debounce deterministic:
- * `advanceTimersByTimeAsync` fires the timer AND flushes the resolved-promise
- * microtask in one step, so assertions run against settled state.
- */
+/** `findIpc` is mocked at the module boundary (its marshalling is in `findIpc.test.ts`). Fake
+ * timers + `fireEvent`: `advanceTimersByTimeAsync` fires the debounce and flushes the promise. */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `newSearchId` and `cancelFind` MUST be listed here: this factory REPLACES the
-// module wholesale, and an export it forgets arrives at the component as
-// `undefined` — a crash inside an effect that Vitest reports as a stray "Error"
-// while the suite stays green.
+// The factory replaces the module: a forgotten export arrives as `undefined` and crashes inside
+// an effect while the suite stays green.
 const findIpc = vi.hoisted(() => ({
   findInFiles: vi.fn(),
   cancelFind: vi.fn(),
@@ -32,10 +13,8 @@ const findIpc = vi.hoisted(() => ({
 }));
 vi.mock("./findIpc", () => findIpc);
 
-// The scope selector's Folder dropdown reads subdirs via `read_dir`; mock only
-// that wrapper so it never crosses Tauri in jsdom (no backend here), keeping
-// `readFile`/`writeFile` real for the editor a hit opens. Default: no subdirs —
-// the "Whole workspace" default scope, i.e. the pre-scope behaviour.
+// Only `readDir` is mocked (for the Folder dropdown); `readFile`/`writeFile` stay real. Default:
+// no subdirs.
 const workspaceIpc = vi.hoisted(() => ({ readDir: vi.fn() }));
 vi.mock("../workspace/workspaceIpc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../workspace/workspaceIpc")>()),
@@ -513,12 +492,8 @@ describe("FindInFiles — scope selector", () => {
   });
 });
 
-/**
- * "All workspaces" — the fan-out. Two roots (a primary + a browse
- * root), the scope switched to the sentinel: the search runs once per root in
- * parallel, results merge, each group carries its repo label, and a hit opens in
- * ITS OWN repo (a naive single-root impl would open the wrong one).
- */
+/** Fan-out over two roots: one search per root, merged, repo-labelled, and each hit opens in its
+ * own repo. */
 describe("FindInFiles — All workspaces (fan-out)", () => {
   const OPTS = { regex: false, caseSensitive: false, wholeWord: false, glob: "" };
 
@@ -610,19 +585,8 @@ describe("FindInFiles — All workspaces (fan-out)", () => {
   });
 });
 
-/**
- * Cancelling a slow search. A search which took too long froze the whole
- * program; it has to run in parallel so that it can be killed. Rust moved the
- * walk off the event-loop thread;
- * this is the half the user touches.
- *
- * Every test here holds a search still (a promise that never settles) — the
- * 10-second walk on a big repo, frozen so it can be examined. What is pinned:
- * the Stop control exists exactly while there is something to stop, EVERY exit
- * path stops the Rust-side walk (and stops the right one, by id), a search that
- * was stopped never claims the project has no matches, and a `cancelled`
- * rejection is silent while a genuine one is not.
- */
+/** Searches held still (never-settling promises): Stop exists only while there is something to
+ * stop, every exit cancels the right walk by id, and a stopped search never claims no matches. */
 describe("FindInFiles — cancelling a slow search", () => {
   /** A search that never settles — a slow walk, held still. */
   const hangs = () =>
@@ -807,10 +771,8 @@ describe("FindInFiles — cancelling a slow search", () => {
   });
 
   it("a slow walk's late reply cannot overwrite the fast one that replaced it", async () => {
-    // The single most important correctness property here, asserted two-sided:
-    // the CURRENT search's results must land, and the superseded
-    // one's must not. An assertion that only checks "stale is absent" is also
-    // satisfied by a panel that renders nothing at all.
+    // Two-sided: current results land and superseded ones do not ("stale absent" alone passes an
+    // empty panel).
     setRoot("/w");
     let resolveSlow!: (r: FindResult) => void;
     findIpc.findInFiles
@@ -839,13 +801,8 @@ describe("FindInFiles — cancelling a slow search", () => {
   });
 });
 
-/**
- * The CONTEXT default: Ctrl+F and Ctrl+O searched every
- * workspace by default, when they should follow the window that is open — from
- * a gazelle file or a gazelle terminal the search should cover gazelle. Two
- * roots open — the PRIMARY is alpha, so the old default would
- * search alpha — and the focused tab lives in gazelle.
- */
+/** Two roots with alpha as primary; the focused tab lives in gazelle, so the search must cover
+ * gazelle. */
 describe("FindInFiles — scope follows the focused tab", () => {
   const OPTS = { regex: false, caseSensitive: false, wholeWord: false, glob: "" };
   const workspaceSelect = () => screen.getByLabelText("Search workspace");

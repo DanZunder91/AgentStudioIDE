@@ -1,8 +1,4 @@
-/**
- * The painting primitives' screen snap: every world position lands on a whole screen
- * pixel — at a whole zoom (exactly `round(ox) + round(wx) * zoom`, as ever) and at an
- * overview zoom below 1, where a plain product would start art on half pixels.
- */
+/** Below zoom 1 a plain product would start art on half pixels; positions must still snap. */
 
 import { describe, expect, it } from "vitest";
 

@@ -1,8 +1,3 @@
-/**
- * LspStatus — the editor header's code-intelligence indicator (M5). Calm and
- * quiet: an indexing indicator, a dismissible install hint, or nothing.
- */
-
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

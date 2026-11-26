@@ -1,61 +1,6 @@
-/**
- * JsonView — a reusable, collapsible JSON tree viewer (M6, API client).
- *
- * Renders an ALREADY-PARSED JS value (the caller does `JSON.parse`) as an
- * expand/collapse tree instead of a flat blob. Objects `{}` and arrays `[]` are
- * collapsible nodes (expanded by default); primitives render inline, typed and
- * styled by CSS class (string / number / boolean / null). Handles any JS value —
- * object, array, string, number, boolean, null, undefined (and exotic
- * primitives like bigint fall back to their string form).
- *
- * Self-contained: a local recursive `JsonNode` walks the value. Depth is capped
- * (`MAX_DEPTH`) so a pathologically deep value renders a summary instead of an
- * unbounded tree — it never infinite-loops.
- *
- * A/B compare: two OPTIONAL props extend the tree for the
- * ComparePanel without touching existing callers.
- * - `selectedKey` cross-highlights every occurrence of a key NAME (exact
- *   full-string match, at any depth) — the panel sets the same name on both
- *   panes so the eye can pair rows across responses.
- * - `onSelectKey` makes every key label a real `<button>` so keys are
- *   clickable. A button must never nest inside another button (invalid HTML,
- *   and the click would also toggle the node), so in this mode the row-wide
- *   expand/collapse button shrinks to a caret-only button with the key button
- *   as its SIBLING. Without `onSelectKey` the markup stays exactly as before
- *   (whole row = one toggle button, key = a span), so existing callers render
- *   and behave unchanged.
- * Every keyed row's key element — span or button — carries `data-key` (array
- * indices too, as `String(i)`) so the ComparePanel can find occurrences.
- *
- * ## Search inside the tree
- *
- * Search works in the tree view too. Two more OPTIONAL
- * props, threaded by `ResponseBody`'s find bar — the same "the parent tells me
- * what to emphasise" shape `selectedKey` already established:
- * - `search` is a `TreeSearch`, built by `searchJsonTree` from the SAME value
- *   this component renders. It holds, per slot, the matches inside that slot's
- *   text and the ordinal of its first match.
- * - `currentMatch` is the global ordinal the find bar's cursor is on.
- *
- * Three decisions that make the count honest, and are worth stating because
- * each one is a place the number could quietly lie:
- *
- * 1. **A match is a matched substring inside ONE key name or ONE primitive
- *    value.** Nothing matches across a slot boundary, because nothing on
- *    screen spans two slots. That is a different unit from the Raw view, which
- *    also searches the JSON punctuation, the indentation and the quotes around
- *    key names — so for a query made of *content* the two totals agree by
- *    construction (the characters are the same), and they can only diverge on
- *    JSON structure. When they do, `ResponseBody` shows BOTH totals, labelled.
- * 2. **Node summaries (`{…}` / `Array(7)`) are chrome, not content, and are
- *    never searched.** Otherwise the total would depend on which nodes happen
- *    to be collapsed, and "7 results" would change by clicking a caret.
- * 3. **A node whose subtree holds a match is PINNED open** (`pinned`), and its
- *    caret is disabled while it is. A counted hit you cannot see is worse than
- *    a missing one, so the tree never lets you hide one; conversely, matches
- *    below `MAX_DEPTH` are not counted at all, because that node renders a
- *    summary and cannot be opened.
- */
+/** Tree for an ALREADY-PARSED value, depth-capped (MAX_DEPTH). With onSelectKey keys are buttons
+ * beside a caret-only toggle (buttons can't nest); key elements carry data-key for ComparePanel.
+ * Search counts within one key/primitive slot, never summaries; nodes with hits are pinned open. */
 
 import { useState } from "react";
 
@@ -69,13 +14,7 @@ const MAX_DEPTH = 100;
 /** A single object entry or array item: its label prefix + child value. */
 type Entry = readonly [key: string, value: unknown];
 
-/**
- * Object/array entries in RENDER order, or `null` for a primitive.
- *
- * The renderer and `searchJsonTree` MUST agree on this order — the ordinals the
- * find bar counts are the order the rows appear in — so they share one function
- * rather than two copies of the same three lines.
- */
+/** Shared by the renderer and searchJsonTree: find ordinals must follow row order. */
 function entriesOf(value: unknown): Entry[] | null {
   if (Array.isArray(value)) {
     return (value as unknown[]).map((v, i) => [String(i), v] as const);
@@ -89,12 +28,8 @@ function entriesOf(value: unknown): Entry[] | null {
 /** The two searchable text slots a row can own. */
 type SlotKind = "k" | "v";
 
-/**
- * Node paths are built from key names, so the separator must be a character a
- * JSON key realistically cannot contain. U+0001 is not expressible in JSON
- * source except as a `\u0001` escape. The same constant builds the path in
- * both the walk and the render, so the two cannot disagree about it.
- */
+/** U+0001 can't appear in a JSON key except as an escape. Shared by walk and render so both
+ * build identical paths. */
 const PATH_SEP = "\u0001";
 const childPath = (path: string, key: string): string =>
   `${path}${PATH_SEP}${key}`;
@@ -116,13 +51,7 @@ export interface TreeSearch {
   pinned: Set<string>;
 }
 
-/**
- * Find every match of `query` in the text the tree for `value` would render.
- *
- * Match semantics come from `findModel` — the same engine the editor's find bar
- * and the Raw view use, so the three cannot disagree about what a match is.
- * Callers pass a NON-empty query (`ResponseBody` renders no cursor without one).
- */
+/** Match semantics come from findModel (shared with the editor and Raw view). Query non-empty. */
 export function searchJsonTree(value: unknown, query: string): TreeSearch {
   const spec = {
     search: query,
@@ -228,18 +157,8 @@ function primitiveView(value: unknown): { className: string; text: string } {
   }
 }
 
-/**
- * The `key:` prefix of one row. Two shapes on purpose:
- * - Read-only (no `onSelectKey`): the original `<span>key: </span>`, so
- *   existing callers (ApiRequestView's ResponsePanel) render as before.
- * - Interactive: a real `<button>` the ComparePanel can click. The trailing
- *   `: ` moves to a sibling punct span so the button — and the selection
- *   chip — hugs the key name only.
- * Both shapes carry `data-key`, and both mark selection (`data-selected` +
- * modifier class) when the name exactly equals `selectedKey`. The name's TEXT
- * additionally carries the find bar's `<mark>`s — the two highlights are
- * independent and can coexist on the same key.
- */
+/** Read-only: a <span>. With onSelectKey: a <button>, its ": " in a sibling so the chip hugs the
+ * name. Both carry data-key and the selection mark; find <mark>s are independent of it. */
 function KeyLabel({
   name,
   path,
@@ -368,10 +287,7 @@ function CollapsibleNode({
     </>
   );
 
-  // Interactive mode: the key is a <button>, and a button must never sit
-  // inside another button — so the toggle shrinks to a caret-only button and
-  // the key/punct render as its siblings. Clicking the key selects; only the
-  // caret toggles.
+  // A button can't nest in a button: the toggle shrinks to a caret; key and punct are siblings.
   if (onSelectKey) {
     return (
       <div className="jsonview__node">

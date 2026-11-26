@@ -1,8 +1,5 @@
-/**
- * The drag gesture across windows: let go OUTSIDE the window → a new window at the cursor;
- * drop on ANOTHER window → ask that tab's window to give it over. The OS reads are mocked
- * (`probeRelease`); the decision (`releasedOutside`) and the move are the real ones.
- */
+/** Cross-window drag: released OUTSIDE → a new window at the cursor; dropped on ANOTHER window →
+ * ask the source to give it. OS reads (`probeRelease`) are mocked; decision and move are real. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

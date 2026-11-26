@@ -1,16 +1,5 @@
-/**
- * Layer 5 — the project styles of the agent rail, drawn by the real CSS in a real browser.
- *
- * Each style draws a project's shape across a FLAT list: the header, then rows that are its
- * siblings. Nothing wraps a project, so the shape is closed by sibling selectors alone: a
- * project's first row is `.folder-group + .fleet-row`, its last is the row right before the
- * next header (`:has(+ .folder-group)`) or the last row of all (`:last-child`). jsdom
- * computes no styles from a stylesheet, so this is the only tier where "the card closes
- * under the last agent" is a claim rather than a hope.
- *
- * The rail holds two projects, so both ways a project can end are exercised: the first ends
- * before the next header, the second at the end of the list.
- */
+/** Project styles close each project's shape with sibling selectors over a flat list; jsdom
+ * computes no stylesheet styles. Two projects cover both endings: before a header, and last. */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

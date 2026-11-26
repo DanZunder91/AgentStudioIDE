@@ -1,30 +1,6 @@
-//! Agent control: what an agent running in an Agent Studio terminal can ask the app to do.
-//!
-//! The user says "connect me to postgres://…" or "send this request" to whatever agent they are
-//! talking to; the agent calls a tool — `agent-studio db connect <url>` on the command line
-//! ([`cli`]) or the same tool over MCP — and the app does it, visibly. Every agent can, because
-//! the only requirement is a process in one of our PTYs.
-//!
-//! # The channel
-//!
-//! No new server and no network exposure. Requests go to the hook listener that already exists
-//! ([`crate::hook_listener`]), on `127.0.0.1`, as `POST /ctl` carrying the same per-launch token
-//! and terminal id every PTY already has in its environment. A process without the token is
-//! dropped before a byte of its body is read; the terminal id says who asked.
-//!
-//! # The tools
-//!
-//! Declared once in [`registry`] tables under [`commands`]; the CLI, its help and the MCP tool
-//! list are generated from them. A request is `{"tool": "<name>", "args": {…}}`, validated
-//! against the tool's parameters before it runs.
-//!
-//! # What an agent may and may not do
-//!
-//! The agent already holds whatever the user typed into the conversation. What it must never get
-//! is the user's **saved** secrets: Vault values are never returned, and an agent-written URL or
-//! request that names a Vault variable (`{{VAR}}`) is refused — otherwise an agent could send a
-//! saved secret to a host of its choosing (ADR-0025 §5). Each command module states its own rules
-//! on top of that.
+//! Agent control: tools an agent in an Agent Studio PTY calls (CLI or MCP) to act in the app.
+//! Requests are `POST /ctl` to the 127.0.0.1 hook listener with the PTY's token. Vault values are
+//! never returned and `{{VAR}}` in agent-written requests is refused (ADR-0025 §5).
 
 pub mod cli;
 pub mod commands;

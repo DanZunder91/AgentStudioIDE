@@ -1,49 +1,14 @@
-/**
- * The terminal-close confirmation, driven through the REAL store.
- *
- * Closing a terminal that is running claude must first ask for confirmation.
- *
- * # Why this suite exists beside `store.test.ts`
- *
- * There are FOUR gestures that can kill a running terminal, and they do not
- * share a code path — the tab ✕ and Cmd/Ctrl+W converge on `requestCloseTab`,
- * the pane ✕ goes through `requestClosePane`, the fleet rail's ✕ through
- * `requestDismissAgent`. Three of the four once bypassed the confirm entirely,
- * and "one of them still does" is exactly the bug a user would find and a
- * per-action unit test would not (two covered halves do not add up to a
- * working feature — test the seam). So every
- * path is exercised here, against the same store the app runs.
- *
- * # Every path is asserted TWO-SIDED
- *
- * The failure this feature must not have is **a dialog that appears and then the
- * terminal dies anyway**, and its mirror is **a gate that never lets go**. An
- * assertion on `pendingTerminalClose` alone is satisfied by the first of those:
- * a build that raises the dialog *and* disposes the PTY passes it. So each path
- * asserts both arms, and the busy arm always asserts the terminal was **not
- * disposed** — `dispose` is the call that reaches `terminal_close` in Rust, so
- * it is the observable that means "the session is gone", and it is mocked here
- * precisely so its call count is assertable.
- *
- * # 🔴 Closing is ASYNCHRONOUS now
- *
- * The gate awaits an IPC round trip before it either closes or holds. A
- * synchronous assertion right after a close gesture reads the state from before
- * the answer arrived — it would pass on the busy path for the wrong reason and
- * fail on the idle one. `settleGate()` below is the boundary every test crosses.
- */
+/** Four gestures can kill a terminal on different paths, so all run here on the real store. Each
+ * asserts both arms, the busy arm that `dispose` (the call that kills the PTY) did not run. The
+ * gate is async: cross `settleGate()` before asserting. */
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// `store.ts` calls `dispose(terminalId)` through the terminal barrel — the seam
-// where a close becomes a dead PTY. Mocked so "was the terminal killed?" is a
-// call count rather than a guess. Same three exports `store.test.ts` stubs.
-// (A factory mock is a frozen copy of the module's surface — if the
-// store starts importing a fourth name from this barrel, this list must grow
-// with it, or the break surfaces as an Unhandled Error beside green tests.)
+// `dispose` is where a close becomes a dead PTY, mocked so it is a call count. A factory mock
+// is a frozen copy: if the store imports more names from this barrel, add them here.
 const terminal = vi.hoisted(() => ({
   configureTerminal: vi.fn(),
   dispose: vi.fn(),
@@ -57,10 +22,8 @@ vi.mock("./index", () => terminal);
 const busyIpc = vi.hoisted(() => ({ terminalsBusy: vi.fn() }));
 vi.mock("./terminalBusyIpc", () => busyIpc);
 
-// `<Pane>` mounts the real xterm host for its active tab; the two call-site
-// tests at the bottom of this file need a pane whose active tab is a TERMINAL,
-// which is precisely the tab that cannot be mounted under jsdom. Same stub
-// `Pane.test.tsx` uses, for the same reason.
+// The call-site tests need a pane whose active tab is a terminal, which jsdom cannot mount
+// (as in `Pane.test.tsx`).
 vi.mock("./TerminalView", () => ({ TerminalView: () => null }));
 
 import { findNode, useAppStore } from "../../app/store";
@@ -83,14 +46,8 @@ const layout = () => state().layoutActions;
 const editors = () => state().editorActions;
 const fleet = () => state().agentActions;
 
-/**
- * Let the gate's IPC round trip settle.
- *
- * A macrotask boundary drains the ENTIRE microtask queue, so this does not
- * depend on counting `await` hops inside `gateTerminalClose` — a refactor that
- * adds one more `await` cannot silently turn these tests into assertions about
- * the state before the answer arrived.
- */
+/** A macrotask drains all microtasks, so an extra `await` in `gateTerminalClose` cannot make
+ * these tests read the state before the answer. */
 const settleGate = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 /** The terminal behind a terminal/agent-terminal tab; throws for anything else. */
@@ -307,10 +264,8 @@ describe("the pane ✕ (requestClosePane)", () => {
   });
 
   it("a paneId that no longer exists is a total no-op — no round trip, no crash", async () => {
-    // A stale id is not hypothetical: canonicalize prunes an emptied leaf, so a
-    // toolbar that re-fires (double click, a queued event) hands this a paneId
-    // the tree no longer contains. It must fall through to `closePane`'s own
-    // no-op rather than ask Rust about a pane that is already gone.
+    // Canonicalize prunes an emptied leaf, so a re-fired toolbar can pass a gone paneId: it must
+    // fall through to `closePane`'s no-op, not ask Rust.
     const { origin, created } = splitOff();
     layout().closePane(created); // prunes the empty leaf; the split collapses
     expect(findNode(state().layout, created)).toBeNull();
@@ -494,19 +449,8 @@ describe("proceedTerminalClose — one arm per scope kind", () => {
 
 /* ═══════════ the two ✕ buttons that used to bypass the gate ═══════════ */
 
-/**
- * The store half above is worth nothing if a button still calls the primitive.
- *
- * Two of the four gestures reached `closePane` / `dismissAgent` DIRECTLY, and
- * the component suites cannot see the difference: they only ever close idle
- * terminals, where the gated wrapper and the primitive are indistinguishable by
- * construction (ask which path the test actually exercised). So
- * these two drive the real buttons with something RUNNING behind them, which is
- * the only state in which the wiring is observable at all.
- *
- * Written with `createElement` rather than JSX because this suite is a `.ts`
- * file; the components are the real ones, unmocked.
- */
+/** Drives the real buttons with something running: with idle terminals the gate and the
+ * primitive look identical. `createElement`, not JSX, as this is a `.ts` file. */
 describe("the rendered ✕ buttons route through the gate", () => {
   it("the PANE toolbar's ✕ asks first (Pane.tsx)", async () => {
     const user = userEvent.setup();

@@ -1,55 +1,6 @@
-/**
- * EpochTool — the Tools rail's epoch ⇄ human-readable date converter.
- *
- * The requirement: type an epoch and get it converted to a human-readable time, in
- * UTC, with an explanation; the tool should also identify what was typed and convert the
- * other way, from any date to an epoch, all from one string input. Every part of that
- * request is a design constraint, and each one is answered here rather than in a
- * settings panel:
- *
- * * **One string input** → ONE text box and no direction toggle. `parseToolInput`
- *   classifies (`empty` / `epoch` / `date` / `unknown`) and this component renders per
- *   class. A toggle would be a second place to be wrong, and it would be wrong exactly
- *   when the user is least likely to notice: at the moment they paste something.
- * * **Identifying the input** → the classification is *shown*, never merely acted on. A guess
- *   the user cannot see is a guess they cannot correct, so the unit, the format name and
- *   the reason are all on screen.
- * * **The explanation** → `chosen.because` and `assumption` are printed **verbatim**. They are
- *   already full sentences written for a human (see `instant.ts` / `dateParse.ts`); a
- *   paraphrase here would be a second copy of the rule, free to drift from the one that
- *   actually decided the answer.
- * * **UTC** → the UTC line leads every instant block, in both directions.
- *
- * ── What this component does NOT do ──────────────────────────────────────────
- * **No conversion maths.** Not one arithmetic operator on a timestamp lives in this
- * file: `parseToolInput`, `viewInstant`, `civilInZone` and `epochIn` own all of it, and
- * they are `BigInt`-exact and separately tested. The one number this tool exists to read
- * correctly (`1700000000123456789`) is precisely the one a `number` corrupts, so a
- * "convenient" `Date` call here would be a bug the tests below could not see.
- *
- * **No debounce, no memo.** The engine is a regex plus a handful of `BigInt` divisions on
- * a string a human is typing by hand; scheduling that would add a stale-state failure
- * mode to buy nothing measurable.
- *
- * ── Why `clock` and `timeZone` are props with defaults ───────────────────────
- * Reading `Date.now()` and the host zone inline would make every assertion below depend
- * on when and where the suite runs — the "2 hours ago" line and the whole
- * local-time block are functions of both. They are injected instead, defaulted to the
- * real host so the panel passes neither, and every test pins both. `Europe/Paris` is the
- * zone the tests use most, chosen because its offset is non-zero *and* DST-dependent, so
- * a hard-coded `+00:00` cannot pass.
- *
- * ── The "also reads as" block, and why it is not collapsible ─────────────────
- * A bare number carries no unit, and the single most common epoch mistake is reading
- * milliseconds as seconds (or a Go nanosecond stamp as anything at all) — a wrong answer
- * that looks completely plausible, decades off. So the other three readings are always
- * rendered, unfolded: the whole value is that the correct one is *one glance away*, and
- * anything behind a disclosure triangle is not.
- *
- * A reading whose `instant` is `null` renders as "out of range" and is a NORMAL state,
- * not an error — three of the four readings of a 19-digit nanosecond stamp are outside
- * what a calendar can represent, and saying so is more useful than hiding the row.
- */
+/** Epoch ⇄ date converter: ONE input, classified by `parseToolInput` and shown (unit, format and
+ * reason printed verbatim). No conversion maths here: the engine is `BigInt`-exact. The other
+ * readings are always shown unfolded, since a wrong unit is a plausible answer decades off. */
 
 import { useEffect, useState } from "react";
 
@@ -69,14 +20,8 @@ import type { DateParse, DateReading } from "./dateParse";
 /** Best-effort swallow — a clipboard rejection must never throw out of a click. */
 const noop = (): void => {};
 
-/**
- * The host's IANA zone, or `UTC` when the platform will not name one.
- *
- * Exported so the fallback is *falsifiable* (an unfalsifiable guard is
- * dead code, not safety): the test stubs `resolvedOptions` and asserts `UTC`. ECMA-402
- * says the field is always a string, but this value is read once at module-adjacent
- * default-prop time and a `undefined` here would silently poison every local line.
- */
+/** The host's IANA zone, or `UTC` when the platform names none. Exported so the test can falsify
+ * the fallback; an `undefined` here would poison every local line. */
 export function hostTimeZone(): string {
   const zone: string | undefined = Intl.DateTimeFormat().resolvedOptions().timeZone;
   return zone === undefined || zone === "" ? "UTC" : zone;
@@ -89,15 +34,8 @@ const HINT =
 /** What an unrepresentable reading says instead of a date. */
 const OUT_OF_RANGE = "Out of the range a calendar can represent.";
 
-/**
- * A copy button.
- *
- * The house pattern exactly (`LogsPanel.tsx`): bail if the platform has no clipboard,
- * and swallow a rejection. A denied clipboard permission is a thing that happens, and a
- * converter that throws out of a click because of it is worse than one that quietly does
- * nothing. Every instance gets a distinct `aria-label` — a rail full of buttons all
- * called "Copy" is a screen reader reading out nothing.
- */
+/** The house copy pattern (`LogsPanel.tsx`): no clipboard → bail, rejection → swallowed. Each
+ * gets a distinct `aria-label` for screen readers. */
 function CopyButton({ label, value }: { label: string; value: string }): React.JSX.Element {
   const copy = (): void => {
     if (!navigator.clipboard) return;
@@ -110,13 +48,7 @@ function CopyButton({ label, value }: { label: string; value: string }): React.J
   );
 }
 
-/**
- * One label-above-value row, with a copy button.
- *
- * Label ABOVE rather than beside: the rail is 180px at its minimum and `overflow-x` is
- * hidden, so a two-column row turns a long ISO string into a silently clipped one. See
- * `tools.css` — this stack is the fix, not a stylistic preference.
- */
+/** Label ABOVE value, not beside: the rail can be 180px and clips (see `tools.css`). */
 function ValueRow({
   label,
   value,
@@ -149,13 +81,8 @@ function PlainRow({ label, value }: { label: string; value: string }): React.JSX
   );
 }
 
-/**
- * The four lines every instant gets, in ONE order for both directions.
- *
- * UTC leads because the requirement names it. The order does not vary between the
- * epoch→date and date→epoch cases on purpose: the same instant rendered two ways in two
- * layouts reads as two different answers.
- */
+/** The four lines of every instant, UTC first, in ONE order for both directions: two layouts of
+ * one instant would read as two answers. */
 function InstantLines({
   instant,
   now,
@@ -246,15 +173,8 @@ function OtherLines({
   );
 }
 
-/**
- * A bare number was typed: lead with which unit won and why, then the instant, then the
- * three readings that did not win.
- *
- * The alternatives show UTC and ISO only. The full four-line block times three would be
- * twelve rows of near-identical text in a 180px rail — the alternatives exist to be
- * *scanned* for a plausible year, and a wrong-unit reading is always wrong by decades,
- * never by an hour of zone offset.
- */
+/** A bare number: the winning unit and why, the instant, then the other readings (UTC and ISO
+ * only: a wrong unit is decades off, so scanning for a plausible year is enough). */
 function EpochView({
   epoch,
   now,
@@ -288,17 +208,9 @@ function EpochView({
   );
 }
 
-/**
- * One reading of a date string: the format that matched, whatever had to be assumed, the
- * four epochs, the instant, and — when the string carried no offset — the alternative
- * epoch for the same wall clock read in the user's own zone.
- *
- * That alternative is the answer to the question a date converter is actually asked.
- * Someone typing `2024/01/25` usually means *their* 25 January, and the engine has to
- * assume UTC to produce anything at all; showing only the UTC answer would be correct and
- * unhelpful. It is skipped when `civil` is `null` (the string said its own offset, so
- * there is nothing left to re-interpret) and when `civilInZone` cannot resolve the zone.
- */
+/** One date reading: format, assumptions, epochs, instant, and for an offset-less string the epoch
+ * of the same wall clock in the user's zone (what they usually mean). Skipped when `civil` is null
+ * or `civilInZone` cannot resolve the zone. */
 function DateReadingView({
   reading,
   now,
@@ -333,13 +245,8 @@ function DateReadingView({
   );
 }
 
-/**
- * A date string was typed. When it is genuinely ambiguous (`05/06/2010`) BOTH readings
- * render with equal weight, under the engine's own one-sentence explanation of what is
- * ambiguous — a contract that can hold two states and data that names
- * neither must say so in the output. Burying the second reading behind "advanced" would
- * be picking one silently, which is wrong half the time by construction.
- */
+/** A date string. An ambiguous one (`05/06/2010`) renders BOTH readings with equal weight under
+ * the engine's explanation; hiding one would silently pick, wrong half the time. */
 function DateView({
   parse,
   now,

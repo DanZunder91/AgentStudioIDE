@@ -1,17 +1,4 @@
-/**
- * The City's backdrop canyon in Tokyo (render/backdropCanyon.ts): sign-clad mid-rise buildings
- * in clusters between stretches of open sky, karaoke among their signs.
- *
- * Through a recording fake (render/testRecorder.ts): the layout (world-locked clusters on the ground
- * between the backdrop's air, shoulder to shoulder, 5–9 storeys; nothing in the air; the four featured words, two a
- * blade in turn, and a pink karaoke box each cluster), the landmarks' crowns never covered over a sweep of
- * cities, `faceAt` the exact top of what the day pass paints, nothing painted off the view, fine detail
- * only from PANE_ZOOM up, the day rasters blitted at a whole zoom the very rects of the rect pass (a fake
- * OffscreenCanvas records them) — and the night: nothing lit by day, every light through `fillLit` at
- * `neonStrength`, never in the air nor inside a temple's box, a stuttering letter dark, the lit windows
- * only growing, the light rasters bounded. Real pixels are the browser tier's
- * (backdropCanyon.browser.test.tsx).
- */
+/** Through a recording fake (render/testRecorder.ts); real pixels are the browser tier's. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -220,10 +207,7 @@ class FakeRaster {
   }
 }
 
-/**
- * What a day pass painted, as screen fills in paint order: its own fills, and each fake raster it blitted
- * laid out where it landed (at a whole zoom, exactly where its rects would be).
- */
+/** A day pass's screen fills in paint order, each blitted fake raster laid out where it landed. */
 function painting(ctx: RecordingTarget): { x: number; y: number; w: number; h: number; color: string }[] {
   return ctx.calls.flatMap((c) => {
     if (c.op === "fillRect") return [{ x: c.args[0] as number, y: c.args[1] as number, w: c.args[2] as number, h: c.args[3] as number, color: c.fillStyle }];

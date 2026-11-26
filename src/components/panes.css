@@ -1,8 +1,5 @@
-/* Split-pane / tabs — M1 (ARCHITECTURE §4).
-   Owned by src/components/**. Reuses the CSS vars declared in src/App.css
-   (--bg-app, --bg-surface, --bg-elev, --text, --text-dim, --border, --accent,
-   --mono); declares no palette of its own so theming stays in one place.
-   Class names are `pane`-prefixed to avoid colliding with App.css's shell. */
+/* Split-pane / tabs (ARCHITECTURE §4). Uses src/App.css's vars and declares no palette, so
+ * theming stays in one place; classes are `pane`-prefixed to avoid App.css's shell. */
 
 /* ── allotment overrides ───────────────────────────────────────────────── */
 /* allotment ships its own sash colors; retint them to the app palette. */
@@ -100,15 +97,8 @@
   opacity: 0.45;
 }
 
-/**
- * Reorder insertion line: where the dragged tab will land.
- *
- * Drawn as an inset shadow on the neighbouring tab's edge rather than as a
- * positioned element — it lands on exactly the same pixel boundary, needs no
- * measurement to render, and cannot shift the strip by its own width the way
- * an in-flow element would. `--insert-after` is only ever the last tab (the
- * append case); every other position is the next tab's `--insert-before`.
- */
+/** Reorder insertion line: an inset shadow on the neighbour's edge (no measurement, no layout
+ * shift). `--insert-after` is only the last tab (append); else the next tab's `--insert-before`. */
 .pane-tab--insert-before {
   box-shadow: inset 2px 0 0 var(--accent);
 }
@@ -217,13 +207,8 @@
   position: relative;
 }
 
-/**
- * The layout root: the pane tree, plus the drop preview drawn over all of it.
- *
- * Mirrors `.center`'s flex rules so <PaneTree>'s `height: 100%` child (a `.split`
- * or a lone `.pane`) still resolves against a definite box, and establishes the
- * containing block the preview is positioned in.
- */
+/** Layout root: mirrors `.center`'s flex rules so <PaneTree>'s `height: 100%` child resolves,
+ * and is the containing block for the drop preview. */
 .pane-tree {
   position: relative;
   display: flex;
@@ -239,16 +224,8 @@
   min-width: 0;
 }
 
-/**
- * The landing preview: exactly the box the dragged tab will occupy.
- *
- * Positioned against `.pane-tree` (the whole work area) rather than inside the
- * hovered pane, and sized from percentages the component computes by running
- * the REAL drop against a copy of the tree — see PaneTree.tsx. A drop can prune
- * the source leaf and collapse a split, so the landing box is frequently LARGER
- * than the pane under the cursor; drawn per-pane it could never show that (and
- * `.pane` is `overflow: hidden` anyway).
- */
+/** The landing preview: the box the dragged tab will occupy, positioned over the whole tree
+ * from percentages of the REAL drop (PaneTree.tsx); often LARGER than the hovered pane. */
 .pane__dropzone {
   position: absolute;
   z-index: 5;

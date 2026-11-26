@@ -1,14 +1,5 @@
-/**
- * The verdict logic of `npm run verify`.
- *
- * Only `classify` is tested, and that is the point: the interesting decision in a runner is
- * **which failures matter**, and that must be pinned rather than discovered by reading the
- * script. Whether `spawnSync` shells out correctly is not a claim worth a test; whether a
- * third party's outage can turn the whole verification red is (a suite that fails for
- * reasons nobody can fix teaches people to ignore failures).
- *
- * Literal expectations throughout, never read back from the module under test.
- */
+/** Only `classify` is tested: which failures block is the decision worth pinning (a third party's
+ * outage must never turn verify red). Literal expectations, never read back from the module. */
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -492,16 +483,8 @@ describe("fixtureVerdict — which fixture containers may block the database tie
   });
 
   it("🔴 stays usable when an engine NO TEST USES is unhealthy — it only gets reported", () => {
-    // NB: this case has run out of real examples, and that is the interesting part. ClickHouse was
-    // the original, then Mongo, then Redis, then DynamoDB — **now every container in
-    // `docker/db-fixtures` has a driver and is required**, so there is no unwired engine left to
-    // point at. The behaviour is still worth pinning (the next engine added to compose will land in
-    // exactly this state before its driver does), so the name is deliberately hypothetical.
-    //
-    // The bug this case exists for: ClickHouse drifted past its own memory cap, went unhealthy, and
-    // `verify` refused to run the entire database tier — so the only tests that prove the database
-    // client works were skipped because of an engine with no driver. A gate that fails for reasons
-    // unrelated to the code is a gate people bypass.
+    // Hypothetical on purpose: every compose engine now has a driver. An unwired engine going
+    // unhealthy must not block the DB tier, or the tests proving the client works get skipped.
     const v = fixtureVerdict({ ...allHealthy, "some-future-engine": "unhealthy" });
     expect(v.usable).toBe(true);
     expect(v.blocking).toEqual([]);
@@ -542,11 +525,8 @@ describe("fixtureVerdict — which fixture containers may block the database tie
   });
 
   it("grows with the drivers: a listed engine blocks once it is required", () => {
-    // The contract for the NEXT engine, whatever it turns out to be. ClickHouse, Mongo, Redis and
-    // DynamoDB each made this transition in turn — out of the "reported" case above and into the
-    // required list — and all four have landed, so the name here is hypothetical on purpose.
-    // Adding a driver without adding it to `TIER_ENGINES` leaves its live tests silently skippable,
-    // and this is the assertion that notices.
+    // Hypothetical next engine: a driver missing from `TIER_ENGINES` leaves its live tests silently
+    // skippable, and this assertion notices.
     const v = fixtureVerdict({ ...allHealthy, "some-future-engine": "unhealthy" }, [
       "postgres",
       "some-future-engine",

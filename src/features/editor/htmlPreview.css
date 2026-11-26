@@ -1,19 +1,5 @@
-/* ── Rendered HTML preview ──────────────────────────────────────
- *
- * The chrome only. Everything below the bar is the previewed document, which
- * lives in a cross-origin iframe and styles itself — not one rule here can
- * reach inside it, which is exactly the point (see HtmlPreview.tsx's header).
- *
- * Palette: the shared cockpit tokens from App.css (--bg-app, --bg-surface,
- * --bg-elev, --text, --text-dim, --border, --accent, --mono), each with the
- * same self-contained fallback markdownPreview.css uses, so the chrome stays
- * legible if it is ever rendered outside those variables. No hard-coded palette.
- *
- * Deliberately quiet: this bar sits directly under `.code-editor__bar`, and two
- * loud strips stacked on top of a page is worse chrome than one. It borrows the
- * editor bar's exact metrics (4px/10px padding, 11px text, 1px --border rule)
- * so the two read as one header rather than as a header plus a warning.
- */
+/* HTML preview chrome only: the document lives in a cross-origin iframe no rule here can reach.
+ * Matches `.code-editor__bar`'s metrics so the two bars read as one header. */
 .html-preview {
   flex: 1 1 auto;
   min-height: 0;
@@ -145,10 +131,7 @@
   width: 100%;
   display: block;
   border: 0;
-  /* White, on purpose, in a dark cockpit. A page that sets no background of its
-     own gets the UA default — and an iframe with a transparent canvas would
-     show the app's #0d1117 through it and render the author's default black
-     text invisibly. A browser shows an unstyled page on white; the preview's
-     job is to disagree with a browser as little as possible, so it does too. */
+  /* White on purpose: through a transparent canvas, a page that sets no background would show the
+   * app's dark background and its default black text would be invisible. */
   background: #ffffff;
 }

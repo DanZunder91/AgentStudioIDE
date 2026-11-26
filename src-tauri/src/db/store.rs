@@ -1,47 +1,12 @@
-//! `db-connections.json` — the persisted connection store.
-//!
-//! ## Three properties this file exists to guarantee
-//!
-//! 1. **It never holds a secret.** Everything written here comes off a
-//!    [`crate::db::model::DbConnection`], whose `password_ref` is `""` or a `{{VAR}}` and
-//!    whose `url` has already had its credentials split out server-side. This module
-//!    does not need to know that — it is a property of the type — but it is the reason the
-//!    file is safe to screenshot, and the reason `mode 0600` below is belt-and-braces rather
-//!    than the whole defence.
-//! 2. **A crash cannot corrupt it.** The writer is `pinned_agents::save`'s, not
-//!    `api_store::save`'s: sibling temp → `write_all` → `sync_all` → atomic `rename`. A
-//!    connection list is exactly the kind of state whose *loss* is an annoyance and whose
-//!    *corruption* is a mystery bug, so it takes the atomic path.
-//! 3. **A bad file can never break startup.** Missing, unreadable, non-JSON, or well-formed
-//!    JSON of the wrong shape all load as [`DbConnectionStore::default`] — the robustness
-//!    contract every store in this repo shares (`recent_projects`, `api_store`,
-//!    `pinned_agents`).
-//!
-//! ## The injected path is not a testing convenience, it is a safety rule
-//!
-//! Every function here takes an explicit `&Path`. The only place the *real* path is resolved
-//! is [`store_path`], which needs an `AppHandle` and is therefore unreachable from
-//! `cargo test`. That is deliberate: a test-exercised code path that writes to a real config
-//! location can corrupt a developer's real configuration. No writer in this module can be
-//! reached by a test without the test naming its own temp directory.
-//!
-//! ## `version`, and what a mismatch means
-//!
-//! [`STORE_VERSION`] is bumped when the on-disk schema changes in a way a reader cannot
-//! absorb. Reading is deliberately **tolerant** — an older file loads and is re-stamped on
-//! the next write, because `#[serde(default)]` on the model's later fields already handles
-//! the additive case, which is the only case we have had. A *newer* file (a downgrade) is
-//! loaded rather than discarded: throwing away a user's connections because they ran an
-//! older build once is a worse outcome than showing a record with a field we ignore.
+//! `db-connections.json`: no secrets (by the model's types), crash-safe writes (temp, fsync,
+//! rename, `0600`), and any bad file loads as default. Paths are injected; only [`store_path`]
+//! knows the real one. Reads are version-tolerant: older files upgrade, newer ones still load.
 
 use std::path::{Path, PathBuf};
 
 use crate::db::model::{DbConnection, DbConnectionStore};
 
-/// The on-disk schema version stamped into every write.
-///
-/// `1` is the first shipped shape. Bump this **only** for a change a reader cannot absorb
-/// with `#[serde(default)]`; adding a field is not one.
+/// On-disk schema version; bump only for a change `#[serde(default)]` cannot absorb.
 pub const STORE_VERSION: u32 = 1;
 
 /// The file name inside the app config dir. Sibling to `api-store.json`.
@@ -55,11 +20,8 @@ pub fn load(path: &Path) -> DbConnectionStore {
     serde_json::from_str::<DbConnectionStore>(&text).unwrap_or_default()
 }
 
-/// CRASH-SAFE write: serialize → sibling temp → `fsync` → atomic `rename`, then `0600`.
-///
-/// `version` is re-stamped on every write, so a file written by this build always says so.
-/// The temp file lives in the same directory, which is what keeps the `rename` on one
-/// filesystem and therefore atomic.
+/// Crash-safe write: sibling temp → `fsync` → atomic `rename` (same filesystem), then `0600`;
+/// `version` is re-stamped.
 pub fn save(path: &Path, store: &DbConnectionStore) -> std::io::Result<()> {
     let mut stamped = store.clone();
     stamped.version = STORE_VERSION;
@@ -90,10 +52,7 @@ fn restrict_permissions(path: &Path) {
 #[cfg(not(unix))]
 fn restrict_permissions(_path: &Path) {}
 
-/// Insert or replace `conn` in `list`, matching on `id`. Returns `true` when it replaced.
-///
-/// Pure over the list so the whole upsert decision is unit-testable without a filesystem;
-/// the caller does the (atomic) write.
+/// Insert or replace `conn` by `id`; `true` when it replaced. Pure; the caller writes the file.
 pub fn put(list: &mut Vec<DbConnection>, conn: DbConnection) -> bool {
     match list.iter_mut().find(|c| c.id == conn.id) {
         Some(slot) => {
@@ -115,10 +74,8 @@ pub fn remove(list: &mut Vec<DbConnection>, id: &str) -> bool {
     list.len() != before
 }
 
-/// The store file's path: the Tauri app config dir if available, else a `home_dir()`-based
-/// fallback. **Always outside any workspace/repo and never `~/.claude`**.
-///
-/// Takes an `AppHandle`, so it cannot be called from a unit test — which is the point.
+/// The store path: the app config dir, else a `home_dir()` fallback; never a workspace or
+/// `~/.claude`. Needs an `AppHandle`, so tests cannot reach it.
 pub fn store_path(app: &tauri::AppHandle) -> PathBuf {
     use tauri::Manager;
     if let Ok(dir) = app.path().app_config_dir() {

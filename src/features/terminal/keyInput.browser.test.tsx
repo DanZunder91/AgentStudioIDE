@@ -1,24 +1,5 @@
-/**
- * Layer 5 — special keys reach the PTY, so shell history recall works.
- *
- * ## The symptom, and what it actually was
- *
- * The symptom: the Up arrow did not bring back the previous shell command
- * (readline history recall, not scrollback).
- *
- * It was **not** a key-forwarding bug. It was a confound: the app was restarting
- * every ~10s (a dev-rebuild storm), and every restart spawns a fresh shell with
- * empty history — so ↑ legitimately recalled nothing. On a stable terminal the
- * keys forward correctly, which is exactly what this suite pins so the phantom
- * cannot come back as a real regression (e.g. a future handler swallowing keys).
- *
- * ## Why the browser tier
- *
- * The keystroke path is DOM → xterm's hidden textarea → xterm's key parser →
- * `onData` → `terminal_write`. jsdom has no real key event pipeline and xterm's
- * textarea never receives input there, so this can only be asserted in real
- * Chromium via `userEvent.keyboard`.
- */
+/** Browser tier: the key path (DOM → xterm's textarea → parser → `onData` → `terminal_write`)
+ * does not exist in jsdom. Guards against a handler swallowing keys such as ↑ (history recall). */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

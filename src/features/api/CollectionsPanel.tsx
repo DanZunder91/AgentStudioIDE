@@ -1,36 +1,6 @@
-/**
- * CollectionsPanel — the right rail's "Collections" tab.
- *
- * A protocol-aware library of SAVED requests — HTTP, WebSocket, AND gRPC — persisted
- * in the durable API store (app-data dir, never the repo). This is where
- * the saved-request list lives now: it used to sit inline inside `<ApiRequestView/>`,
- * but it is shown as its own rail tab now, so the view
- * only composes/sends and the rail owns the library.
- *
- * Clicking a saved request OPENS it in a fresh tab, restored to the surface it was
- * saved on (a gRPC save re-opens the gRPC console, a WS save the WS console), with the
- * tab titled by the saved name. Saving is driven by Cmd/Ctrl+S (`SaveRequestShortcut`), so this
- * panel is read + open + delete only — there is no "name this request" box here.
- *
- * ── Folders ──────────────────────────────────────────────────────────────────────
- * The library was a flat list. It now has **folders**: collapsible groups a request is
- * dragged into, with the grouping persisted in `api-store.json` and the disclosure
- * state in `layout-prefs.json`. Two rules shape what you see below:
- *   • **Existing requests stay at the root.** A request with no `folderId` renders
- *     in the root section, which is every request anybody saved before folders
- *     existed — there is no migration and nothing moves on upgrade.
- *   • **Deleting a folder does not delete its requests.** They come back to the root
- *     (`api_store::delete_folder`), because this store has no undo and no trash.
- *
- * Drag-and-drop follows `<FolderGroupRow/>`'s conventions exactly: a private MIME per
- * payload kind so a request drag and a folder drag can never be dropped on each other,
- * and a `…-id:<id>` marker type so a `dragover` can suppress the self-drop indicator
- * (dataTransfer VALUES are unreadable until the drop; the TYPE list is not).
- *
- * Hydrates the durable store once on mount if not already loaded — the same one-shot
- * guard `<VaultPanel/>` / `<HistoryPanel/>` use; the `cancelled` guard drops a late
- * resolve after unmount, and the store flag (not a module latch) re-arms between tests.
- */
+/** Rail library of SAVED HTTP/WS/gRPC requests (app-data store, never the repo): read/open/delete
+ * only (save is Cmd/Ctrl+S). No `folderId` = root (no migration); deleting a folder returns its
+ * requests to the root. DnD follows `<FolderGroupRow/>` (private MIME per kind, `…-id:` marker). */
 
 import { useEffect, useState, type DragEvent } from "react";
 
@@ -46,11 +16,8 @@ export const REQUEST_DND_MIME = "application/x-agentstudio-saved-request";
 /** Drag payload for reordering a folder: the VALUE is the folder's id. */
 export const API_FOLDER_DND_MIME = "application/x-agentstudio-api-folder";
 
-/**
- * A `dragover`-readable marker encoding the dragged folder's own id, so a row can tell
- * "a folder is being dragged over me" from "*I* am being dragged over me". Lowercased
- * because the HTML5 DnD spec lowercases every format string.
- */
+/** A dragover-readable marker of the dragged folder's id, so a row can spot itself. Lowercased:
+ * HTML5 DnD lowercases every format string. */
 export function apiFolderIdType(id: string): string {
   return `${API_FOLDER_DND_MIME}-id:${id}`.toLowerCase();
 }
@@ -168,13 +135,8 @@ function FolderRow({
     if (dragged && dragged !== folder.id) void moveFolder(dragged, folder.id);
   };
 
-  /**
-   * Commit the rename box. Takes the value rather than reading `renaming`, so there
-   * is no `!== null` guard here that the UI can never take: the box only exists
-   * inside the `renaming !== null` branch below, where TypeScript narrows it.
-   * (The store drops a blank name before it reaches Rust, so an empty box is a
-   * cancel rather than an error the user has to dismiss.)
-   */
+  /** Commit the rename box (value passed in, so no unreachable `null` guard). The store drops a
+   * blank name before Rust, so an empty box is a cancel. */
   const commitRename = (value: string) => {
     void renameFolder(folder.id, value);
     setRenaming(null);
@@ -284,15 +246,8 @@ export function CollectionsPanel(): React.JSX.Element {
     };
   }, [hydrateApiStore]);
 
-  // Root = everything not in a folder that actually exists. Computed rather than
-  // stored, so a folder deleted anywhere needs no second bookkeeping here.
-  //
-  // The `!folderIds.has(...)` half is load-bearing, not defensive noise: a request
-  // pointing at a folder that is not in the list would otherwise render in NO section
-  // at all, and a saved request that has vanished from the rail is indistinguishable
-  // from one that was deleted. Rust clears `folderId` when it deletes a folder, so this
-  // is the belt to that braces — the cost of being wrong is someone's saved work
-  // appearing to be gone.
+  // Root = requests not in an EXISTING folder (computed). The `!folderIds.has` half matters: a
+  // request pointing at a missing folder would otherwise render nowhere and look deleted.
   const folderIds = new Set(folders.map((f) => f.id));
   const rootRequests = collections.filter(
     (c) => c.folderId === undefined || !folderIds.has(c.folderId),

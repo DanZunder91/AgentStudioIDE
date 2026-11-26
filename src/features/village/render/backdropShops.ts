@@ -1,90 +1,6 @@
-/**
- * Agent Village — the City's YOKOCHŌ: a row of small food shops behind the street, under paper lanterns
- * and kana signs — the front of the City's backdrop in Tokyo (render/backdrop.ts is the contract; `SHOPS`
- * is its nearest MID layer, before the neon canyon, render/backdropCanyon.ts, with the high-rises behind,
- * render/backdropTowers.ts).
- *
- * At Fit, a strip of low haze beside a tall gazelle leaves the background empty; these shops fill it
- * with ramen shops and the like, under neon signs for ramen and soba in katakana, sushi in hiragana and
- * karaoke — four big signs — by day and by night. They stand in front of the towers and the canyon, with
- * open sky between their clusters.
- *
- * THE ROW — clusters of two- and three-storey Tokyo shophouses standing on the horizon in the open street
- * beyond both ends of the city, in front of the haze and behind everything the world draws. Within a
- * cluster the shops stand wall to wall, an alley now and then; no shop touching one of the backdrop's
- * QUIET stretches is built (render/backdrop.ts `inQuiet`): the open sky between clusters (`airSpans`,
- * 64–120 px per 288 px — the canyon's gaps too, so they line up front and back) and the city's own span,
- * whose street gaps hold the temples, Tokyo Tower and the sakura in front of calm apartments. A storey is 32 world px (2 tiles): a shop door is a little shorter than a
- * passer-by and a window an eighth of a project floor, so the row reads nearer than the haze (whose
- * windows are 1×2 px) and still well behind the world's own buildings. Its colours are mixed 15 % of the
- * way towards the haze's (more in rain and fog; the lanterns, noren, awnings and signs half that, so they
- * stay vivid): the aerial perspective that puts it between the two.
- *
- *        ▄▄▄▄▄▄▄▄▄▄                 ┌──────────┐      kawara (tiled) roof, or a flat roof with a
- *      ▄▄██████████▄▄          ▓▓▓▓ │ カラオケ │      water tank, a stair house or a kana signboard
- *     ┌──────────────┐ ┌──┐   ┌────┴──────────┴─┐
- *     │ ▯▯  ▯▯   ▯▯  │ │ラ│   │ ▯▯   ▯▯   ▯▯   │    upper floors: windows, balconies, AC units,
- *     │▀▀▀▀▀▀▀▀▀▀▀▀▀▀│ │ー│   │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    a pot plant, laundry
- *     │ ▯▯  ▯▯   ▯▯  │ │メ│   │ ▯▯   ▯▯   ▯▯   │
- *     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │ン│ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓    a tiled eave (or a striped awning)
- *     │ ● ┃▌▌▌┃ ●  ▢ │ └──┘ │ ● ┃▌▌▌┃ ●         │    red chōchin lanterns, a split noren curtain
- *     │   ┃░░░┃      │      │   ┃░░░┃           │    over a sliding door of lit paper panes
- *
- * About one shop in three hangs a vertical BLADE SIGN (tategaki), its word from `SIGN_WORDS` laid out by
- * render/kana.ts on a plate in its kind's colours: ラーメン yellow on red, ソバ white on indigo, すし red on
- * white, カレー on orange, コーヒー cream on brown, カラオケ white on magenta, バー pink on purple; a roof in
- * eighteen carries a horizontal signboard (カラオケ, ゲーム, ホテル, バー, コーヒー).
- *
- * THE FEATURED FOUR — ラーメン, ソバ, すし and カラオケ — are always in view at Fit, on BIG signs: their
- * kana twice the size (16 px, readable at Fit on a @2x screen, where a glyph of the others is 8),
- * each shop raised to three storeys to hold one (`feature`). They take the shops nearest the city's ends
- * whose sign stands in the OPEN street beyond them, inside what Fit frames (render/landmarks.ts
- * `placeLandmarks(…).span`), out of the quiet stretches and clear of every temple, street tree, lamp or
- * torii, and the projects' own neon blade signs — in the reference city, a cluster of tall shops right of
- * Agent Studio, past its torii. A street with no such room falls back, in order, to a usual-size sign
- * there, then to just past the frame (which the view's own width at Fit shows). In a street with no
- * building at all they stand nearest the middle of its frame.
- *
- * NIGHT (`paintLights`, after the grade, every light through `fillLit`): the shop fronts glow warm but
- * modest — paper doors, back-lit noren, display windows, light spilling under the eaves — the lanterns
- * glow red, and the signs light up as neon: the plate a back-lit box, the kana in bright tubes, all rising
- * with `neonStrength` (render/neon.ts), from nothing at noon to full at night (and part-way in a storm's
- * gloom); only the four featured big signs, the focal points, wear a halo. Now and then one kana stutters
- * (`neonFlicker`, deterministic per sign and time). Upstairs, single windows come on one by one in a dim
- * warm (some a cool white) as `s.lit` rises, each at its own threshold — 28 % at full night, and a floor
- * in four stays vacant, never lit.
- *
- * THE CALM PASS (zoomed ×2 on a City at night, the row looked overloaded — a sign-lit shop behind a
- * shrine in a narrow gap between the city's buildings, blades everywhere round the karaoke building —
- * while the idea of some neon-lit buildings, a night district with more behind it, still made sense): a
- * hierarchy, not wallpaper. The four big signs carry the neon; the rest recedes — blades on a third of
- * the shops, a signboard on a roof in eighteen, no halo but the four's, dimmer fronts and windows — and
- * nothing at all in the city's own span. By the calm pass's measures, the row's lit pixels at ×2 by
- * night and its signs per 1000 px of street are about half what they were.
- *
- * LANDMARKS are never hidden: over each shop `roofLimit(…, ["far", "tower"])` caps
- * its roof; a shop that would rise into a crown first loses its rooftop tank, stair house or signboard,
- * then storeys (`settle`).
- *
- * WORLD-LOCKED (a skyline that slides under a pan is a bug): the row is laid out in fixed CHUNKS
- * of the world (`CHUNK` px), each a pure function of its index, so a pan or a zoom never re-rolls it; the
- * per-world part (the landmarks' caps, the city's own span left quiet, the featured four) is settled
- * once per World. The quiet stretches are world-locked too. `faceAt` reads a per-column height table
- * built with each chunk.
- *
- * COST — every chunk's shops are settled once per World and their art compiled once (rects in shop
- * coordinates, a colour index and a level of detail each); a frame walks only the chunks in view and
- * skips any rect off screen. Below `PANE_ZOOM` (the haze's threshold) only the big shapes are drawn,
- * the kana of a small sign as one block a glyph; from `FINE_ZOOM` the finest detail (lattices, lantern
- * ribs, tank panels, window hoods and sills) joins in.
- * Measured in headless Chromium, the reference city (its Tokyo backdrop whole, towers and
- * canyon behind):
- *   - Fit, 1280×800 @2x (zoom 1): by day 0.23 ms (893 rects); at night 0.19 ms through the frame's
- *     `fillLit` (389 lights; 0.11 ms of it is filling them, the rest cutting them round the street's
- *     trees, lamps and sprites, render/backdropLights.ts);
- *   - Fit @1x (zoom 9/16): 0.08 ms (308 rects) and 0.12 ms; zoomed to 2 on the open street: 0.13 and
- *     0.09 ms.
- */
+/** The yokochō: the nearest MID backdrop layer (render/backdrop.ts contract). Shop clusters skip
+ * quiet stretches, are world-locked in fixed `CHUNK`s, and cap their roofs under landmark crowns.
+ * The featured four big signs stay in view at Fit; only they wear a halo, so the row stays calm. */
 
 import { CITY_DAY } from "../engine/ambience";
 import { artBox } from "../engine/streetTheme";
@@ -142,11 +58,8 @@ const DETAIL = PANE | FINE;
 
 // ───────────────────────────── colours ─────────────────────────────
 
-/**
- * The row by day, before the haze (`HAZE_MIX`) — our own palette: plaster, tile and wood walls, grey and
- * blue-glazed kawara, wooden shop fronts, paper, the noren's dyes, red lanterns, and each sign's plate and
- * kana. Exported for the tests (`shopPalette` holds them in this order).
- */
+/** The row's day palette, before the haze (`HAZE_MIX`); exported for tests (`shopPalette` holds
+ * it in this order). */
 export const SHOP_DAY = {
   wallCream: "#e6dbc2",
   wallStone: "#c4bdb0",
@@ -344,10 +257,8 @@ const KIND_DRAW: readonly Kind[] = [
 ];
 const NARROW_DRAW: readonly Kind[] = ["bar", "bar", "izakaya", "ramen"];
 
-/**
- * The featured four (the three food words, then karaoke), in the order they choose their shops: the
- * four-kana words first, which need the tallest fronts.
- */
+/** Order the featured four choose their shops in: the four-kana words first (they need the
+ * tallest fronts). */
 export const FEATURED: readonly Kind[] = ["ramen", "karaoke", "soba", "sushi"];
 
 /** The rooftop signboards' words. */
@@ -407,12 +318,8 @@ export function shopHeight(shop: Pick<Shop, "storeys" | "roof" | "board">): numb
 /** A rooftop signboard's width for `word`. */
 const boardW = (word: string): number => kanaText(word, false).w + 2 * BOARD_PAD;
 
-/**
- * The shops chunk `c` lays out, before any World settles them: a pure function of `c`. From the
- * chunk's left edge, shops of 3–9 units, now and then a 1–2-unit alley before one (never the chunk's
- * first, never leaving no room for it); the last shop takes what is left of the chunk, and a remainder
- * too narrow for a shop is an alley too. So no gap in the row is wider than 2 units.
- */
+/** Chunk `c`'s raw shops, a pure function of `c`: shops of 3–9 units with an occasional 1–2-unit
+ * alley before one; the last takes the rest. No gap in the row is wider than 2 units. */
 function rawChunk(c: number): Shop[] {
   const out: Shop[] = [];
   for (let u = 0, i = 0; CHUNK_UNITS - u >= WIDTHS[0]; i++) {
@@ -461,17 +368,9 @@ interface Feature {
   big: boolean;
 }
 
-/**
- * `shop` settled in its World — or null when it is left out: every shop touching one of the backdrop's
- * quiet stretches is (`inQuiet`: the open sky between the clusters, and the city's own span — so none
- * stands behind a building or in the street's gaps between them). One of the featured four (`st.featured`)
- * takes its kind — and with a big sign, three storeys (the sign kept while its front still holds it).
- * Under a landmark's crown it first loses its rooftop
- * tank, stair house or signboard, then storeys (one storey hangs no blade sign) — never the last: the
- * landmarks keep their crowns clear of the haze (render/landmarks.ts), so the lowest cap of all, the
- * Tower's in the shortest sky (240 px), still leaves room for a storey under kawara (41 px).
- * Only the featured four and about one shop in three hang a blade sign (`blade`).
- */
+/** `shop` settled in its World, or null when it touches a quiet stretch (`inQuiet`). A featured
+ * shop takes its kind (a big sign: three storeys). Under a crown it loses rooftop props, then
+ * storeys, never the last. About one shop in three hangs a blade sign. */
 function settle(shop: Shop, st: Settle): Shop | null {
   if (inQuiet(st.world, shop.x, shop.x + shop.w)) return null;
   const f = st.featured.get(shop.x);
@@ -531,10 +430,8 @@ function chunkOf(m: Memo, c: number): Chunk {
   return chunk;
 }
 
-/**
- * The world box [x, y, w, h] of `shop`'s blade sign plate, or null when it hangs none: the kana, 1 px of
- * air and a 1-px rim either side — all twice the size for one of the featured four (`big`).
- */
+/** World box [x, y, w, h] of `shop`'s blade plate, or null: the kana, 1 px of air and a 1-px rim
+ * either side, doubled for a featured (`big`) sign. */
 export function bladePlate(shop: Pick<Shop, "x" | "w" | "word" | "big" | "signLeft">, horizon: number): [number, number, number, number] | null {
   if (!shop.word) return null;
   const scale = shop.big ? 2 : 1;
@@ -547,14 +444,9 @@ export function bladePlate(shop: Pick<Shop, "x" | "w" | "word" | "big" | "signLe
 const overlap = (a: readonly number[], b: readonly number[]): boolean =>
   a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
 
-/**
- * Which shops take the featured four words (shop x → its kind and sign). A candidate for a word is a
- * shop out of the quiet stretches — so in the open street beyond the city's ends — that, taking it, still
- * hangs its sign under any landmark's crown: a big one where its front can hold it (ラーメン and カラオケ
- * three storeys, ソバ and すし two), else the usual one; and clear of every temple, street prop rising
- * above the street and project neon sign. Best first: inside what Fit frames, then just past it — at
- * each, a big sign before the usual one, then the nearest the city's ends. The four-kana words choose first.
- */
+/** Shops for the featured four (shop x → kind and sign): out of quiet stretches, sign under any
+ * crown and clear of temples, tall street props and project neon. Best first: inside Fit's frame,
+ * then just past it; a big sign before the usual one; nearest the city's ends. */
 function feature(world: World, amb: Ambience | undefined): Map<number, Feature> {
   const st = settleOf(world, amb, new Map());
   const { horizon } = st;
@@ -602,10 +494,8 @@ function memoOf(world: World, amb: Ambience | undefined): Memo {
   return m;
 }
 
-/**
- * Walk `world`'s settled shops reaching into world x ∈ [x0, x1), left to right (`visit` per shop). The
- * same World and zone always give the same shops, wherever the view is.
- */
+/** Walk the settled shops reaching into world x ∈ [x0, x1), left to right; the same World and
+ * zone give the same shops wherever the view is. */
 export function forEachShop(world: World, amb: Ambience | undefined, x0: number, x1: number, visit: (shop: Shop) => void): void {
   const m = memoOf(world, amb);
   for (let c = Math.floor(x0 / CHUNK); c * CHUNK < x1; c++) for (const s of chunkOf(m, c).shops) if (s.x < x1 && s.x + s.w > x0) visit(s);
@@ -620,11 +510,8 @@ function faceAt(world: World, amb: Ambience | undefined, x: number): number {
 
 // ───────────────────────────── the art ─────────────────────────────
 
-/**
- * A shop's silhouette: column runs [dx, w, up] solid from `up` px above the horizon down to it, bottom
- * up (a later run is never lower where it overlaps an earlier one). The art is painted inside it, and
- * `faceAt` is its top.
- */
+/** A shop's silhouette as column runs [dx, w, up], bottom up (a later run never lower where they
+ * overlap); the art is painted inside it and `faceAt` is its top. */
 function outline(s: Shop): [number, number, number][] {
   const body = GROUND + (s.storeys - 1) * STOREY;
   const out: [number, number, number][] = [[0, s.w, body]];
@@ -732,11 +619,8 @@ function roof(s: Shop, put: Put, body: number): void {
   if (s.roof === "board") put(at, -deck - BOARD_FRAME, boardW(s.board), BOARD_FRAME, "steel", ALL);
 }
 
-/**
- * An upper floor whose top is at `y0` (from the horizon): its windows (clear glass, some curtained, or
- * frosted) under little hoods and clear of the sign's plate, then a balcony — an AC unit, a pot plant or
- * the washing — or an AC unit on the wall.
- */
+/** An upper floor whose top is `y0` above the horizon: hooded windows clear of the sign plate,
+ * then a balcony or a wall AC unit. */
 function floor(s: Shop, put: Put, art: Art, y0: number, plate: number[] | null): void {
   const W = s.w;
   // The plate covers its strip of this floor when it reaches up into the window band.
@@ -790,12 +674,8 @@ function floor(s: Shop, put: Put, art: Art, y0: number, plate: number[] | null):
   put(a, y0 + 27, span, 1, "shade", FINE);
 }
 
-/**
- * The ground floor, its door and noren between dx `a` and `b`: a tiled eave (or the kind's striped
- * awning) over a wooden front between two posts, a sliding door of paper (or glass) panes with a
- * lattice and a kick panel, the noren split into flaps on its rod, lanterns either side where there is
- * room — and under one a menu board, a pot plant or a stack of crates — and a display window beyond.
- */
+/** The ground floor between dx `a` and `b`: eave or awning, wooden front, sliding paper door,
+ * noren, lanterns where there is room, and a display window. */
 function shopFront(s: Shop, k: KindStyle, put: Put, art: Art, a: number, b: number): void {
   const W = s.w;
   const top = -GROUND;
@@ -1000,10 +880,8 @@ function paint(s: BackdropScene): void {
 /** The share of the rooms upstairs lit when `lit` of the far skyline's windows are: 28 % at full night, a floor in four vacant. */
 const ROOMS_LIT = 0.7;
 
-/**
- * The night pass: the shop fronts, lanterns and signs at `neonStrength`, the upstairs windows by their
- * thresholds — every light through `s.fillLit`, and none by day.
- */
+/** Night pass: fronts, lanterns and signs at `neonStrength`, upstairs windows by threshold, every
+ * light through `s.fillLit`; none by day. */
 function paintLights(s: BackdropLightScene): void {
   const k = neonStrength(s.amb);
   const share = Math.min(1, s.lit * ROOMS_LIT);
@@ -1035,11 +913,7 @@ function paintLights(s: BackdropLightScene): void {
   ctx.globalAlpha = 1;
 }
 
-/**
- * The front of the City's backdrop in Tokyo (render/backdrop.ts): a MID layer — clusters of yokochō food
- * shops in front of the haze and the neon canyon, behind the temples and the world, open sky between
- * them, their lanterns, noren and kana signs glowing at night.
- */
+/** The yokochō MID layer: in front of the haze and canyon, behind the temples and the world. */
 export const SHOPS: BackdropLayer = {
   paint,
   paintLights,

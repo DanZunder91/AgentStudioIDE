@@ -1,28 +1,7 @@
 #!/usr/bin/env node
-/**
- * A small, REAL local service for the real-service E2E specs (e2e/specs/real-service*.e2e.ts).
- *
- * It is started by the spec INSIDE an IDE terminal, exactly as a user (or an agent) would start
- * their own service, so everything the IDE shows about it comes through the product's real
- * paths: its stdout is PTY output (→ Agent logs), calls to it go through the terminal's injected
- * proxy (→ Network), and its own outbound call is a child `curl` that inherits the same env.
- *
- *   GET /health            → 200 {"status":"ok"}          logs `<ISO> INFO svc: GET /health 200`
- *   GET /upstream          → shells out to `curl -s https://example.com/` (the only public host
- *                            the external spec allows); 200 + the upstream's size on success,
- *                            logs `INFO svc: upstream example.com 200` or `ERROR svc: upstream failed …`
- *   GET /upstream?fail=1   → a deterministic, LOCAL failure: curl to https://localhost:1/ (nothing
- *                            listens there), 502, logs `ERROR svc: upstream failed …` — no internet.
- *   GET /selfcall          → the service ITSELF (this node process, not a child curl) calls its own
- *                            /health — through $HTTP_PROXY when it is set, the way a proxy-aware
- *                            client does; directly when it is not. 200 {"selfcall":"proxy"|"direct"}.
- *                            The capture-guard E2E uses it: started with the proxy vars stripped,
- *                            the call bypasses Network; restarted with capture, it shows up as this
- *                            process's own request.
- *
- * Node built-ins only. Listens on loopback (the proxy captures loopback).
- * Port: $SVC_PORT (default 47819).
- */
+/** Real local service the specs start inside an IDE terminal, so the IDE sees it via real paths.
+ * Routes: /health, /upstream[?fail=1] (child curl), /selfcall (this process, via $HTTP_PROXY when
+ * set). Loopback only; port $SVC_PORT (47819). */
 
 import http from "node:http";
 import { execFile } from "node:child_process";
@@ -38,15 +17,9 @@ function upstream(url, done) {
   });
 }
 
-/**
- * GET `http://localhost:${port}/health` from this process. Via $HTTP_PROXY (`http://user:pass@host:port`)
- * as an absolute-URI request with Proxy-Authorization, exactly what curl sends; else directly.
- * Node's own http client ignores proxy variables unless NODE_USE_ENV_PROXY is honoured (Node ≥ 24,
- * and 22 from 22.21), so the fixture does it by hand and behaves the same on every Node. Where Node
- * DOES honour it, the proxying lives on the global agent — and the IDE sets NODE_USE_ENV_PROXY=1 —
- * so this request gets an agent of its own: otherwise the hand-made proxy request is itself sent
- * through the proxy and fails (as it did on Node 22.23.5).
- */
+/** Proxied by hand (absolute URI + Proxy-Authorization, as curl does) so every Node behaves alike.
+ * Own agent: where Node honours NODE_USE_ENV_PROXY (the IDE sets it), the global agent would send
+ * this hand-made proxy request through the proxy again. */
 const ownAgent = new http.Agent();
 function selfcall(done) {
   const raw = process.env.HTTP_PROXY ?? process.env.http_proxy ?? "";

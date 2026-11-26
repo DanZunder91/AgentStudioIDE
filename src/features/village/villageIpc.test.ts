@@ -1,8 +1,4 @@
-/**
- * `villageIpc` — the external-agents wire. The command NAME, the exact argument object
- * (serde ignores a misspelt key, so a typo fails as silence), the rejection passthrough
- * and the error-code reader are the whole contract.
- */
+/** serde ignores a misspelt key (a typo fails as silence): names and argument shapes are exact. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

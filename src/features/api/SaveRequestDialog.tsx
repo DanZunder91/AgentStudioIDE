@@ -1,24 +1,11 @@
-/**
- * SaveRequestDialog — the "name this request" modal. Mounted once at the
- * app root; renders only while `saveRequestPrompt` is set, which Cmd/Ctrl+S does when
- * the active API-request tab still carries the DEFAULT title (a renamed tab saves
- * straight to Collections with no prompt). The user types a name → the request lands
- * in Collections and the tab is retitled to match.
- *
- * Reuses the shared `.dialog-overlay` / `.dialog` chrome (App.css) so it matches the
- * unsaved-changes confirm. Enter confirms, Esc cancels; confirm is disabled until the
- * name is non-empty (the store guards this too — belt and braces).
- */
+/** Shown while `saveRequestPrompt` is set: Cmd/Ctrl+S on a tab that still has the DEFAULT title
+ * (a renamed tab saves straight to Collections). Reuses the .dialog chrome from App.css. */
 
 import { useEffect, useRef, useState } from "react";
 
 import { useAppStore } from "../../app/store";
 
-/**
- * The outer gate: mounts the inner form only while a prompt is pending. Because the
- * form unmounts on close, its `name` state resets to empty for free on the next open
- * — no setState-in-effect needed to clear a stale name.
- */
+/** Mounts the form only while a prompt is pending, so `name` resets on each open with no effect. */
 export function SaveRequestDialog(): React.JSX.Element | null {
   const open = useAppStore((s) => s.saveRequestPrompt !== null);
   return open ? <SaveRequestForm /> : null;

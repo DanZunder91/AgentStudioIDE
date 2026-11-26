@@ -1,27 +1,6 @@
-/**
- * Layer 5 — arrow encoding follows DECCKM, and the transport never corrupts it.
- *
- * ## Why this exists
- *
- * Ground truth captured from the real app: the shell sends the Up arrow as SS3
- * (`ESC O A`) but `claude` sends CSI (`ESC [ A`). Both reach the PTY. That split
- * is entirely explained by DECCKM (DEC application-cursor-keys mode, `ESC[?1h` /
- * `ESC[?1l`): with it ON, xterm sends SS3; with it OFF, CSI. readline in the
- * shell turns it ON; in the captured claude session it was OFF.
- *
- * The prime suspect for "claude's `?1h` not taking effect in our app" was the
- * Rust stream coalescer (8ms/32KB batching → ipc::Channel → term.write) splitting
- * the escape mid-sequence so xterm mis-parses it. These tests **rule that out**:
- * xterm buffers partial escape sequences across writes — even one byte at a time
- * — so a coalescer-split `?1h` still switches the mode. If this ever regresses,
- * arrows silently break inside every TUI, so it is worth a permanent guard.
- *
- * (Whether `claude` itself emits `?1h` is a claude-side question this cannot
- * answer. It was captured from the real app during the "arrows in claude"
- * investigation: claude sets no DECCKM, so arrows are CSI — the real bug was the
- * agent cwd, not the encoding. This guard remains because the coalescer/DECCKM
- * transport is worth protecting regardless.)
- */
+/** DECCKM (`ESC[?1h`/`ESC[?1l`) picks SS3 vs CSI arrows. Guards that xterm buffers partial
+ * escapes across writes, even one byte at a time, so the Rust coalescer splitting `?1h` cannot
+ * break arrows inside a TUI. */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

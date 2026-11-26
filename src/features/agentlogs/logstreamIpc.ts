@@ -1,12 +1,5 @@
-/**
- * Agent Logs IPC — the ONE `invoke`/`listen` seam for the feature.
- *
- * Feature-local (not `app/ipc.ts`) so the wire types live next to their feature. Tests mock
- * exactly this module's two Tauri imports and nothing else.
- *
- * Neither command swallows: a failed snapshot is information the panel shows
- * ("could not read the log stream"), so the rejection passes through to the store.
- */
+/** The ONE `invoke`/`listen` seam for Agent Logs (tests mock exactly its two Tauri imports).
+ * Nothing is swallowed: a failed snapshot is shown, so rejections pass through to the store. */
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";

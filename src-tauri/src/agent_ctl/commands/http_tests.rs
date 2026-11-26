@@ -385,11 +385,8 @@ fn a_deadline_defaults_caps_and_says_when_it_capped() {
 
 /* ───────────────────────────── the {{ refusal ───────────────────────────── */
 
-/// 🔴 The rule that keeps the user's saved secrets out of an agent's hands: `{{` anywhere an
-/// agent writes is refused, and the sentence says where. Falsify: drop the last
-/// `refuse_vault_refs(&parts)` in `agent_request_for` (the check on what the request became) —
-/// the body, JSON-body and escaped-curl rows go red; drop the curl-text check — the curl rows
-/// name the wrong part.
+/// Keeps the user's saved secrets from an agent: `{{` is checked in the curl text and in the
+/// request it became, and the refusal names the part.
 #[test]
 fn a_vault_reference_anywhere_in_an_agent_request_is_refused() {
     let cases = [
@@ -442,11 +439,8 @@ fn a_vault_reference_anywhere_in_an_agent_request_is_refused() {
     .is_ok());
 }
 
-/// 🔴 `{{` spelled without being written: the request tab's Format button parses and
-/// re-serializes a JSON body (`"\u007b\u007bKEY}}"` becomes `"{{KEY}}"`), and a percent-escape
-/// (`%7B`, any case) can be decoded on the way to the user's Send. Each form is refused, in every
-/// place an agent writes. Falsify: make `spells_vault_ref` a plain `contains("{{")` — every row
-/// goes red.
+/// `{{` that appears only once decoded: Format re-serializes JSON escapes (`\u007b`), and a
+/// percent escape (`%7B`, any case) can be decoded before the user's Send.
 #[test]
 fn a_vault_reference_written_with_escapes_or_percent_encoding_is_refused() {
     let lone_surrogate = r#"{"a":"\ud800","n":"\u007B\u007bK}}"}"#;
@@ -773,11 +767,8 @@ async fn collections_list_names_and_urls_as_written_and_never_values() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// 🔴 A credential the user typed into a saved URL in a spelling the URL parser reads (one or
-/// three slashes, a backslash), under a credential name the list did not know (`pass`, `pw`,
-/// `passphrase`), or in a webhook's path is masked wherever an agent reads the URL: the
-/// collections listing, the history, and `api run`'s label. Falsify: cut the userinfo only after
-/// `://`, or drop the webhook path rule — the matching rows go red.
+/// URL parsers read userinfo after one or three slashes or a backslash; such credentials, unlisted
+/// credential names and webhook paths are masked in collections, history and `api run`'s label.
 #[tokio::test]
 async fn odd_userinfo_spellings_new_credential_names_and_webhook_paths_are_masked_in_listings() {
     let dir = temp_dir();
@@ -1060,12 +1051,8 @@ async fn history_lists_the_newest_first_bounded_and_without_headers_or_bodies() 
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// 🔴 The history is the user's own sends and the agent's, and a recorded error or status text
-/// can quote the request as sent — reqwest's ` for url (…)` with the `{{VAR}}`s substituted, the
-/// gRPC engine's `could not connect to <endpoint>` — or a server's message. `api history` hands
-/// back none of that text: a failure is only its kind, a status only its standard reason phrase,
-/// the URL the request as written (masked by its shape). Falsify: return the recorded error (or
-/// status text) in `run_history` — the leak and kind rows go red.
+/// Recorded errors and status texts can quote the substituted request or a server's message, so
+/// history returns only a failure's kind, the standard reason phrase and the masked written URL.
 #[tokio::test]
 async fn history_returns_no_recorded_text_that_could_carry_a_secret() {
     let dir = temp_dir();
@@ -1201,14 +1188,8 @@ async fn history_returns_no_recorded_text_that_could_carry_a_secret() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// 🔴 Nothing an agent wrote is matched against Vault values. If a value it guessed came back as
-/// `{{NAME}}` — in its own error, its echo, its compare, its history entry — the reply would
-/// confirm the guess (`?q=Summer2024!` → `?q={{PG_PASSWORD}}`, a host → `corpdb-{{BASE}}`), a
-/// few thousand guesses per call. So every reply for a right guess reads exactly as for a wrong
-/// one, once the guess itself is set aside. Most sends fail before any I/O (a header value with a
-/// control character), so they need no network; the echo goes to the in-process server.
-/// Falsify: run `run_send`'s error, or `run_history`'s URL, through every Vault value again — the
-/// right guesses come back as names and the two runs differ.
+/// Agent-written text is never matched against Vault values: a reply naming `{{NAME}}` would
+/// confirm a guess, thousands per call. Most sends fail before any I/O, so no network is needed.
 #[tokio::test]
 async fn an_agent_cannot_confirm_a_guessed_vault_value() {
     let port = serve();
@@ -1322,11 +1303,8 @@ async fn an_agent_cannot_confirm_a_guessed_vault_value() {
     }
 }
 
-/// 🔴 A send's error goes through the request's own redactor and URL masking — for a saved
-/// request, its substituted values and literal credentials; for an agent's request, nothing by
-/// value (a value it wrote stays as written), only URLs masked by their shape. A response goes
-/// through the request's redactor. Falsify: return the engine's error unchanged in `redacted` —
-/// the saved request's rows go red.
+/// A saved request's error is redacted with its own substituted values and literal credentials;
+/// an agent's only by URL shape (a value it wrote stays as written).
 #[test]
 fn an_error_is_redacted_with_the_requests_own_values_and_urls_by_shape() {
     let saved =
@@ -1555,10 +1533,8 @@ async fn http_open_emits_the_tab_and_sends_nothing() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// 🔴 A saved request is sent with its secrets in, and nothing that comes back carries them:
-/// the echo endpoint repeats the Authorization header, the query and the body, and the agent
-/// reads `{{TOKEN}}`. The history keeps the literal request. Falsify: pass
-/// `&Redactor::default()` in `run_saved` — the SECRET assertions go red.
+/// The echo repeats the auth header, query and body, yet the agent reads `{{TOKEN}}`; the history
+/// keeps the literal request.
 #[tokio::test]
 async fn api_run_resolves_the_users_variables_and_never_hands_them_back() {
     let port = serve();
@@ -1739,11 +1715,8 @@ async fn api_compare_sends_both_sides_and_reports_the_differences() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// 🔴 A credential the user typed literally into a saved request — not a `{{VAR}}` — is hidden
-/// from the agent in `api collections`, so it must not come back through `api run` either: the
-/// echo repeats the query, the `X-Api-Key` and `Authorization` headers and the Basic header
-/// reqwest builds from the URL's userinfo, and each reads `***`. Falsify: drop
-/// `.masking(&literal_secrets(…))` in `resolve` — the LITERAL rows go red.
+/// Literal credentials hidden in `api collections` must not come back via `api run`: the echoed
+/// query, `X-Api-Key`, `Authorization` and the Basic header built from userinfo each read `***`.
 #[tokio::test]
 async fn api_run_masks_credentials_written_literally_into_a_saved_request() {
     let port = serve();
@@ -1789,11 +1762,7 @@ async fn api_run_masks_credentials_written_literally_into_a_saved_request() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Listings are bounded however the user's store looks: names and URLs cut (ending in `…`), a
-/// request's header names capped, environments and their variable names capped, the active
-/// environment always listed, and a byte budget over the whole listing — each cut said.
-/// Falsify: print `r.name` / `r.url` whole in `run_collections` — the line-length row goes red;
-/// drop `ENV_CAP` — the environment count row goes red.
+/// The active environment is always listed, whatever else is cut.
 #[tokio::test]
 async fn collections_and_environments_are_bounded_and_say_so() {
     let dir = temp_dir();

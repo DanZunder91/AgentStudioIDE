@@ -1,16 +1,5 @@
-/**
- * Layer 5 (testing-strategy §1) — the rail chrome, in real pixels.
- *
- * Two user-facing behaviours that ONLY exist with a real layout engine (jsdom
- * has none, so every width here would be 0 and the assertions vacuous):
- *
- *  1. The titlebar panel toggles collapse/expand the left + right rails — the rail
- *     element actually goes `display:none` and comes back.
- *  2. The right rail no longer scrolls HORIZONTALLY. The bug: the Vault
- *     "Environments" editor overflowed the ~300px rail (a fixed 200px input) and
- *     the `+ Add` button was clipped, with a stray horizontal scrollbar. Here we
- *     add an environment and assert the panel's content fits its own width.
- */
+/** Rail chrome in real pixels (testing-strategy §1): panel toggles really hide/show the rails,
+ * and the right rail never scrolls horizontally. jsdom has no layout, so widths would be 0. */
 
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -158,25 +147,9 @@ describe("rail chrome — real browser geometry", () => {
   });
 
   it("keeps the tab strip ONE row at every width — seven tabs at 300px, five + the ⋯ trigger at the drag-min", async () => {
-    // Why this test's claim is strict rather than relaxed: four icon+label pairs needed
-    // ~271px of a ~279px content box, so at RAIL_MIN_W=180 the strip wrapped and
-    // "Collections" was clipped at the rail edge, because `.rail` is `overflow-x:hidden`
-    // and over-wide content is CLIPPED, not scrolled (the rail-clipping failure mode).
-    // The fix: drop the words, keep the glyph, label in the tooltip.
-    //
-    // A sixth (Tools) tab overflowed again: at a 14px gap the strip needed
-    // 6×17 + 5×14 = 172px against 159px and wrapped to two rows. A 10px gap (152px) left
-    // 7px of slack, but a SEVENTH tab does not fit at 10px — 7×17 + 6×10 = 179px — so a
-    // smaller gap is not an answer; a smaller glyph or an overflow menu is.
-    //
-    // The seventh (Git) tab came with that answer: visibility is now
-    // pure budget math over the store's `rightRailWidth`
-    // (`src/features/workspace/railTabsLayout.ts` — no ResizeObserver; the rail's
-    // width only ever changes through the store), and tabs past the cut fold behind
-    // a tab-sized "⋯" trigger. So the one-row claim holds at EVERY width again, and
-    // this test's job is to re-derive the budget from the LIVE boxes: the unit tier
-    // proves the arithmetic, only a layout engine proves the pixels match it.
-    // Only a real layout engine can decide this; under jsdom every box here is 0×0.
+    // `.rail` is `overflow-x:hidden`, so over-wide content is CLIPPED. Tab visibility is budget
+    // math over `rightRailWidth` (`src/features/workspace/railTabsLayout.ts`), extras fold behind
+    // "⋯"; the unit tier proves the arithmetic, this re-derives it from live boxes.
     const user = userEvent.setup();
     render(<App />);
     await screen.findByTestId("app-shell");
@@ -208,10 +181,8 @@ describe("rail chrome — real browser geometry", () => {
         expect(svg.getBoundingClientRect().width).toBeGreaterThan(8);
         // …there is no text taking width back (the trigger included)…
         expect(t.textContent).toBe("");
-        // …and the button is still NAMED, which is the thing icon-only UI usually
-        // gets wrong. Asserted here as well as in the unit test because a CSS change
-        // that reintroduced a visible label would pass the unit test's textContent
-        // check only if it also removed the aria-label.
+        // …and still NAMED (icon-only UI's usual miss); a visible label creeping back would pass
+        // the unit test's textContent check only if it also dropped the aria-label.
         expect(t.getAttribute("aria-label")).toBeTruthy();
         // …and the whole button sits inside the rail's box (1px sub-pixel slack).
         const box = t.getBoundingClientRect();
@@ -220,12 +191,8 @@ describe("rail chrome — real browser geometry", () => {
       }
     };
 
-    // The width BUDGET, re-derived from the live boxes so it tracks a CSS change
-    // instead of restating a comment (assert the arithmetic, not the appearance —
-    // "needed ≤ available" names the fix where "2 rows !== 1" does not).
-    // With `flex-wrap: nowrap` this is also the assertion that catches a budget bug:
-    // the wrap safety net is gone ON PURPOSE, so over-budget now means clipping, and
-    // clipping means these numbers went red first.
+    // Budget re-derived from live boxes ("needed ≤ available" names the fix). The wrap safety net
+    // is gone ON PURPOSE (`nowrap`): over-budget means clipping, and these numbers go red first.
     const assertBudget = () => {
       const cs = getComputedStyle(strip());
       const btns = stripButtons();
@@ -248,10 +215,8 @@ describe("rail chrome — real browser geometry", () => {
     assertBudget();
     expect(oneRow()).toBe(1);
 
-    // 2. Dragged to its NARROWEST — the case that happens in practice. The math
-    //    (visibleTabCount(180, 7) = 5) says five tabs + the trigger: 5×17 + 4×10 +
-    //    10 + 17 = 152px inside the 159px content box. Asserted literally, ids and
-    //    all, so a tab that silently stops rendering cannot make the fit claim vacuous.
+    // 2. At its NARROWEST: visibleTabCount(180, 7) = 5, five tabs + the trigger (152px of 159).
+    //    Ids asserted literally so a tab that stops rendering cannot make the fit vacuous.
     act(() => {
       useAppStore.getState().uiActions.setRightRailWidth(RAIL_MIN_W);
     });
@@ -272,10 +237,8 @@ describe("rail chrome — real browser geometry", () => {
     assertBudget();
     expect(oneRow()).toBe(1);
 
-    // 3. The overflow MENU at the drag-min: it lists the two folded tabs and its own
-    //    box stays inside the rail — `.rail` is `overflow-x:hidden`, so a menu wider
-    //    than the rail would be silently clipped (the rail-clipping failure mode
-    //    again, one layer up). Numbers parsed from live boxes, never string-compared.
+    // 3. The overflow MENU at the drag-min lists the two folded tabs and fits inside the rail
+    //    (`overflow-x:hidden` would clip it). Numbers parsed from live boxes.
     await user.click(trigger() as HTMLElement);
     await settle();
     const menu = document.querySelector('[data-testid="rail-overflow-menu"]') as HTMLElement;
@@ -309,18 +272,8 @@ describe("rail chrome — real browser geometry", () => {
   });
 
   it("keeps the Tools panel inside the rail at BOTH widths, with its widest content", async () => {
-    // The Tools panel is the epoch ⇄ date converter, and it is the worst case this
-    // rail has to hold: unbreakable 19-digit numbers, a full ISO
-    // 8601 timestamp, an IANA zone name, and a four-row "also reads as" list — all in a
-    // box that can be dragged to 180px. That is the rail-clipping failure mode's favourite
-    // shape, and jsdom cannot see it: with no layout engine every box is 0×0, so
-    // `scrollWidth <= clientWidth` is vacuously true in the unit tier no matter what the
-    // CSS says. It can only be decided here.
-    //
-    // The input is driven the way a user drives it rather than by seeding
-    // state, and it is given the NANOSECOND stamp on purpose: it is the longest single
-    // token the tool can produce, it cannot be broken at a space, and every one of the
-    // four unit readings is rendered at once.
+    // The Tools epoch converter is the rail's worst case (unbreakable 19-digit tokens at 180px);
+    // typed like a user, with the NANOSECOND stamp: the longest token, all four readings shown.
     const user = userEvent.setup();
     render(<App />);
     await screen.findByTestId("app-shell");
@@ -348,11 +301,8 @@ describe("rail chrome — real browser geometry", () => {
       // nothing clipped by `.rail`'s `overflow-x: hidden`. +1px for sub-pixel rounding.
       expect(panel().scrollWidth).toBeLessThanOrEqual(panel().clientWidth + 1);
       expect(rail().scrollWidth).toBeLessThanOrEqual(rail().clientWidth + 1);
-      // And every VALUE box — the long, unbreakable ones — sits inside the rail.
-      // `scrollWidth` alone can miss a child that overflows to the LEFT or is absolutely
-      // positioned; this cannot. The selector names the three classes that carry a raw
-      // value, so a new one added without `overflow-wrap` is only invisible to this test
-      // if it is also a class nobody listed here.
+      // Every VALUE box sits inside the rail (catches left/absolute overflow `scrollWidth` misses).
+      // The selector lists the three raw-value classes; a new one must be added here.
       const railBox = rail().getBoundingClientRect();
       const values = Array.from(
         panel().querySelectorAll(".epoch-row__value, .epoch-other__utc, .epoch-other__iso"),

@@ -1,46 +1,6 @@
-//! Windows glue for the process table: only the API calls. Every decision — the command-line
-//! rules, the PEB walk, the SID → uid hash, the fd shapes — is in [`super::winparse`], pure and
-//! tested on every OS. Its own tests run on Windows alone, against real processes.
-//!
-//! | need | call | access |
-//! |---|---|---|
-//! | pids, ppids, image names | `CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS)` | none |
-//! | owner ("uid") | `OpenProcessToken(TOKEN_QUERY)` + `GetTokenInformation(TokenUser)` → [`super::winparse::uid_of_sid`] | `PROCESS_QUERY_LIMITED_INFORMATION` |
-//! | exe | `QueryFullProcessImageNameW` | limited |
-//! | start time, liveness | `GetProcessTimes`, `GetExitCodeProcess` | limited |
-//! | command line | `NtQueryInformationProcess(ProcessCommandLineInformation)` (Windows 8.1+) | limited |
-//! | cwd, env, console, std handle values | `NtQueryInformationProcess(ProcessBasicInformation)` → PEB → `ReadProcessMemory` | `PROCESS_QUERY_INFORMATION \| PROCESS_VM_READ` |
-//! | open files, fd 1/2 targets | `NtQueryInformationProcess(ProcessHandleInformation)` (Windows 8+) → `DuplicateHandle` → `NtQueryVolumeInformationFile(FileFsDeviceInformation)` → disk files only: `GetFinalPathNameByHandleW` on a helper thread under a deadline | `PROCESS_QUERY_INFORMATION \| PROCESS_DUP_HANDLE` |
-//! | listening ports | `GetExtendedTcpTable` ([`crate::netmachine::windows::tcp_rows`]) | none |
-//! | stop | `TerminateProcess` | `PROCESS_TERMINATE` |
-//!
-//! **No administrator rights and no prompt, ever** (zero-install, no OS permission): every
-//! access right above is one a user holds on their own, non-elevated processes. A process
-//! the call is refused for — another user's, a service, an elevated one when the IDE is
-//! not — is simply not listed (or its cwd/env/files are unknown). **Never**
-//! `SeDebugPrivilege`, and never the system-wide handle table
-//! (`NtQuerySystemInformation(SystemExtendedHandleInformation)`): only the table of a
-//! process we already opened as its own user.
-//!
-//! # Open files without hanging (measured on Windows 11 ARM64)
-//!
-//! A name query on another process's file handle (`GetFinalPathNameByHandleW`,
-//! `NtQueryObject(ObjectNameInformation)`) waits for the file object's lock, which a synchronous
-//! handle holds for as long as an I/O on it is pending. Measured: it **hung** on a pipe with a
-//! pending `ReadFile` AND on a disk file whose handle waited in `LockFileEx` (a JVM's
-//! `FileChannel.lock()` is exactly that). The device query (`FileFsDeviceInformation`, what
-//! `GetFileType` asks) answered in under a millisecond in every one of those cases, a console
-//! with a pending read included. So, per handle: the table entry's `GrantedAccess` first (only
-//! files opened for writing, [`super::winparse::access_writes`]), then the device
-//! ([`super::winparse::device_of`]), and a name **only for a disk file, on a helper thread**
-//! that is abandoned after [`NAME_BUDGET`] (it returns, and closes its duplicate, when the I/O it
-//! waits behind completes). An abandoned handle is not asked again while its process lives, at
-//! most [`MAX_STUCK`] helpers may be waiting at once, and one process's walk stops asking after
-//! [`WALK_BUDGET`].
-//!
-//! **This module only reads**, except [`terminate`], which Restart calls after its explicit
-//! confirm. A duplicated handle is used for the queries above and closed; nothing is read
-//! through it.
+//! Windows API glue for the process table; every decision lives in [`super::winparse`].
+//! Never elevated: no `SeDebugPrivilege`, no system handle table; a refused process is unlisted.
+//! Name queries hang behind pending I/O: disk files only, on a helper thread ([`NAME_BUDGET`]).
 
 use super::os::RawProc;
 use super::winparse::{
@@ -397,10 +357,8 @@ pub fn peb_view(pid: u32) -> PebView {
     })
 }
 
-/// `pid`'s current directory — the one implementation behind `pty::cwd::process_cwd` and
-/// procscan. Note: Windows PowerShell's `Set-Location` moves only PowerShell's own location,
-/// not the process cwd (`cmd.exe`'s `cd` moves both); the IDE's terminal prompt hook syncs the
-/// two, and this reads the process cwd.
+/// `pid`'s Win32 process cwd, shared by `pty::cwd::process_cwd` and procscan. PowerShell's
+/// `Set-Location` does not move it; the terminal's prompt hook syncs the two.
 pub fn process_cwd(pid: u32) -> Option<String> {
     with_params(pid, |params, read| cwd_at(params, read)).flatten()
 }
@@ -791,14 +749,9 @@ pub fn ppid_of(pid: u32) -> Option<u32> {
     basic_info(&h).map(|(_, ppid)| ppid)
 }
 
-/// **Windows has no SIGTERM.** A console program could only be sent Ctrl+Break by a process
-/// sharing its console, and `WM_CLOSE` reaches only a window — neither is something the IDE can
-/// deliver to a program another terminal started. So Restart's stop is `TerminateProcess` (exit
-/// code 1): immediate, with no chance for the program to clean up. It runs only after the
-/// explicit confirm that names the pid and command, only for the same user
-/// ([`super::restart::stop`] checks the uid and the start time first), and never for pid 0, pid 4
-/// or the IDE itself ([`terminate_refusal`]). It stops that one process, not its children — as
-/// SIGTERM to one pid would.
+/// `TerminateProcess` (exit code 1): Windows has no SIGTERM the IDE can deliver. Runs only after
+/// the explicit confirm; [`super::restart::stop`] checks uid and start time, [`terminate_refusal`]
+/// refuses pid 0, 4 and the IDE. Stops this one pid, not its children.
 pub fn terminate(pid: u32) -> Result<(), String> {
     if let Some(why) = terminate_refusal(pid, std::process::id()) {
         return Err(why);
@@ -1382,10 +1335,8 @@ mod tests {
         }
     }
 
-    /// A name query behind a pending byte-range lock wait does not return — measured. The
-    /// helper is abandoned after [`NAME_BUDGET`], the handle is remembered (no second helper for
-    /// it), the device query on the same handle still answers at once, and the helper finishes
-    /// by itself once the lock is released.
+    /// Measured: a name query behind a pending lock wait never returns, so the helper is abandoned
+    /// after [`NAME_BUDGET`] while the device query on the same handle still answers.
     #[test]
     fn a_name_query_stuck_behind_a_lock_wait_is_abandoned_not_waited_for() {
         use std::os::windows::io::AsRawHandle;

@@ -1,44 +1,6 @@
-//! **Contract goldens — the Rust half of the seam test** for the Network and Agent Logs
-//! views (two 100%-covered halves do not add up to a working feature).
-//!
-//! Every value here is produced by the **real production code path** and serialised with
-//! serde exactly as Tauri serialises a command result or an event payload (the struct itself,
-//! never a `serde_json::Value`, which re-orders keys). The result is compared
-//! byte for byte with the checked-in goldens in `src/test/contract/goldens/*.json`, which the
-//! TypeScript half (`src/test/contract/*.test.ts[x]`) feeds through the real stores and panels.
-//! So a rename, a new field, a changed enum spelling or a changed string on EITHER side goes
-//! red on that side, naming the value.
-//!
-//! | golden | produced by |
-//! |---|---|
-//! | `netcap-flows.json` (`FlowDetail` by scenario) | a real `Netcap` proxy on loopback, driven by real clients (reqwest, a raw CONNECT + hyper h2, a raw WebSocket upgrade) against loopback upstreams — `Netcap::flow` |
-//! | `netcap-summaries.json` (`FlowSummary`) | the same proxy's **emit path** (the `FlowSink` the app wires to `netcap://flow`): the pending rows the UI receives before a flow completes |
-//! | `netcap-status.json` (`NetcapStatus`) | `Netcap::status` in the default / decrypt+passthrough / skipped+CA-dir / port-moved+app-opt-in states, and the real `netcap_status` command with no proxy running |
-//! | `level-cases.json` (`[{ line, level }]`) | `logstream::classify_level` over a hand-checked case table — the TS block-output classifier must agree on every case |
-//! | `logstream-lines.json` (`LogLine[]`) | a real `LogHub` fed by the **real supervisor** over real PTYs (`/bin/sh`: output, lifecycle, agent session lines) plus tool lines from the real `ClaudeAdapter` + `TranscriptToolTail` over the checked-in transcript fixture — `LogHub::snapshot` (= `logstream_snapshot`) |
-//! | `syslog-*.json`, `netmachine-*.json` (whole computer) | see [`machine`] (`tests/contract_goldens/machine.rs`) |
-//! | `external-agents.json` (`ExternalAgentsReport`, Agent Village) | see [`village`] (`tests/contract_goldens/village.rs`) |
-//! | `weather.json` (`WeatherWire`, Agent Village ambience) | see [`weather`] (`tests/contract_goldens/weather.rs`) |
-//!
-//! **Normalised** (volatile by nature, replaced with fixed values AFTER production and BEFORE
-//! serialisation, on the typed struct so key order is untouched): ids, timestamps, ephemeral
-//! ports (also inside `host` header values), durations, TLS-tunnel byte counts (handshake sizes
-//! vary with ECDSA signature length), the `date` header, the OS errno in "connection refused",
-//! temp paths/terminal ids, and a truncated body's 1 MiB text (cut to a short prefix — `size`
-//! and `truncated` stay real, and the full length is asserted first). Every flow's real
-//! `client` is asserted to be THIS process first, then replaced with a representative one per
-//! scenario ([`scenario_client`]: `claude`, `curl`, `gazelle`, `Agent Studio`, or `null`) — and the test binary's
-//! name inside a `note` with that client's name.
-//!
-//! **Regenerate** after an intended contract change — then read the diff, and update the TS
-//! side in the same change:
-//!
-//! ```text
-//! UPDATE_GOLDENS=1 cargo test --manifest-path src-tauri/Cargo.toml --test contract_goldens
-//! ```
-//!
-//! Hermetic: loopback only, test CAs, `/bin/sh` with no rc files, the
-//! transcript fixture copied to a temp dir; nothing reads or writes `~/.claude`.
+//! Rust half of the Network/Agent Logs contract goldens: real production values serialised as
+//! Tauri does, byte-compared with `src/test/contract/goldens/*.json`; volatile fields normalised.
+//! Regenerate: `UPDATE_GOLDENS=1 cargo test --test contract_goldens`, then update the TS side.
 
 #![cfg(unix)]
 
@@ -933,10 +895,8 @@ async fn netcap_wire_values_match_the_goldens() {
     assert!(!stopped.running);
     status.insert("stopped", stopped);
 
-    // Bypass rows: the REAL detector on realistic proxy-bypassing
-    // commands → the supervisor's `bypass_input` → `Netcap::record_bypass`, on a proxy of its
-    // own (with a config dir, so the curl shim exists) so the counts above are untouched.
-    // The transcript's timestamps are the rows' `startedMs` — already deterministic.
+    // Bypass rows: the REAL detector → `bypass_input` → `Netcap::record_bypass`, on a separate
+    // proxy (with a config dir, so the curl shim exists) so the counts above are untouched.
     let dir = std::env::temp_dir().join(format!("netcap-golden-bypass-{}", ulid::Ulid::new()));
     let (bp, _) = proxy(Vec::new(), Some(dir.clone()), Vec::new());
     assert!(bp.shim_dir().is_some(), "a config dir gets the curl shim");
@@ -986,11 +946,8 @@ struct LevelCase {
     level: LogLevel,
 }
 
-/// `logstream::level::classify_level` over a representative table, written to
-/// `level-cases.json` for the TS mirror. Every expectation is a hand-written literal checked
-/// against Rust FIRST (the golden is not allowed to be merely whatever the code says) —
-/// so drift on either side is named: a Rust change reddens here, a TS change reddens
-/// the TS contract test against the golden.
+/// `classify_level` over a hand-written table, checked against Rust FIRST, written to
+/// `level-cases.json` for the TS mirror, so drift on either side is named.
 #[test]
 fn level_cases_match_the_golden() {
     use LogLevel::{Debug, Error, Info, Warn};
@@ -1106,10 +1063,8 @@ fn level_cases_match_the_golden() {
         ("naïve warnings only", Info),
         ("日本語のログ 情報", Info),
         ("✓ 12 passed", Info),
-        // Rust's `regex` is Unicode-aware: `\b` treats letters of every script as word
-        // characters, `\s` includes U+00A0, `\d` includes every decimal digit (Nd). JS is
-        // not (`\b`/`\d` are ASCII even with the `u` flag), so these pin the TS mirror to
-        // Rust's answers — recorded from Rust, then written here by hand.
+        // Rust's `regex` is Unicode-aware (`\b`, `\s` incl. U+00A0, `\d` = Nd); JS's is ASCII,
+        // so these pin the TS mirror to Rust's recorded answers.
         ("éerror in a word", Info),
         ("日本error", Info),
         ("エラー: error happened", Error),
@@ -1249,11 +1204,8 @@ async fn logstream_wire_values_match_the_golden() {
     sup.close(agent_id.clone()).await.unwrap();
     wait_line(&hub, "closed", |l| l.text == "terminal closed").await;
 
-    // Tool lines: the real ClaudeAdapter + TranscriptToolTail over the checked-in fixture,
-    // turned into drafts with the exact mapping of the supervisor's private `on_tool_events`
-    // (kind from `is_result`, level error from `is_error`, the event's own timestamp, the
-    // root's terminal; an agent the forest does not know keeps its id as the label). That
-    // mapping's live path is proven by `logstream_tailer_live.rs`.
+    // Tool lines: the real adapter + `TranscriptToolTail`, mapped exactly as the supervisor's
+    // private `on_tool_events` does; the live path is proven by `logstream_tailer_live.rs`.
     let fixture =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/logstream/tool-calls");
     let session = root.join("sess");
@@ -1300,10 +1252,8 @@ async fn logstream_wire_values_match_the_golden() {
     })
     .await;
 
-    // Background-task lines: the real parser, the real TaskTails over the
-    // tasks fixture under a fake Claude root, and the supervisor's `poll_task_tails`; the
-    // root terminal is filled in exactly as its private `on_task_lines` does. That live
-    // path is proven by `logstream_tasks_live.rs`.
+    // Background-task lines via the real TaskTails and `poll_task_tails`, root terminal set as
+    // `on_task_lines` does; the live path is proven by `logstream_tasks_live.rs`.
     let claude_root = root.join("claude-4242");
     let task_dir = claude_root.join("-work-gazelle/sess/tasks");
     std::fs::create_dir_all(&task_dir).unwrap();

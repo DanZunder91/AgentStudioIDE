@@ -1,26 +1,6 @@
-/**
- * CSP violation reporter — the webview's own `securitypolicyviolation` events,
- * surfaced in the diagnostics log.
- *
- * WHY THIS EXISTS. `src-tauri/tauri.conf.json` now ships a real
- * Content-Security-Policy (see `docs/design/csp.md`). A CSP is defence in depth,
- * but its failure mode is *silence*: a directive that is one source too narrow
- * does not error, it just makes a feature quietly not render — a blank Markdown
- * preview, an unstyled editor, an image that never appears. In a packaged build
- * there is no DevTools console to check, and a user cannot be asked to
- * screenshot-verify. So the browser's own violation report is
- * routed into the Logs panel: open it, and you SEE what the policy blocked.
- *
- * It is deliberately tiny and dependency-free — one `document` listener, one
- * `logWarn` per event, an unsubscribe returned. Mounted exactly once, from
- * `<App/>`. Being an app-lifetime listener it must never be the thing that
- * breaks a render, hence the `typeof document` guard (Node/SSR-shaped
- * environments have no `document` at all).
- *
- * Report-only by design: no `report-uri` / `report-to` is configured anywhere,
- * because this app must not phone home. This listener is the *entire* reporting
- * channel, and it never leaves the process.
- */
+/** Routes the webview's CSP violation reports into the Logs panel: a too-narrow directive fails
+ * silently and packaged builds have no console (see `docs/design/csp.md`). Report-only, never sent
+ * anywhere (no `report-uri`). Mounted once from `<App/>`. */
 
 import { logWarn } from "./logStore";
 
@@ -30,13 +10,7 @@ export const CSP_LOG_SOURCE = "csp";
 /** Stand-in for a field the browser reported empty (WebKit/Blink differ). */
 const UNKNOWN = "(unknown)";
 
-/**
- * The subset of `SecurityPolicyViolationEvent` we read. Declared structurally
- * rather than using the DOM type so a synthetic event (jsdom has no
- * `SecurityPolicyViolationEvent` constructor at all) is describable in a test
- * without casting through `any`, and so a browser that omits an optional field
- * is a typed possibility rather than a surprise at runtime.
- */
+/** Structural: a synthetic jsdom event types without `any`, and missing fields are expected. */
 interface ViolationFields {
   violatedDirective?: string;
   effectiveDirective?: string;
@@ -47,15 +21,8 @@ interface ViolationFields {
   sample?: string;
 }
 
-/**
- * One violation → the `(message, detail)` pair of a WARN log line.
- *
- * `effectiveDirective` is preferred over `violatedDirective`: the latter is the
- * deprecated alias and carries the whole source list in older engines, while the
- * former is exactly the directive name a reader has to go and widen. Every field
- * is optional in practice, so each one has a literal fallback — a half-reported
- * violation must still produce a readable line, since the line IS the diagnosis.
- */
+/** `effectiveDirective` first (`violatedDirective` is the deprecated alias). Every field has a
+ * literal fallback: a half-reported violation must still read clearly. */
 function describe(e: ViolationFields): { message: string; detail: string } {
   const directive = e.effectiveDirective || e.violatedDirective || UNKNOWN;
   const blocked = e.blockedURI || UNKNOWN;
@@ -70,12 +37,7 @@ function describe(e: ViolationFields): { message: string; detail: string } {
   };
 }
 
-/**
- * Subscribe to the document's CSP violation reports and append each one to the
- * diagnostics log as a WARN line. Returns the unsubscribe.
- *
- * No-op (and never throws) where there is no `document`.
- */
+/** Log each CSP violation as a WARN line; returns the unsubscribe. No-op without `document`. */
 export function startCspReporter(): () => void {
   if (typeof document === "undefined") return () => {};
 

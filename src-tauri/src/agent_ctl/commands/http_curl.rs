@@ -1,19 +1,6 @@
-//! `curl …` → the parts of an HTTP request, for `http send --curl` / `http open --curl`.
-//!
-//! A port of the API client's cURL import (`src/features/api/curlParse.ts`) for the one dialect
-//! an agent's shell writes: bash quoting (single quotes, `$'…'`, double quotes, backslash escapes
-//! and line continuations), bundled short flags (`-sX POST`), attached values (`-XPOST`,
-//! `-H'A: b'`) and `--flag=value`. The flags it models are the import's — `-X`, `-H`, `--url`,
-//! `-d`/`--data*`, `-u`, `-b`, `-g` — and the rules for choosing the URL and the method are the
-//! same.
-//!
-//! Where an agent is concerned it goes further than the paste box, because a request that is
-//! quietly different from the command that described it is worse than a refusal:
-//! * a form upload (`-F`), a file upload (`-T`), a body read from a file or stdin (`-d @file`),
-//!   headers read from a file (`-H @file`), cookies read from a file (`-b <file>`) and a config
-//!   file (`-K`) are **refused** with a sentence, not dropped;
-//! * `--json`, `-G`/`--get`, `-I`/`--head`, `-A`/`--user-agent`, `-e`/`--referer`,
-//!   `--oauth2-bearer` and `-m`/`--max-time` are read, and `--data-urlencode` encodes like curl.
+//! `curl …` → request parts: a port of `src/features/api/curlParse.ts` (bash quoting only).
+//! A request quietly different from its command is worse than a refusal, so file, stdin and form
+//! uploads and `-K` are refused with a sentence, never dropped.
 
 use base64::Engine as _;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};

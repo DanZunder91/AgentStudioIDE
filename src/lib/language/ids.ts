@@ -1,12 +1,5 @@
-// src/lib/language/ids.ts
-
-/**
- * Canonical language identifier. Stable, lowercase-kebab. Adding a value is
- * backwards-compatible; renaming/removing one is a breaking contract change
- * (see "Contract stability"). Consumers MUST handle 'plaintext' as the default
- * and SHOULD fall back to 'plaintext' rendering for any id they don't grammar/
- * icon yet — never throw on an unknown id.
- */
+/** Canonical lowercase-kebab id: adding one is compatible, renaming or removing one is breaking.
+ * Consumers default to 'plaintext' and fall back to it for an unknown id, never throw. */
 export type LanguageId =
   // ── default ──────────────────────────────────────────────────────────────
   | 'plaintext'

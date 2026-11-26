@@ -1,8 +1,4 @@
-/**
- * networkApps — which flows are an app's (pid first, executable name only for a pid no listed
- * app owns), the picker predicate, the per-row capture state, and the words. Expectations are
- * hand-written.
- */
+/** Expectations are hand-written. */
 
 import { describe, expect, it } from "vitest";
 

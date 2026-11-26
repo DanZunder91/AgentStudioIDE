@@ -165,10 +165,8 @@
 }
 .village-card__source { margin-top: 2px; font-size: 11px; }
 
-/* ── Sky chip (time of day + weather) ──────────────────────────────────────────────────
-   Lives inside the HUD. Integrator hooks: `.village-sky[data-weather][data-phase]`,
-   `.village-sky--override`, and `--village-sky-accent` (the glyph/border tone per
-   weather) — override it on `.village` to retheme. */
+/* ── Sky chip (time of day + weather) ── Hooks: `.village-sky[data-weather][data-phase]`,
+   `.village-sky--override`; override `--village-sky-accent` on `.village` to retheme. */
 .village-sky {
   --village-sky-accent: var(--village-amber);
   position: relative;

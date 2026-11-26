@@ -1,15 +1,5 @@
-/**
- * A/B compare — the SEAM test. Three modules meet at this seam (store slice,
- * dual-send executor, split UI) plus the JsonView selection contract; each is
- * covered in its own file. This file owns the
- * joins: the REAL `ApiRequestView` driving the real store, the real
- * `executeCompareRequest`, the real `ComparePanel` and the real `JsonView`,
- * with ONLY the IPC boundary mocked. Not a unit test and not pretending to be.
- *
- * Falsified: removing the `<ComparePanel/>` arm from
- * ApiRequestView reds "both responses render side by side" with
- * `Unable to find an element by: [data-testid="compare-panel"]`.
- */
+/** A/B compare SEAM test: the REAL ApiRequestView, store, `executeCompareRequest`, ComparePanel
+ * and JsonView joined, with ONLY the IPC boundary mocked. Each module's units live elsewhere. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";

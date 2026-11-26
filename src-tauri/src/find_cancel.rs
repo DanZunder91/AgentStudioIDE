@@ -1,71 +1,16 @@
-//! The live-search registry — what makes a project-wide search **killable**.
-//!
-//! ## The bug this exists for
-//!
-//! `find_in_files` (Mod+Shift+F) and `find_files` (Mod+Shift+O) were synchronous
-//! `#[tauri::command]`s. A sync command is dispatched **inline on the thread processing the
-//! IPC message** — `tauri::ipc::InvokeResolver::respond`, reached because
-//! `tauri-macros`' `WrapperAttributes::execution_context` defaults to
-//! `ExecutionContext::Blocking` — so a multi-second `ignore::WalkBuilder` walk over a big
-//! repo froze the whole window, terminals included. Two features in this crate had already
-//! learned this and written it down (`portability::blocking`: *"a synchronous
-//! `#[tauri::command]` would spend it blocking the webview"*; `metrics::claude_metrics`:
-//! *"so the supervisor loop and the PTY hot path never see a filesystem sweep"*). Find never
-//! got the same treatment. It has it now: both commands are `async` and hand the walk to
-//! `tokio::task::spawn_blocking`.
-//!
-//! **Moving the walk off the main thread is a precondition for this module, not a separate
-//! improvement.** While a sync search held the event-loop thread, a `find_cancel` invoke
-//! could not even be *dispatched* — the cancel would have queued up behind the thing it was
-//! asked to stop. Same shape as `db_cancel` (see `db/session.rs`): a cancel signal has to
-//! be reachable without touching anything the running work holds.
-//!
-//! ## Shape
-//!
-//! A `LazyLock<Mutex<HashMap<…>>>` keyed by a frontend-minted `searchId`, exactly the
-//! idiom of `ws.rs::CONNECTIONS` and `db/session.rs::SESSIONS`, and for the same reason
-//! given there: it keeps the commands free of a `State<…>` parameter and therefore callable
-//! from a test without standing up an `AppHandle`.
-//!
-//! **Lock discipline.** A plain `std::sync::Mutex` is enough, and every critical section is
-//! a single `insert` / `get` / `remove` — the guard never outlives one statement, and it is
-//! **never held across an `.await`** (the classic way to deadlock a tokio runtime). What
-//! crosses the thread boundary into the blocking pool is an `Arc<AtomicBool>`, never a
-//! guard: the walk reads a lock-free flag, and `find_cancel` writes it without ever queuing
-//! behind the search.
-//!
-//! **The entry is owned by a guard, not by the code path.** [`begin`] returns a
-//! [`SearchHandle`] whose `Drop` removes the id — so the entry is cleaned up on success, on
-//! error, on cancel, on an early `?`, and on a panic. A registry that leaked one flag per
-//! keystroke would be a slow memory leak in the most-typed-in surface of the app.
+//! Live-search registry making `find_in_files`/`find_files` cancellable. Both are `async` +
+//! `spawn_blocking`: a sync command runs on the IPC thread, freezing the window and the cancel.
+//! The std lock is never held across `.await`; the walk polls an `Arc<AtomicBool>`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
-/// The exact `Err` string a cancelled search returns.
-///
-/// A **bare sentinel**, deliberately: the frontend matches on it to drop the result
-/// silently, and a cancel is not something the user should ever see an error toast for.
-/// The two find modules otherwise use `"<code>: <detail>"` only where there *is* a detail
-/// (`invalid regex: …`, `invalid glob: …`); the detail-free errors there are bare sentences
-/// too (`path is not a directory`, `path does not exist`), so this matches house style.
+/// The `Err` a cancelled search returns: a bare sentinel the frontend drops without a toast.
 pub const CANCELLED: &str = "cancelled";
 
-/// Every in-flight cancellable search, keyed by the frontend-minted `searchId`.
-///
-/// An entry existing *is* a search being live — same "the registry is the truth" rule as
-/// `ws.rs::CONNECTIONS`. A search launched without an id (the back-compat path) is simply
-/// absent here, and is therefore uncancellable rather than special-cased.
-///
-/// 🔴 **The value is a `Vec`, and that is the whole point.** With one flag per id, a second
-/// `begin` on the same id would *replace* the first — and the walk it belonged to would run
-/// to completion with nobody able to stop it. That is not hypothetical: an "All workspaces"
-/// search fans out to one `invoke` per root, and the obvious implementation gives the whole
-/// batch one id. So an id addresses a **set** of live searches, [`cancel`] flags every
-/// member, and a duplicate id is safe by construction instead of safe by frontend
-/// convention. Callers are still free to mint one id per leg; they are simply no longer
-/// *required* to, and nothing silently orphans a walk if they don't.
+/// In-flight cancellable searches by `searchId`; absent = not cancellable. A `Vec` per id so an
+/// "All workspaces" fan-out sharing one id is fully cancelled, never orphaning a walk.
 static SEARCHES: LazyLock<Mutex<HashMap<String, Vec<Arc<AtomicBool>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -91,11 +36,7 @@ impl Drop for SearchHandle {
     fn drop(&mut self) {
         let Some(id) = &self.id else { return };
         let mut map = SEARCHES.lock().expect("find-cancel mutex poisoned");
-        // Remove OUR flag by identity, never the id's whole entry: a sibling search sharing
-        // this id may still be running. The entry itself goes only when its last member
-        // leaves, so an id that is finished with leaves nothing behind. The frontend calls
-        // this pair on every keystroke, so it stays a hash lookup plus a retain over a
-        // one- or two-element vector.
+        // Remove only our flag (a sibling may share this id); the entry goes with its last member.
         if let Some(flags) = map.get_mut(id) {
             flags.retain(|live| !Arc::ptr_eq(live, &self.flag));
             if flags.is_empty() {
@@ -105,15 +46,8 @@ impl Drop for SearchHandle {
     }
 }
 
-/// Register a search and return the handle that owns its registry slot.
-///
-/// `id` is `None` for a caller that did not mint a `searchId`: the search still runs, it is
-/// simply not cancellable. That is the back-compat path, and it is a plain absence rather
-/// than a branch anywhere else.
-///
-/// **A duplicate id is legal.** Two concurrent searches may share one `searchId` — a
-/// fan-out over several workspace roots is the case that motivates it — and one [`cancel`]
-/// then stops all of them. See [`SEARCHES`].
+/// Register a search; the handle owns its registry slot. `id: None` runs uncancellable. Duplicate
+/// ids are legal: one [`cancel`] stops them all.
 pub fn begin(id: Option<String>) -> SearchHandle {
     let flag = Arc::new(AtomicBool::new(false));
     if let Some(id) = &id {
@@ -127,13 +61,8 @@ pub fn begin(id: Option<String>) -> SearchHandle {
     SearchHandle { id, flag }
 }
 
-/// Flag every live search registered under `id` as cancelled. `true` if at least one was.
-///
-/// `false` means "there is nothing to cancel". It does **not** distinguish an id that was
-/// never registered from one whose search has already finished and dropped its slot — the
-/// registry deliberately keeps no tombstones, so those two are the same observation. A
-/// cancel racing a completion is the normal case, not a failure, and neither caller has
-/// anything different to do about it.
+/// Flag every live search under `id`; `true` if any. `false` cannot tell an unknown id from a
+/// finished one (no tombstones), and a cancel racing completion is normal.
 pub fn cancel(id: &str) -> bool {
     // Clone the `Arc`s out and release the map lock BEFORE storing, so a cancel never holds
     // the registry lock for longer than a hash lookup — it must never queue behind the thing
@@ -150,50 +79,28 @@ pub fn cancel(id: &str) -> bool {
     !flags.is_empty()
 }
 
-/// Has this search been cancelled? `None` (no `searchId`) is never cancelled.
-///
-/// `Relaxed` on purpose: the flag *is* the whole message — no other memory is published
-/// through it — so this is a plain load with no fence, cheap enough to run once per
-/// directory entry and once per matched line without measurably slowing a walk.
+/// Has this search been cancelled? `None` never is. `Relaxed`: the flag publishes nothing else, so
+/// a plain load is cheap enough per entry and per line.
 pub(crate) fn is_cancelled(flag: Option<&AtomicBool>) -> bool {
     flag.is_some_and(|f| f.load(Ordering::Relaxed))
 }
 
-/// Cancel an in-flight `find_in_files` / `find_files`.
-///
-/// Frontend contract: `invoke<boolean>('find_cancel', { searchId })` → `true` if at least
-/// one live search was flagged, `false` if there was nothing to cancel. `false` is
-/// best-effort information, not an error: it cannot tell an unknown id from a search that
-/// finished a microsecond ago, and nothing should be surfaced to the user either way.
-///
-/// One id may cover several concurrent searches (a fan-out over workspace roots); all of
-/// them are flagged. See [`begin`].
-///
-/// Deliberately **synchronous**: it is one hash lookup plus a handful of atomic stores, and
-/// a cancel wants the shortest possible path from keystroke to flag. That is only safe
-/// because the searches themselves are now `async` + `spawn_blocking` — see the module doc.
+/// Contract: `invoke<boolean>('find_cancel', { searchId })`; `false` = nothing to cancel, never
+/// surfaced. Synchronous for the shortest keystroke-to-flag path, safe because the searches are
+/// `async`.
 #[tauri::command]
 pub fn find_cancel(search_id: String) -> bool {
     cancel(&search_id)
 }
 
-/// How many `searchId`s currently have at least one live search. Test-only.
-///
-/// Ids, not searches: an id covering a two-leg fan-out counts once. Zero means the registry
-/// is genuinely empty, which is the assertion the leak tests care about.
+/// Ids with at least one live search (test-only); zero means the registry is empty.
 #[cfg(test)]
 pub(crate) fn live_count() -> usize {
     SEARCHES.lock().expect("find-cancel mutex poisoned").len()
 }
 
-/// Serialises every test that observes the *whole* registry.
-///
-/// `cargo test` runs the suite as parallel threads in ONE process, so [`SEARCHES`] is
-/// shared across `find`, `find_files` and this module's tests. "the map is empty afterwards"
-/// is only a meaningful assertion if no sibling test has a search registered at the same
-/// moment. Any test that calls [`begin`] (directly or through `run_find*`) takes this first.
-/// A poisoned gate is recovered rather than propagated — one failing test must not cascade
-/// into every other test in the group.
+/// Serialises tests that observe the whole registry (tests share one process); any test calling
+/// [`begin`] takes it first. A poisoned gate is recovered so one failure cannot cascade.
 #[cfg(test)]
 pub(crate) static REGISTRY_GATE: Mutex<()> = Mutex::new(());
 
@@ -280,11 +187,7 @@ mod tests {
         assert_eq!(live_count(), 0);
     }
 
-    /// 🔴 The regression this registry was reshaped for. Two concurrent searches sharing one
-    /// `searchId` — which is what an "All workspaces" fan-out produces if the batch gets one
-    /// id — must BOTH be cancellable by one call. With a single flag per id the second
-    /// `begin` replaced the first and that walk ran to completion, uncancellable, with
-    /// nothing anywhere reporting a problem.
+    /// An "All workspaces" fan-out can give its legs one id; both must stop on one call.
     #[test]
     fn two_searches_sharing_one_id_are_both_cancelled_by_one_call() {
         let _gate = registry_gate();

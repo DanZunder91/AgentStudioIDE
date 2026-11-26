@@ -1,14 +1,6 @@
-/**
- * Layer 5 — the village renderer against a REAL 2D context in Chromium.
- *
- * The jsdom suite proves draw order and source rects through a recording fake;
- * only a real canvas can prove the vendored PNGs actually decode through Vite's
- * asset URLs, that the recolour pipeline (OffscreenCanvas getImageData /
- * putImageData) really produces pixels, and that a character lands where its
- * feet say. Assertions read back pixels with getImageData.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/render.browser.test.tsx`
- */
+/** Only a real canvas proves the PNGs decode via Vite asset URLs, recolouring yields pixels and
+ * a character lands at its feet. Browser tier:
+ * `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -413,12 +405,8 @@ describe("the city in a real canvas", () => {
   });
 });
 
-/**
- * The Fit zoom of the 720 × 520 city below: the largest sixteenth that shows its buildings, street,
- * lounge and the Seats hall under it (down to the subway — the world's bottom). By hand: the fit
- * target is 64 × 48 tiles (1024 × 768 px); 720 / 1024 = 0.703 → 11/16 across, 520 / 768 = 0.677 →
- * 10/16 down — the hall's 12 rows made it the height that binds (it was 11/16).
- */
+/** Fit zoom of the 720 × 520 city: the largest sixteenth showing it all, down to the subway. Fit
+ * target 64 × 48 tiles (1024 × 768 px): 720/1024 → 11/16 across, 520/768 → 10/16 down (binds). */
 const ZOOM_720 = 10 / 16;
 
 describe("capacity buildings in a real canvas", () => {
@@ -598,13 +586,9 @@ describe("a project room's Wi-Fi router and pulses in a real canvas", () => {
       ["city", buildCityWorld(planCity([ag("lead", folder), ...Array.from({ length: 12 }, (_, i) => ag(`t${i}`, folder, "lead"))]).plans)],
     ] as const;
 
-  /**
-   * The world's real draw list (nobody in it) plus `extra` items, through `renderFrame` at zoom 4 in a
-   * 128×64 world px window with the router's tile at (56, 24). The router PROP item is taken out and the
-   * router painted by `drawRouter` itself (`on`, `frame`): the prop dispatch is props.ts's, tested with
-   * props.ts — this block proves the art reads in place, and the pulses through the real frame.
-   * `at` reads the pixel under a world px.
-   */
+  /** The world's draw list plus `extra`, via `renderFrame` at zoom 4 in a 128×64 window, router
+   * tile at (56, 24). The router prop is swapped for `drawRouter(on, frame)`: props.ts's dispatch
+   * is tested there. `at` reads the pixel under a world px. */
   async function scene(world: ReturnType<typeof buildWorld>, opts: { on?: boolean; frame?: number; extra?: (x0: number, top: number) => DrawItem[] } = {}) {
     const { drawRouter } = await import("./router");
     const r = world.props.find((p) => p.kind === "router")!;
@@ -947,11 +931,8 @@ describe("the City's sky through the day in a real canvas", () => {
     for (const p of [HIGH, LOW]) expect(lum(at(night, ...p))).toBeLessThan(60);
   });
 
-  /**
-   * A world x on row `wy` that no cloud covers in this frame (render/clouds.ts — they fill the whole sky
-   * now), so a sample there is the open sky's: the same field painted into a
-   * recorder, world-locked, at the frame's clock (0).
-   */
+  /** A world x on row `wy` that no cloud covers this frame (clouds fill the whole sky), found by
+   * painting the same field into a recorder at the frame's clock (0). */
   async function openX(amb: Ambience, wy: number): Promise<number> {
     const { paintClouds } = await import("./clouds");
     const { recorder } = await import("./testRecorder");
@@ -1054,25 +1035,16 @@ describe("the Tokyo landmarks in a real canvas", () => {
     key: `p${i}`, label: `p${i}`, team: 2, hasIde: true,
     floors: Array.from({ length: floors }, (_, f) => ({ key: `floor:${i}:${f}`, label: `a${i}.${f}`, ide: true })),
   });
-  /**
-   * The capacity HQ in the middle of the street, a five-floor project right of it and a three-floor one
-   * left: the HQ stands between the towers (the towers stand apart) — the Tower
-   * in the gap left of it, the Skytree in the gap right of it — and Fuji over the HQ, its snow cap clear
-   * of every roof, wide enough (288 px tall) to stand behind both. The five floors give the sky (496 px)
-   * that puts both towers' sampled bodies above the far skyline's band. (The shortest city, the HQ's own
-   * 240-px sky, has neither: its Tower is lit only from 41 % of its height.)
-   */
+  /** HQ mid-street, a five-floor project right and a three-floor one left: the towers stand in the
+   * gaps, Fuji over the HQ. Five floors give a sky (496 px) that lifts both towers' sampled bodies
+   * above the far skyline's band. */
   const world = buildCityWorld([plan(0, 5), plan(1, 3)], { seats: 6 });
   const H = world.city!.street * 16;
   const tokyo = (phase: "noon" | "night") => computeAmbience(new Date(2026, 9, 15, 12, 0), null, { weather: "clear", phase }, "Asia/Tokyo");
 
-  /**
-   * The sky backdrop (render/city.ts) at `zoom`, the camera centred on what Fit frames, the whole sky in
-   * view — up to the Skytree's tip, which rises past the world's top (it stands up to 1.5× the tallest
-   * roof) — with `layers` of landmarks over it: "none" = the open sky alone, "far" = + Fuji, "all" = +
-   * Fuji and the towers (the real order). Returns the canvas and where each stands (in the world:
-   * they scroll and zoom with the street).
-   */
+  /** The sky backdrop at `zoom`, centred on what Fit frames, the whole sky in view (the Skytree
+   * rises past the world's top), with `layers` of landmarks: none, far (Fuji), all. Returns the
+   * canvas and where each landmark stands, in world coordinates. */
   async function scene(zoom: number, layers: "none" | "far" | "all" = "all") {
     const L = await import("./landmarks");
     const { paintCityBackdrop } = await import("./city");
@@ -1085,11 +1057,8 @@ describe("the Tokyo landmarks in a real canvas", () => {
     const view = { w: W, h: VH };
     const { ctx } = makeCanvas(W, VH);
     ctx.imageSmoothingEnabled = false;
-    // The backdrop of a FOGGY noon (the day's sky, but no clouds: fog has its own bands, painted with
-    // the grade, not here) in a city with NO zone. The backdrop paints a landmark city's landmarks
-    // itself (city.ts → paintFarLandmarks / paintLandmarks), and in Tokyo the "sky behind the Tower"
-    // was that Tower, faded by the fog. Without a zone it is the sky alone; the
-    // landmarks go over it below, explicitly, in the clear noon. (The sky ignores the zone.)
+    // A foggy noon with NO zone: the backdrop then paints no landmarks itself (in Tokyo the sky
+    // behind the Tower would be that Tower, fogged); the landmarks go over it below, in clear noon.
     paintCityBackdrop(ctx, { ...tokyo("noon"), weather: "fog", zone: undefined }, world, cam, view, 0, null);
     if (layers !== "none") L.paintFarLandmarks(ctx, cam, world, view, tokyo("noon"), H);
     if (layers === "all") L.paintLandmarks(ctx, cam, world, view, tokyo("noon"), H, 0);
@@ -1108,12 +1077,8 @@ describe("the Tokyo landmarks in a real canvas", () => {
       const { ctx: far } = await scene(zoom, "far");
       const { ctx: sky } = await scene(zoom, "none");
       const rgb = (c: CanvasRenderingContext2D, [wx, wy]: readonly [number, number]) => px(c, ...sc(wx, wy)).slice(0, 3);
-      /**
-       * The open sky at world `p` — PROVEN open, not assumed: above the far skyline's tallest block
-       * (3 tiles; in the real frame the blocks stand in front of a tower's foot), and the colour of
-       * its whole row at the canvas's left edge (a sky band runs the full width; a landmark, the sun,
-       * a cloud or a skyline block painted there would differ).
-       */
+      /** The open sky at world `p`, PROVEN open: above the far skyline's tallest block (3 tiles)
+       * and the colour of its whole row at the canvas's left edge. */
       const openSky = (p: readonly [number, number], what: string) => {
         expect(p[1], `${zoom}: ${what} is above the far skyline`).toBeLessThan(H - 3 * 16);
         const s = rgb(sky, p);
@@ -1249,11 +1214,8 @@ describe("the Tokyo temples in a real canvas", () => {
     return [d[i], d[i + 1], d[i + 2]];
   };
 
-  /**
-   * The city's sky backdrop alone — a FOGGY noon (the day's sky and far skyline, no clouds) in a city with
-   * NO zone, so render/city.ts paints none of the landmarks itself — and the same backdrop with the
-   * temples painted over it, as the city paints them (after the skyline's blocks), in Tokyo's clear noon.
-   */
+  /** A foggy, zone-less noon backdrop (no landmarks painted), and the same with the temples painted
+   * over it as the city does (after the skyline's blocks) in Tokyo's clear noon. */
   async function day(zoom: number) {
     const s = await setup(zoom);
     const { paintCityBackdrop } = await import("./city");
@@ -1321,11 +1283,8 @@ describe("the Tokyo temples in a real canvas", () => {
     expect(outside).toBeGreaterThan(W * VH * 0.9);
   });
 
-  /**
-   * A night: a navy sky with the towers and the temples painted in day colours and a dark veil over
-   * all of it (standing in for the grade), then — what the test is about — the landmarks' lights.
-   * Returns the canvas before and after the lights.
-   */
+  /** A night: navy sky, towers and temples in day colours under a dark veil (standing in for the
+   * grade), then the landmarks' lights. Returns the canvas before and after the lights. */
   async function night() {
     const s = await setup(1);
     const { ctx } = makeCanvas(s.W, s.VH);
@@ -1377,11 +1336,8 @@ describe("no building ever covers a crown — the reference city at Fit and zoom
   const ag = (key: string, folder: string, parentKey: string | null = null) => ({
     key, parentKey, origin: "ide" as const, title: key, folder, activity: "typing" as const, tool: "Edit", ideAgentId: key, lastActivityAt: 0,
   });
-  /**
-   * The reference city: `gazelle` — 7 floors, each a leader and 25 sub-agents, two
-   * desk rows a floor: 57 rows, 912 px tall — left of the centred HQ, and `chat-server`, one floor, right.
-   * The Skytree used to slide behind gazelle as soon as the view zoomed in on it.
-   */
+  /** Reference city: `gazelle` (7 floors of a leader + 25 sub-agents, 912 px tall) left of the
+   * centred HQ, one-floor `chat-server` right; the Skytree must not slide behind it on zoom. */
   const agents = [
     ...Array.from({ length: 7 }, (_, f) => [ag(`g${f}`, "gazelle"), ...Array.from({ length: 25 }, (_, s) => ag(`g${f}s${s}`, "gazelle", `g${f}`))]).flat(),
     ag("t0", "chat-server"),
@@ -1392,12 +1348,9 @@ describe("no building ever covers a crown — the reference city at Fit and zoom
   const W = 1280;
   const VH = 800;
 
-  /**
-   * The City as the panel shows it — Fit, or zoomed notch by notch on `on`'s right wall near its roof
-   * until it reaches `on.zoom` — and, with the same camera, the backdrop alone (sky, landmarks, far skyline, street: no
-   * building, prop, agent or label) in Tokyo and with no zone (no landmarks). Where the two backdrops
-   * differ inside a crown's box is that crown, as seen; the full frame must show exactly those pixels.
-   */
+  /** The City at Fit (or zoomed notch by notch onto `on`'s right wall near its roof) and, with the
+   * same camera, the backdrop alone in Tokyo and with no zone. Their difference inside a crown's
+   * box is that crown; the full frame must show exactly those pixels. */
   async function shots(on?: { key: string; zoom: number }) {
     const bank = await loadSprites();
     const v = new VillageView(1, () => null, "city");

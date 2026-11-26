@@ -1,46 +1,6 @@
-/**
- * Layer 5 (testing-strategy §1, §7.5) — the renderer degrade path: WebGL -> DOM.
- *
- * ## Why this file exists
- *
- * §7.5 names two tests that had no home in the repo:
- *   - `renderer_falls_back_webgl_to_dom` — "Feature detection needs a real WebGL
- *     context."
- *   - `dispose_releases_instance` — "No leak in `TerminalRegistry` across
- *     open/close cycles."
- * This is the file that closes that gap, and it also pins the two adjacent
- * decisions renderer.ts owns: the `setRendererPreference` override and the
- * WebGL-context-loss self-heal.
- *
- * ## Why it must be the browser tier (and not jsdom)
- *
- * `renderer.ts`'s `webgl2Available()` probe is a *real* `canvas.getContext(
- * "webgl2")` call. jsdom has no canvas and no WebGL, so the probe there is
- * always null and the "WebGL is available -> pick WebGL" branch is unreachable —
- * every assertion about it would be vacuously green. Only real Chromium reports
- * a real WebGL2 context, so only here can the webgl branch even be entered. That
- * is exactly §7.5's rationale.
- *
- * ## The seams, stated up front (so no assertion is accidentally vacuous)
- *
- *  1. **Feature detection** — `webgl2Available()` calls
- *     `HTMLCanvasElement.prototype.getContext("webgl2")`. We toggle availability
- *     by surgically stubbing that method to return `null` for GL context types
- *     only (delegating "2d" etc. to the real implementation). This is the exact
- *     input the real probe reads — not a mock of the probe.
- *  2. **The addon boundary** — `renderer.ts` does `await import(
- *     "@xterm/addon-webgl")` then `new WebglAddon()` + `term.loadAddon(gl)`, and
- *     registers `gl.onContextLoss(...)`. `@xterm/addon-webgl` is third-party
- *     (anti-pattern #1: we do not test xterm's addons — we test *our decision to
- *     mount/dispose one*). So the addon is replaced with a faithful fake that
- *     records `activate`/`dispose`/`onContextLoss`, letting us observe *which
- *     renderer renderer.ts actually mounted and disposed* — the real decision,
- *     which is what the test bar requires. The WebGL2 probe stays real.
- *
- * A regression in renderer.ts's decision logic flips one of these observations:
- * choose-dom-when-webgl-available, choose-webgl-when-unavailable, fail-to-
- * dispose, or ignore-the-preference all turn a green assertion red here.
- */
+/** Browser tier (testing-strategy §7.5): only real Chromium has WebGL2, so the probe stays real
+ * and is toggled by stubbing `getContext("webgl2")`. `@xterm/addon-webgl` is a faithful fake: we
+ * test our decision to mount/dispose it, not xterm's addon. */
 
 import { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -115,13 +75,8 @@ function realWebgl2Available(): boolean {
   return available;
 }
 
-/**
- * Poll until `pred()` holds or a deadline passes. renderer.ts loads the addon
- * via a lazy `await import()`, and the *first* such import in the suite pays a
- * one-time module-load cost longer than a couple of microtasks — a fixed flush
- * is racy, polling is not. Returns without asserting; the caller asserts the
- * final state so a timeout surfaces as a precise, legible failure.
- */
+/** The first lazy `import()` of the addon pays a module-load cost, so poll rather than flush.
+ * Does not assert; the caller does, so a timeout fails legibly. */
 async function waitFor(pred: () => boolean, timeoutMs = 3000): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
@@ -197,10 +152,8 @@ describe("terminal renderer — WebGL selection and the DOM degrade path", () =>
   });
 
   it("addon activation throws → falls back to DOM and disposes the dead addon", async () => {
-    // A distinct branch from the probe-null case: here the probe says "yes",
-    // renderer.ts commits to WebGL, and the *addon* fails on loadAddon()
-    // (real-world: the GL context can't actually be created). renderer.ts must
-    // catch, dispose the half-built addon, and land on DOM.
+    // Probe says yes but the addon fails in loadAddon() (no real GL context): renderer.ts must
+    // dispose the half-built addon and land on DOM.
     expect(realWebgl2Available()).toBe(true);
     glMock.state.activateThrows = true;
 

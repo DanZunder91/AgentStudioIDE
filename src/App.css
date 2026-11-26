@@ -130,11 +130,8 @@ body.is-panning * {
 .app-shell--right-collapsed .rail-resizer--right { display: none; }
 
 .rail { background: var(--bg-surface); overflow-y: auto; overflow-x: hidden; }
-/* PIN each pane to its own grid column. Without this, collapsing a rail with
-   `display:none` REMOVES it from the grid, so the remaining items auto-shift left —
-   the center pane would slide into the (now 0px) left column and vanish (the bug:
-   the center console ended up attached to the left panel and was hidden). Explicit columns
-   keep the center in column 2 whether or not a rail is collapsed. */
+/* Pin each pane to its column: a `display:none` rail leaves the grid and the rest would shift,
+   sliding the center into the 0px left column. */
 .rail--left { grid-column: 1; border-right: 1px solid var(--border); }
 .rail--right { grid-column: 3; border-left: 1px solid var(--border); }
 
@@ -205,35 +202,9 @@ body.is-panning * {
 .workarea__placeholder p { margin: 4px 0; }
 .muted { font-size: 11px; opacity: 0.7; }
 
-/* Right rail — the Files / Vault / History / Collections / DB / Tools / Git tab strip.
-   ICON-ONLY, label in the tooltip: four icon+label pairs run ~271px, which fits the
-   default 300px rail but not the RAIL_MIN_W = 180px drag-min — and since `.rail` is
-   `overflow-x: hidden`, over-wide content is silently CLIPPED rather than scrolled
-   ("Collections" lost its tail at the rail edge), so the words live in the tooltip.
-
-   ⚠️ The budget. Seven glyphs do not fit at the drag-min either, and shaving the gap
-   again is not an answer — so the strip shows only as many tabs as the width affords
-   and folds the rest behind a tab-sized "⋯" trigger with a menu. The arithmetic:
-
-       available = rightRailWidth − 1px .rail--right border − 2×10px padding
-                   (= 159px at RAIL_MIN_W 180)
-       one tab   = 13px glyph + 2×2px .rail__tab padding                =  17px
-       seven     = 7×17 + 6×10                                          = 179px > 159px
-       at the drag-min: 5 tabs + the tab-sized ⋯ trigger
-                 = 5×17 + 4×10 + 10 + 17                                = 152px ≤ 159px
-
-   The constants live in `src/features/workspace/railTabsLayout.ts` (TAB_W 17,
-   TAB_GAP 10, STRIP_CHROME 21, TRIGGER_W 17) — its `visibleTabCount()` is the ONE
-   place the sum is computed, driven by the store's `rightRailWidth` (no
-   ResizeObserver: the rail's width only ever changes through the store). If a pixel
-   here changes, change it THERE, and `src/e2e/railChrome.browser.test.tsx`
-   re-derives needed-vs-available from the live boxes so the drift turns red.
-
-   `flex-wrap` is nowrap, ON PURPOSE. The wrap was a safety net that turned an
-   over-budget strip into a silent second row — a failure mode nobody sees. With the
-   math preventing overflow, nowrap makes a budget bug VISIBLE as clipping, which the browser test catches by number, not by squinting. The
-   trigger + menu styling is feature-local: `src/features/workspace/railTabs.css`
-   (which also gives `.rail__tabs` the `position: relative` the menu anchors to). */
+/* Right-rail tab strip: icon-only (`.rail` clips); extra tabs fold behind a ⋯ menu (railTabs.css).
+   Mirror px changes in features/workspace/railTabsLayout.ts (e2e/railChrome.browser.test.tsx).
+   nowrap on purpose: a budget bug must show as clipping, not a silent second row. */
 .rail__tabs {
   display: flex;
   flex-wrap: nowrap; /* deliberate — see the budget comment above */

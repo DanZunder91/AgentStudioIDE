@@ -1,25 +1,6 @@
-/**
- * The IDE-traffic toolbar never clips a control, and the sidebar reads (the bug: with the new
- * Apps sidebar the Source / Process / Host pickers were no longer visible — the toolbar ran off
- * the pane's right edge).
- *
- * Browser tier: only real layout can say where a control is. Two hosts:
- * - a definite pane (the app's `.pane__body`: a column with `min-width: 0` children);
- * - a flex ROW item with the default `min-width: auto` — the harness that reproduces the clip:
- *   the table's column floor became the panel's min-content, the panel outgrew its box and the
- *   toolbar laid its pickers out past the visible edge.
- * At a real layout (≈1450 px pane, 280 px sidebar) and at 900 px, every toolbar control's
- * rect is inside the panel's visible box.
- *
- * Falsified: removing `contain: inline-size` from `.net-ide__main` → both flex-row cases read
- * `the panel is its box's width: expected 1472 to be less than or equal to 900` (the panel grows
- * to sidebar + table floor) while the pane cases still pass — which is why both hosts are here.
- * Setting `.net-bar` to `flex-wrap: nowrap` → `columns right: expected 922.53125 to be less than
- * or equal to 900.5` at 900 px. The old 230 px sidebar default → `"by claude · gazelle" is not
- * truncated: expected 122 to be less than or equal to 110`.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/network/networkToolbar.browser.test.tsx`
- */
+/** Browser tier: only real layout says where a control is. The flex-row host (default
+ * `min-width: auto`) reproduces the clip and fails without `contain: inline-size` on
+ * `.net-ide__main`; the pane host does not, which is why both hosts are here. */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,20 +1,6 @@
-//! **Contract goldens: the whole-computer halves** of the Agent Logs and
-//! Network views. Same rules as the parent file:
-//! every value comes out of the real production code path, is normalised on the typed struct
-//! only where it is volatile, and is serialised with serde exactly as Tauri would.
-//!
-//! | golden | produced by |
-//! |---|---|
-//! | `syslog-lines.json` (`LogLine[]`, `kind: "machine"`) | the checked-in `log stream --style ndjson` and `journalctl --output=json` fixtures through the production parsers (`syslog::macos::parse_ndjson`, `syslog::journal::parse_journal`), pushed through a real `LogHub` (the 500/s machine cap, on tokio's paused clock) and taken from `LogHub::snapshot` — including the hub's own rate-limit `system` line |
-//! | `syslog-status.json` (`SyslogStatus` by state) | `syslog::status_of` over real backends (`unavailable()`, `journal::linux_backend` over synthetic `/proc/self/status` + `/etc/group`, `eventlog::backend()`), real `normalized()` filters, real `child::spawn` children (`/bin/sh` scripts that stream or die) and the hub's real `machine_rates` |
-//! | `syslog-apps.json` (`RunningApp[]`) | `syslog::procs::group_apps` over synthetic process entries |
-//! | `netmachine-samples.json` (`MachineSample` by scenario) | macOS: the real `NetMachine` sampler over the nettop fixture cut by `NettopSplitter` + `parse_sample` (two samples ⇒ the second has rates); Linux: `/proc/net/*` + `ss -tinH` text through `parse_proc_net` / `parse_ss` / `assemble`, rated by `RateTracker` with a real (warmed) `Rdns` |
-//! | `netmachine-status.json` (`MachineStatus` by state) | `NetMachine::status/start` over each platform's `Platform`, a source that dies, and the `unavailable()` helper |
-//!
-//! **Normalised:** the hub's stamp on its own drop line, and a sample's `tsMs` (the sampler's
-//! wall clock). **OS-independent by construction:** nothing here reads this machine's process
-//! list, journal, sockets or simulator; the `cfg`-gated platform constants are restated as
-//! literals and asserted equal to the real ones on the OS that has them.
+//! Whole-computer goldens (`syslog-*.json`, `netmachine-*.json`) from the production parsers
+//! over checked-in fixtures; nothing reads this machine, and `cfg` constants are restated and
+//! asserted on their own OS. Normalised: the hub's drop-line stamp and a sample's `tsMs`.
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;

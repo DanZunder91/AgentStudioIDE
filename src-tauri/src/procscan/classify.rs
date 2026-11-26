@@ -1,44 +1,6 @@
-//! Which processes are **dev apps**, and what they are. Pure over
-//! `(exe path, argv, parent exe/argv, console)` — [`Facts`] — and table-tested on every OS.
-//!
-//! | runtime | recognised by | `entry` (what it runs) |
-//! |---|---|---|
-//! | `jvm` | exe basename `java` (Windows also `javaw`) | `-jar x.jar` → `x.jar`; else the main class (`-m mod/cls` → `cls`) |
-//! | `node` | exe basename `node`/`nodejs`/`bun`/`deno` | a `node_modules` package (`node_modules/.bin/vite` → `vite`), an npm/pnpm/yarn script (`npm run dev`), `bun run dev`, else the script's basename |
-//! | `rust` | exe under `…/target/{debug,release}/` (also `target/<triple>/…`, `examples/`), or a child of `cargo run` | the exe basename |
-//! | `python` | exe basename `python`, `python3`, `python3.12`, … (Windows also `pythonw`) | `-m mod` → `mod`; else the script's basename |
-//! | `go` | exe under a `go-build…/…/exe/` dir (`go run`), or a child of `go run` | the exe basename |
-//! | `shell` | `sh`/`bash`/`zsh`/… running a script (`-c …` or a file) **with its stdout/stderr in a file** | the script (≤ 80 chars) or its basename |
-//!
-//! **Launchers** (`npm run dev`, `pnpm dev`, `bun run dev`, `deno task`, `cargo run`,
-//! `go run`, `gradle`/`mvn` clients) are dev apps too, flagged [`Classified::launcher`] —
-//! [`super::assemble`] hides one whose descendant is a dev app (`npm run dev` → `vite`: the
-//! row is `vite`, which is where the ports and the logs are).
-//!
-//! **Skipped** (→ `None`): anything whose executable is under a system prefix
-//! ([`SYSTEM_PREFIXES`]); editors and IDEs themselves and their tooling — an executable
-//! inside an IDE bundle/install ([`in_ide`]: RustRover, IntelliJ, VS Code, Cursor, Zed,
-//! Xcode, …), a script inside one (a language server `node …/RustRover.app/…/server.js`),
-//! and JetBrains' own JVMs (`com.intellij.*`/`org.jetbrains.*` main classes) — but **not**
-//! what they launch (a Gradle daemon on the IDE's bundled JDK, an app run from IDEA with
-//! `-javaagent:…/idea_rt.jar`: decided by the main class, not the JDK's location); plain
-//! interactive shells and shells whose console is a terminal/pipe; one-shot tools
-//! (`npm install`, `python -m pip`, `cargo build`, `bun add`); Rust build scripts and test
-//! binaries (`target/debug/{build,deps}/`); everything unrecognised.
-//!
-//! **Why a shell with a file console counts.** `sh -c 'exec >svc.log 2>&1; …'` is how a
-//! service gets started by hand or by an agent, and its log file is exactly what the view
-//! is for. A shell whose output goes to a terminal is a person typing (already a terminal
-//! in the IDE or in theirs) and is noise.
-//!
-//! **Windows-shaped paths** go through the same rules: a path with a `\` is read
-//! with `/` for the comparisons ([`norm_path`]; `\\?\` dropped), names lose `.exe` (`node.exe`
-//! is `node`, `target\debug\gazelle.exe` is `gazelle`), `C:\Windows\…` is the system's
-//! ([`is_system_path`]), `powershell`/`pwsh`/`cmd` are shells, the console hosts
-//! (`conhost.exe`, `OpenConsole.exe` — a ConPTY host can sit in a cargo `target\debug`) are never
-//! apps, and the IDE installs under `Program Files` / `AppData\Local\Programs` are IDEs. A path
-//! with no `\` and no drive letter is never touched by any of it, so macOS and Linux classify
-//! exactly as before.
+//! Which processes are dev apps (jvm, node, rust, python, go, a shell logging to a file) and
+//! what they run; pure over [`Facts`]. Launchers are flagged; system, IDE and one-shot tools
+//! are skipped. Windows-shaped paths (`\`, `.exe`) are normalised; others classify unchanged.
 
 use std::borrow::Cow;
 
@@ -173,10 +135,8 @@ const SHELLS: &[&str] = &[
     "sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "tcsh", "csh", "nu", "pwsh",
 ];
 
-/// Windows' own shells, a shell only when the name comes from a Windows-shaped path or a
-/// `.exe` ([`is_shell`]). Not in [`SHELLS`]: a unix binary is often called `cmd` — `go run
-/// ./cmd` runs `/tmp/go-build…/exe/cmd` — and must not be read as a shell (the
-/// Windows-shaped path guard).
+/// Windows shells, only for a Windows-shaped path or `.exe` ([`is_shell`]): a unix binary is
+/// often named `cmd` (`go run ./cmd`) and must not be read as a shell.
 const WINDOWS_SHELLS: &[&str] = &["cmd", "powershell"];
 
 /// Windows console hosts: the process behind a console window or a ConPTY session, never an app
@@ -213,10 +173,8 @@ fn stem(p: &str) -> &str {
     }
 }
 
-/// Is this process a shell (`/bin/zsh`, a login `-zsh`, `bash`)? By the executable's
-/// name, else argv[0]'s (a login shell's leading `-` dropped). Used by the origin
-/// walk ([`super::ide`]): a shell between the `claude` CLI and a process is what makes that process
-/// something the agent *ran* rather than one of claude's own helpers.
+/// Is this a shell? By exe name, else argv[0] (login `-` dropped). For the origin walk: a shell
+/// between `claude` and a process means the agent RAN it, not a claude helper.
 pub fn is_shell(exe: Option<&str>, argv: &[String]) -> bool {
     let source = exe.filter(|e| !exe_name(e).is_empty()).or_else(|| {
         argv.first()
@@ -917,11 +875,8 @@ fn windows_project_like(cwd: &str, home: Option<&str>) -> bool {
     .any(|p| path == *p || path.starts_with(&format!("{p}/")))
 }
 
-/// The row's name: a fixed name (`gradle daemon`); else
-/// `<tool> · <project>` — `vitest · Agent Studio`, `vite · web`, `server.js · gazelle`,
-/// `sh · svc`, `App · shop`; just the project when the tool *is* the project (`gazelle`
-/// built from `gazelle/`, not `gazelle · gazelle`); just the tool when the cwd names no
-/// project (`/`, `$HOME`); else the fallback.
+/// Row name: a fixed name, else `<tool> · <project>` (`vite · web`); just the project when the
+/// tool is the project, just the tool when the cwd names no project; else the fallback.
 pub fn app_name(c: &Classified, cwd: Option<&str>, home: Option<&str>) -> String {
     if let Some(n) = &c.fixed_name {
         return n.clone();

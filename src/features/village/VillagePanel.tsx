@@ -1,38 +1,6 @@
-/**
- * VillagePanel — the Agent Village tab: a pixel-art village where every Claude Code
- * agent on this machine is a character (IDE agents and, unless toggled off, the ones
- * running in other terminals). Wires the three layers together:
- *
- *   useVillageAgents (data) → VillageView (sim + world + camera) → renderFrame (canvas)
- *
- * Two pictures of the same agents, switched by the HUD's Village | City toggle (remembered
- * per viewer, `villageMode`): the VILLAGE — a house per project — and the CITY (an option to
- * see everything as a city, where everything running is a building
- * and every console or agent takes one floor) — a building per project, a floor per root
- * agent or plain IDE console (`useCityConsoles`), each floor's leader at the big desk and its
- * sub-agents at the team desks (engine/city.ts). Each picture has its own `VillageView` (sim,
- * world, camera), kept while the tab is open, so switching back finds the camera where the
- * user left it. The sky, the sprite bank and the HUD are shared.
- *
- * The world is rebuilt only when the plan's signature changes, so an agent changing
- * activity never moves the houses. The rAF loop runs only while the tab is mounted AND the
- * document is visible. A host without a 2D context (jsdom) still gets the HUD, the empty
- * state and the controls — the loop just skips painting.
- *
- * Sky: `useVillageAmbience` brings the live weather + the local
- * clock; `computeAmbience` turns them (or the HUD override) into the outdoor grade,
- * weather and lights, which `VillageView` hands to the sim (idle agents go indoors) and
- * the renderer (house interiors stay lit and dry). The chip in the HUD shows / overrides it.
- *
- * Interaction: drag to pan, wheel / − + to zoom (integer steps — and for a city too big for
- * its pane, halvings below 1 down to the zoom that shows it whole — anchored at the
- * cursor / centre; wheel deltas accumulate so a trackpad gesture is not a leap), Fit to re-frame; hover a character for its card; click an IDE
- * character to select that agent (the same `selectAgent` the rail's rows use, which
- * re-points the centre to its terminal); click a city console to bring its terminal tab to
- * the front (`focusLogSource`, the Agent Logs "take me there"); click an outside character
- * whose app is known (iTerm2, Terminal…) to bring that app to the front
- * (`focus_external_agent` — a failure is a coded line in the HUD, never a dialog).
- */
+/** Agent Village tab: useVillageAgents → VillageView (sim, world, camera) → renderFrame. Village
+ * and City each keep their own VillageView while the tab is open; the world rebuilds only when the
+ * plan's signature changes. rAF runs only while mounted and visible; no 2D context, no paint. */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 

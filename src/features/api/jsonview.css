@@ -1,7 +1,4 @@
-/* ── JSON tree viewer (reusable) ─────────────────────────────────────────────
-   Renders already-parsed JSON as a collapsible tree. Used for the API client's
-   response body, but self-contained: no `api-*` class dependency. Theme
-   variables come from App.css. */
+/* JSON tree viewer: self-contained, no api-* class dependency. */
 
 .jsonview {
   font-family: var(--mono);
@@ -47,12 +44,8 @@
   color: var(--accent);
 }
 
-/* ── A/B compare: clickable keys + cross-highlight ───────────────────────────
-   In interactive mode (JsonView given `onSelectKey`) the key is a real <button>
-   and the expand/collapse control shrinks to a caret-only button beside it — a
-   button must never nest inside another button. <button> inherits neither font
-   nor color and brings its own UA background/border/padding; reset all of it so
-   both modes read identically. */
+/* Interactive keys are <button>s beside a caret-only toggle (buttons can't nest); reset the UA
+   button styles so both modes read identically. */
 button.jsonview__key {
   padding: 0;
   margin: 0;
@@ -77,15 +70,9 @@ button.jsonview__key:hover {
   cursor: pointer;
 }
 
-/* Cross-highlight chip: every occurrence of the selected key name. Accent-soft
-   background + a 1px accent ring drawn with box-shadow — not padding or border,
-   so the mono column alignment of the two compare panes never shifts. The key
-   keeps its --accent color, which stays readable on the translucent
-   --accent-soft over the dark surfaces (same pairing as .agent--selected).
-   The `button.` variant is required, not belt-and-braces: the UA reset above
-   (`button.jsonview__key`, 0-1-1) outguns a bare class (0-1-0), so without it
-   a selected key in interactive mode kept the ring but lost the fill — pinned
-   by compare.browser.test.tsx's computed-style assertion. */
+/* Selected-key chip: the ring is a box-shadow, not padding/border, so pane columns never shift.
+   The button. variant is required: the UA reset above (0-1-1) beats a bare class and drops the
+   fill (compare.browser.test.tsx pins the computed style). */
 .jsonview__key--selected,
 button.jsonview__key--selected {
   background: var(--accent-soft);
@@ -116,11 +103,8 @@ button.jsonview__key--selected {
   color: var(--text);
 }
 
-/* ── JsonBodyEditor: an editable body that LOOKS like JSON ─────────────────────
-   A transparent <textarea> layered over a colored <pre>. Both MUST share the
-   `.api-body` metrics (font/size/line-height/padding) so the caret aligns with the
-   highlighted text; both wrap identically. The textarea is in-flow (drives height,
-   stays resizable); the highlight is absolute behind it. */
+/* JsonBodyEditor: a transparent textarea over a colored <pre>; both MUST share .api-body metrics
+   so the caret aligns. The textarea is in-flow (height, resize); the highlight sits behind it. */
 .json-editor {
   position: relative;
 }

@@ -1,17 +1,6 @@
-/**
- * Tab tear-off from the thing the user touches (a store-level test cannot see
- * which action a BUTTON calls). Both ways:
- *
- *  - the COMMAND — the tab's right-click menu: "Move to New Window" / "Move to Main Window",
- *    offered only where they make sense, absent for kinds that cannot leave a window;
- *  - the GESTURE — a tab dragged and let go with no drop target asks whether it was released
- *    outside the window (`tearOffIfReleasedOutside`), and a tab from ANOTHER window dropped on
- *    a strip or a pane is asked for (`takeForeignDrop`) instead of "moved" by an id that means
- *    nothing here.
- *
- * The moves themselves are spied (their behaviour is `app/tearoff/handoff.test.ts`); the
- * store and the menu are real.
- */
+/** Tear-off from what the user touches: the right-click Move commands (absent where meaningless)
+ * and the gesture (`tearOffIfReleasedOutside`, `takeForeignDrop` for another window's tab). Moves
+ * are spied (behaviour: `app/tearoff/handoff.test.ts`); store and menu are real. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

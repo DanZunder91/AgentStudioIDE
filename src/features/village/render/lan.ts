@@ -1,28 +1,6 @@
-/**
- * Agent Village — the Seats room's LAN (engine/lan.ts): the cable runs that wire every desk PC to
- * the switch, and the data packets running along them (the agents in the seats
- * communicating with each other). Our own procedural pixel art in world px,
- * snapped like every other draw (`rect`).
- *
- *   - A CABLE is 2 world px across, centred on its run: a lit edge (the top of a horizontal run,
- *     the left of a vertical one — the art is lit from the top-left) over a dark core. Both are
- *     darker than every room floor tint and the door threshold, the core by at least 3:1, so a run
- *     reads as a cable on any floor, dark wood included. Each end gets a square cap half the
- *     width long, so two runs meeting at a corner or a tee close the joint with no notch.
- *   - A TEAM packet (an agent and the agent that started it: task down, result back) is a bright
- *     3×3 square in the team's hue inside a 1-px rim of the same hue, much darker: the body pops
- *     on the dark cable, the rim on the floor it overhangs. An UPLINK packet (an agent and the
- *     switch: its model API traffic) is background traffic — a pale, translucent 2×2 glint the
- *     size of the cable itself, with no rim.
- *   - A Wi-Fi PULSE (a project room's boss and its router talking over the air, engine/teamLan.ts)
- *     is a pixel ring in the team's hue that grows and fades — `drawWifi`, at the end of this file.
- *
- * Below zoom 1 every rect keeps at least one whole pixel (paint.ts) and the part that must
- * survive is painted LAST, so when two parts snap onto the same screen pixel the core of a cable
- * and the body of a packet win: at the Village's ½ Fit floor a cable is still a dark line and a
- * packet still a coloured dot. Both are culled to the view first — a frame can carry ~100 runs
- * and a few hundred packets.
- */
+/** Seats-room LAN (engine/lan.ts): 2-px cables darker than every floor, team packets, uplink
+ * glints. Below zoom 1 what must survive is painted LAST (a cable's core, a packet's body); all is
+ * culled to the view first (a frame can carry ~100 runs and hundreds of packets). */
 
 import type { DrawItem } from "../villageTypes";
 import type { Camera } from "./camera";
@@ -90,17 +68,9 @@ export function drawPacket(ctx: DrawTarget, cam: Camera, item: Packet, view: Vie
   rect(ctx, cam, x - b, y - b, PACKET.body, PACKET.body, c.body);
 }
 
-// ───────────────────────────── Wi-Fi (engine/teamLan.ts) ─────────────────────────────
-//
-// A project room's boss talks to its router over the air (the boss is on Wi-Fi):
-// while they talk, Wi-Fi pulses ripple out of both antennas. A pulse is a pixel RING — a 1-px circle
-// drawn cell by cell (midpoint circle, no canvas arc: no anti-aliasing, the pixel look) — that grows
-// from MIN_R to MAX_R and fades out as its `phase` goes 0 → 1. A ring, not an upward fan: a village
-// router hangs right under its house's name board, which hides most of what rises above it at the
-// usual zooms, and a ring still shows its lower half in the room. Like a team packet it is a pale,
-// bright line in the team's hue with a dark rim of the same hue just outside it, so it reads on a dark
-// plank floor (the line) and on light plaster (the rim) alike; the line is painted last, so below
-// zoom 1 it is the line that survives.
+// ── Wi-Fi (engine/teamLan.ts) ── A pulse is a 1-px midpoint-circle RING (no canvas arc, no AA)
+// growing MIN_R → MAX_R as `phase` goes 0 → 1; a ring because the name board hides what rises
+// above the router. Its dark rim and pale line read on any floor; the line is painted last.
 
 /** A pulse's radius range, world px: just sent → fully spread. */
 export const WIFI = { minR: 2, maxR: 12 } as const;
@@ -111,10 +81,7 @@ export function wifiRadius(phase: number): number {
   return WIFI.minR + Math.round(p * (WIFI.maxR - WIFI.minR));
 }
 
-/**
- * A pulse's colours at `phase`: the ring pale and bright, its rim dark — both in the team's hue, both
- * fading with the phase (fully opaque ring at 0, nothing left at 1).
- */
+/** A pulse's ring (pale) and rim (dark) in the team's hue, fading from opaque at 0 to gone at 1. */
 export function wifiColors(hue: number, phase: number): { ring: string; rim: string } {
   const fade = 1 - Math.min(1, Math.max(0, phase));
   const a = (v: number) => Math.round(v * fade * 1000) / 1000;
@@ -181,10 +148,8 @@ function ringRuns(r: number): { ring: Run[]; rim: Run[] } {
 
 type Wifi = Extract<DrawItem, { t: "wifi" }>;
 
-/**
- * One Wi-Fi pulse this frame: a ring of `wifiRadius(phase)` round (x, y), rim first, then the ring.
- * Nothing once faded out (phase ≥ 1, or not a number), nothing off-screen.
- */
+/** One pulse: rim, then ring, `wifiRadius(phase)` round (x, y). Nothing once faded (phase ≥ 1 or
+ * NaN) or off-screen. */
 export function drawWifi(ctx: DrawTarget, cam: Camera, item: Wifi, view: View): void {
   const { x, y, phase, hue } = item;
   if (!(phase < 1)) return;

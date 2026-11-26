@@ -1,37 +1,6 @@
-/**
- * Bare Cmd/Ctrl+O and the UNCLAIMED Cmd/Ctrl+F — the two find keys a hand reaches
- * for before it remembers the Shift (Ctrl+F and Ctrl+O use the workspace of the
- * window that is open).
- *
- * Before this, both keys did nothing outside a find-capable surface: bare Mod+O had
- * no binding anywhere (no native menu item either — `src-tauri/src/menu.rs` binds only
- * Cmd+W), and Mod+F answered only when focus sat in an editor, a terminal, a rendered
- * preview, an API response, a results grid or the logs panel. On a village tab, an
- * empty pane, a tree row or a tab header, the key fell on the floor.
- *
- *   • **Mod+O → quick-open a file** (the `<FindFiles/>` overlay, same as Mod+Shift+O).
- *     IntelliJ's habit (⌘O / ⌘⇧O are both "go to"), and VS Code's ⌘O "open file"
- *     means the same thing in an app with no native open dialog. It is an OPEN, never
- *     a toggle. Exception: on Linux/Windows, Ctrl+O inside a TERMINAL stays with the
- *     shell (readline's operate-and-get-next, nano's write-out), exactly as macOS
- *     Ctrl+F stays with readline in `terminal/find/searchModel`.
- *
- *   • **Mod+F nobody claimed → Find in Files.** Strictly a FALLBACK: every in-surface
- *     find keeps the key (the terminal's capture listener stops it dead; CodeMirror,
- *     the preview's own window listener, ResponseBody, ResultsGrid and the logs panel
- *     all `preventDefault`). The decision is taken a macrotask AFTER dispatch, because
- *     the preview's window listener may have been registered after this one and so
- *     runs later in the same dispatch; by the timer, `defaultPrevented` is final.
- *     A key typed into some other text field (a rail filter box) is left alone, the
- *     same rule as `editor/previewFind.isEditableTarget`.
- *
- * Both overlays open on the scope of the tab the user is in (`find/ScopeSelector`'s
- * `useScope`), so in a torn-off window — which mounts this host too — they search
- * THAT window's workspace. Platform modifiers are strict (⌘ on macOS, Ctrl elsewhere),
- * so macOS Ctrl+F / Ctrl+O always reach the PTY or the field untouched.
- *
- * Renders nothing — an effect host mounted once per window (App, TearoffApp).
- */
+/** Bare Mod+O quick-opens (but off macOS Ctrl+O in a terminal stays the shell's); an unclaimed
+ * Mod+F opens Find in Files, decided a macrotask after dispatch so `defaultPrevented` is final.
+ * Both use the current tab's scope; modifiers are strict (⌘ on macOS, Ctrl elsewhere). */
 
 import { useEffect } from "react";
 
@@ -48,10 +17,7 @@ export interface ModKeyEvent {
   shiftKey: boolean;
 }
 
-/**
- * Which bare platform-modifier find key is this — "f", "o", or neither?
- * Shift and Alt variants belong to other bindings (Find in Files, quick open).
- */
+/** Shift and Alt variants belong to other bindings (Find in Files, quick open). */
 export function bareFindKey(e: ModKeyEvent, mac: boolean): "f" | "o" | null {
   if (e.altKey || e.shiftKey) return null;
   const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;

@@ -1,25 +1,6 @@
-/**
- * The dev-apps store — the list Rust polls, the app the user selected, the log streams this UI
- * started, and the Restart-in-the-IDE flow.
- *
- * Its own feature-local `create(...)`. Everything a user does here lives in it rather than in
- * component state, because the Logs panel is a TAB and remounts on every switch:
- * a restart confirm, a stream error or the selected app must survive that.
- *
- * ── Polling runs only while something is on screen ──
- * `procs_list` walks every process's fds, so it costs CPU. Views hold it with
- * {@link acquireProcs} on mount and let go with {@link releaseProcs} on unmount (or just call
- * {@link useProcsPolling}). The stop is DEFERRED one macrotask and cancelled by a re-acquire, so
- * React StrictMode's mount → unmount → mount (and a tab move's remount) keeps exactly one
- * interval — the Network view's `machineStore` pattern. A tick that lands while the previous
- * `procs_list` is still in flight is skipped, so a slow scan never stacks calls. A failure is not
- * sticky: the next tick tries again and a success clears the error.
- *
- * ── Streams ──
- * Only streams started FROM HERE are tracked; Rust's key comes back with the tail and is the only
- * handle Stop uses. A stream outlives its app's row on purpose: a file tail keeps working after
- * the process that wrote it exits, and the Logs view keeps showing it as a source of its own.
- */
+/** Dev-apps store; user state lives here as the Logs tab remounts. `procs_list` walks every fd,
+ * so polling runs only while held; the stop waits one macrotask (StrictMode), overlapping ticks
+ * are skipped, failures are not sticky. Streams started here outlive their app's row on purpose. */
 
 import { useEffect } from "react";
 import { create } from "zustand";
@@ -62,11 +43,7 @@ export interface ProcsState {
   streamErrors: Record<string, string>;
   /** At most one restart at a time — it SIGTERMs a process. */
   restart: RestartState | null;
-  /**
-   * The Apps group's runtime sections the user opened or closed. Absent = the default: open
-   * while it has apps, closed while empty ({@link runtimeSectionOpen}). Here, not in component
-   * state, so a tab switch keeps it.
-   */
+  /** User-toggled runtime sections; absent = the default ({@link runtimeSectionOpen}). */
   runtimeOpen: Partial<Record<DevRuntime, boolean>>;
 }
 
@@ -182,11 +159,8 @@ export function streamsOf(s: ProcsState, appKey: string): ActiveStream[] {
   return s.streams.filter((x) => x.appKey === appKey);
 }
 
-/**
- * Start one stream: `path` = a file of `app`'s (tailed by pid), null = its container's logs.
- * Resolves to the new stream's `source`, or null when it did not start (already streaming, in
- * flight, nothing to tail, or Rust refused — the error is then on the card).
- */
+/** `path` = a file of `app`'s (tailed by pid), null = its container's logs. Resolves to the new
+ * `source`, or null when not started (an error is then on the card). */
 export async function startStream(app: DevApp, path: string | null): Promise<string | null> {
   const id = streamId(app.key, path);
   const s = useProcsStore.getState();
@@ -269,14 +243,9 @@ export function cancelRestart(): void {
   useProcsStore.setState((s) => (s.restart?.phase === "running" ? {} : { restart: null }));
 }
 
-/**
- * The user confirmed: prepare (Rust re-reads the pid and mints a token), then restart. Resolves
- * to the new terminal's id, or null on failure (the error is then on the card).
- *
- * DECIDED — pid reuse: the confirm named what the LAST POLL saw, up to 3 s old. If the pid has
- * since been reused by another program, `prepare`'s summary names that program, and we stop
- * there — the token is never spent, so nothing is SIGTERMed that the user did not confirm.
- */
+/** Prepare (Rust re-reads the pid, mints a token), then restart; null on failure. If the pid was
+ * reused since the last poll, `prepare`'s summary names the other program and we stop there:
+ * the token is never spent, so nothing unconfirmed is SIGTERMed. */
 export async function confirmRestart(app: DevApp): Promise<string | null> {
   const r = useProcsStore.getState().restart;
   if (r === null || r.appKey !== app.key || r.phase !== "confirm" || app.pid === null) return null;

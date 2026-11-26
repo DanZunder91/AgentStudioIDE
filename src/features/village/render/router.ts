@@ -1,16 +1,6 @@
-/**
- * Agent Village — a project room's Wi-Fi router (the boss is on Wi-Fi). Its team's
- * PCs / laptops are cabled to it and its boss talks to it over the air (engine/teamLan.ts); the
- * pulses are `drawWifi` in render/lan.ts. Our own procedural pixel art, anchored like every prop:
- * (x0, bottom) = the footprint's left and bottom edges, world px.
- *
- * A small white box hung at the top of its tile — right under the back wall's face, the Seats
- * switch's spot, so it reads as wall-mounted in the top-down village and the side-view city alike —
- * with a dark outline (it must read on light plaster and dark planks alike), a white top, a grey
- * front with a dark LED window, and two black antennas leaning out of its top corners, rising a few
- * px over the wall's foot. The box's bottom edge sits just under the tile's centre line, where the
- * room's cables meet it (they are drawn under it).
- */
+/** A project room's Wi-Fi router: team PCs are cabled to it, the boss talks over the air
+ * (engine/teamLan.ts; pulses: `drawWifi` in render/lan.ts). (x0, bottom) = the footprint's left
+ * and bottom edges, world px. Hung at the tile's top so it reads wall-mounted in both views. */
 
 import type { Camera } from "./camera";
 import { rect } from "./paint";
@@ -46,12 +36,9 @@ const ROUTER_FRAMES = 3;
 /** How far the antennas rise above the tile's top edge, world px. */
 export const ROUTER_RISE = 4;
 
-/**
- * The router at (x0, bottom). `on` (its room has traffic) lights the activity LEDs green with one
- * flashing on each `frame` (0..2; any integer is taken mod 3); off they are dim and do not change with
- * `frame`. The power LED is lit either way. Paints inside `[x0 + 1, x0 + 15) × [bottom − 16 −
- * ROUTER_RISE, bottom − 6)`: its tile, and the antennas a few px over the tile's top edge.
- */
+/** `on` lights the activity LEDs, one flashing per `frame` (taken mod 3); off they are dim and
+ * frame-independent. The power LED is always lit. Paints within
+ * `[x0 + 1, x0 + 15) × [bottom − 16 − ROUTER_RISE, bottom − 6)`. */
 export function drawRouter(ctx: DrawTarget, cam: Camera, x0: number, bottom: number, on: boolean, frame: number): void {
   const f = ((Math.trunc(frame) % ROUTER_FRAMES) + ROUTER_FRAMES) % ROUTER_FRAMES;
   const top = bottom - 16;

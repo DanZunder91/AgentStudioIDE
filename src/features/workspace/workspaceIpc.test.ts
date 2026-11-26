@@ -1,11 +1,4 @@
-/**
- * `workspaceIpc` — the filesystem half of the command surface, at the wire.
- *
- * A thin wrapper, and thin wrappers are exactly where the command *name* and the
- * arg *shape* are the whole contract: get either wrong and Rust rejects the call
- * at runtime with types none the wiser. `read_dir`'s real exercise is driven
- * through `<WorkspaceTree>`; this pins the marshalling.
- */
+/** Pins the marshalling: a wrong command name or arg shape fails only at runtime, in Rust. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

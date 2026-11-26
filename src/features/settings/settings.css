@@ -1,7 +1,4 @@
-/* ── Settings menu ───────────────────────────────────────────────────────────
-   A titlebar gear that opens a small popover. Calm dark aesthetic, theme vars
-   from App.css. The trigger reuses `.titlebar__icon-btn`; this file adds the
-   popover + the accessible switch. */
+/* ── Settings menu ── titlebar gear popover; the trigger reuses `.titlebar__icon-btn`. */
 
 .settings-menu {
   position: relative;
@@ -85,10 +82,8 @@
   background: #fff;
 }
 
-/* ── share-a-config: the two action items ────────────────────────────────────
-   Buttons, not rows: these DO something rather than toggling a preference, so they
-   take the whole width and are clickable anywhere in it. Same type scale and the same
-   `--text-dim` hint colour as the rows above, so the menu reads as one thing. */
+/* ── share-a-config: the two action items ── full-width buttons (they act, not toggle),
+   with the rows' type scale and `--text-dim` hint colour. */
 .settings-menu__separator {
   height: 1px;
   margin: 10px -10px;          /* bleeds to the popover's edges, past its padding */

@@ -1,20 +1,6 @@
-/**
- * Agent Village — the Tokyo street props (engine/streetTheme.ts places them): a cherry tree in
- * bloom with its petals falling, a drinks vending machine, and a shrine gate.
- *
- * The Tokyo theme: sakura trees with petals falling from them, vending machines on the street, and
- * some temples. Our own procedural pixel art (no reference image is copied), anchored like every prop: (x0, bottom) = the
- * footprint's left and bottom edges, world px; the art rises above the footprint. Deterministic —
- * the petals move with the clock `t` alone, so a frame at the same time always looks the same.
- *
- *   drawSakura  2×2  pink canopy (deep shade underneath, layered pinks, white blossoms) on a dark
- *                    crooked trunk; petals drift down and sideways to the ground, rest, and loop.
- *   drawVending 1×1  2 tiles tall: blue or red body, a lit window of bottles in rows, a button
- *                    under each column, a coin panel, the dark pickup slot. Brighter at night.
- *   drawTorii   3×1  vermilion pillars on black feet, the nuki tie beam, a plaque, the shimaki and
- *                    the black kasagi on top with upturned ends — rising ~2¾ tiles.
- *   vendingGlow      the machine's cool halo for the night-lights pass (render/ambience.ts).
- */
+/** Tokyo street props, placed by engine/streetTheme.ts. Anchored like every prop: (x0, bottom) is
+ * the footprint's left and bottom edges, world px. Deterministic: petals move with the clock `t`
+ * alone. */
 
 import { hashString } from "../engine/rng";
 import type { Camera } from "./camera";
@@ -44,10 +30,7 @@ export const PETALS = 6;
 export const PETAL_PERIOD = 4;
 /** Share of the cycle a petal spends falling; the rest it lies on the ground. */
 const FALL = 0.8;
-/**
- * Where a petal can ever be, relative to (x0, bottom): it starts in the canopy's lower part, drifts
- * right (a breeze) and sways, and lands on the footprint's last rows. Exclusive right and bottom.
- */
+/** Every place a petal can be, relative to (x0, bottom); right and bottom are exclusive. */
 export const PETAL_COLUMN = { left: 1, right: 38, top: -24, bottom: 0 } as const;
 
 /** One petal this frame, world px. */
@@ -59,12 +42,8 @@ export interface Petal {
   color: string;
 }
 
-/**
- * The tree's falling petals at time `t` (seconds). Each petal has its own start in the canopy, its
- * own landing row, drift and sway, and its own offset in the shared cycle (so they never fall in
- * step); a tree's are seeded by its position, so neighbours differ. Exactly periodic in `t` with
- * PETAL_PERIOD. A petal is 2×1 lying flat and 1×1 edge-on as it turns.
- */
+/** Falling petals at `t` seconds, each at its own offset in the shared cycle; seeded by the tree's
+ * position so neighbours differ. Exactly periodic in `t` with PETAL_PERIOD. */
 export function sakuraPetals(x0: number, bottom: number, t: number): Petal[] {
   const out: Petal[] = [];
   for (let k = 0; k < PETALS; k++) {
@@ -197,10 +176,7 @@ export function vendingVariant(id: string): 0 | 1 {
 const BOTTLE_X = [3, 5, 7, 9, 11];
 const BOTTLE_ROW = [26, 22, 18];
 
-/**
- * A drinks vending machine, one tile wide and two tall: `variant` 0 blue / 1 red; `lightsOn` (night,
- * dusk, a storm) brightens the window and lights the buttons.
- */
+/** A 1×2-tile vending machine: `variant` 0 blue / 1 red; `lightsOn` lights window and buttons. */
 export function drawVending(ctx: DrawTarget, cam: Camera, x0: number, bottom: number, variant: number, lightsOn: boolean): void {
   const b = bottom;
   const V = VENDING;
@@ -238,10 +214,8 @@ const GLOW_RADII = [6, 10, 14];
 const GLOW_CX = 7;
 const GLOW_CY = 21;
 
-/**
- * A soft round pool of light (crossed bands, brightest at the core — `render/ambience.ts`'s lamp
- * glow) round the machine's window, and a pool on the ground. For the night-lights pass.
- */
+/** The machine's soft pool of light (`render/ambience.ts`'s lamp glow) round the window and on
+ * the ground, for the night-lights pass. */
 export function vendingGlow(ctx: DrawTarget, cam: Camera, x0: number, bottom: number): void {
   const cx = x0 + GLOW_CX;
   const cy = bottom - GLOW_CY;

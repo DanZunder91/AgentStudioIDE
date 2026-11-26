@@ -1,10 +1,3 @@
-/**
- * The Seats room's LAN art: a cable is 2 px across (a lit edge over a dark core) and covers
- * exactly its run plus a half-width cap at each end; a team packet is a bright square in its
- * team's hue inside a dark rim; an uplink packet is a smaller, paler, see-through glint — and
- * nothing off-screen is painted.
- */
-
 import { describe, expect, it } from "vitest";
 
 import type { DrawItem } from "../villageTypes";

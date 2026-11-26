@@ -1,19 +1,6 @@
-//! Secrets in a command line, masked **for display**. A dev app's
-//! argv is shown in the app card and in Restart's confirm; `--password=…` there would put a
-//! credential on screen and into a screenshot. The real argv never leaves Rust (Restart
-//! uses it from the token store, [`super::restart`]).
-//!
-//! Masked, each keeping its key so the user still sees *what* was passed:
-//! - `--password=x`, `-password=x`, `--api-key=x`: a flag whose name is secret-looking;
-//! - `--token x`: the value after such a flag (unless it is itself a flag);
-//! - `DB_PASSWORD=x`, `OPENAI_API_KEY=x` (the `env K=V cmd` / `launcher K=V` shape): an
-//!   environment-style assignment whose name is secret-looking — `*_KEY`, `*_TOKEN`, …;
-//! - `-Ddb.password=x` (a JVM system property);
-//! - `postgres://user:pw@host` → `postgres://user:••••@host` (URL userinfo anywhere);
-//! - `Authorization: Bearer x` → `Authorization: ••••`.
-//!
-//! A false positive (`--key ./tls.pem` masked) costs a path on screen; a false negative
-//! leaks a secret. So the word list leans wide. Pure; table-tested.
+//! Masks secrets in a dev app's argv for DISPLAY (card, Restart confirm); the real argv never
+//! leaves Rust. Keys stay visible: secret-looking flags/values, `K=V` env, `-D` props, URL
+//! userinfo, `Authorization:`. The word list leans wide: a false negative leaks a secret.
 
 /// What a masked value is replaced with.
 pub const MASK: &str = "••••";

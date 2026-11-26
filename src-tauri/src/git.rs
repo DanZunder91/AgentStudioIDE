@@ -1,24 +1,11 @@
-//! Git branch resolution for `AgentNode.branch` (ARCHITECTURE §2.2 — the left
-//! rail renders `branch • cwd`).
-//!
-//! **Reads `.git` directly rather than shelling out to `git`.** A subprocess per
-//! agent spawn would be slow on the control path, and — more importantly — a
-//! GUI-launched app has a minimal `PATH` (see `agent::claude::resolve_binary`), so
-//! `git` may not even be findable. The file format here is stable and trivial.
-//!
-//! **A directory that is not a repo is a normal case, never an error**: agents run
-//! wherever the user points them. Every failure path returns an empty string.
+//! Git branch resolution for `AgentNode.branch` (ARCHITECTURE §2.2). Reads `.git` directly, never
+//! `git`: a GUI-launched app has a minimal `PATH`. A non-repo directory is normal, never an error:
+//! every failure path returns an empty string.
 
 use std::path::{Path, PathBuf};
 
-/// The branch checked out at `cwd`, or `""` when there isn't one.
-///
-/// Returns `""` — not an error — for: a non-repo directory, an unreadable `.git`,
-/// a repo with no commits yet, or anything malformed. `branch` is a required
-/// `string` on the wire (`types.ts`), and the UI simply renders nothing for empty.
-///
-/// Detached HEAD yields the short SHA, which is what a user would recognise from
-/// their prompt.
+/// The branch checked out at `cwd`, or `""` for no repo, unreadable/malformed `.git` or no
+/// commits (`branch` is a required string on the wire). Detached HEAD yields the short SHA.
 pub fn current_branch(cwd: &Path) -> String {
     match find_git_dir(cwd) {
         Some(git_dir) => read_head(&git_dir).unwrap_or_default(),
@@ -26,14 +13,8 @@ pub fn current_branch(cwd: &Path) -> String {
     }
 }
 
-/// The **working root** of the git repo containing `start` — the directory that
-/// holds `.git` — or `None` if `start` is not inside a repo.
-///
-/// Distinct from [`find_git_dir`], which returns the *gitdir* (resolved through
-/// worktree indirection). `default_workspace` wants the folder the user thinks of
-/// as "the project", so it wants the working root. `.git` is present (as a dir in a
-/// normal repo, a file in a worktree/submodule) exactly at the working root, so we
-/// return the first ancestor that has one.
+/// The working root (the dir holding `.git`) of the repo containing `start`, or `None`. Unlike
+/// [`find_git_dir`], which returns the gitdir resolved through worktree indirection.
 pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
     let mut dir = Some(start);
     while let Some(d) = dir {
@@ -45,32 +26,15 @@ pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// The git repository root containing `path` — the working root that holds
-/// `.git` — or `None` when `path` is not inside a repo. Equivalent to
-/// `git rev-parse --show-toplevel`.
-///
-/// The ad-hoc-detection hook is installed here rather than in
-/// the terminal's cwd: `claude` walks **up** from the session's cwd to find
-/// `.claude/`, so a single hook at the repo root covers every subdirectory the
-/// user might `cd` into before typing `claude`. A per-cwd install missed exactly
-/// that — the user changing directory into another folder of the same (or a
-/// different) repo.
-///
-/// **Reads `.git` directly** (via [`find_repo_root`]), never shelling out to
-/// `git`: a GUI-launched app has a minimal `PATH` and may not find `git` at all
-/// (see the module header and `agent::claude::resolve_binary`), and a subprocess on
-/// the control path is the cost this module exists to avoid. `.git` is present (a
-/// dir in a normal repo, a file in a worktree/submodule) exactly at the working
-/// root, which is precisely what `--show-toplevel` reports.
+/// The repo working root containing `path` (like `git rev-parse --show-toplevel`), or `None`.
+/// The ad-hoc-detection hook is installed here, not in the cwd: `claude` walks up to find
+/// `.claude/`, so one hook at the root covers every subdirectory.
 pub fn git_root(path: &Path) -> Option<PathBuf> {
     find_repo_root(path)
 }
 
-/// Walk up from `cwd` looking for `.git`, resolving the worktree/submodule
-/// indirection.
-///
-/// Walking up matters: an agent is very often started in a subdirectory of the
-/// repo, and only the root holds `.git`.
+/// Walk up from `cwd` (agents often start in a subdirectory) looking for `.git`, resolving the
+/// worktree/submodule indirection.
 fn find_git_dir(cwd: &Path) -> Option<PathBuf> {
     let mut dir = Some(cwd);
     while let Some(d) = dir {
@@ -79,10 +43,8 @@ fn find_git_dir(cwd: &Path) -> Option<PathBuf> {
             return Some(dot_git);
         }
         if dot_git.is_file() {
-            // A linked worktree or submodule: `.git` is a file containing
-            // `gitdir: /abs/path/to/real/gitdir`. Without following it, every
-            // agent in a worktree would report no branch — and worktree-per-agent
-            // is the isolation model prior-art says we will adopt (ARCHITECTURE §9).
+            // Worktree or submodule: `.git` is a file `gitdir: /abs/path`. Unfollowed,
+            // every agent in a worktree reports no branch (ARCHITECTURE §9).
             let contents = std::fs::read_to_string(&dot_git).ok()?;
             let path = contents.strip_prefix("gitdir:")?.trim();
             let resolved = PathBuf::from(path);

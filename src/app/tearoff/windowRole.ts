@@ -1,20 +1,6 @@
-/**
- * Which window is this JS realm running in? (tab tear-off, docs/design/tab-tearoff.md)
- *
- * Every Tauri window is a separate realm with its own module instances and its own store,
- * all loaded from the same bundle. The ROLE decides what the realm boots: the main window
- * runs the whole app (rails, fleet bridge, layout persistence); a detached window runs a
- * minimal shell — its pane tree and tab strip — and must not start the app-wide pollers or
- * write `layout-prefs.json`.
- *
- * The role comes from the window's LABEL, which Tauri injects into every webview
- * (`__TAURI_INTERNALS__.metadata.currentWindow.label`) — not from the URL, which a page can
- * navigate. Rust mints detached labels with the same prefix (`tearoff.rs` `LABEL_PREFIX`)
- * and `capabilities/tearoff.json` grants exactly `tearoff-*`.
- *
- * Outside Tauri (a jsdom test, the browser tier) there is no metadata, and the realm is the
- * main window — which is what every existing test renders.
- */
+/** Which window this realm runs in (tab-tearoff.md): main runs the whole app, detached a minimal
+ * shell (no app-wide pollers, no `layout-prefs.json`). Read from the injected LABEL, never the URL;
+ * prefix synced with `tearoff.rs` and `capabilities/tearoff.json`. No Tauri (tests) → main. */
 
 /** The main window's label (`tauri.conf.json`). */
 export const MAIN_WINDOW = "main";

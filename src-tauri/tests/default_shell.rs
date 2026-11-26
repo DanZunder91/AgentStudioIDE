@@ -1,11 +1,5 @@
-//! `pty::default_shell()` — the per-OS fallback chain (ARCHITECTURE §2.4).
-//!
-//! **Why this is its own test binary:** the function reads `$SHELL`, so pinning
-//! its branches means mutating process-global env. `cargo test` runs the tests
-//! within one binary on parallel threads, and `set_var` is process-wide — a
-//! sibling test reading `$SHELL` at the wrong moment would flake. Isolating the
-//! mutation in its own binary, in a single sequential `#[test]`, makes that
-//! impossible rather than unlikely.
+//! `pty::default_shell()`'s per-OS fallback chain (ARCHITECTURE §2.4). Own binary, one
+//! sequential test: it mutates the process-global `$SHELL`, which parallel siblings would race.
 
 use agent_studio_scaffold_lib::pty::default_shell;
 

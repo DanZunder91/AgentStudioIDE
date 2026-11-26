@@ -1,17 +1,6 @@
-//! Whole-computer network connections for the Network view — macOS nettop / Linux /proc /
-//! Windows iphlpapi.
-//!
-//! Every app's sockets, **without any OS permission**: macOS reads the built-in
-//! `/usr/bin/nettop` (no root, no prompt), Linux reads world-readable `/proc/net/*` and names
-//! only the user's own processes (others are `other user`), Windows reads the kernel's TCP/UDP
-//! tables with their owning pids (`GetExtendedTcpTable`; every process is named, but there are
-//! no byte counts). Nothing is installed (zero-install) and no shell is involved.
-//!
-//! Layout: the parsers (`nettop`, `procnet`, `wintable`), the rate math (`rates`) and the
-//! reverse-DNS cache (`rdns`) are pure and compiled on every OS, so the Linux and Windows
-//! parsers are tested on the Mac too. Only the thin spawn/read glue (`macos`, `linux`,
-//! `windows`) is `cfg`-gated. The sampler writes to an injected [`SampleSink`] so the
-//! start/stop lifecycle is tested without Tauri.
+//! Whole-computer network connections for the Network view with no OS permission: macOS
+//! `nettop`, Linux `/proc/net/*` (own processes named), Windows TCP/UDP tables (no byte counts).
+//! Parsers are pure and tested on every OS; only the spawn/read glue is `cfg`-gated.
 
 pub mod names;
 pub mod nettop;

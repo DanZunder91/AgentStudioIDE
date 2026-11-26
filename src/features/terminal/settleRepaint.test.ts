@@ -1,13 +1,5 @@
-/**
- * The settle repaint's rules (`settleRepaint.ts`), one test each, on a terminal whose frames
- * the test draws by hand — so "a frame was drawn", "output was parsed" and "the animation
- * frame ran" happen exactly when the test says. The same module on real xterm and a real
- * WebGL canvas, in real layout, is `restoredPaint.browser.test.tsx`.
- *
- * What the rules protect against, on an engine that shows a canvas one draw late
- * (WebKitGTK): a terminal whose last draw was its output shows the frame before it —
- * blank — until something draws again.
- */
+/** Frames are drawn by hand, so draw/parse/animation-frame timing is the test's. Real xterm and
+ * WebGL in real layout: `restoredPaint.browser.test.tsx`. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installSettleRepaint, SETTLE_REPAINT_MS, type Repaintable } from "./settleRepaint";

@@ -1,35 +1,6 @@
-/**
- * Agent Logs → the Sources sidebar, the pure half (the logs of running apps must be easy to
- * find, and which apps are running must be easy to see; one log stream per
- * thing — the Running strip grew into a sidebar grouped Services / Terminals / Agents / Mac
- * apps).
- *
- * Everything here is derived from the log lines alone — no fleet store, no extra IPC — so
- * the sidebar can never disagree with the stream under it. One entry per SOURCE label (the
- * same key the Source picker and the row's source cell use), because "show only that
- * source" is what a click on a row does.
- *
- * What makes a source live, by the wire texts Rust emits (they are the contract):
- *   - background task — `system` `background task started · <program> (<id>)` → running,
- *     `background task stopped · <program> (<id>) — <reason>` → stopped with that reason
- *     (`logstream/tasks.rs` `STARTED_PREFIX`/`STOPPED_PREFIX`). `task` lines with no start
- *     seen (it scrolled out of the ring, or was cleared) still mean it is running.
- *   - IDE terminal — `terminal opened · …` → running, `terminal exited …` /
- *     `terminal closed` → stopped. A source seen with `output` and no lifecycle is running.
- *   - agent — `agent started · …` / `sub-agent started…` → running; `agent exited …`,
- *     `agent session ended`, `sub-agent finished|failed` → stopped. Tool calls with no
- *     lifecycle seen mean it is running.
- *   - Mac app — a `machine` source, listed only while the system-apps stream is on.
- *   - dev app's log — `system` `app log started · <source>` → running, `app log stopped ·
- *     <source> — <reason>` → stopped (`logstream/apps.rs` `APP_STARTED_PREFIX`/`APP_STOPPED_PREFIX`).
- *     `app` lines with no start seen mean it is running. Listed whatever the system-apps switch
- *     says: the user started this stream by hand from an app's card.
- *
- * A root agent and its terminal share one label (`claude · gazelle`), so they are one
- * chip; the LAST lifecycle event decides whether it is running. Output after a stop never
- * flips it back — only an explicit start does (a stopped task's final flush lands just
- * before its closing line, and a late byte must not resurrect it).
- */
+/** Sources sidebar, the pure half: derived from log lines alone (no store, no IPC), one entry per
+ * SOURCE label. Liveness reads Rust's lifecycle texts (contract: `logstream/tasks.rs`, `apps.rs`);
+ * the LAST lifecycle event wins, and output after a stop never revives a source. */
 
 import type { AppPickerItem } from "../../components/AppPicker";
 import { APPS_TITLE } from "../procs/procsFormat";
@@ -45,13 +16,8 @@ export const TASK_STOPPED_PREFIX = "background task stopped · ";
 export const APP_STARTED_PREFIX = "app log started · ";
 export const APP_STOPPED_PREFIX = "app log stopped · ";
 
-/**
- * What a source IS — and, one to one, which sidebar group it sits in: `task` →
- * Services (a background task and the file it redirects to, e.g. `gazelle`), `terminal` →
- * Terminals, `agent` → Agents (root + sub-agents), `machine` → Mac apps / System apps,
- * `app` → a dev app's log stream, listed by the sidebar UNDER its app in the **Apps** group
- * (`agentLogsApps.ts` does the placing).
- */
+/** What a source is, one-to-one with its sidebar group: `task` → Services, `terminal`, `agent`
+ * (root + sub-agents), `machine` → Mac/System apps, `app` → under its app (`agentLogsApps.ts`). */
 export type RunningKind = "task" | "agent" | "terminal" | "machine" | "app";
 
 export interface RunningSource {
@@ -124,12 +90,8 @@ interface Acc {
   live: boolean;
 }
 
-/**
- * Derive the strip. `machineStreaming` says whether the system-apps stream is on right
- * now; without it Mac-app sources are left out (their lines are history, not "running").
- * Order: running first (by when they were first seen — chips do not jump as lines
- * arrive), then stopped (most recently stopped first).
- */
+/** Derive the sources. Without `machineStreaming`, Mac-app sources are left out (their lines are
+ * history). Running first by first-seen (chips don't jump), then most recently stopped. */
 export function deriveRunning(lines: readonly LogLine[], machineStreaming: boolean): RunningSource[] {
   const by = new Map<string, Acc>();
   for (const line of lines) {
@@ -240,18 +202,11 @@ export function chipTitle(s: RunningSource, nowMs: number, machineLabel: string)
 
 /* ───────────────────────────── the sidebar's groups ───────────────────────────── */
 
-/**
- * The sidebar's order: the apps first (a top group **Apps**, above Services — it replaced an
- * older group at the bottom), then what the agents run,
- * then where they run, then who runs.
- */
+/** Sidebar group order: Apps, then what the agents run, where they run, who runs. */
 export const GROUP_ORDER: readonly RunningKind[] = ["app", "task", "terminal", "agent", "machine"];
 
-/**
- * The group headings; the machine one follows the backend ("Mac apps" / "System apps"), the
- * dev-app one is the procs section's own heading ("Apps") so the toolbar picker's sublabel and
- * the sidebar heading read the same.
- */
+/** Group headings: machine follows the backend ("Mac apps" / "System apps"); dev apps use the
+ * procs heading ("Apps") so the picker sublabel and sidebar heading match. */
 export function groupLabel(kind: RunningKind, machineLabel: string): string {
   if (kind === "task") return "Services";
   if (kind === "terminal") return "Terminals";
@@ -285,11 +240,8 @@ export function groupSingular(kind: RunningKind, machineLabel: string): string {
 
 /* ───────────────────────────── the stream header ───────────────────────────── */
 
-/**
- * What the header above a solo stream says. The Source column no longer disappears on a
- * solo (its coming and going read as a new, empty column), so the header is
- * where the selection is announced: `gazelle · service · ● running · 26 lines · 1 error`.
- */
+/** Header above a solo stream (`gazelle · service · ● running · 26 lines · 1 error`); it, not
+ * the Source column, announces the selection. */
 export interface StreamHeader {
   /** The wire label — the key the "All sources" link and the row click share. */
   source: string;
@@ -304,12 +256,8 @@ export interface StreamHeader {
   text: string;
 }
 
-/**
- * The header for `source` over the ring. Kind and state come from the same derivation as the
- * sidebar, with Mac apps always included (a solo picked through the toolbar can name one while
- * the stream is off); the counts are the source's own lines, so they are right even for a
- * source the derivation leaves out.
- */
+/** Header for `source`: kind/state from the sidebar derivation with Mac apps always included (a
+ * toolbar solo can name one while off); counts are the source's own lines. */
 export function streamHeader(
   source: string,
   lines: readonly LogLine[],
@@ -337,14 +285,8 @@ export function streamHeader(
 
 /* ───────────────────────────── the toolbar's source picker ───────────────────────────── */
 
-/**
- * The picker's rows, grouped like the sidebar: Apps (their log streams) first, then Services, Terminals, Agents, Mac
- * apps — each row's `sublabel` is its group (the shared `AppPicker` has no headings; it
- * renders rows in the order given, so the order IS the grouping). Within a group the
- * sidebar's order (running first, by first appearance). A source the derivation does not
- * list — one whose only lines are a hub warning — goes last, ungrouped, so it can still be
- * picked. Ids stay the wire labels (they are the filter's keys); labels are display names.
- */
+/** Picker rows in sidebar group order (`AppPicker` has no headings: order IS grouping, `sublabel`
+ * names the group); underived sources (hub warnings only) go last. Ids stay wire labels. */
 export function sourcePickerItems(
   sources: readonly string[],
   running: readonly RunningSource[],
@@ -363,13 +305,8 @@ export function sourcePickerItems(
   return out;
 }
 
-/**
- * While the toolbar narrows the stream by content (a query, a level off), how many lines
- * of EACH source it keeps — the count the sidebar shows in place of the line total
- * (search is global, results are per source). The source pick is lifted for the
- * count, so a source you are not looking at still says how much it would show. Null when
- * no content filter is active.
- */
+/** Per-source line counts kept by the content filter (query, level off), with the source pick
+ * lifted; the sidebar shows them instead of totals. Null when no content filter is active. */
 export function matchCountsBySource(lines: readonly LogLine[], filter: LogFilter): ReadonlyMap<string, number> | null {
   if (!contentFilterActive(filter)) return null;
   const global: LogFilter = { ...filter, hiddenSources: [], onlySources: null };

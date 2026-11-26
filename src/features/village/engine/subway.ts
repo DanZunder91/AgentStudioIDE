@@ -1,37 +1,12 @@
-/**
- * The CITY's SUBWAY timetable (a subway under the Seats lounge, whose
- * train goes out and comes back about every three minutes).
- *
- * One train, one track, one round per `SUBWAY_CYCLE_MS`: EASTBOUND (left to right) at the start of each
- * cycle, WESTBOUND half a cycle later. A run comes in from far beyond the world's end, cruises, brakes
- * to a stop at the station (`CitySubway.station`, under the street entrance), waits there with its doors
- * open, pulls away and cruises out past the other end. Constant deceleration and acceleration, so its
- * speed never jumps: it eases into the station and out of it.
- *
- *   |— cruise in —|— brake —|— dwell (doors open) —|— accelerate —|— cruise out —|      …nothing…      |
- *   0          CRUISE_MS                                                     RUN_MS            CYCLE/2
- *
- * A PURE function of the clock (`trainAt`) and the World: no state, nothing to tick. The renderer asks
- * with the frame's clock (`RenderView.timeMs`, the animation loop's `now`), so every view of the same
- * World on that clock shows the train in the same place; and none of it depends on a camera:
- * where the train is, and where its run starts, are properties of the World.
- *
- * How far out a run starts (`trainReach`): past the world's FAR end from the station, by a world's
- * width (at least `REACH_MIN`), so the train is off screen at Fit even where the view runs far past the
- * world (a tall, narrow city). Its cruising speed follows (`trainSpeed`): a run always takes `RUN_MS`.
- *
- * The train is DECORATION: it runs on a timetable, never on anything an agent does. It
- * is not an agent — never hit-tested, labelled or counted.
- */
+/** One round per `SUBWAY_CYCLE_MS`: eastbound, then westbound half a cycle later, easing in and
+ * out of the station. A PURE function of the clock and the World (no state, no camera), so every
+ * view on that clock agrees. Decoration only: never hit-tested, labelled or counted. */
 
 import { TILE, type CitySubway } from "../villageTypes";
 
 /** One round — out and back — every three minutes. */
 export const SUBWAY_CYCLE_MS = 180_000;
-/**
- * Cars in the train, each `CAR_LEN` world px long, `CAR_GAP` px of gangway between two. Eight (up
- * from three).
- */
+/** Cars in the train, each `CAR_LEN` world px long, `CAR_GAP` px of gangway between two. */
 export const TRAIN_CARS = 8;
 export const CAR_LEN = 62;
 export const CAR_GAP = 2;
@@ -57,10 +32,7 @@ export interface TrainState {
   dir: 1 | -1;
   /** How far its doors are open: 0 shut .. 1 wide open (only while it stands at the station). */
   doors: number;
-  /**
-   * Who is aboard, as a seed: one per run before the station and another after it (some got off,
-   * others on), so its riders change at the station and nowhere else.
-   */
+  /** Riders as a seed: one per run before the station, another after, so they change only there. */
   riders: number;
 }
 
@@ -69,11 +41,8 @@ export function stationStop(sub: CitySubway): number {
   return ((sub.station.col0 + sub.station.col1) / 2) * TILE;
 }
 
-/**
- * World px from where a run starts to the stop (and from the stop to where it ends): past the world's
- * farther end from the station by a world's width (at least `REACH_MIN`), and half a train more, so
- * even its last car starts out there.
- */
+/** World px from a run's start to the stop (and stop to end): past the farther world end by a
+ * world's width (at least `REACH_MIN`) plus half a train, so even its last car starts out there. */
 export function trainReach(sub: CitySubway, cols: number): number {
   const w = cols * TILE;
   const stop = stationStop(sub);
@@ -85,10 +54,7 @@ export function trainSpeed(sub: CitySubway, cols: number): number {
   return trainReach(sub, cols) / (CRUISE_MS + BRAKE_MS / 2);
 }
 
-/**
- * The train at `timeMs` (the frame's clock) in a World `cols` wide, or null between runs. Eastbound in
- * the first half of each cycle, westbound in the second.
- */
+/** The train at `timeMs` (frame clock), or null between runs; eastbound in a cycle's first half. */
 export function trainAt(sub: CitySubway, cols: number, timeMs: number): TrainState | null {
   const half = SUBWAY_CYCLE_MS / 2;
   const n = Math.floor(timeMs / half);

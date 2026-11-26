@@ -1,32 +1,6 @@
-//! Which process is on the other end of a proxy connection, and whether decrypting it is safe
-//! (the rule: "never break a client").
-//!
-//! **Why.** Decrypt mode terminates TLS with a leaf from our CA. Only clients that read the CA
-//! variables `pty_env` injects (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, …)
-//! trust it. A compiled Rust/Go service with bundled or platform roots does not — MITM-ing it
-//! fails every one of its upstream calls. So the proxy
-//! decides per connection, by the client's executable: MITM only [`reads_injected_ca`]
-//! runtimes, tunnel everything else with the reason on the row.
-//!
-//! **How the pid is found** (no OS permission, no install — only the user's own processes):
-//! * macOS — libproc: `proc_listpids(PROC_UID_ONLY, uid)`, then per pid
-//!   `proc_pidinfo(PROC_PIDLISTFDS)` + `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)` for each socket fd,
-//!   looking for the TCP socket whose local port is our peer port and whose foreign port is our
-//!   listen port. `proc_pidpath` names it.
-//! * Linux — the `/proc/net/tcp{,6}` row whose local endpoint is our peer and whose remote port
-//!   is our listen port gives the socket inode; `/proc/<pid>/fd/*` → `socket:[inode]` gives the
-//!   pid; `/proc/<pid>/exe` the path.
-//! * Windows — the kernel's TCP table with owning pids (`GetExtendedTcpTable`, no rights
-//!   needed): the row whose local endpoint is our peer and whose remote port is our listen port
-//!   ([`crate::netmachine::wintable::owner_pid`]); `QueryFullProcessImageNameW` names it.
-//!   Without it Windows had no resolver and MITM'd every client, so the first HTTPS call of
-//!   anything that does not read our CA failed there.
-//! * Anything else (or any failure) — `None`.
-//!
-//! Cost: the pids that resolved recently are tried first (one client usually opens many
-//! connections), so a repeat client costs one pid's fd table. A cold scan walks the user's
-//! processes, bounded by [`SCAN_BUDGET`]; it runs on a blocking thread, never on the accept
-//! loop, and a failure only means "unknown client" — it never fails a connection.
+//! Which process owns a proxy connection, and whether decrypting it is safe (never break a
+//! client): only runtimes reading our injected CA vars are MITM'd. The pid comes from libproc,
+//! `/proc/net/tcp` or `GetExtendedTcpTable`, off the accept loop, bounded by [`SCAN_BUDGET`].
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -96,45 +70,16 @@ fn versioned(name: &str, stem: &str) -> bool {
             && rest.chars().all(|c| c.is_ascii_digit() || c == '.'))
 }
 
-/// **The decrypt allowlist**: runtimes that read a CA variable `pty_env` injects, so our leaf
-/// verifies for them. Deliberately small — a wrong "yes" breaks a client, a wrong "no" only
-/// hides a path.
-///
-/// | client | reads |
-/// |---|---|
-/// | `node`, `nodejs`, `bun`, the `claude` CLI | `NODE_EXTRA_CA_CERTS` |
-/// | `deno` | `DENO_CERT` |
-/// | `python`, `python3*` (requests/httpx/ssl) | `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE` |
-/// | `curl` | `CURL_CA_BUNDLE` |
-/// | `git`, `git-remote-http(s)` | `GIT_SSL_CAINFO` |
-/// | `cargo` | `CARGO_HTTP_CAINFO` |
-/// | `ruby*`, `php*` (OpenSSL) | `SSL_CERT_FILE` |
-///
-/// Not on it: `java` (its own truststore — `SSL_CERT_FILE` is ignored), `go`/compiled Go and
-/// Rust binaries (platform or bundled roots), browsers. A client on the list that still
-/// distrusts us (`curl --cacert other.pem`, a pinned SDK) fails once and is then learned as a
-/// passthrough for that (executable, host).
-///
-/// **Windows is narrower** — see [`reads_injected_ca_on`].
+/// The decrypt allowlist: runtimes that read a CA var `pty_env` injects (node/bun/claude, deno,
+/// python, curl, git, cargo, ruby, php). Small on purpose: a wrong "yes" breaks a client, a
+/// wrong "no" only hides a path. Windows is narrower ([`reads_injected_ca_on`]).
 pub fn reads_injected_ca(name: &str) -> bool {
     reads_injected_ca_on(name, cfg!(windows))
 }
 
-/// [`reads_injected_ca`] for a named platform (a parameter, so both tables are tested on
-/// every OS).
-///
-/// On Windows `curl`, `git` and `cargo` are **not** on the list. The `curl.exe` Windows ships
-/// (`System32`) and cargo's libcurl use Schannel, and Git for Windows can be set to
-/// (`http.sslBackend=schannel`, an installer choice). Schannel verifies against the Windows
-/// certificate store — which the IDE never writes (no OS permission may be required) — and
-/// checks revocation, which a leaf minted on the fly cannot pass. So a CA variable does not
-/// make them trust us,
-/// and MITM would fail their request. Tunnelled, they work and still show as a row (host and
-/// bytes). A user whose curl or git is an OpenSSL build can opt it in per app (the per-app
-/// decrypt opt-in).
-///
-/// This is reasoned from how those clients are built, not measured on a Windows machine —
-/// which is exactly why the choice is the one that cannot break a client.
+/// [`reads_injected_ca`] per platform (both tested everywhere). On Windows `curl`, `git` and
+/// `cargo` may use Schannel (Windows store + revocation), so they are tunnelled unless opted in.
+/// Reasoned, not measured on Windows: the choice that cannot break a client.
 pub fn reads_injected_ca_on(name: &str, windows: bool) -> bool {
     let n = name.to_ascii_lowercase();
     const EVERYWHERE: [&str; 6] = ["node", "nodejs", "bun", "deno", "claude", "php"];
@@ -175,18 +120,9 @@ pub fn learned_note(name: Option<&str>) -> String {
     )
 }
 
-/// Whether the user said this client trusts the IDE's CA (`decryptApps`). An entry
-/// matches when it **equals the executable name**, or when the executable **path contains
-/// `/<entry>.app/`** — so every helper inside a bundle counts as the bundle
-/// (`/Applications/Postman.app/Contents/Frameworks/Postman Helper.app/Contents/MacOS/Postman
-/// Helper` is `Postman`), while a different bundle whose name merely starts with it
-/// (`PostmanCanary.app`) does not.
-///
-/// **Case-sensitive, deliberately.** The UI builds an entry from a flow's own `client.path`,
-/// so the exact spelling is what it has; folding case would only widen a decrypt "yes", and a
-/// wrong yes breaks the client (a wrong no only hides a path — see [`reads_injected_ca`]). An
-/// empty entry, or one containing `/`, never matches (it would turn `/<entry>.app/` into a
-/// pattern for "any bundle" / a path fragment); [`super::Netcap::set_app_decrypt`] refuses them.
+/// User opt-in (`decryptApps`): an entry equal to the executable name, or `/<entry>.app/` in its
+/// path (bundle helpers count). Case-sensitive on purpose (a wrong yes breaks the client); empty
+/// or `/`-containing entries never match.
 pub fn user_opted_in(client: &ClientProcess, apps: &[String]) -> bool {
     apps.iter().filter(|a| valid_app_entry(a)).any(|a| {
         client.name == *a
@@ -202,10 +138,8 @@ pub fn valid_app_entry(app: &str) -> bool {
     !app.trim().is_empty() && !app.contains('/')
 }
 
-/// The per-connection decision (decrypt already known to be on and possible). `extra` adds
-/// names to the allowlist (the test seam [`super::Netcap::also_decrypt_for`]); `apps` are the
-/// user's opt-ins ([`user_opted_in`]). Both apply uniformly — to IDE terminals and
-/// external clients alike — since an allowlisted runtime needs no opt-in anyway.
+/// Per-connection decision, decrypt already on: `extra` (test seam) extends the allowlist and
+/// `apps` are the user's opt-ins, applied alike to IDE terminals and external clients.
 pub fn decide(
     client: Option<&ClientProcess>,
     resolver_available: bool,

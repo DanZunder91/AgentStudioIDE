@@ -1,7 +1,4 @@
-/**
- * The village's rAF loop and its visibility gate: frames flow only while running,
- * stop (with `onStop`) on pause and unmount, and always call the LATEST callback.
- */
+/** Frames flow only while running, and each frame calls the LATEST callback. */
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

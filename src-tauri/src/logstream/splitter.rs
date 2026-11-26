@@ -1,25 +1,6 @@
-//! Per-terminal line splitter: raw PTY bytes → log lines.
-//!
-//! Runs on the hub task, **never** in the pump — the hot byte plane only hands over a
-//! refcounted `Bytes` clone.
-//!
-//! What it does to the byte stream, and why:
-//! - **Strips escape sequences** — CSI (`ESC [ … final`), OSC (`ESC ] … BEL|ST`), DCS /
-//!   SOS / PM / APC strings (`ESC P|X|^|_ … ST`) and two-byte escapes. A log line is
-//!   text; colour codes and cursor moves are rendering, not content.
-//! - **`\r` means "the next write replaces this line"** (last write wins). A progress
-//!   bar redraws itself with `\r` hundreds of times; that is one line, not four
-//!   hundred. `\r\n` is an ordinary line end.
-//! - **Alternate screen** (`CSI ?1049h` / `?1047h` / `?47h` … `l`): while a TUI owns
-//!   the screen, nothing is logged. A repaint is not a log line.
-//! - **4 KiB cap** per line; the excess is dropped and the line ends in `…`.
-//! - **UTF-8 is never cut**: bytes are accumulated raw and decoded only when a line is
-//!   emitted, so a multibyte character split across two PTY reads is joined. A
-//!   silence-flush or the cap that would land inside a character keeps (or drops) the
-//!   incomplete tail rather than emitting U+FFFD.
-//!
-//! Timing (the ~250 ms partial-line flush) is the hub's job: this type is pure and
-//! clock-free, so every rule above is testable without a runtime.
+//! Per-terminal line splitter (pure; runs on the hub task, never the pump): strips escapes, `\r`
+//! is last-write-wins, nothing logged on the alternate screen, 4 KiB cap per line, and UTF-8 is
+//! decoded only on emit so a split character is joined. The hub owns flush timing.
 
 /// Longest line we keep, in bytes — the `…` marker of a capped line included.
 pub const MAX_LINE_BYTES: usize = 4 * 1024;
@@ -49,11 +30,8 @@ enum State {
 #[derive(Debug)]
 pub struct LineSplitter {
     state: State,
-    /// The CSI parameter being parsed (for the alt-screen check). Parameters are judged
-    /// one at a time as each ends, so the alt-screen one is recognised however many others
-    /// precede it — the old "first 64 bytes of the whole sequence" buffer lost a `1049`
-    /// that came after a long mode list and left the terminal suppressed for good
-    /// (found by `tests/logstream_props.rs`).
+    /// The CSI parameter being parsed, judged one at a time, so an alt-screen mode is recognised
+    /// however many others precede it.
     csi: Vec<u8>,
     /// The current parameter outgrew [`CSI_PARAM_MAX`], so it is not an alt-screen mode.
     csi_overflow: bool,
@@ -68,11 +46,8 @@ pub struct LineSplitter {
     cr_pending: bool,
     /// The line hit [`MAX_LINE_BYTES`]; further bytes are dropped until it ends.
     truncated: bool,
-    /// A capped line was already emitted by a silence flush, but the terminal line goes
-    /// on: its excess is still excess, dropped until the line ends (or a `\r` redraws
-    /// it). Without this the rest of the over-long line came back as a new line starting
-    /// with the orphaned tail bytes of the character the cap cut — U+FFFD (found by
-    /// `tests/logstream_props.rs`).
+    /// A silence flush already emitted this capped line; its excess stays dropped until the line
+    /// ends (or `\r` redraws), or the tail would return as a new line starting with U+FFFD.
     discard: bool,
     alt_screen: bool,
 }
@@ -159,10 +134,8 @@ impl LineSplitter {
                     self.csi_alt = false;
                     self.state = State::Csi;
                 }
-                // RIS (full reset) — what `reset` / `tput reset` print to recover a
-                // terminal a TUI left behind; the terminal returns to the main screen, so
-                // must we, or that terminal is never logged again (found by
-                // `tests/logstream_props.rs`).
+                // RIS (full reset, `tput reset`): the terminal returns to the main screen,
+                // so must we, or it is never logged again.
                 b'c' => {
                     if self.alt_screen {
                         self.leave_alt_screen();
@@ -244,10 +217,8 @@ impl LineSplitter {
         }
     }
 
-    // No alt-screen check here on purpose: bytes pushed while a TUI owns the screen
-    // are never emitted (`\n` and `flush_partial` are gated on it) and leaving the
-    // alt screen clears the line. A guard here was falsified as dead (every change must
-    // move a test).
+    // No alt-screen check here: bytes pushed on the alt screen are never emitted (`\n`
+    // and `flush_partial` are gated on it) and leaving it clears the line.
     fn push(&mut self, b: u8) {
         if self.cr_pending {
             // Last write wins: `\r` then text redraws the line from column 0.
@@ -329,12 +300,8 @@ fn incomplete_utf8_tail(bytes: &[u8]) -> usize {
     }
 }
 
-/// Decode a finished line: drop an incomplete trailing character (possible after the
-/// cap cut it), decode lossily otherwise (genuinely invalid bytes stay visible), drop
-/// C1 controls (U+0080–U+009F arrive as UTF-8 text but are terminal controls, not
-/// content — found by `tests/logstream_props.rs`), trim trailing whitespace, and skip
-/// blank lines. A capped line gives up room for its `…` so the whole text — marker
-/// included — stays within [`MAX_LINE_BYTES`], as the contract's "≤ 4 KiB" says.
+/// Decode a finished line: drop an incomplete trailing char, decode lossily, drop C1 controls,
+/// trim trailing whitespace, skip blanks. A capped line's `…` fits within [`MAX_LINE_BYTES`].
 fn finish(bytes: &[u8], truncated: bool) -> Option<String> {
     let cut = bytes.len() - incomplete_utf8_tail(bytes);
     let mut s = String::from_utf8_lossy(&bytes[..cut]).into_owned();

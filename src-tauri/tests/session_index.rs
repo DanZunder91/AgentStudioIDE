@@ -1,11 +1,6 @@
-//! `list_claude_sessions`: list a folder's past Claude Code sessions
-//! so the UI can offer "Recover session" (double-click → resume).
-//!
-//! Every test builds a FAKE `~/.claude/projects/...` tree under a tempdir `HOME`
-//! (the real `~/.claude` is read-only for us — the suite never goes
-//! near it). Own binary because `HOME`/`USERPROFILE` are process-global; the
-//! `HOME_LOCK` mutex serializes the tests within it — the same pattern as
-//! `subagent_locate.rs` / `fanout_real_adapter.rs`.
+//! `list_claude_sessions` lists a folder's past Claude Code sessions for "Recover session".
+//! Tests build a fake `~/.claude/projects/...` under a temp `HOME` (the real one is never touched);
+//! own binary because `HOME`/`USERPROFILE` are process-global, and `HOME_LOCK` serializes tests.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -205,11 +200,9 @@ fn label_falls_back_to_the_first_user_message_collapsed_and_truncated() {
     assert!(got[0].resumable);
 }
 
-/// An EMPTY transcript is still listed (its id exists on disk) but with the
-/// placeholder label and `resumable:false` — `claude --resume`
-/// errors on an id with no conversation, so the UI must know not to offer it.
-/// A summary-only transcript is likewise unresumable; per the wire contract's
-/// label precedence its summary still wins as the label.
+/// `claude --resume` errors on an id with no conversation, so an empty transcript is listed with
+/// the placeholder label and `resumable:false`. Summary-only is unresumable too, but its summary
+/// still wins as the label (the wire contract's label precedence).
 #[test]
 fn empty_and_summary_only_transcripts_are_listed_but_not_resumable() {
     let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -342,10 +335,8 @@ fn non_jsonl_and_garbage_files_are_handled_calmly() {
     assert!(!g.resumable, "no parseable message line was found");
 }
 
-/// HONESTY ABOUT THE BOUND: labels come from the first 256 KiB only. A transcript
-/// whose first user message sits beyond that gets the fallback label — but a file
-/// that large is certainly a real conversation, so it is still `resumable:true`
-/// (a truncated head is assumed resumable rather than mislabeled unresumable).
+/// Labels come from the first 256 KiB only; a file that large is surely a real conversation, so it
+/// stays `resumable:true` rather than being mislabeled unresumable.
 #[test]
 fn a_user_message_beyond_the_256kib_scan_bound_gets_the_fallback_label() {
     let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());

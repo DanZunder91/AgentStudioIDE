@@ -1,17 +1,5 @@
-/**
- * FindFiles — the fuzzy FILENAME finder (Cmd/Ctrl+Shift+O).
- *
- * The quick-open sibling of `<FindInFiles>`: type `store.ts`, get the files whose
- * NAME matches, open one. Separate from Cmd/Ctrl+Shift+F, which searches file
- * *content*. Mirrors FindInFiles exactly — a self-contained overlay that installs
- * its OWN global toggle + Esc-close, so `App.tsx`'s only addition is a one-line
- * `<FindFiles/>` mount, and its behaviour lands in the coverage-measured set.
- *
- * The one new thing over FindInFiles is the shared `<ScopeSelector/>`: the search
- * is pinned to `scopeRoot` (workspace/folder), so it need not scan everything.
- * Results are a flat list (no per-file grouping — one row IS a file); clicking a
- * row, or Enter on the first, opens it and closes the overlay.
- */
+/** Fuzzy filename finder (Cmd/Ctrl+Shift+O), FindInFiles' sibling: a self-installing overlay
+ * scoped by `<ScopeSelector/>`; one row per file. Click, or Enter on row one, opens and closes. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -29,11 +17,8 @@ import {
 import { folderName, ScopeSelector, useScope } from "./ScopeSelector";
 import "./find.css";
 
-/**
- * Window event that OPENS the panel (idempotent — never toggles it shut). Fired by
- * the bare Cmd/Ctrl+O binding in `features/shortcuts/FindKeysShortcut`, so that
- * component need not reach into this one's local `open` state.
- */
+/** Window event that opens the panel (never toggles it shut). Fired by Cmd/Ctrl+O in
+ * `features/shortcuts/FindKeysShortcut`, which cannot reach this local `open` state. */
 export const OPEN_FIND_FILES_EVENT = "agentstudio:open-find-files";
 
 /** Idle time after the last keystroke/scope change before a search fires. */
@@ -44,25 +29,14 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/**
- * Rust rejects a cancelled walk with the bare message `cancelled` (the
- * `find_cancel` contract) — a NORMAL outcome, never an error and never "no
- * matching files". Matched exactly (trimmed/case-folded), so a genuine failure
- * that merely mentions cancellation still reaches the user. Mirrors
- * `FindInFiles.tsx`'s copy, alongside `errorMessage`/`DEBOUNCE_MS`.
- */
+/** Rust's bare `cancelled` (the `find_cancel` contract) is a normal stop, never an error or "no
+ * matching files". Matched exactly; mirrors `FindInFiles.tsx`. */
 function isCancelled(err: unknown): boolean {
   return errorMessage(err).trim().toLowerCase() === "cancelled";
 }
 
-/**
- * One debounced search run — scheduled, then in flight, then settled.
- *
- * `cancelled` is the pre-existing stale-result guard (it was a closure `let`),
- * promoted to a field so the Stop button, which lives outside the effect, can
- * flip it. `ids` are the ids Rust knows this run by: ONE PER ROOT, because "All
- * workspaces" fans out into one `find_files` per root and every leg must stop.
- */
+/** One debounced search run. `cancelled` lets the Stop button neuter its reply; `ids` holds one
+ * search id per root, since "All workspaces" fans out and every leg must stop. */
 interface SearchRun {
   cancelled: boolean;
   ids: readonly string[];
@@ -73,12 +47,8 @@ function idleRun(): SearchRun {
   return { cancelled: true, ids: [] };
 }
 
-/**
- * Stop one run: neuter its reply AND ask Rust to abandon the walk on every leg.
- * Best-effort by design — `cancelFind` never throws, and the walk stops at its
- * next check — so the caller returns to idle itself. Idempotent: the ids are
- * dropped, so a second stop sends nothing.
- */
+/** Neuter the run's reply and ask Rust to abandon every leg. Best-effort (`cancelFind` never
+ * throws), so callers go idle themselves; idempotent because the ids are dropped. */
 function stopRun(run: SearchRun): void {
   run.cancelled = true;
   for (const id of run.ids) void cancelFind(id);
@@ -90,28 +60,17 @@ function countText(files: number): string {
   return `${files} ${files === 1 ? "file" : "files"}`;
 }
 
-/**
- * Join a search root to a hit's relative path, in the root's own separator. `find_files`
- * sends `src/a.ts` on every OS; on Windows the tab must be `C:\repo\src\a.ts` — the file
- * tree's and git's spelling — or it is a second tab on the same file that the Files rail
- * cannot select.
- */
+/** `find_files` sends `src/a.ts` on every OS. Joining in the root's separator gives the tree's
+ * `C:\repo\src\a.ts` on Windows, not a second tab on the same file. */
 const joinRoot = joinPath;
 
-/**
- * A filename hit tagged with the root it came from: its abs path is
- * `${root}/${path}` — the RIGHT repo — and, when the search fanned out over ≥2
- * roots, the row can show which repo it lives in.
- */
+/** A filename hit tagged with its root, so the abs path lands in the right repo. */
 interface RootedFileHit extends FindFileHit {
   root: string;
 }
 
-/**
- * The fan-out's merged view: every root's files tagged with their root (root
- * order preserved), whether ANY root truncated, and whether to label each row
- * with its repo (only with ≥2 roots — a single root reads exactly as before).
- */
+/** Every root's files in root order, whether any root truncated, and whether to label rows with
+ * their repo (only with ≥2 roots). */
 interface MergedFilesResult {
   files: RootedFileHit[];
   truncated: boolean;
@@ -150,12 +109,8 @@ export function FindFiles(): React.JSX.Element {
   // `open` re-arms the context default on every fresh open.
   const { effectiveScope, scopeRoots, setScope } = useScope(open);
 
-  /**
-   * Kill the run that owns the panel (a search must be killable):
-   * Rust abandons its walk, the reply is neutered, and the panel lands in a calm
-   * "stopped" state at once rather than waiting on an advisory cancel — and NOT
-   * in "No matching files", which a search that never finished cannot claim.
-   */
+  /** Stop the owning run (Rust abandons the walk, the reply is neutered) and show "stopped" at
+   * once, never "No matching files". */
   const cancelSearch = useCallback(() => {
     stopRun(runRef.current);
     setLoading(false);
@@ -187,9 +142,7 @@ export function FindFiles(): React.JSX.Element {
     };
   }, []);
 
-  // Focus + select the input each time the panel opens. No state is reset here:
-  // `react-hooks/set-state-in-effect` forbids it, and a lingering "stopped"
-  // banner clears itself — it can only be up while the query is non-empty, and a
+  // No state reset here (`react-hooks/set-state-in-effect`). A "stopped" banner needs none: a
   // non-empty query re-fires the search on reopen.
   useEffect(() => {
     if (open) {
@@ -198,19 +151,9 @@ export function FindFiles(): React.JSX.Element {
     }
   }, [open]);
 
-  // Debounced search. Re-runs on query, scope, or the case toggle. Fans out over
-  // every root in `scopeRoots` in parallel (one by default, all under "All
-  // workspaces") and merges the tagged results. A superseded run is neutered by
-  // ONE shared `cancelled` flag (in `apply`) for the whole batch, so a slow
-  // result that lands after the query moved on cannot overwrite the fresh one —
-  // and the cleanup ALSO calls `find_cancel` on every leg so
-  // the walk actually stops rather than merely having its answer discarded. That
-  // one cleanup is the single mechanism behind every exit from a search:
-  // superseding it, and closing the overlay (✕, Esc, the Cmd+Shift+O toggle,
-  // opening a hit) — all change a dep, so all stop Rust. An empty query never
-  // searches; an empty root set (no workspace) never searches — the resting hint
-  // / "open a folder" states cover both. `scopeRoots` is a stable reference
-  // (memoized in `useScope`), so it is a safe effect dep.
+  // Fans out over `scopeRoots` (memoized, a safe dep) in parallel. The cleanup sets the batch's
+  // shared `cancelled` flag and calls `find_cancel` on every leg; every exit (query/scope change,
+  // close) changes a dep, so it is the one stop. No search on an empty query or root set.
   useEffect(() => {
     if (!open || scopeRoots.length === 0 || query === "") return;
     // The run owns the panel from the moment it is SCHEDULED, not from when it
@@ -225,10 +168,8 @@ export function FindFiles(): React.JSX.Element {
       setLoading(true);
       setStopped(false);
       const apply = (settle: () => void) => {
-        // Drop the spinner when the run that owns the panel settles — including a
-        // CANCELLED one, whose reply is the last thing that will ever happen to
-        // it. A superseded run stays silent rather than blanking the spinner of
-        // the run that replaced it.
+        // Only the owning run drops the spinner, cancelled ones included; a superseded run must not
+        // blank its replacement's spinner.
         if (runRef.current === run) setLoading(false);
         if (run.cancelled) return;
         settle();
@@ -270,10 +211,7 @@ export function FindFiles(): React.JSX.Element {
     }
   }, []);
 
-  // Open a hit and close the overlay so the opened file is visible — the
-  // click-to-open-and-close behaviour. `abs` is built by a caller that
-  // has already narrowed `scopeRoot` non-null. Line 1: a filename finder lands at
-  // the top of the file, not at a match.
+  // Close so the opened file is visible; a filename hit opens at line 1.
   const openHit = useCallback((abs: string) => {
     void revealInEditor(abs, 1);
     setOpen(false);
@@ -352,11 +290,7 @@ export function FindFiles(): React.JSX.Element {
   );
 }
 
-/**
- * The body under the bar: one calm state at a time (no root / searching / error /
- * stopped / empty query / no matches / results). Split out so each state is a
- * single `if`, the same shape as FindInFiles' `FindResults`.
- */
+/** One state at a time (no root / searching / error / stopped / empty / no matches / results). */
 function FindFilesResults({
   hasRoot,
   loading,

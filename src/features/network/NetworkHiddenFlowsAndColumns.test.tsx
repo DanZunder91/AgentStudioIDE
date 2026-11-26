@@ -1,15 +1,4 @@
-/**
- * Hidden flows, the Process column and resizable columns — what a busy capture needs:
- *
- * 1. "No flows match the filter." over a busy capture, with a tunnel flow open in the detail pane.
- *    The table was right (the HTTP chip was on and every flow was a Tunnel) but it said so
- *    in a way that read as a broken view: no reason, no way back, and the detail pane kept
- *    showing a flow the table was hiding.
- * 2. The Process column (`FlowSummary.client`) and the "not decrypted" note.
- * 3. Resizable + hideable columns (shared `components/columns`), wired into both tables.
- *
- * Only `./netcapIpc` / `./netmachineIpc` are mocked; the store, formatters and columns are real.
- */
+/** Only `./netcapIpc` / `./netmachineIpc` are mocked; store, formatters and columns are real. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

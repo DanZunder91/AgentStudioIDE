@@ -1,69 +1,7 @@
 #!/usr/bin/env node
-/**
- * Generates `THIRD-PARTY-NOTICES.txt` — the attribution file a binary
- * distribution of Agent Studio is legally required to carry.
- *
- * WHY THIS FILE EXISTS
- * --------------------
- * The desktop binary contains hundreds of MIT, ISC, BSD-2/3-Clause and
- * Apache-2.0 dependencies, and a dependency audit found **no attribution file
- * anywhere in the repo**. All of those licences bind *binary* redistribution:
- *
- *   MIT          "The above copyright notice and this permission notice shall be
- *                 included in all copies or substantial portions of the Software."
- *   BSD-2/3      "Redistributions in binary form must reproduce the above
- *                 copyright notice, this list of conditions and the following
- *                 disclaimer in the documentation and/or other materials..."
- *   Apache-2.0   §4(d) — retain the NOTICE file's attribution notices.
- *   ISC / Zlib   equivalent notice-retention clauses.
- *
- * There is no copyleft problem to solve here: the audit established that
- * libgit2's GPL-2.0 comes with a linking exception broad enough that static
- * linking imposes nothing on our source, and the five MPL-2.0 crates are
- * file-level weak copyleft that we do not modify. This is purely the
- * attribution gap, and it must be closed **before the first public build**.
- *
- * WHAT IT COVERS, AND WHAT IT DELIBERATELY DOES NOT
- * -------------------------------------------------
- * - **JS: production dependencies only.** Walked from the committed
- *   `package-lock.json`, skipping every `dev`/`devOptional` entry. Dev tooling
- *   is not distributed, so including it would triple the file with packages we
- *   owe nothing for — and a notice file nobody can read is a notice file nobody
- *   checks. The lockfile is used rather than `npm ls` because it is committed,
- *   deterministic, and immune to whatever is extraneous in `node_modules`
- *   (undeclared packages do accumulate there).
- * - **Rust: the crates that actually ship**, i.e. the normal (non-dev,
- *   non-build) dependency closure of the app crate for the shipped target, via
- *   `cargo metadata --filter-platform`. `cargo metadata` does NOT build, which
- *   matters: this script must be safe to run while another cargo process holds
- *   the build tree. The counts differ substantially from the full resolved
- *   set — roughly 540 resolved crates vs ~320 shipped on macOS —
- *   so the generated header states exactly which number it is reporting.
- * - **The vendored C**, whose own notices crate metadata does not describe:
- *   libgit2's COPYING and zlib's licence header. Read from
- *   `REVIEWED_VENDORED_C` in `scripts/audit.mjs`, so the list of C we compile
- *   lives in exactly one place (the same list the audit gate enforces).
- * - **Vendored design assets** (no lockfile knows them): the Material Icon
- *   Theme file-type SVGs under `src/assets/file-icons/`. Declared in
- *   `VENDORED_ASSETS` below; each set's licence file is read off disk and
- *   reproduced, so regeneration can never silently drop the credit.
- *
- * HONESTY RULES BAKED INTO THE OUTPUT
- * -----------------------------------
- * 1. A licence is never guessed. If the metadata says nothing and no licence
- *    file can be classified, the package lands in an explicit **needs manual
- *    review** section. (A known case: `khroma@2.1.0` reports no
- *    licence in metadata but ships an MIT `license` file — that is resolved by
- *    *reading the file*, and recorded as such, not by assuming MIT.)
- * 2. A licence text that could not be located is listed as missing, never
- *    silently dropped.
- * 3. The output is **deterministic**: stable sorts everywhere, no timestamps,
- *    no run counters. Two runs over the same inputs produce byte-identical
- *    files, which is what makes this reviewable in a diff instead of noise.
- *
- * Usage: `npm run attribution` (or `node scripts/attribution.mjs`).
- * Zero new dependencies, on purpose.
- */
+/** Generates THIRD-PARTY-NOTICES.txt, which binary distribution legally needs: JS prod deps (from
+ * the lockfile), shipped Rust crates (`cargo metadata`, no build), vendored C and assets. Never
+ * guesses a licence (unresolved = manual review); deterministic output. `npm run attribution`. */
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -77,23 +15,15 @@ import { REVIEWED_VENDORED_C, parseCargoLockPackages } from "./audit.mjs";
 // Plain text, not Markdown: the only Markdown file in the repository is README.md.
 export const OUTPUT_FILE = "THIRD-PARTY-NOTICES.txt";
 
-/**
- * The target whose runtime graph is reported. macOS is the artifact the audit
- * reviewed and the only one we currently build. A Windows/Linux release must
- * regenerate with `--target <triple>` — the crate sets differ by ~200 crates.
- */
+/** macOS is the only target built today; a Windows/Linux release must regenerate with
+ * `--target` (the crate sets differ by ~200). */
 export const DEFAULT_RUST_TARGET = "aarch64-apple-darwin";
 
 // ---------------------------------------------------------------------------
 // Pure part 1 — licence identity
 // ---------------------------------------------------------------------------
 
-/**
- * Licences that grant rights without asking for a notice in return: public
- * domain dedications and 0BSD, which exists precisely to drop the retention
- * clause. Everything else is assumed to require reproduction — over-attribution
- * is never a violation, under-attribution is.
- */
+/** Everything else is assumed to need reproduction: over-attribution is never a violation. */
 export const NO_ATTRIBUTION_REQUIRED = new Set(["0BSD", "CC0-1.0", "Unlicense", "WTFPL"]);
 
 /** Strings npm/cargo use to mean "no licence stated". Never a licence id. */
@@ -127,20 +57,8 @@ const LICENCE_FILE_STEMS = new Set([
   "unlicence",
 ]);
 
-/**
- * Canonicalise a licence declaration into one comparable string, or null when
- * nothing was declared.
- *
- * Accepts every shape the two ecosystems produce: an SPDX string, npm's legacy
- * `{type, url}` object, npm's even more legacy `licenses: [{type}, ...]` array,
- * and the `MIT/Apache-2.0` slash spelling. A pure-OR expression has its terms
- * sorted so that `MIT OR Apache-2.0`, `Apache-2.0 OR MIT` and `MIT/Apache-2.0`
- * all land in ONE group — the audit found all three spellings in our graph, and
- * three groups for one licence is how a notice file becomes unreadable.
- *
- * Anything containing `AND` or `WITH` is kept verbatim: reordering an `AND` set
- * or splitting an exception off its licence would change the meaning.
- */
+/** Accepts SPDX, npm's `{type}` and `licenses: […]` shapes and `A/B`; pure-OR terms are sorted so
+ * spellings of a licence share a group. `AND`/`WITH` stay verbatim (reordering alters meaning). */
 export function normalizeLicense(raw) {
   let text = null;
   if (typeof raw === "string") {
@@ -184,16 +102,8 @@ function joinOr(terms) {
   return [...terms].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0)).join(" OR ");
 }
 
-/**
- * Distinctive opening phrases of the licences we actually encounter. Used ONLY
- * when metadata declares nothing — the point is to read the file rather than
- * guess, which is how `khroma@2.1.0` (no `license` field, MIT `license` file)
- * gets resolved correctly.
- *
- * Each marker is a phrase that appears in that licence and in no other, so a
- * text matching two of them is a dual-licence file and is reported as
- * UNRESOLVED rather than arbitrarily assigned to the first match.
- */
+/** Only when metadata declares nothing: read the file, never guess. Each marker is unique to its
+ * licence, so a text matching two is a dual-licence file and stays UNRESOLVED. */
 const TEXT_MARKERS = [
   ["MIT", /Permission is hereby granted, free of charge, to any person obtaining a copy/i],
   ["Apache-2.0", /Apache License,? Version 2\.0/i],
@@ -205,20 +115,11 @@ const TEXT_MARKERS = [
   ["Zlib", /This software is provided ['`]as-is['`], without any express or implied warranty/i],
 ];
 
-/**
- * Classify a licence TEXT. Returns null when nothing matches, or when more than
- * one licence matches (a combined file — a human must say which arm applies).
- *
- * BSD is handled separately from the marker table because BSD-2-Clause and
- * BSD-3-Clause share their opening phrase and differ only by the third clause.
- */
+/** null on no match or several (a combined file: a human picks the arm). BSD is separate: 2- and
+ * 3-Clause share their opening and differ only by the third clause. */
 export function sniffLicenseFromText(text) {
   if (typeof text !== "string" || text.trim() === "") return null;
-  // Match against whitespace-normalised text: licence files hard-wrap at
-  // whatever column their author preferred, so `obtaining a\ncopy` and
-  // `obtaining a copy` are the same sentence and must match the same marker.
-  // (Measured: without this, `khroma`'s MIT file goes unrecognised purely
-  // because its line break falls one word earlier.)
+  // Whitespace-normalised: licence files hard-wrap anywhere; a line break must not hide a marker.
   const flat = text.replace(/\s+/g, " ");
   const hits = new Set();
   for (const [id, marker] of TEXT_MARKERS) {
@@ -235,12 +136,7 @@ export function sniffLicenseFromText(text) {
   return [...hits][0];
 }
 
-/**
- * Pick the licence-text files out of a directory listing, in stable order.
- * Matches `LICENSE`, `license`, `LICENCE.md`, `LICENSE-MIT`, `LICENSE.APACHE`,
- * `COPYING`, `COPYRIGHT`, `NOTICE`, `UNLICENSE`; rejects code that merely
- * starts with the word (`license-check.js`, `licenserc.json`).
- */
+/** Rejects code that merely starts with the word (`license-check.js`, `licenserc.json`). */
 export function pickLicenseFiles(names) {
   if (!Array.isArray(names)) return [];
   return names
@@ -256,17 +152,8 @@ export function pickLicenseFiles(names) {
     .sort();
 }
 
-/**
- * Decide one package's licence, recording WHERE the answer came from.
- *
- * @param {object} args
- * @param {*}      args.metadataLicense  the `license`/`licenses` field, any shape
- * @param {Array}  args.licenseFiles     `{file, text}` in the package directory
- * @returns {{license: string|null, source: string, candidates: string[]}}
- *   `source` is `"metadata"`, `"licence file: <name>"`, or `"unresolved"`.
- *   `candidates` lists what the texts looked like when they disagreed, so the
- *   manual-review section can say something useful instead of just "unknown".
- */
+/** `source`: `"metadata"`, `"licence file: <name>"` or `"unresolved"`; `candidates` lists
+ * what disagreeing texts looked like, for the manual-review section. */
 export function resolveLicense({ metadataLicense, licenseFiles = [] } = {}) {
   const declared = normalizeLicense(metadataLicense);
   if (declared !== null) return { license: declared, source: "metadata", candidates: [] };
@@ -288,24 +175,15 @@ export function resolveLicense({ metadataLicense, licenseFiles = [] } = {}) {
   return { license: null, source: "unresolved", candidates: distinct };
 }
 
-/**
- * Does this licence oblige us to reproduce its text in a binary distribution?
- * True unless EVERY term of the expression is a no-notice licence — an OR
- * expression is treated as requiring reproduction if any arm does, because
- * reproducing more than strictly necessary is never a violation.
- */
+/** True unless EVERY term is a no-notice licence: reproducing more is never a violation. */
 export function requiresTextReproduction(license) {
   if (typeof license !== "string" || license.trim() === "") return true;
   const terms = license.split(/\s+(?:OR|AND)\s+/i).map((term) => term.trim().replace(/^\(|\)$/g, ""));
   return terms.some((term) => !NO_ATTRIBUTION_REQUIRED.has(term));
 }
 
-/**
- * Compare `name@version` ids so `foo@9.0.0` sorts before `foo@10.0.0` (a plain
- * string compare would invert them). Numeric runs compare numerically, the rest
- * lexicographically. Total and deterministic — which is the property the
- * generated file depends on.
- */
+/** Numeric runs compare numerically (`foo@9` before `foo@10`); total and deterministic, which
+ * the generated file depends on. */
 export function compareIds(a, b) {
   const chunks = (value) => String(value).match(/\d+|\D+/g) ?? [];
   const left = chunks(a);
@@ -325,13 +203,7 @@ export function compareIds(a, b) {
   return 0;
 }
 
-/**
- * Group resolved packages by licence. Groups are sorted by licence name and
- * packages by id — never by count, so that adding one package cannot reshuffle
- * the whole file and drown the real change in the diff.
- *
- * @returns {{license: string, entries: object[]}[]}
- */
+/** Sorted by licence and id, never by count, so one new package cannot reshuffle the file. */
 export function groupByLicense(entries) {
   const groups = new Map();
   for (const entry of Array.isArray(entries) ? entries : []) {
@@ -347,11 +219,7 @@ export function groupByLicense(entries) {
     .sort((a, b) => compareIds(a.license, b.license));
 }
 
-/**
- * Pull the leading `/* ... *\/` comment out of C source. zlib ships its licence
- * as the header comment of `zlib.h` rather than as a separate file, so this is
- * how that notice gets reproduced verbatim instead of paraphrased.
- */
+/** zlib's licence is the header comment of `zlib.h`, so it is reproduced verbatim from there. */
 export function extractLeadingBlockComment(source) {
   if (typeof source !== "string") return null;
   const start = source.indexOf("/*");
@@ -379,15 +247,8 @@ export function extractLeadingBlockComment(source) {
 // Pure part 2 — the document model
 // ---------------------------------------------------------------------------
 
-/**
- * Turn raw package lists into everything the renderer needs, with the
- * bookkeeping the honesty rules demand.
- *
- * Licence texts are deduplicated by exact content and emitted once each, with
- * the packages that share them listed alongside. Without that, ~200 crates that
- * ship the identical 11 KB Apache-2.0 text would add 2 MB of byte-identical
- * boilerplate to a file meant to be reviewed by a person.
- */
+/** Licence texts are deduplicated by exact content and listed once with their packages: ~200
+ * crates ship the identical Apache-2.0 text (2 MB of duplicates otherwise). */
 export function buildModel({
   js = [],
   rust = [],
@@ -450,21 +311,12 @@ export function buildModel({
 
 const H = "\n";
 
-/**
- * Render the model as Markdown. Deterministic by construction: every list is
- * pre-sorted by `buildModel`, and nothing here reads the clock, the process, or
- * the environment. That is what makes the file committable — a notice file that
- * churns on every run gets `-u`'d without being read.
- */
+/** Deterministic by construction (pre-sorted; no clock, process or env): a notice file that
+ * churns every run gets accepted unread. */
 export function renderNotices(model) {
   const out = [];
-  /**
-   * Append lines, collapsing consecutive blank separators so an empty section
-   * cannot leave a run of blank lines behind. Deliberately done HERE rather than
-   * with a regex over the finished document: a blanket `\n{3,}` collapse would
-   * silently rewrite the inside of a licence text, and a licence text must be
-   * reproduced exactly.
-   */
+  /** Collapses consecutive blank separators here, not by regex over the document: that would
+   * rewrite inside licence texts, which must be reproduced exactly. */
   const push = (...lines) => {
     for (const line of lines) {
       if (line === "" && out.length > 0 && out[out.length - 1] === "") continue;
@@ -724,15 +576,8 @@ function compareText(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/**
- * A code fence long enough to contain `text` verbatim.
- *
- * Licence texts are reproduced inside fenced blocks, and a licence file that
- * happens to contain a ```-fence of its own would otherwise close the block
- * early and corrupt every section after it. No licence text in the tree does
- * that today — which is exactly why it must be handled here rather than
- * discovered later.
- */
+/** A licence containing its own ``` fence would otherwise close the block early and corrupt
+ * every later section. */
 export function fenceFor(text) {
   const longest = Math.max(0, ...(String(text ?? "").match(/^`{3,}/gm) ?? []).map((run) => run.length));
   return "`".repeat(Math.max(3, longest + 1));
@@ -758,12 +603,8 @@ function renderGroups(push, groups, unit) {
 // Pure part 3 — reading the two dependency graphs
 // ---------------------------------------------------------------------------
 
-/**
- * The package name for a `package-lock.json` key. Keys are paths, so a nested
- * copy reads `node_modules/glob/node_modules/minimatch` — the name is whatever
- * follows the LAST `node_modules/`, which also keeps scopes (`@scope/pkg`)
- * intact. An explicit `name` field (npm writes one for aliased installs) wins.
- */
+/** Lock keys are paths: the name follows the LAST `node_modules/` (scopes intact); an explicit
+ * `name` (aliased installs) wins. */
 export function packageNameFromLockKey(key, entry = {}) {
   if (typeof entry.name === "string" && entry.name !== "") return entry.name;
   if (typeof key !== "string") return null;
@@ -773,15 +614,8 @@ export function packageNameFromLockKey(key, entry = {}) {
   return name === "" ? null : name;
 }
 
-/**
- * The production packages of a parsed `package-lock.json`, deduplicated by
- * `name@version`.
- *
- * `dev` and `devOptional` are both excluded: `devOptional` means "reachable
- * only from dev dependencies, and optional", so it does not ship either.
- * `optional` production entries ARE kept — an optional dependency that gets
- * installed is distributed.
- */
+/** `dev` and `devOptional` (reachable only from dev deps) don't ship; installed `optional`
+ * production entries do. Deduplicated by `name@version`. */
 export function jsProdEntriesFromLock(lock) {
   const packages = lock && typeof lock === "object" ? (lock.packages ?? {}) : {};
   const byId = new Map();
@@ -802,15 +636,7 @@ export function jsProdEntriesFromLock(lock) {
     .sort((a, b) => compareIds(a.id, b.id));
 }
 
-/**
- * The normal (non-dev, non-build) dependency closure of the workspace root, out
- * of a `cargo metadata` payload. Build dependencies and dev dependencies are
- * dropped: build scripts run on the build host and never ship, and dev
- * dependencies are test-only.
- *
- * A `dep_kinds` entry with `kind: null` is cargo's encoding of "normal
- * dependency"; `"build"` and `"dev"` are the other two.
- */
+/** Build and dev deps are dropped (they never ship). In `dep_kinds`, `kind: null` means normal. */
 export function rustRuntimeClosure(metadata) {
   const nodes = metadata?.resolve?.nodes;
   const root = metadata?.resolve?.root;
@@ -965,10 +791,8 @@ function collectRust(repoRoot, target) {
   });
   return {
     entries,
-    // The honest denominator: how many crates the committed lockfile pins in
-    // total, across every platform and dependency kind. `metadata.packages` here
-    // is already platform-filtered, so using it would quietly compare a number
-    // against itself.
+    // All crates the lockfile pins: `metadata.packages` is already platform-filtered, so using it
+    // would compare a number against itself.
     meta: {
       target,
       totalResolved: parseCargoLockPackages(
@@ -987,12 +811,8 @@ function collectRust(repoRoot, target) {
   };
 }
 
-/**
- * The bundled C libraries' own notices. Driven by `REVIEWED_VENDORED_C` in
- * `scripts/audit.mjs` — the same list the audit gate enforces versions against.
- * Entries whose crate is not in the graph are skipped: they are not compiled
- * into this artifact, so nothing is owed for them.
- */
+/** From `REVIEWED_VENDORED_C` (scripts/audit.mjs), the list the audit gate enforces; crates not
+ * in the graph are skipped, since nothing is owed for them. */
 function collectVendoredC(crateDirs) {
   const libs = [];
   for (const entry of REVIEWED_VENDORED_C) {
@@ -1027,13 +847,8 @@ function collectVendoredC(crateDirs) {
   return libs;
 }
 
-/**
- * Design assets copied into the tree (no lockfile knows them). Declarative,
- * like `REVIEWED_VENDORED_C`: adding a vendored asset set means adding a row
- * here, and the generated notices then carry its licence durably — a section
- * hand-appended to the OUTPUT file would be deleted by the next regeneration,
- * which is exactly how the Material entry was first (and briefly) recorded.
- */
+/** Declarative, like `REVIEWED_VENDORED_C`: a section hand-appended to the output would be
+ * deleted by the next regeneration. */
 export const VENDORED_ASSETS = [
   {
     name: "Material Icon Theme (file-type icons)",

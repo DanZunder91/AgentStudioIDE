@@ -1,9 +1,3 @@
-/**
- * The City's passers-by, drawn (render/streetLife.ts): a character sprite with no agent marker, cut at the
- * sidewalk on the subway stairs, its umbrella's stick behind it and canopy over it, its can in hand — and a
- * purchase at a vending machine drawn on the machine, step by step. Plus the frame's dispatch.
- */
-
 import { describe, expect, it, vi } from "vitest";
 
 import { VEND, type WalkerItem } from "../engine/streetLife";

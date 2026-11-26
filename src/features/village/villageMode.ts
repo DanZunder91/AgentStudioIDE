@@ -1,10 +1,5 @@
-/**
- * Which picture the Agent Village tab shows — the VILLAGE (a house per project, seen from
- * above) or the CITY (a building per project, a floor per console or
- * agent, seen from the side) — remembered per viewer, the way the sky override is
- * (`useVillageAmbience`). Storage is a convenience: every access is wrapped, and a missing,
- * corrupt or unreadable value means the village.
- */
+/** Village (a house per project, from above) or City (a building per project, from the side), per
+ * viewer. Storage is wrapped; a missing, corrupt or unreadable value means the village. */
 
 import { useCallback, useState } from "react";
 

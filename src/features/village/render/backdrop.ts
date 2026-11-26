@@ -1,36 +1,6 @@
-/**
- * Agent Village — the City's BACKDROP: what stands behind the street in Tokyo.
- *
- * At Fit, a strip of low haze next to a four-floor gazelle leaves the sky behind the street almost
- * empty. The backdrop fills that sky: towers, ramen shops and the like in the background, big lit
- * buildings by night and by day, and neon signs for ramen and soba in katakana and for sushi in
- * hiragana.
- *
- * It is three layers — towers, a neon canyon and a yokochō of food shops — with some empty space left
- * between their clusters and karaoke among the signs. In a city with the Tokyo street
- * theme (render/city.ts `backdropOf`):
- *
- *   - the high-rises (render/backdropTowers.ts) stand out of the haze;
- *   - the neon canyon (render/backdropCanyon.ts) stands in front of the haze;
- *   - the yokochō shops (render/backdropShops.ts) stand in front of the canyon;
- *   - between their clusters there is open sky (`airSpans`).
- *
- * Any other city keeps the haze alone.
- *
- * A backdrop is LAYERS at two depths of `paintCityBackdrop` (render/city.ts):
- *
- *   sky · sun · Fuji · clouds · [HIGH layers] · Tokyo Tower / Skytree · the haze · [MID layers] · temples
- *
- * A HIGH layer stands behind the towers and the haze (its feet are in the haze). A MID layer stands in
- * front of the haze, behind the temples and everything the world itself draws, and behind any MID layer
- * after it. Each layer paints in DAY colours; the outdoor grade turns them to dusk and night, as it does
- * the haze and the landmarks. Then it paints its own LIGHTS after the grade, through `fillLit`, which
- * leaves out whatever stands in front of that layer: the haze or a nearer layer, a temple, a street tree
- * or lamp, a passer-by.
- *
- * The landmarks are never hidden: no backdrop roof rises into a crown it would
- * cover (`roofLimit`). For a HIGH layer that means Fuji's; for a MID one, Fuji's and the towers'.
- */
+/** Backdrop layers at two depths of `paintCityBackdrop` (render/city.ts): sky · sun · Fuji ·
+ * clouds · [HIGH] · Tokyo Tower/Skytree · haze · [MID] · temples. Layers paint DAY colours, then
+ * lights via `fillLit` after the grade; no roof may cover a landmark's crown (`roofLimit`). */
 
 import { TILE, type Ambience, type CityInfo, type World } from "../villageTypes";
 import type { Camera } from "./camera";
@@ -61,10 +31,8 @@ export interface BackdropLightScene extends BackdropScene {
   dark: number;
   /** The share of the far skyline's windows lit now (`citySky(amb).lit`): 0 by day, rising from golden hour. */
   lit: number;
-  /**
-   * Fill a world-px rect of light in the CURRENT `fillStyle` and `globalAlpha`, less every part of it
-   * that something in front of this layer covers. Every light a layer paints goes through here.
-   */
+  /** Fill a world-px rect of light (CURRENT `fillStyle`/`globalAlpha`) less whatever is in front
+   * of this layer. Every light a layer paints goes through here. */
   fillLit(x: number, y: number, w: number, h: number): void;
   /** Is world pixel (x, y) covered by something in front of this layer? (For a layer's own tests and tiny lights.) */
   hidden(x: number, y: number): boolean;
@@ -76,24 +44,17 @@ export interface BackdropLayer {
   paint(s: BackdropScene): void;
   /** The layer's lights, after the grade — every one through `s.fillLit`. */
   paintLights(s: BackdropLightScene): void;
-  /**
-   * World y where the layer's OPAQUE face begins at world x — the top of what stands there, or
-   * `s.horizon` where nothing does. World-locked (a pure function of world x for a given world): the
-   * stars, the moon and a farther layer's lights stay behind it.
-   */
+  /** World y where the layer's OPAQUE face begins at world x (`s.horizon` where nothing stands).
+   * World-locked; stars, moon and farther layers' lights stay behind it. */
   faceAt(s: BackdropScene, x: number): number;
 }
 
 /** World px a backdrop roof keeps below a landmark crown over it, and either side of it. */
 export const CROWN_PAD = 8;
 
-/**
- * The highest a backdrop roof standing over world x ∈ [x0, x1) may rise — a world y it must stay at or
- * below — so that no crown of the given landmark `layers` is covered: `CROWN_PAD` under the lowest
- * point of every crown whose span (padded `CROWN_PAD` either side) it overlaps. `-Infinity` when no
- * such crown is over it (no limit). A HIGH layer passes `["far"]` (it stands in front of Fuji only);
- * a MID layer `["far", "tower"]`. Pure; the placement is cached per world (render/landmarks.ts).
- */
+/** Highest world y a roof over [x0, x1) may reach without covering a crown of `layers`: `CROWN_PAD`
+ * under each overlapped (padded) crown's lowest point; `-Infinity` if none. HIGH passes `["far"]`,
+ * MID `["far", "tower"]`. Pure; placement is cached per world (render/landmarks.ts). */
 export function roofLimit(
   world: World,
   amb: Ambience | undefined,
@@ -113,14 +74,9 @@ export function roofLimit(
   return limit;
 }
 
-/**
- * The open sky between the backdrop's clusters (fewer buildings side by side, with empty space left
- * between them). These are world-locked stretches where the MID layers (the
- * canyon and the shops) build nothing and the haze is not painted, so the sky, and the towers far behind,
- * show between clusters of buildings. There is one stretch per `AIR_CHUNK` world px, `AIR_MIN`–`AIR_MAX`
- * wide, at a place hashed from the chunk. Every layer reads the SAME stretches, so a gap in the shops is a
- * gap in the canyon behind them too.
- */
+/** Open sky between clusters: one world-locked stretch per `AIR_CHUNK` px, `AIR_MIN`–`AIR_MAX`
+ * wide, hashed from the chunk; MID layers build nothing there and the haze is not painted. Every
+ * layer reads the SAME stretches, so a gap in the shops is a gap in the canyon too. */
 export const AIR_CHUNK = 288;
 export const AIR_MIN = 64;
 export const AIR_MAX = 120;
@@ -142,29 +98,16 @@ export function inAir(x0: number, x1: number): boolean {
   return airSpans(x0, x1).length > 0;
 }
 
-/**
- * The city's own span: world x [a, b) from its outermost wall to its outermost wall (null: no
- * buildings). Behind its buildings nothing shows; between them the street's gaps hold the temples,
- * Tokyo Tower and the sakura.
- */
+/** World x [a, b) between the city's outermost walls (null: no buildings). */
 export function citySpan(world: World): readonly [number, number] | null {
   const bs = (world.city as CityInfo).buildings;
   if (bs.length === 0) return null;
   return [Math.min(...bs.map((b) => b.col * TILE)), Math.max(...bs.map((b) => (b.col + b.w) * TILE))];
 }
 
-/**
- * The QUIET stretches, where the neon district (the canyon, the shops) builds nothing and the
- * apartments stand instead (render/backdropApartments.ts). They are:
- *   - the open stretches of sky between its clusters (`airSpans`). Buildings with lights stand behind
- *     those empty spaces, some lit and some dark like vacant apartments, because otherwise the city
- *     looks unfinished;
- *   - the city's own span (`citySpan`). A sign-lit shop and canyon behind the shrine, in a narrow gap
- *     between two of the city's buildings, looked overloaded, while Tokyo Tower standing in a calm gap
- *     looked fine. Inside the city the street's gaps stay calm.
- * Every layer reads the SAME stretches. Returned in world x order; the city's span is merged with any
- * stretch of sky it overlaps.
- */
+/** Quiet stretches, where the neon layers build nothing and apartments stand instead: the open sky
+ * (`airSpans`) and the city's own span. Every layer reads the SAME stretches; returned in world x
+ * order, the city's span merged with any sky stretch it overlaps. */
 export function quietSpans(world: World, x0: number, x1: number): [number, number][] {
   const out = airSpans(x0, x1);
   const city = citySpan(world);
@@ -191,10 +134,7 @@ export interface SignWord {
   meaning: string;
 }
 
-/**
- * Every word a backdrop sign may spell (render/kana.ts draws exactly these): katakana for ramen, soba
- * and the rest, hiragana for sushi.
- */
+/** Every word a backdrop sign may spell; render/kana.ts draws exactly these. */
 export const SIGN_WORDS: readonly SignWord[] = [
   { text: "ラーメン", meaning: "ramen" },
   { text: "ソバ", meaning: "soba" },

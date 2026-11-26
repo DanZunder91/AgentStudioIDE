@@ -1,19 +1,6 @@
-/* ── the terminal-close confirm ──────────────────────────────────────────────
-   The chrome is `editor.css`'s `.dialog` — the house template for a centred
-   confirm box (same overlay wash, radius, border, surface, shadow and button
-   metrics), re-declared here under its own names rather than reused, for the
-   reason `db.css` gives at the top of its own overlay: reusing `.dialog` means
-   either widening a class every other dialog silently inherits, or importing
-   another feature's whole stylesheet to get four rules. A terminal must render
-   its confirm without the editor feature ever having been loaded.
-
-   Every colour is an App.css token with the same fallback the other dialogs
-   carry, so this file hard-codes no palette of its own. Two spellings of "red"
-   exist in the repo and NEITHER is defined in App.css today — `--danger`
-   (#e06c75: the file-tree delete confirm, the API history) and `--red`
-   (#f85149: the editor's `.dialog__btn--danger`, the database dialog). This is
-   a modal confirm, so it follows the modal one, `--red`. Flagged rather than
-   silently picked: the two want to become one token. */
+/* ── the terminal-close confirm ── `editor.css`'s `.dialog` chrome re-declared under its own
+   names, so it renders without the editor feature loaded. Red is `--red` (the modal one), not
+   `--danger`; neither is defined in App.css, and they should become one token. */
 
 .close-terminal-overlay {
   position: fixed;
@@ -91,10 +78,8 @@
   outline-offset: 1px;
 }
 
-/* The destructive one, and it says so AT REST. `.dialog__btn--danger` only
-   turns red on hover, which leaves the two buttons identical until the pointer
-   is already on one of them — no help at all to a keyboard user, and none to
-   anyone deciding which button to aim at. */
+/* Red at rest, unlike `.dialog__btn--danger` (hover only): a keyboard user must see which
+   button is destructive. */
 .close-terminal-dialog__btn--danger {
   border-color: var(--red, #f85149);
   color: var(--red, #f85149);

@@ -1,25 +1,6 @@
-/**
- * Browser-tier smoke-core E2E suite (PRIMARY tier).
- *
- * The 8 highest-value end-to-end flows (docs/design/e2e-flow-catalog §4.1) driven
- * against the REAL `<App/>` in real Chromium (Playwright), over a comprehensive
- * mocked Tauri backend (see `harness.ts`). This is the deterministic suite that
- * runs with `npm run test:browser` on a dev machine — the tier that
- * catches the frontend-wiring bugs jsdom cannot (Find not closing on open; a
- * click that "does nothing"): real DOM events, real components, real selectors.
- *
- *   1. B1 — App boots to the 3-pane shell.
- *   2. P1 — New terminal (empty pane) → tab + PTY host + terminal_open.
- *   3. F1 — Quick-launch agent → rail row + agent-terminal tab + agent_spawn.
- *   4. F6 — Close agent → row gone + terminal_close.
- *   5. E1 — Open a workspace file → editor tab with content + read_file.
- *   6. S1→S6 — Find in files → search → open a match → editor opens + Find closes.
- *   7. A2 — API GET → http_send → 200 + body.
- *   8. A3 — API POST → http_send carries method:"POST" + the body.
- *
- * Each `it` is independent: `beforeEach` resets every module-level singleton and
- * reinstalls the mock, mirroring the existing browser specs.
- */
+/** Smoke-core E2E (primary tier): the 8 flows of docs/design/e2e-flow-catalog §4.1 against the
+ * REAL `<App/>` in Chromium over the mocked backend (`harness.ts`); catches wiring bugs jsdom
+ * cannot. Each `it` is independent (`beforeEach` resets singletons and the mock). */
 
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -126,10 +107,8 @@ describe("smoke-core E2E — real <App/> over a mocked Tauri backend", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    // The Files panel is multi-root and empty with no agents, so open
-    // the fixture folder as a browse root first — that is the flow a real user
-    // takes to see files with no agent running. The fixture root is already mocked
-    // for read_dir/read_file, so its listing paints and the file is clickable.
+    // The Files panel is empty with no agents, so open the fixture folder as a browse root first,
+    // as a real user would.
     act(() => {
       useAppStore.getState().workspaceActions.addBrowseRoot(FIXTURE_ROOT);
     });

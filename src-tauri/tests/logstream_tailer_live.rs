@@ -1,11 +1,6 @@
-//! Tool calls reach the Agent Logs **through the live fan-out tailer loop**: locate the
-//! transcript by session id → poll → tail new tool blocks → `SupervisorMsg::ToolEvents`
-//! → labelled `tool` / `tool-result` lines in the hub. The real `ClaudeAdapter` does
-//! the parsing; no real `claude` runs.
-//!
-//! Its own binary because it points the locator at a private temp `HOME` (process
-//! global) and speeds the poll to 50 ms — the same pattern as `fanout_tailer_live.rs`.
-//! The developer's real `~/.claude` is never read, let alone written.
+//! Tool calls reach Agent Logs through the live tailer loop (`ToolEvents` → labelled `tool` /
+//! `tool-result` lines) via the real `ClaudeAdapter`. Own binary: a private temp `HOME`
+//! (process global), 50 ms polls; the real `~/.claude` is never read.
 
 #![cfg(unix)]
 

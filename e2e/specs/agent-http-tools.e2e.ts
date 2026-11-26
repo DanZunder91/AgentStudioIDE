@@ -1,13 +1,5 @@
-/**
- * `agent-studio http send` / `agent-studio http open` from a real terminal in the real app —
- * the commands an agent runs when the user says "send this request" or "open this request".
- *
- * Typed into a real PTY exactly as an agent's shell would run them: the script on the
- * terminal's PATH execs the app binary in command mode, which posts to the running app's
- * listener with the terminal's token. A send goes through the app's own HTTP engine to a local
- * fixture server and lands in the API history, which comes into view; an open puts the request
- * in a new API client tab without sending it.
- */
+/** `agent-studio http send|open` typed into a real PTY: the PATH script runs the app binary in
+ * command mode against the running app. A send lands in API history; an open adds an unsent tab. */
 import { $, browser, expect } from "@wdio/globals";
 import { startHttpFixture, type HttpFixture } from "../support/http-fixture";
 import { openTerminalFromEmptyPane, typeInTerminal } from "../support/terminal";

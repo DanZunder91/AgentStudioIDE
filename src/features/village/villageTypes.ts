@@ -1,43 +1,20 @@
-/**
- * Agent Village — the shared contract between its four layers.
- *
- *   data  (villageModel.ts, villageIpc.ts)  → VillageAgent[]
- *   engine (engine/*, pure TS, no DOM)      → World + VillageSim → DrawItem[]
- *   render (render/*, canvas via DrawTarget) → pixels
- *   panel  (VillagePanel.tsx)               → wires the three + HUD/tooltip
- *
- * A pixel-art village (inspired by pixel-agents, MIT — see src/assets/pixel-agents/)
- * where every Claude Code agent on this machine is a character: the ones the IDE runs
- * AND the ones running in some other terminal (discovered read-only from
- * ~/.claude/projects by the Rust `list_external_agents` command). One house per
- * project folder; sub-agents sit at the team tables of their root's house, each at its
- * own laptop (next to their parent only when every team seat is taken).
- *
- * World units are PIXELS of the unscaled art (1 tile = TILE px). The renderer
- * multiplies by an integer zoom. Nothing here is persisted.
- */
+/** Agent Village's shared contract: data (villageModel, villageIpc) → engine (engine/*, no DOM) →
+ * render (render/*) → panel. External agents are read-only from ~/.claude/projects (Rust). World
+ * units are unscaled art px (1 tile = TILE); nothing persists. */
 
 /** Size of one tile in art pixels. */
 export const TILE = 16;
 
-/**
- * World px a SEATED character's sprite is drawn above its `y`. The sim puts a sitter's
- * `y` a few px below its chair tile (for depth sorting); drawn from there the chair back
- * would hide the whole head, so the renderer raises the sprite (and the engine's hit box
- * follows) — head and shoulders show above the chair back, the pixel-agents look.
- */
+/** World px a SEATED sprite is raised above its `y` (the sim puts `y` below the chair for depth
+ * sorting), so the head shows above the chair back; the hit box follows. */
 export const SEAT_LIFT = 9;
 
 // ───────────────────────────── data ─────────────────────────────
 
 export type VillageOrigin = "ide" | "external";
 
-/**
- * What a character is doing. `typing` = a writing tool (Edit/Write/Bash/…),
- * `reading` = Read/Grep/Glob/WebFetch/WebSearch/LS, `thinking` = running with no
- * tool known, `waiting` = needs the user (permission / input), `idle` = turn over,
- * `done` / `error` = finished (sub-agents mostly).
- */
+/** `typing` = a writing tool, `reading` = Read/Grep/Glob/WebFetch/WebSearch/LS, `thinking` = no
+ * tool known, `waiting` = needs the user, `idle` = turn over, `done`/`error` = finished. */
 export type VillageActivity =
   | "typing"
   | "reading"
@@ -64,36 +41,22 @@ export interface VillageAgent {
   ideAgentId: string | null;
   /** Epoch ms of the last known activity, or null. */
   lastActivityAt: number | null;
-  /**
-   * External only: display name of the app its `claude` runs in ("iTerm2", "Terminal"),
-   * or null when unknown — a click brings that app to the front. Never a path.
-   */
+  /** External only: the app its `claude` runs in ("iTerm2"), or null; a click fronts it. Never a
+   * path. */
   host?: string | null;
-  /**
-   * City view only: the TERMINAL id of a plain IDE CONSOLE (a terminal tab with no agent),
-   * which the city shows as a floor of its own with the console's user at the desk. A click
-   * brings that terminal's tab to the front. Absent/null for every agent.
-   */
+  /** City only: the TERMINAL id of a plain IDE console (a tab with no agent), shown as its own
+   * floor; a click fronts that tab. Absent for agents. */
   consoleId?: string | null;
-  /**
-   * How many tool calls this agent has been SEEN making, monotonic (each one is a real model
-   * round-trip) — the LAN shows one uplink packet per new call. Absent = unknown (no packets).
-   */
+  /** Tool calls SEEN so far, monotonic; one uplink packet per new call. Absent = unknown (no
+   * packets). */
   toolCalls?: number;
-  /**
-   * The programming language this agent's work is in, as a language id ("rust", "typescript"…),
-   * or null / absent when unknown. The City lights its building's NEON sign in it. Only the id
-   * ever crosses from Rust — never a path or a file name (privacy).
-   */
+  /** Language id ("rust", "typescript"…) of this agent's work, or null/absent: its building's neon.
+   * Only the id crosses from Rust, never a path (privacy). */
   language?: string | null;
 }
 
-/**
- * A real communication the LANs show as packets (packets move only
- * when agents communicate with each other): a sub-agent was given its TASK (it was spawned), it
- * sent its RESULT back (it finished), or an agent made a TOOL call (a round-trip to the model).
- * Observed by `VillageView` from the agents it is handed; nothing moves without one.
- */
+/** A real communication the LANs show: a sub-agent's TASK (spawned) or RESULT (finished), or a TOOL
+ * call. Observed by `VillageView`; nothing moves without one. */
 export interface LanEvent {
   kind: "task" | "result" | "tool";
   /** task / result: the sub-agent; tool: the agent that called the tool. */
@@ -113,19 +76,13 @@ export interface ExternalAgentWire {
   activity: "running" | "waiting" | "idle" | "done" | "error";
   tool: string | null;
   lastActivityMs: number;
-  /**
-   * true when a live `claude` process claims this session (by `--session-id`/`--resume`
-   * id, else as its folder's newest session since the process started); null = unknown
-   * (no process table, e.g. Windows). Sessions no process claims are not sent at all.
-   */
+  /** A live `claude` process claims this session (by id, else as its folder's newest since start);
+   * null = unknown (no process table, e.g. Windows). Unclaimed sessions are not sent. */
   alive: boolean | null;
   /** Display name of the GUI app the session's `claude` runs in ("iTerm2"), or null. Never a path. */
   host: string | null;
-  /**
-   * The session's language id ("rust", "typescript"…): the files its tool calls named, voted by
-   * extension in Rust (`external_agents/language.rs`, the shared `projectLanguages.json`); null when
-   * none says. Sub-agents carry their session's. An id — never a path or a file name.
-   */
+  /** The session's language id, voted by extension in Rust (`external_agents/language.rs`, shared
+   * `projectLanguages.json`), or null. Sub-agents carry their session's. Never a path. */
   language: string | null;
 }
 
@@ -136,10 +93,7 @@ export interface ExternalAgentsReport {
 
 // ───────────────────────────── engine ─────────────────────────────
 
-/**
- * `sky` (city only) is painted as nothing — the city's sky backdrop shows through it;
- * `road` (city only) is the street's asphalt.
- */
+/** `sky` (city) is painted as nothing so the sky backdrop shows; `road` (city) is asphalt. */
 export type TileKind = "grass" | "path" | "floor" | "wall" | "water" | "plaza" | "sky" | "road";
 
 /** Furniture & props. `src` picks the art: vendored pixel-agents PNG or our own procedural sprite. */
@@ -190,11 +144,8 @@ export interface Prop {
   seatId?: string;
   /** Optional text for a sign. The village leaves it unset: a house's name is drawn once, as the `house` label. */
   label?: string;
-  /**
-   * Capacity props only: which one this is — a seat desk's number (its desk, PC and chair),
-   * a rack's number (racks fill in this order), or a gauge's window (0 = the 5-hour session,
-   * 1 = the week).
-   */
+  /** Capacity props: a seat desk's or rack's number, or a gauge's window (0 = 5-hour session, 1 =
+   * week). */
   index?: number;
   /** Capacity props only: the building (village house / city HQ floor) whose figure this prop shows. */
   capacity?: CapacityKind;
@@ -229,12 +180,8 @@ export interface House {
   capacity?: CapacityKind;
 }
 
-/**
- * City view: everything running is a building, and every console or
- * agent takes one floor of it. One building per project folder; its FLOORS are
- * the world's `houses` (so the sim seats each leader and its team on their own floor), and
- * this record holds what only a building has: its outer shell, its street door and its sign.
- */
+/** City view: one building per project folder; its FLOORS are the world's `houses`, and this holds
+ * only the shell, street door and sign. */
 export interface CityBuilding {
   /** The folder (basename) — also its sign. */
   key: string;
@@ -251,52 +198,33 @@ export interface CityBuilding {
   hasIde: boolean;
   /** The capacity HQ (its Memory and Usage floors; its Seats are the lounge under the street) — not a project. */
   hq?: boolean;
-  /**
-   * The project's language (`VillageAgent.language`, its agents' most common one), or null when
-   * none is known: the building's neon sign. Never set on the HQ.
+  /** The project's language (its agents' most common), or null: its neon sign. Never set on the HQ.
    */
   language?: string | null;
-  /**
-   * The elevator of a project building with a team (its sub-agents are the only riders), up its door
-   * column through every floor. Absent on the HQ and on a building without a team.
-   */
+  /** A project building's lift up its door column (its sub-agents are the only riders); absent on
+   * the HQ and without a team. */
   lift?: CityLift;
 }
 
-/**
- * An elevator shaft (busy agents ride an elevator up to the street and
- * go to their building). Vertical, one column wide; a rider gets on and off only at `top`, `bottom` and the
- * rows in `stops`.
- */
+/** A lift shaft, one column wide; riders board or leave only at `top`, `bottom` and `stops`. */
 export interface CityLift {
   col: number;
   /** Its highest and lowest rows (top ≤ bottom). */
   top: number;
   bottom: number;
-  /**
-   * Every row a rider may get on or off at, top to bottom, `top` and `bottom` included. A project
-   * building's: each floor's desk-chair rows (top floor first), then its street door's row
-   * (`bottom`). The lounge's: the far sidewalk (`top`), then each bench row's aisle.
-   */
+  /** Rows a rider may board or leave, top to bottom incl. `top` and `bottom`: a building's
+   * desk-chair rows then its door row; the lounge's far sidewalk then each bench aisle. */
   stops: number[];
 }
 
-/**
- * The CITY's SUBWAY (a subway under the seats, with an entrance somewhere on
- * the map and a train that goes out and comes back every three minutes): a tunnel dug in under the Seats
- * lounge that runs the whole street (past the world's ends too — render/ draws it across the view), a
- * station under its street entrance, and that entrance — a `metro` prop on the far sidewalk, left of the
- * lounge, whose stairs go down beside the lounge to the station.
- */
+/** The City's subway: a tunnel under the lounge running the whole street (drawn across the view), a
+ * station under its entrance, the entrance a `metro` prop on the far sidewalk. */
 export interface CitySubway {
   /** The tunnel's ceiling row and its floor (track-bed) row; the three rows between are the tunnel. */
   top: number;
   bottom: number;
-  /**
-   * The row the train runs on: its wheels on this row's bottom edge. Its body rises 38 px from there
-   * (`render/subway.ts` CAR_H — taller than two rows so its doors are taller than a person), leaving
-   * 22 px of headroom under the tunnel's lamps.
-   */
+  /** The train's row (wheels on its bottom edge); the body rises 38 px (`render/subway.ts` CAR_H),
+   * leaving 22 px under the tunnel's lamps. */
   rail: number;
   /** The station's platform, columns [col0, col1), under the entrance. */
   station: { col0: number; col1: number };
@@ -304,14 +232,9 @@ export interface CitySubway {
   entrance: { col: number; row: number };
 }
 
-/**
- * The Seats LOUNGE: the capacity HQ's seats are no longer desks but a waiting
- * room UNDER THE STREET, centred below the HQ — a bench seat per seat (`bench` props, numbered like
- * the Seats desks), where agents wait to be called. A busy agent leaves its bench, rides `lift` up
- * to the far sidewalk, crosses the road at `lift.col` (in front of the HQ's door), walks the near
- * sidewalk to its building, rides that building's lift up to its floor and sits at its desk; when
- * it is done it comes back the same way.
- */
+/** The Seats LOUNGE under the street, centred below the HQ: a bench per seat. A busy agent rides
+ * `lift` up, crosses at `lift.col`, walks and rides its building's lift to its desk, and comes
+ * back the same way. */
 export interface CityLounge {
   /** Its house key (`capacityKey("lounge")`) — the lounge is that house in `World.houses`. */
   key: string;
@@ -319,10 +242,8 @@ export interface CityLounge {
 }
 
 export interface CityInfo {
-  /**
-   * First street row below the buildings (the near sidewalk) of the FIRST (top) street; every
-   * building on it has its front wall on the row above.
-   */
+  /** First row below the buildings (the near sidewalk) of the top street; every building's front
+   * wall is on the row above. */
   street: number;
   buildings: CityBuilding[];
   /** The lounge under the street; absent in a city without a capacity layout. */
@@ -371,17 +292,13 @@ export interface CharacterView {
   bubbleAlpha: number;
   /** Spawn/despawn effect progress 0..1, or null when none. */
   fx: { kind: "spawn" | "despawn"; t: number } | null;
-  /**
-   * In a lift right now (the city's commute, engine/commute.ts): the draw list puts a car round it.
-   * Absent = on foot, seated or standing.
-   */
+  /** In a lift now (engine/commute.ts): the draw list puts a car round it. Absent = on foot or
+   * seated. */
   riding?: boolean;
 }
 
-/**
- * Who sits at which seat this frame (`VillageSim.seating`): a character SEATED at its seat — not
- * walking to it, not despawning. What a project room's LAN (engine/teamLan.ts) wires up.
- */
+/** Who sits at which seat this frame (`VillageSim.seating`), SEATED only; what a room's LAN wires
+ * up. */
 export interface SeatedAgent {
   key: string;
   /** The agent that started it; null for a root. */
@@ -401,10 +318,8 @@ export type DrawItem =
       mask: number /* N=1 E=2 S=4 W=8 */;
       /** The owning house's hue (degrees) — each house gets its own warm tint. Absent = the default plaster. */
       hue?: number;
-      /**
-       * true for a house's bottom (street-facing) wall: drawn one tile tall as a cap + a
-       * darker facade instead of a 2-tile back wall, so it never covers the room's last row.
-       */
+      /** A house's street-facing wall: one tile tall (cap + facade), so it never covers the room's
+       * last row. */
       front?: boolean;
     }
   | {
@@ -418,14 +333,9 @@ export type DrawItem =
   | { t: "character"; c: CharacterView }
   | { t: "bubble"; c: CharacterView }
   | {
-      /**
-       * A project building's NEON sign (a neon sign that says the project's
-       * language — a Rust project such as gazelle gets Rust-style neon lights): a vertical blade sign hanging off the
-       * building's right wall, its language's short name stacked in pixel letters in that
-       * language's colours (render/neon.ts). (x, y) = world px of the point it hangs from: the
-       * right wall's outer face, level with the sign's top (engine/drawList.ts `neonAnchor`).
-       * Only on a project building whose `CityBuilding.language` is known — never on the HQ.
-       */
+      /** A project building's NEON blade sign (render/neon.ts). (x, y) = world px of its hang point
+       * on the right wall's face (`neonAnchor`). Only when `CityBuilding.language` is known; never
+       * the HQ. */
       t: "neon";
       x: number;
       y: number;
@@ -435,12 +345,8 @@ export type DrawItem =
       building: string;
     }
   | {
-      /**
-       * The city's Seats LOUNGE, dressed (render/lounge.ts): an underground
-       * waiting hall — warm lamps under its ceiling, a panelled wainscot behind each bench row, a
-       * plant at each row's ends. Painted on its back surface, at its back wall's depth, so its
-       * benches, the agents waiting on them and every rider are drawn over it. TILES: the
-       * interior's first column, its back-wall row (`House.row`) and its width.
+      /** The Seats lounge hall (render/lounge.ts), painted at its back wall's depth so benches,
+       * waiters and riders draw over it. TILES: first column, back-wall row (`House.row`), width.
        */
       t: "lounge";
       col: number;
@@ -452,11 +358,8 @@ export type DrawItem =
       lift: number;
     }
   | {
-      /**
-       * One straight run of the Seats room's LAN cable (engine/lan.ts), world px, axis-aligned:
-       * on the floor between the desk rows (village) or along the back wall (city). Drawn right
-       * after the ground tiles, so the furniture and the sitters cover it.
-       */
+      /** One straight LAN cable run (engine/lan.ts), world px, axis-aligned; drawn right after the
+       * ground tiles so furniture covers it. */
       t: "cable";
       x0: number;
       y0: number;
@@ -464,13 +367,9 @@ export type DrawItem =
       y1: number;
     }
   | {
-      /**
-       * A data packet this frame — on the Seats LAN (engine/lan.ts) or a project room's LAN
-       * (engine/teamLan.ts) — world px centre. Packets move ONLY on real communication (`LanEvent`):
-       * `team` = a sub-agent's task (parent → child, at its spawn) or result (child → parent, when it
-       * finishes), in the team's hue; `uplink` = one tool call's round trip to the switch / router.
-       * Drawn after the scene, before the meters.
-       */
+      /** A packet this frame (engine/lan.ts or teamLan.ts), world px centre, moving ONLY on a real
+       * `LanEvent`: `team` = task or result in the team's hue; `uplink` = a tool call's round
+       * trip. Drawn after the scene. */
       t: "packet";
       x: number;
       y: number;
@@ -479,12 +378,8 @@ export type DrawItem =
       hue: number;
     }
   | {
-      /**
-       * A Wi-Fi pulse at an antenna this frame (engine/teamLan.ts): a project room's router, or
-       * its boss's desk, while the boss and its team talk over the air. World px centre of the
-       * antenna; `phase` 0..1 = how far this pulse has spread (0 just sent, 1 faded out).
-       * Drawn with the packets: after the scene, before the meters.
-       */
+      /** A Wi-Fi pulse at a router or boss-desk antenna (engine/teamLan.ts), world px centre;
+       * `phase` 0 just sent .. 1 faded. Drawn with the packets. */
       t: "wifi";
       x: number;
       y: number;
@@ -493,10 +388,8 @@ export type DrawItem =
       hue: number;
     }
   | {
-      /**
-       * A small fill bar floating over an agent's desk: its context window.
-       * World px: (x, y) is the bar's top-left, `w` its width.
-       */
+      /** A context-window fill bar over an agent's desk; (x, y) its top-left, `w` its width, world
+       * px. */
       t: "meter";
       x: number;
       y: number;
@@ -507,37 +400,24 @@ export type DrawItem =
     }
   | {
       t: "label";
-      /**
-       * World anchor: an agent label's box hangs from y (top-centre); a house label is
-       * centred on (x, y); a floor plate's box starts at x (left edge), centred on y.
-       */
+      /** World anchor: an agent label hangs from y (top-centre); a house label is centred on
+       * (x, y); a floor plate starts at x, centred on y. */
       x: number;
       y: number;
       text: string;
-      /**
-       * `floor` = a city floor's name plate; `civic` = a capacity house's board or HQ floor plate, with its figure
-       * ("Seats 3/10"); `gauge` = a usage gauge's own small caption ("5h 41%").
-       */
+      /** `floor` = a city floor plate; `civic` = a capacity board or HQ plate with its figure;
+       * `gauge` = a usage gauge's caption. */
       tone: "house" | "agent" | "floor" | "civic" | "gauge";
-      /**
-       * Placement rank, lower first (labels.ts `placeLabels`): 0 = hovered (always drawn),
-       * 1 = waiting on the user, 2 = root agent, 3 = sub-agent. House labels are always drawn.
-       */
+      /** Placement rank, lower first (`placeLabels`): 0 hovered (always drawn), 1 waiting on the
+       * user, 2 root, 3 sub-agent. House labels always draw. */
       priority?: number;
-      /**
-       * Widest the box may be, WORLD px (a city floor plate: its floor). Labels are screen-sized,
-       * so below zoom 1 a plate would spill past its building; with a cap it is clipped to fit —
-       * or not drawn when not even one letter fits.
-       */
+      /** Widest the box may be, WORLD px: screen-sized labels would spill below zoom 1, so it is
+       * clipped, or not drawn if not one letter fits. */
       maxW?: number;
     }
   | {
-      /**
-       * A lift SHAFT (busy agents ride an elevator): a project building's
-       * (`CityBuilding.lift`) or the lounge's (`CityLounge.lift`), one tile column wide — rails
-       * on a dark strip, a landing door at each stop (render/lift.ts). Drawn after the scene, so it
-       * runs OVER the back walls and slabs it crosses, and before the riders and their cars. TILES.
-       */
+      /** A lift SHAFT, one tile column wide (render/lift.ts). Drawn after the scene, OVER the walls
+       * and slabs it crosses, before riders and cars. TILES. */
       t: "shaft";
       col: number;
       /** The first and last tile rows it is drawn over (inclusive). */
@@ -547,35 +427,23 @@ export type DrawItem =
       stops: readonly number[];
     }
   | {
-      /**
-       * A lift CAR round a rider this frame (render/lift.ts): `back` (its back wall and frame) right
-       * before the rider, `front` (its lintel, sill and side posts) right after it, so the rider is
-       * inside. (x, y) = the rider's feet, world px.
-       */
+      /** A lift CAR round a rider (render/lift.ts): `back` before the rider, `front` after, so the
+       * rider is inside. (x, y) = the rider's feet, world px. */
       t: "car";
       x: number;
       y: number;
       part: "back" | "front";
     }
   | {
-      /**
-       * A vehicle on the City's road this frame (engine/traffic.ts `TrafficFx`; art: render/vehicles.ts).
-       * Z-sorted with the street by the road under its wheels (`VehicleView.y`): the far lane behind the
-       * near lane, both in front of the near sidewalk's lamps, trees and walkers and behind everything
-       * on the far sidewalk. Decoration: never hit-tested, never labelled, never counted.
-       */
+      /** A vehicle this frame (engine/traffic.ts; art render/vehicles.ts), z-sorted by the road
+       * under its wheels. Decoration: never hit-tested, labelled or counted. */
       t: "vehicle";
       v: VehicleView;
     }
   | {
-      /**
-       * A PASSER-BY on a City sidewalk this frame (engine/streetLife.ts `StreetLife`, art:
-       * render/streetLife.ts; people walk on the street too, and in the
-       * rain some of them, not all, carry an umbrella). Anonymous, drawn from the character sheets
-       * with NO agent marker and no bubble — never a sim character, so never hit-tested, hovered,
-       * labelled or counted. (x, y) = world px of its feet on the sidewalk; on the subway stairs `y` is
-       * the line its sprite is cut at. Z-sorted in front of its sidewalk's props (`walkerZ`).
-       */
+      /** A PASSER-BY this frame (engine/streetLife.ts; art render/streetLife.ts): no agent marker,
+       * never hit-tested, hovered, labelled or counted. (x, y) = feet, world px; on subway stairs
+       * `y` is the cut line. Z: `walkerZ`. */
       t: "walker";
       /** Its serial number: a new one per passer-by, the same for its whole walk. */
       id: number;
@@ -600,11 +468,7 @@ export type DrawItem =
       drink: WalkerDrink | null;
     };
 
-/**
- * A passer-by buying a drink (someone goes to buy something at the
- * vending machine): the machine and how far through the purchase it is — engine/streetLife.ts `VEND` names the
- * steps (pay, a button flashes, the can drops into the tray, the buyer takes it).
- */
+/** A passer-by's vending-machine purchase; engine/streetLife.ts `VEND` names its steps. */
 export interface WalkerVend {
   /** World px of the machine's left edge and of its bottom (its sidewalk tile's). */
   x0: number;
@@ -624,11 +488,8 @@ export interface WalkerDrink {
   sip: boolean;
 }
 
-/**
- * The City's TRAFFIC (taxis, cars and buses, at random and only as many
- * as it takes to make the city look alive): a vehicle as the renderer needs it, produced each frame by
- * `TrafficFx` (engine/traffic.ts). Decoration — no vehicle stands for anything measured.
- */
+/** A vehicle as the renderer needs it, made each frame by `TrafficFx` (engine/traffic.ts).
+ * Decoration: no vehicle stands for anything measured. */
 export type VehicleKind = "car" | "kei" | "taxi" | "bus";
 
 export interface VehicleView {
@@ -652,10 +513,8 @@ export interface VehicleView {
   speed: number;
 }
 
-// ───────────────────────────── ambience (time of day + weather) ─────────────────────────────
-//
-// Weather and time of day follow the user's local conditions: rain when it rains there, afternoon
-// outside the house in the afternoon. Outdoors is graded by the local clock (sunrise/sunset from the weather report when known); house interiors stay lit.
+// ──── ambience (time of day + weather) ──── Follows the user's local conditions; outdoors is
+// graded by the local clock, house interiors stay lit.
 
 export type WeatherKind = "clear" | "cloudy" | "fog" | "drizzle" | "rain" | "snow" | "storm";
 
@@ -684,17 +543,11 @@ export type PhaseOverride = "auto" | DayPhase;
 /** Everything the engine + renderer need to paint the sky this frame. Pure data. */
 export interface Ambience {
   phase: DayPhase;
-  /**
-   * How far through `phase` the clock is: 0 = its start .. 1 = its end. A forced phase is shown at
-   * its middle (0.5); night is 0 (its sky does not change across it). It lets the City's sky glide
-   * through a phase — golden hour deepening into sunset, sunset into twilight — instead of stepping
-   * at the phase's edges (`engine/ambience.ts skyClock`). Absent = 0.5.
-   */
+  /** How far through `phase` the clock is, 0..1 (forced phase 0.5, night 0), so the City's sky
+   * glides through a phase (`engine/ambience.ts skyClock`). Absent = 0.5. */
   progress?: number;
-  /**
-   * The machine's IANA time zone ("Asia/Tokyo") — the same thing the live weather picks its city
-   * from; the City's skyline shows that city's landmarks. Absent = unknown (a generic skyline).
-   */
+  /** The machine's IANA time zone ("Asia/Tokyo"), also the live weather's city: the skyline shows
+   * its landmarks. Absent = a generic skyline. */
   zone?: string;
   /** 0 = darkest night .. 1 = full noon sun. Drives the outdoor grade. */
   daylight: number;
@@ -709,11 +562,8 @@ export interface Ambience {
   campfireLit: boolean;
   /** Idle agents stay indoors (bad weather or night). */
   stayIndoors: boolean;
-  /**
-   * The city's sky (side view): which body is up — the sun from sunrise to sunset, the moon
-   * otherwise — and how far it has crossed, 0 = just risen on the left .. 1 = setting on the
-   * right. Absent = no sun or moon drawn (the village is seen from above and has no sky).
-   */
+  /** City sky body (sun sunrise to sunset, else moon) and how far it has crossed, 0 left .. 1
+   * right. Absent = no sun or moon (the village has no sky). */
   arc?: { body: "sun" | "moon"; t: number };
 }
 
@@ -727,12 +577,8 @@ export interface WeatherParticle {
   alpha: number;
 }
 
-// ───────────────────────────── capacity ───────────────────────────────────────────
-//
-// Both the Village and the City show the agents' seats — the available ones, and of the reserved
-// ones how many are in use — and the memory available to agents. Three figures, a building each: Seats (how many agents can work at
-// once vs how many do), Memory (what the agents hold vs the machine) and Usage (the account's
-// 5-hour and weekly limits); plus each agent's context window as a bar over its desk.
+// ──── capacity ──── Seats, Memory and Usage (5-hour and weekly limits) are a building each in both
+// views, plus each agent's context window as a bar over its desk.
 
 /** Wire `AgentMemory` of `machine_capacity` (src-tauri/src/capacity.rs, camelCase). */
 export interface AgentMemoryWire {
@@ -756,20 +602,15 @@ export interface MachineCapacityWire {
   sampledAtMs: number;
 }
 
-/**
- * The capacity buildings: Seats (the selected agent's context window — a hall of `/context`'s 200
- * seats), Memory and Usage are a house each in the village and a floor each of the city's HQ; the
- * `lounge` is the City's waiting room under the street (its 64 benches, where agents wait to be
- * called), which the village does not have.
+/** Capacity buildings: Seats (the selected agent's context, 200 seats), Memory and Usage (a house
+ * each in the village, an HQ floor each in the city), and the City-only `lounge` under the street.
  */
 export type CapacityKind = "seats" | "memory" | "usage" | "lounge";
 
 /** What the capacity buildings must have room for (it shapes the world, so it changes rarely). */
 export interface CapacityLayout {
-  /**
-   * Benches in the City's lounge: a fixed 64, or more — one for every live agent. The Seats are a
-   * fixed hall of `/context`'s 200 seats in both views, so the Village gives 0 and ignores it.
-   */
+  /** Lounge benches: a fixed 64, or one per live agent if more. The Village ignores it (its Seats
+   * hall is a fixed 200). */
   seats: number;
 }
 
@@ -788,22 +629,15 @@ export type PropReading =
   | { kind: "rack"; agents: number; other: number; known: boolean }
   /** A gauge: its window's meter, or null with no reading. */
   | { kind: "gauge"; meter: Meter | null }
-  /**
-   * A city lounge bench with an anonymous agent WAITING on it (a free seat — no holder, no sim
-   * character): its look (a character sheet and hue, from the bench's number) and its pose this frame.
-   */
+  /** A lounge bench with an anonymous WAITER (a free seat: no holder, no sim character); look from
+   * the bench's number. */
   | { kind: "waiter"; palette: number; hueShift: number; pose: WaiterPose }
   /** The Seats hall: the selected agent's context window seat by seat (`HallFrame`); null before the first frame. */
   | { kind: "hall"; hall: HallFrame | null };
 
-/**
- * The Seats hall this frame, in the Village's Seats house and on the City HQ's Seats floor
- * (`/context`'s grid is what the seats mean, in both views): the selected agent's context window
- * as `/context`'s own 200-cell grid — `cells[i]` is the category key seat i is taken by (`free-space` = an empty seat,
- * `autocompact-buffer` = a reserved one), in the CLI's order, front row first. `cells` null = no
- * reading (nothing selected, a sub-agent, or not read yet): the seats are drawn as unknown, never as
- * empty.
- */
+/** The selected agent's context as `/context`'s 200-cell grid: `cells[i]` is seat i's category key
+ * (`free-space` empty, `autocompact-buffer` reserved), front row first. `cells` null = no reading:
+ * drawn as unknown, never empty. */
 export interface HallFrame {
   cells: readonly string[] | null;
   /** Percent of the window in use, as `/context` printed it; null without a reading. */
@@ -812,10 +646,7 @@ export interface HallFrame {
   tone: MeterTone;
 }
 
-/**
- * A lounge waiter's pose: sitting `still`, a brief `shift` in its seat, or `read`ing a paper. Asleep
- * at night is the renderer's (it has the sky): a still sitter with a "z".
- */
+/** A lounge waiter's pose; asleep at night is the renderer's call (it has the sky). */
 export type WaiterPose = "still" | "shift" | "read";
 
 /** Who holds a seat desk: the agent, what it is doing, and who started it (null = a root). */
@@ -825,15 +656,11 @@ export interface SeatHolder {
   parentKey: string | null;
 }
 
-/**
- * What the capacity buildings show THIS frame — plain data, made by `capacityModel` from the
- * machine sample, the usage store and the context store. The world holds only the furniture.
- */
+/** What the capacity buildings show THIS frame (from `capacityModel`); the world holds only the
+ * furniture. */
 export interface CapacityFrame {
-  /**
-   * The City's lounge: bench i's holder, or null for a free bench. Its length is the bench count:
-   * every live agent has one. Empty in the Village (it has no lounge).
-   */
+  /** The City's lounge: bench i's holder, or null when free; one bench per live agent. Empty in the
+   * Village. */
   desks: (SeatHolder | null)[];
   /** The Seats hall — the selected agent's context window — in both views. */
   hall: HallFrame;

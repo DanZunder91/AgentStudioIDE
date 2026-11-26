@@ -1,65 +1,18 @@
-//! The file enumeration BOTH searches share — content ([`crate::find`]) and
-//! filename ([`crate::find_files`]).
-//!
-//! ## The rule: ignore files prune DIRECTORIES, they do not hide FILES
-//!
-//! Search used to ignore `.env` files — typing `.env` into quick-open returned
-//! **No matching files** while the file sat in the tree three lines away. Two
-//! independent causes, and fixing either one alone still leaves that case broken:
-//!
-//! 1. `WalkBuilder::hidden(true)` — the ripgrep CLI default — prunes every
-//!    dotfile. That is a *terminal* default; no IDE hides `.env`, `.gitignore`,
-//!    `.github/workflows/ci.yml` or `.vscode/settings.json` from its file
-//!    finder.
-//! 2. `.gitignore` was applied to files as well as directories, and `.env` is
-//!    gitignored in essentially every project — that is *why* it exists.
-//!
-//! In a realistic project (`gazelle`, say), `.env` and `gazelle-server/.env` are
-//! hidden **and** ignored, while the `.env.example` files are hidden but
-//! tracked. A hidden-only fix would have surfaced the examples, passed a test,
-//! and still not found `.env` itself.
-//!
-//! So the two intents behind an ignore rule get separated, because they are not
-//! the same thing:
-//!
-//! - **Noise and speed** — `node_modules/`, `target/`, `dist/`, `coverage/`.
-//!   These are *directories*, and pruning them is where all the performance comes
-//!   from. Still pruned, by the `ignore` crate's own nested-`.gitignore` logic.
-//! - **Secrecy** — `.env`, `*.local`. These are *files*. Being un-committable is
-//!   no reason to be unfindable in a local editor.
-//!
-//! The walker therefore decides **which directories exist**; a plain `read_dir`
-//! of each surviving directory decides **which files**. That is the whole trick,
-//! and it is why this is not a hand-rolled gitignore matcher: nested ignore
-//! files, negations, `.git/info/exclude` and the global ignore all keep working,
-//! because the crate still does every bit of the matching that prunes the tree.
-//!
-//! Cost: one extra `read_dir` per surviving directory (the walker already did
-//! one to enumerate it). Bounded by the *pruned* tree, which is the point.
-//!
-//! ## `.git` must be pruned by hand now
-//!
-//! With `hidden(false)` nothing else excludes it, and walking a repo's object
-//! store is thousands of useless entries. Same for `.hg` / `.svn`.
+//! The file walk behind content ([`crate::find`]) and filename ([`crate::find_files`]) search.
+//! Ignore rules prune DIRECTORIES only (noise, speed); every file in a surviving dir is listed, so
+//! hidden or gitignored files like `.env` stay findable. `.git`/`.hg`/`.svn` are pruned by hand.
 
 use std::path::{Path, PathBuf};
 
 use ignore::overrides::Override;
 use ignore::{DirEntry, WalkBuilder};
 
-/// Version-control metadata directories: never content, always large.
-///
-/// They used to be skipped for free by `hidden(true)`. Now that dotfiles are
-/// searchable, this is the only thing keeping `.git`'s object store out of every
-/// result — do not remove it without replacing it.
+/// Version-control metadata dirs. With dotfiles searchable, this is the only thing keeping
+/// `.git`'s object store out of results.
 const VCS_DIRS: [&str; 3] = [".git", ".hg", ".svn"];
 
-/// True for a `.git`/`.hg`/`.svn` directory below the root.
-///
-/// Depth-guarded: opening a `.git` directory *as* the workspace root is a strange
-/// thing to do, but pruning the root would silently return nothing at all, and a
-/// search that answers "no results" for a reason the user cannot see is the exact
-/// failure this module exists to fix.
+/// True for a `.git`/`.hg`/`.svn` directory below the root. Depth-guarded: pruning a `.git`
+/// opened as the root would silently return nothing.
 fn is_pruned_vcs_dir(entry: &DirEntry) -> bool {
     entry.depth() > 0
         && entry.file_type().is_some_and(|t| t.is_dir())
@@ -69,20 +22,9 @@ fn is_pruned_vcs_dir(entry: &DirEntry) -> bool {
             .is_some_and(|n| VCS_DIRS.contains(&n))
 }
 
-/// Every file the search should consider under `root`.
-///
-/// Directories are pruned by `.gitignore` (+ `.ignore`, nested, negations) and by
-/// [`VCS_DIRS`]; files are then taken from each surviving directory **whether or
-/// not they are hidden or ignored** — see the module docs for why those are
-/// different questions.
-///
-/// `overrides` is the caller's glob mask (`find`'s `--glob`). It is applied here
-/// because files no longer come out of the walker, so the walker can no longer
-/// apply it for us — dropping this line would silently turn the glob box into a
-/// no-op.
-///
-/// Each directory's files are sorted by name, so a result set is deterministic
-/// instead of inheriting `readdir` order, which differs between filesystems.
+/// Every file to search under `root`: dirs pruned by ignore files and [`VCS_DIRS`], files kept
+/// even if hidden or ignored. `overrides` (the `--glob` mask) must be applied here since files no
+/// longer come from the walker. Files are sorted per directory so results are deterministic.
 pub fn walk_files(root: &Path, overrides: Option<Override>) -> impl Iterator<Item = PathBuf> {
     WalkBuilder::new(root)
         .git_ignore(true)
@@ -99,11 +41,8 @@ pub fn walk_files(root: &Path, overrides: Option<Override>) -> impl Iterator<Ite
         .flat_map(move |dir| files_in(dir.path(), overrides.as_ref()))
 }
 
-/// The files directly inside one directory, sorted, honouring the glob mask.
-///
-/// Collected into a `Vec` rather than returned lazily so nothing borrows from the
-/// `flat_map` closure above. An unreadable directory yields nothing: a permission
-/// error on one folder must not fail the whole search.
+/// The files directly inside one directory, sorted, honouring the glob mask. An unreadable
+/// directory yields nothing: one permission error must not fail the whole search.
 fn files_in(dir: &Path, overrides: Option<&Override>) -> std::vec::IntoIter<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -224,12 +163,8 @@ mod tests {
         );
     }
 
-    /// Where `hidden(false)` actually earns its keep.
-    ///
-    /// A root-level dotfile comes back from `read_dir` whatever the walker's
-    /// `hidden` setting is — so the obvious `.env` test does NOT pin that flag.
-    /// Descending into a dot-DIRECTORY does. Found while falsifying: flipping
-    /// `hidden(false)` back to `true` reddened nothing until this existed.
+    /// A root-level dotfile is listed whatever `hidden` is; only descending into a dot-directory
+    /// pins `hidden(false)`.
     #[test]
     fn files_inside_hidden_directories_are_found() {
         let t = Tree::new("hiddendir");

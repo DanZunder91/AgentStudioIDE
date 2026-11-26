@@ -1,154 +1,6 @@
-/**
- * Agent Village — the CITY's landmarks: the skyline of the machine's own city behind the street
- * (for Tokyo: Tokyo Tower, the Tokyo Skytree and Mount Fuji).
- *
- * Which city is the machine's IANA time zone (`Ambience.zone`, the same thing the live weather picks
- * its city from): `landmarksFor("Asia/Tokyo")` → Fuji, Tokyo Tower, Skytree, a five-storey
- * pagoda and a shrine hall; any other zone → none (the generic far skyline only). The table is
- * data, so another city is one more entry.
- *
- * Four passes, at four depths of the city's frame (render/city.ts calls them):
- *   - `paintFarLandmarks` — right after the sky bands and the sun, BEFORE the clouds: Fuji, the
- *     farthest thing in the picture (a sunset behind Fuji is a "Diamond Fuji").
- *   - `paintLandmarks` — after the clouds, BEFORE the far skyline blocks, so the hazy blocks (and
- *     the buildings, and the gaps' trees and lamps) stand in front of the towers' bases.
- *   - `paintNearLandmarks` — AFTER the far skyline's blocks and panes (one or two shrines in the
- *     background as well): the temples stand nearer than that haze, still behind the city's
- *     buildings, trees, lamps and street.
- *   - `paintLandmarkLights` — AFTER the outdoor grade, inside the night sky's clip (like
- *     `paintCityNight`): Tokyo Tower's warm orange "Landmark Light", the Skytree's pale blue "Iki"
- *     with a "Miyabi" purple mast, the red aviation lights blinking on both tips, the pagoda's
- *     storeys washed warm and the shrine's lanterns and doors glowing. Evening, dusk and night only.
- *
- * All of them are painted in DAY colours (like the far skyline): the shared outdoor grade turns them
- * to dusk or a night silhouette — one clock, not a second sky model.
- *
- * THE TEMPLES (the "near" layer) are our own pixel art, drawn into a small pixel grid once per size
- * (`templeArt`, cached) and painted as merged runs. The pagoda: a stone base, five storeys — each a
- * vermilion body with cream panels under a dark tiled roof whose eaves turn up at the tips (a gold
- * bell under each), narrowing upward — and a black sōrin spire with nine rings and a gold jewel. The
- * shrine: a stone base with steps up the middle, vermilion pillars and head beam, white walls, a
- * lattice door bay with a shimenawa rope and white shide over it, a wide dark hip-and-gable roof
- * with upturned ends, a gable over the entrance and gold ornaments on the ridge, and a stone lantern
- * either side. Sizes — they stand in front of the far skyline, so they are held to its LOW-CITY
- * height (`SKYLINE_BASE`, render/skyline.ts) rather than to the sky alone:
- *   - the pagoda is 0.3 of the sky's reference, but never under twice that height (96 px: five
- *     storeys need ~13 px each to show a roof AND a body at the City's Fit) — 0.69 of the Tower in
- *     the shortest City, under half of it from three floors up; far more than a 55 m pagoda's real
- *     share of a 333 m tower, because it stands much nearer — and never over 176 px;
- *   - the shrine is a fixed 48 px, that height: no taller, so it may stand in front of a tower's foot
- *     (the haze is never lower); no shorter, or its terrace grows as wide as its roof and its lanterns
- *     lose their posts (1.25× as wide as it is tall).
- * Both fit the street's 4-tile gap between two buildings, however tall the city. (The HQ lost its
- * Seats floor to the lounge under the street, so the shortest city — the
- * HQ alone, and many typical ones — has a sky of 240 px, not 336: at 0.3 and 0.15 of it alone the
- * temples would have shrunk to 67 and 34 px.)
- *
- * SIZE — against the city itself. THE TOWERS stand on its tallest roof (sized against the sky alone,
- * a city at night had Tokyo Tower about 0.45 of its five-floor `gazelle` and the Skytree only about
- * as tall as it — too small): the Skytree (634 m) towers over the tallest building by half
- * again, TOWERING (1.5) × its roof, as far as its tip may rise OVER_TOP (5) tiles past the world's top
- * — never shorter than the sky less a tile, which it used to be, and still is over a street of
- * one-floor buildings — and the Tower is 333/634 of it (≈ 1/1.9), however the city grows
- * (`towerReference`). The full 1.5× up to three floors; 1.43× four, 1.38× five, 1.15× twelve. In that
- * city: the Skytree 576 px, 1.38× `gazelle` (it was 480), the Tower 303 (252). The world keeps only
- * 4–5 sky rows over its tallest roof, so in every City (the HQ alone is two floors) the Skytree rises
- * past the world's top into the open sky painted above it, and Fit frames its tip there
- * (`VillageView.fitTarget`) — a taller frame, which the cap keeps from costing that city its Fit zoom
- * in any @2x pane measured (1280×800 with or without the HUD, 1440×900, 1200×800, 900×700, 720×600);
- * a pane whose height binds below zoom 1 loses a sixteenth (720×600 @1x: 0.6875 → 0.625). Fuji and the
- * temples stand on the sky: its reference is the sky less a tile (`horizonY − TILE`, which grows with
- * the tallest building, and Fit frames 2 of its rows). Fuji is 0.6 of it — the apparent size of a
- * 3,776 m cone 100 km away against a 634 m tower ~10 km away while the Skytree was that reference; the
- * farthest thing in the picture, it kept its size when the towers grew, and still reads as the far
- * mountain behind them — and 4.2× as wide as it is tall (the upper cone that shows above the haze).
- * Only a landmark with no clear spot at its size is drawn smaller (PLACEMENT).
- *
- * WORLD-LOCKED — every landmark scrolls and zooms WITH the street (zoomed in, the Skytree used to
- * slide behind a seven-floor building although it stood in open sky at Fit). They used to
- * scroll at a fraction of the pan (parallax), so a wheel zoom or a pan slid them behind a building.
- * Locked to the world, what hides what is a property of the World, decided once here, and no camera
- * can change it.
- *
- * CROWNS — each far and tower landmark has a CROWN, the part that makes it recognisable
- * (`landmarkCrown`): the Skytree from its tip down to the bottom of its Tembo Deck, Tokyo Tower from
- * its tip down to the bottom of its main deck (a tower's lowest deck, also its widest part up there),
- * Fuji its whole snow cap, ragged edge included. A building HIDES a crown when its x-range overlaps
- * the crown's and its roof rises above the crown's bottom (a building must never hide Fuji or the
- * towers). A building lower than that is fine: in front
- * of a tower's legs or Fuji's flanks is how a skyline looks.
- *
- * PLACEMENT — chosen once per world (cached).
- *   WHERE A CROWN MAY STAND. Fuji and the towers each have a preferred place (`prefer`: Fuji left, the
- *   Tower in the middle, the Skytree right — the composition). A crown stands only where NO building
- *   hides it — a hard rule, not a score — inside the span Fit frames, and at least `PAD` from every
- *   other crown; every whole world px of the span is a candidate.
- *   SIZE. The largest sizes at which all of them have such spots AT ONCE, on any arrangement (below):
- *   all at full size; else Fuji, the farthest, a twentieth of its height smaller at a time — the towers
- *   kept at full size while any size of Fuji's lets them (the towers matter most); else both
- *   towers a twentieth smaller together (so the Tower keeps its 333/634 of the Skytree), Fuji from its
- *   full size down again at each — but never so small that a crown sinks into the far skyline's haze
- *   (`skylineMax`), which would hide it just the same. A city with the HQ (every City the panel builds)
- *   has open sky inside its frame — a 4-tile gap beside the HQ, the low HQ itself under a crown that
- *   clears its roof, the empty street on the side with less built — and in every one the tests sweep
- *   (up to twelve floors) the towers stand there at full size (Fuji, in a few, smaller). A street
- *   without the HQ may have no room at any size (one building filling its whole frame): there, last of
- *   all, each stands at full size where nothing can hide it, as few as can be just past an outer wall.
- *   SEPARATION (the two towers stand at least one or two buildings apart; on build-11 the Skytree and
- *   Tokyo Tower stood side by side in the one gap between the HQ and a seven-floor `gazelle`). At each
- *   size tried, every arrangement of
- *   Fuji and the towers is weighed (`arrange`: each left-to-right order of them, each stretch of street
- *   each may stand on, solved exactly), with the hard rules above. The towers stand as far apart as the
- *   street allows, best first: TWO whole buildings between their crowns (a building's walls both
- *   between them, overlapping neither); else ONE; else, with no building that can stand between them,
- *   `APART` of the span between their crowns — an eighth: the HQ alone gives that (its 96 px of open
- *   street right of it hold both towers' crowns, 18 + 24 px, at most 54 px apart, Fuji taking the
- *   left), and it is 6.5× PAD, never closer than the towers stood before; else only PAD. In every city
- *   the tests sweep, the towers share the street only where no arrangement at their sizes can part
- *   them: two two-floor projects beside the HQ, every roof above every crown's bottom, so every crown
- *   must stand in one of the two 4-tile gaps and Fuji's snow fills one; and seven, nine and eleven
- *   floors round the HQ, where Fuji's snow fills the only room between the tall roofs and the towers
- *   share the short open street left of them all. From eleven floors up the Skytree's crown is wider
- *   than a 4-tile gap: standing beside the HQ it overhangs its roof, and the HQ is no longer wholly
- *   between the crowns.
- *   COMPOSITION, a preference after all that: the fewest pairs out of the order Fuji – Tower – Skytree,
- *   then each, shortest first (at full size), nearest its preferred place (a tie going right). In a
- *   realistic five-floor city (`gazelle`, five floors, left of the HQ; two one-floor buildings right
- *   of it) that is Fuji in the open street left, the Tower in the gap between `gazelle` and the HQ, and
- *   the Skytree between the two one-floor buildings: the HQ and one of them stand between the towers.
- *   On build-11 (a seven-floor `gazelle` right of the HQ, a one-floor building left) the Tower stands
- *   against the one-floor building's left wall, the Skytree against `gazelle`, and Fuji between them:
- *   its snow no longer fits left of the bigger Tower (by 3 px). Where the street can already give the
- *   nearest spots that separation, in as good an order, the arrangement is exactly the nearest spots.
- * The temples go LAST, after the towers have their spots (they must never cost a tower its view),
- * tallest first, and must show WHOLE (their crown is the whole temple): on the candidate spot where
- * most of them shows — in a gap no tower stands in, or hugging an outer wall (2 px off it: Fit frames
- * a tile of air beyond each wall); beyond the frame's walls costs 60 % of its height, and distance
- * from its preferred place a little. A temple never covers a tower above the far skyline's haze
- * (`skylineMax`); one no taller than the haze — the shrine — may stand in front of a tower's foot,
- * which the haze hides anyway: the way Zōjō-ji's hall stands in front of Tokyo Tower. A temple may
- * stand in front of Fuji, far behind it: a pagoda before Fuji's snow is the classic picture of it.
- * The span all this is measured on is what Fit frames (`VillageView.fitTarget`; `framed` repeats its
- * rule and a test pins the two together): so at Fit every crown stands within the frame's width. Without the HQ: the
- * buildings' first wall to their last. With it (the Capacity HQ is the centre): a span CENTRED ON THE HQ, as wide either side as the farther end of what is built, so the side
- * with less built shows empty street past its last wall, inside the frame — open sky where a crown
- * can stand.
- *
- * WEATHER — far things fade first: Fuji is a ghost in rain and fog (it is famously hidden most
- * days), the towers dim a little, the temples barely. Never zero: the user can always tell they
- * are there.
- *
- * COST — our own procedural pixel art, deterministic (hashes, never `Math.random`), placed once
- * per world (cached; the arrangement, re-run at each size tried — one in most cities — takes ≈ 0.1–9
- * ms for one to ten buildings, measured under Node). In that five-floor city at its Fit
- * (zoom 1) a frame is ≈ 3,400 rects for all five by day — runs of equal width merge into one rect —
- * measured at ≈ 0.87 ms in Chromium, and the night's lights ≈ 1,460 rects more, ≈ 0.5 ms (the bigger
- * towers added ≈ 0.06 ms to each). Off-screen landmarks and rows are culled; below zoom 1 the X-bracing
- * and Fuji's ridges are skipped (they would only be noise) and only every round(1/zoom)-th row is
- * painted, so a fitted overview of a big city is cheaper still (≈ 1,350 rects at ½ in that city). The
- * two temples add ≈ 390 rects at zoom 1 (≈ 280 at ½, drawn without their bells, rings, lattice and
- * rope twist); their art is drawn once per size.
- */
+/** The City's landmarks for the machine's zone (Tokyo: Fuji, Tower, Skytree, pagoda, shrine): four
+ * passes at four depths, in DAY colours (the grade does night), world-locked. Placement is cached
+ * per world: no building hides a CROWN; towers stand as far apart as the street allows. */
 
 import { TILE, type Ambience, type CityInfo, type DayPhase, type WeatherKind, type World } from "../villageTypes";
 import type { Camera } from "./camera";
@@ -163,16 +15,11 @@ export type LandmarkKind = "fuji" | "tokyo-tower" | "skytree" | "pagoda" | "shri
 
 export interface LandmarkSpec {
   kind: LandmarkKind;
-  /**
-   * "far" = `paintFarLandmarks` (behind the clouds); "tower" = `paintLandmarks` (in front of them);
-   * "near" = `paintNearLandmarks` (in front of the far skyline's blocks).
-   */
+  /** far = `paintFarLandmarks` (behind the clouds), tower = `paintLandmarks` (in front of them),
+   * near = `paintNearLandmarks` (in front of the far skyline's blocks). */
   layer: "far" | "tower" | "near";
-  /**
-   * Height as a fraction of its reference — the city's sky less a tile (`referenceHeight`), or with
-   * `tower` the towers' (`towerReference`: TOWERING × the tallest roof, never less than the sky's);
-   * 0 = a fixed size, `min`.
-   */
+  /** Height as a fraction of its reference (`referenceHeight`, or `towerReference` with `tower`); 0
+   * = the fixed size `min`. */
   height: number;
   /** Sized against the towers' reference (`towerReference`) rather than the sky's. */
   tower?: boolean;
@@ -190,10 +37,7 @@ const SKYTREE_SPEC: LandmarkSpec = { kind: "skytree", layer: "tower", height: 1,
 const PAGODA_SPEC: LandmarkSpec = { kind: "pagoda", layer: "near", height: 0.3, min: 2 * SKYLINE_BASE, cap: 176, prefer: 0.1 };
 const SHRINE_SPEC: LandmarkSpec = { kind: "shrine", layer: "near", height: 0, min: SKYLINE_BASE, prefer: 0.62 };
 
-/**
- * Back to front within each layer: the passes paint a layer in this order, so the Skytree goes down
- * first and the nearer Tower stands in front of it wherever their feet meet.
- */
+/** Back to front within each layer, so the nearer Tower stands in front of the Skytree. */
 const TOKYO: readonly LandmarkSpec[] = [FUJI_SPEC, SKYTREE_SPEC, TOWER_SPEC, PAGODA_SPEC, SHRINE_SPEC];
 
 /** IANA zone → its skyline. "Japan" is the IANA link to Asia/Tokyo. */
@@ -288,11 +132,7 @@ export const FUJI = {
 /** The aviation lights on both tips (a red core in a soft red halo). */
 export const AVIATION = { core: "#ff2a1f", glow: "rgba(255, 64, 48, 0.4)" } as const;
 
-/**
- * The temples by day: dark grey tiled roofs (lighter on the sunlit left), vermilion and cream
- * walls, grey stone, gold ornaments, the black spire, a straw rope and white paper. Exported for
- * the tests.
- */
+/** The temples' day palette. Exported for the tests. */
 export const TEMPLE = {
   roof: "#4b4f59",
   roofShade: "#363942",
@@ -318,10 +158,7 @@ export const TEMPLE = {
   fireBox: "#46423b",
 } as const;
 
-/**
- * …and lit at night, over the graded silhouette: the pagoda's storeys washed warm (faintly — the
- * roofs stay dark between them, the way a floodlit pagoda reads), the shrine's lantern fires, the
- * light through its lattice doors and the soft halo round each lantern.
+/** Temple lights at night over the graded silhouette: storeys washed faintly warm, roofs left dark.
  */
 export const TEMPLE_LIT = {
   wall: "rgba(255, 146, 78, 0.55)",
@@ -389,10 +226,8 @@ const SIDE_COST = 0.6;
 const DIST_COST = 0.05;
 /** World px kept between two crowns (a temple's crown is all of it). */
 const PAD = 8;
-/**
- * The share of the framed span two towers' crowns keep between them when no building can stand there
- * (see SEPARATION in the file comment: what the HQ alone can give, 6.5× PAD).
- */
+/** Share of the framed span between two towers' crowns when no building can stand between them
+ * (what the HQ alone gives: 6.5× PAD). */
 const APART = 1 / 8;
 /** World px a temple stands off an outer wall: Fit frames only a tile of air beyond it. */
 const WALL = 2;
@@ -408,31 +243,16 @@ export function referenceHeight(horizonY: number): number {
   return Math.max(TILE, horizonY - TILE);
 }
 
-/**
- * How many times the city's tallest roof the Skytree stands (sized against the sky alone, it was only
- * as tall as a five-floor `gazelle` — too small): it towers over the tallest building by half again —
- * as far as OVER_TOP lets it.
- */
+/** The Skytree is this many times the tallest roof (capped by OVER_TOP); sized by the sky alone it
+ * is too small beside a tall building. */
 const TOWERING = 1.5;
 
-/**
- * The most tiles the Skytree's tip may rise past the world's top. The world keeps only 4–5
- * sky rows over its tallest roof, so a Skytree TOWERING over it rises past the top into the open sky the
- * City paints there, and Fit frames its tip (`VillageView.fitTarget`): every tile it rises is a tile
- * more for Fit to frame. Uncapped, a seven-floor building of 26 seats a floor put the tip 392 px past
- * the top, grew the frame by 31 % and cost a quarter of Fit's zoom at 1280×800 @2x; at 5 tiles the
- * reference five-floor city keeps its zoom in every @2x pane measured (its Skytree 1.38× `gazelle`), and the
- * tallest city loses a sixteenth at most there. Up to three floors the Skytree is the full TOWERING.
- */
+/** Most tiles the Skytree's tip may rise past the world's top. Fit frames the tip, so each tile
+ * costs Fit zoom; at 5 the reference five-floor city keeps its zoom in every measured @2x pane. */
 const OVER_TOP = 5;
 
-/**
- * The reference height the towers are a fraction of (the Skytree its whole, the Tower 333/634 of it):
- * TOWERING × the tallest roof over the horizon (`tallest`, world px; −∞ = none) — its tip never more than
- * OVER_TOP tiles past the world's top, `horizonY` over the horizon — and never less than the sky's
- * reference, which only a street of one-floor buildings, or none, keeps (a world's sky is never
- * shorter than a two-floor block's).
- */
+/** Towers' reference height: TOWERING × the tallest roof (`tallest`, world px; −∞ = none), tip at
+ * most OVER_TOP tiles past the world's top, never less than the sky's reference. */
 export function towerReference(horizonY: number, tallest: number): number {
   return Math.max(referenceHeight(horizonY), Math.min(TOWERING * tallest, horizonY + OVER_TOP * TILE));
 }
@@ -444,12 +264,8 @@ function footHalfWidth(kind: LandmarkKind, h: number): number {
   return Math.ceil(h * ART[kind].profile[0][1]) + 1;
 }
 
-/**
- * A tower's half-width (world px) where it rises out of the far skyline's haze, `haze` px tall. A
- * tower is always taller than that haze (the Tower, the shorter, is at least 0.53 of the sky, the haze
- * at most 0.15 of it or 48 px in a sky at least 224 px tall; a smaller one is never drawn with its
- * crown in the haze), so the profile always brackets the height.
- */
+/** A tower's half-width (world px) where it rises out of the `haze`-px far skyline; a tower is
+ * always taller than the haze, so the profile brackets the height. */
 function towerHwAtSkyline(p: { spec: LandmarkSpec; h: number }, haze: number): number {
   return Math.ceil(p.h * profileAt(ART[p.spec.kind as keyof typeof ART].profile, haze / p.h));
 }
@@ -480,22 +296,15 @@ function crownAt(kind: LandmarkKind, cx: number, h: number, base: number): World
   return { x0, x1: x0 + w, top, bottom: yTop + Math.max(2, base - Math.round(d.f0 * h) - yTop) };
 }
 
-/**
- * The CROWN of a placed landmark, world px: the part that must never be hidden — the Skytree and Tokyo
- * Tower from the tip down to the bottom of their lowest deck (the Tembo Deck, the main deck), as wide
- * as that deck; Fuji's whole snow cap, down to the deepest of its ragged edge. A temple shows whole,
- * so its crown is all of it. Pure: from its kind, place and size.
- */
+/** A placed landmark's CROWN, world px, the part never to be hidden: a tower's tip to its lowest
+ * deck (as wide), Fuji's whole snow cap, a temple's whole art. Pure. */
 export function landmarkCrown(p: PlacedLandmark): WorldBox {
   return crownAt(p.spec.kind, p.x, p.h, p.base);
 }
 
-/**
- * Where `specs` stand in `world` (cached per world) — see PLACEMENT in the file comment: Fuji and the
- * towers at the largest sizes where every crown has a spot at once (no building hides it; Fuji drawn
- * smaller before the towers), arranged so the towers stand as far apart as the street allows, in the
- * composition's order where it can; then the temples, where most of each shows. Pure and deterministic.
- */
+/** Where `specs` stand in `world` (cached per world): Fuji and the towers at the largest sizes
+ * where every crown has an unhidden spot (Fuji shrinks first), towers as far apart as possible;
+ * then the temples. Pure, deterministic. */
 export function placeLandmarks(world: World, horizonY: number, specs: readonly LandmarkSpec[]): LandmarkLayout {
   const hit = cache.get(world);
   if (hit && hit.horizonY === horizonY && hit.specs === specs) return hit.layout;
@@ -534,10 +343,8 @@ export function placeLandmarks(world: World, horizonY: number, specs: readonly L
     placed.push({ spec, x, h, hw: footHalfWidth(spec.kind, h), base: horizonY, c: crownAt(spec.kind, x, h, horizonY), i });
   };
 
-  // SIZE and ARRANGEMENT — Fuji and the towers (see PLACEMENT in the file comment): the largest sizes at
-  // which every crown has a spot at once inside the span — the towers kept at full size as long as any
-  // size of Fuji's lets them — on the best arrangement at those sizes; else, last of all, each at full
-  // size, free to stand past the outer walls (as few as can be). Then the temples, where most of each shows.
+  // Largest sizes at which every crown has a spot at once (towers kept full while any Fuji size
+  // allows), on the best arrangement; else each at full size, free to stand past the outer walls.
   const big = order.filter((o) => !near(o.spec));
   /** Fuji's and the towers' sizes with the towers `t` twentieths smaller and Fuji `f` — null once a crown would sink into the haze. */
   const sized = (t: number, f: number): number[] | null => {
@@ -564,15 +371,9 @@ export function placeLandmarks(world: World, horizonY: number, specs: readonly L
   big.forEach(({ spec, i }, k) => stand(spec, i, xs[k], sizes[k]));
   for (const { spec, i, h } of order.filter((o) => near(o.spec))) stand(spec, i, templeSpot(spec, h, prefOf(spec)), h);
 
-  /**
-   * ARRANGEMENT (see the file comment): Fuji and the towers at `sizes`, on the best of all their
-   * arrangements — every left-to-right order of them and every stretch of street each may stand on
-   * (inside the span; with `free`, as far past it as every crown laid end to end), each solved exactly —
-   * or null when they do not all fit. Best: the towers furthest apart (two buildings or more wholly
-   * between their crowns, else one, else `far` px of air, else PAD); then the fewest pairs out of the
-   * composition's order (`prefer`); then each, shortest first, nearest its preferred place, a tie going
-   * right.
-   */
+  /** Best arrangement at `sizes` (every order and stretch, solved exactly; `free` allows past the
+   * span), or null: towers furthest apart (two buildings, one, `far` px of air, PAD), then fewest
+   * pairs out of `prefer` order, then nearest places. */
   function arrange(sizes: readonly number[], free: boolean): number[] | null {
     const n = big.length;
     const crowns = big.map((o, k) => crownAt(o.spec.kind, 0, sizes[k], horizonY));
@@ -582,11 +383,9 @@ export function placeLandmarks(world: World, horizonY: number, specs: readonly L
     const row: number[] = [];
     const on: (readonly [number, number])[] = [];
     let best: { key: number[]; xs: number[] | null } = { key: [Infinity], xs: null };
-    /**
-     * `row`'s spots (by landmark) on their stretches, with x[v] − x[u] ≥ need[u][v] for u left of v: each
-     * landmark in turn, shortest first, as near its preferred place as the others still allow — the
-     * range each can have is exact (the constraints only run left to right) — or null if they do not fit.
-     */
+    /** Spots for `row` with x[v] − x[u] ≥ need[u][v] for u left of v: each, shortest first, as near
+     * its preferred place as the others allow (ranges are exact: constraints run left to right),
+     * or null. */
     const solve = (need: readonly number[][]): number[] | null => {
       const lo = on.map((s) => s[0]);
       const hi = on.map((s) => s[1]);
@@ -642,12 +441,9 @@ export function placeLandmarks(world: World, horizonY: number, specs: readonly L
     return best.xs;
   }
 
-  /**
-   * The stretches of street a crown `c` (offsets from its centre) may stand on: the whole x ranges
-   * [a, z] — inside the span, or as far as `wide` beyond it — where no building hides it, cut wherever a
-   * wall meets one of its edges, so that all along each the same buildings stand wholly left of it and
-   * wholly right of it.
-   */
+  /** The whole x ranges [a, z] where crown `c` (offsets from its centre) stands unhidden, inside
+   * the span or up to `wide` past it, cut where a wall meets its edges so each range has the same
+   * buildings wholly left and right. */
   function stretches(c: WorldBox, wide: number): (readonly [number, number])[] {
     const lo = s0 - c.x0 - wide;
     const hi = s1 - c.x1 + wide;
@@ -662,12 +458,9 @@ export function placeLandmarks(world: World, horizonY: number, specs: readonly L
     return out;
   }
 
-  /**
-   * A temple's spot: of its candidates — its preferred place, every building's middle, every gap's,
-   * and three steps past each outer wall — the one where most of it shows (see the file comment),
-   * never on the other temple nor across a tower's body above the haze; with none left, its
-   * preferred place.
-   */
+  /** A temple's spot among its candidates (preferred place, each building's and gap's middle, three
+   * steps past each outer wall): where most of it shows, never on the other temple or a tower's
+   * body above the haze; else its preferred place. */
   function templeSpot(spec: LandmarkSpec, h: number, pref: number): number {
     const r = templeArt(spec.kind as TempleKind, h, true).hw;
     /** Would standing at x cover what must show of `p`? A temple is placed after every far and tower landmark. */
@@ -708,13 +501,9 @@ export function placeLandmarks(world: World, horizonY: number, specs: readonly L
   return layout;
 }
 
-/**
- * The span Fit frames, less its air (world px) — `VillageView.fitTarget`'s rule (a test keeps the two
- * equal). Without the capacity HQ: the buildings' outer walls `x0`..`x1` (the whole street when there
- * is none). With it: as far either side of the HQ's middle as the farther end of what is built reaches
- * — every building, and the lounge's walls under the street (an HQ always comes with it) — so
- * the HQ is the middle of the view and the side with less built shows its empty street.
- */
+/** The span Fit frames less its air, world px (`VillageView.fitTarget`'s rule; a test keeps them
+ * equal): the outer walls, or with the HQ, centred on it out to the farther built end (lounge
+ * walls included). */
 function framed(world: World, x0: number, x1: number): [number, number] {
   const hq = (world.city as CityInfo).buildings.find((b) => b.hq);
   if (!hq) return [x0, x1];
@@ -832,10 +621,8 @@ const ART: Record<"tokyo-tower" | "skytree", TowerArt> = {
   },
 };
 
-/**
- * Half-width fraction of `profile` at height fraction f ∈ (0, 1]. Every caller samples a row's
- * middle above the foot and at most the tip (a profile runs 0 → 1), so a pair always brackets f.
- */
+/** Half-width fraction of `profile` at height fraction f ∈ (0, 1]; callers stay within the profile,
+ * so a pair always brackets f. */
 function profileAt(profile: Profile, f: number): number {
   const i = profile.findIndex(([f1]) => f <= f1);
   const [f0, w0] = profile[i - 1];
@@ -860,11 +647,8 @@ function rowStep(cam: Camera): number {
   return cam.zoom < 1 ? Math.max(1, Math.round(1 / cam.zoom)) : 1;
 }
 
-/**
- * A vertical stack of horizontal runs: consecutive rows with the same x, width and colour are
- * painted as ONE rect (a straight edge is one call, not one per row). An empty run (width ≤ 0)
- * paints nothing and joins nothing: `flush` and the merge test both want a width.
- */
+/** Vertical stack of runs: consecutive rows with equal x, width and colour paint as ONE rect. An
+ * empty run (width ≤ 0) paints and joins nothing. */
 function lane(ctx: DrawTarget, cam: Camera) {
   let x = 0;
   let w = 0;
@@ -888,11 +672,8 @@ function lane(ctx: DrawTarget, cam: Camera) {
   };
 }
 
-/**
- * A lattice tower (Tokyo Tower, the Skytree) of height `h` on the horizon `base`, centred on `cx`.
- * Only rows above `cut` are painted (the night pass stops above the far skyline). Day or lit is
- * just the palette.
- */
+/** A lattice tower of height `h` on horizon `base`, centred on `cx`; only rows above `cut` are
+ * painted (the night pass stops above the far skyline). Day or lit is just the palette. */
 function paintTower(
   ctx: DrawTarget,
   cam: Camera,
@@ -983,11 +764,8 @@ function paintTower(
 
 /** Fuji's crater rim half-width, as a fraction of its half-width at the foot. */
 const PLATEAU = 0.022;
-/**
- * How straight its flanks are: the half-width grows by this share linearly and the rest with the
- * square of the depth — about 40° under the summit, flaring to under 20° at the foot (a gentle
- * concave cone, never a spike).
- */
+/** Fuji's flank straightness: this share of the half-width grows linearly, the rest with depth
+ * squared (a gentle concave cone, never a spike). */
 const FLANK = 0.55;
 /** The solid snow cap: the top fifth. */
 const CAP = 0.2;
@@ -1154,11 +932,8 @@ type Sketch = ReturnType<typeof sketch>;
 /** A pagoda's storey heights, bottom up (relative): the first storey the tallest, as on a real one. */
 const STOREYS = [1.14, 1.04, 0.98, 0.93, 0.88];
 
-/**
- * One storey's roof, `rows` tall from the row `up`: the eave's lowest edge in the middle, its tips
- * two rows higher and furthest out (upturned), then sweeping in — quickly, then steeply (a concave
- * Japanese roof) — to `topHalf` where the storey above stands. A gold bell hangs under each tip.
- */
+/** One storey's roof, `rows` tall from row `up`: upturned tips two rows above the eave's middle,
+ * sweeping concavely in to `topHalf`; a gold bell under each tip. */
 function pagodaRoof(g: Sketch, up: number, rows: number, half: number, topHalf: number, detail: boolean): void {
   for (let r = 0; r < rows; r++) {
     const w = r < 3 ? half - [3, 1, 0][r] : Math.round(topHalf + (half - 2 - topHalf) * (1 - (r - 3) / Math.max(1, rows - 4)) ** 1.5);
@@ -1241,14 +1016,8 @@ function pagodaArt(h: number, detail: boolean): TempleArt {
   return g.finish();
 }
 
-/**
- * A shrine hall on its stone terrace, `h` tall and 1.25 h wide (the hall itself twice as wide as it
- * is tall): the terrace of cut stone with steep steps up the middle — high enough that the hall
- * stands clear of the street's trees and lamps in front of it — a stone lantern either end of it,
- * the hall's vermilion pillars and head beam, white walls, the lattice door bay with the shimenawa
- * and its shide, the wide dark hip-and-gable roof (upturned ends, a gable over the entrance) and the
- * gold-capped ridge.
- */
+/** A shrine hall on its stone terrace, `h` tall and 1.25 h wide; the terrace lifts the hall clear
+ * of the street's trees and lamps in front of it. */
 function shrineArt(h: number, detail: boolean): TempleArt {
   const hw = Math.round(h * 0.62);
   const terrace = Math.round(h * 0.35);
@@ -1368,10 +1137,8 @@ function templeOf(p: PlacedLandmark, cam: Camera): TempleArt {
   return templeArt(p.spec.kind as TempleKind, p.h, cam.zoom >= 1);
 }
 
-/**
- * Paint a temple's `rows` (runs of `colours`), its foot centred on (cx, base). A run that repeats on
- * the next row (same x, width and colour) grows into one rect, so a wall or a pillar is one call.
- */
+/** Paints a temple's `rows` of `colours` runs, foot centred on (cx, base); a run repeated on the
+ * next row grows into one rect. */
 function paintRuns(
   ctx: DrawTarget,
   cam: Camera,
@@ -1506,17 +1273,9 @@ export function paintNearLandmarks(
   ctx.globalAlpha = 1;
 }
 
-/**
- * The night lighting — AFTER the grade, inside the night sky's clip (open sky: no building is
- * painted over). Evening, dusk and night only.
- *   - The towers' "Landmark Light" and "Iki"/"Miyabi" and their aviation lights: nothing below the
- *     top of the far skyline's haze (`skylineMax`, which grows with the city), where that haze and the
- *     street's trees and lamps stand in front — and nothing on a temple reaching above it across a
- *     tower's foot, which stands in front of it too (placement keeps a temple off a tower's body above
- *     the haze; this keeps the light right whatever the table holds).
- *   - The temples' storeys, lanterns and doors: never on the street's props (trees, lamps, vending
- *     machines, the torii), which stand in front of them.
- */
+/** Night lights after the grade, in the night sky's clip (evening, dusk, night only). Tower lights
+ * stop at the far skyline's haze top and skip temples across a tower's foot; temple lights never
+ * land on the street's props. */
 export function paintLandmarkLights(
   ctx: DrawTarget,
   cam: Camera,
@@ -1572,13 +1331,9 @@ export function paintLandmarkLights(
 
 const ALL_LAYERS: readonly LandmarkSpec["layer"][] = ["far", "tower", "near"];
 
-/**
- * A test for the city's night sky: true where a landmark of `layers` stands at world (wx, wy) this
- * frame — every layer for the stars, the moon and the shooting stars, which stay behind them all;
- * just `["near"]` for the far skyline's lit windows, which stand in front of Fuji and the towers but
- * behind the temples. null when the city has none of them (no cost). A temple is tested pixel by
- * pixel (its art as painted at this zoom); Fuji and the towers by their profiles.
- */
+/** Night-sky mask: true where a landmark of `layers` stands at world (wx, wy) this frame (every
+ * layer for stars and moon; `["near"]` for the skyline's lit windows). null when the city has
+ * none. */
 export function landmarkMask(
   cam: Camera,
   world: World,
@@ -1607,12 +1362,8 @@ function profileHw(p: PlacedLandmark, above: number): number {
   return p.spec.kind === "fuji" ? fujiHw(p.h, p.h - above) : p.h * profileAt(ART[p.spec.kind as keyof typeof ART].profile, above / p.h);
 }
 
-/**
- * The whole world columns a far or tower landmark `p` (Fuji, a tower) covers on world row `wy`, as
- * [x0, x1) — `landmarkMask`'s own test, `|x − p.x| ≤ half-width + ½`, as one interval — or null on a
- * row it does not reach. What a backdrop light is cut by a row at a time (render/backdropLights.ts)
- * rather than a pixel at a time. Not for a temple, whose art has holes.
- */
+/** World columns [x0, x1) a far or tower landmark covers on row `wy` (`landmarkMask`'s test as one
+ * interval), or null; lets backdrop lights cut by row. Not for temples (their art has holes). */
 export function landmarkRow(p: PlacedLandmark, horizonY: number, wy: number): readonly [number, number] | null {
   const above = horizonY - wy;
   if (above <= 0 || above > p.h) return null;

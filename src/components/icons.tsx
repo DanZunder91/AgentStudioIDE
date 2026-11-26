@@ -1,18 +1,6 @@
-/**
- * Inline SVG icons for the pane chrome. Local to src/components/**.
- *
- * Kept inline (no icon dependency, no icon font, no remote/`data:` asset — a
- * strict CSP would block those) and stroked with `currentColor` so they inherit
- * the pane palette and any future theme switch for free.
- *
- * Every icon is `aria-hidden` + `focusable={false}`: these are DECORATION. The
- * accessible name always comes from the host control's text or `aria-label`,
- * never from the glyph — so a screen reader says "Files", not "folder Files".
- *
- * Every icon also carries `data-icon="<shape>"` — a stable, shape-named hook so
- * a test can assert *which* glyph a control rendered (e.g. that the Files tab
- * got the folder, not a shared placeholder) without reaching into path data.
- */
+/** Inline SVG pane-chrome icons: no icon dependency or remote/`data:` asset (strict CSP), stroked
+ * with `currentColor`. Each is `aria-hidden` decoration (the host control names it) and carries
+ * `data-icon="<shape>"` so tests can assert which glyph rendered. */
 
 type IconProps = { size?: number };
 
@@ -50,10 +38,6 @@ export function FileIcon({ size = 13 }: IconProps) {
   );
 }
 
-/**
- * Split into side-by-side panes — a vertical divider.
- * Maps to Orientation 'row' (types.ts: "'row' = side-by-side").
- */
 /** Workspace tree: a folder. `open` swaps to the ajar variant. */
 export function FolderIcon({ size = 13, open = false }: IconProps & { open?: boolean }) {
   return (
@@ -129,10 +113,7 @@ export function LightningIcon({ size = 13 }: IconProps) {
   );
 }
 
-/**
- * Titlebar panel toggle: a rectangle with a divider marking the LEFT rail
- * (the divider sits near the left edge, so the icon reads as "left panel").
- */
+/** Titlebar panel toggle: a rectangle with a divider near the LEFT edge ("left panel"). */
 export function PanelLeftIcon({ size = 16 }: IconProps) {
   return (
     <svg {...base(size, "panel-left")}>
@@ -142,10 +123,7 @@ export function PanelLeftIcon({ size = 16 }: IconProps) {
   );
 }
 
-/**
- * Titlebar panel toggle: a rectangle with a divider marking the RIGHT rail —
- * the mirror image of `PanelLeftIcon`.
- */
+/** Titlebar panel toggle: mirror image of `PanelLeftIcon`, marking the RIGHT rail. */
 export function PanelRightIcon({ size = 16 }: IconProps) {
   return (
     <svg {...base(size, "panel-right")}>
@@ -165,11 +143,7 @@ export function SearchIcon({ size = 16 }: IconProps) {
   );
 }
 
-/**
- * Vault rail tab: a padlock. Two big shapes only — a body and a shackle arc —
- * with no interior detail (no keyhole), so it still reads as "locked" at 13px
- * where a keyhole would just muddy the body.
- */
+/** Vault rail tab: a padlock, body and shackle only (a keyhole muddies it at 13px). */
 export function LockIcon({ size = 13 }: IconProps) {
   return (
     <svg {...base(size, "lock")}>
@@ -179,20 +153,8 @@ export function LockIcon({ size = 13 }: IconProps) {
   );
 }
 
-/**
- * History rail tab: a clock. A plain dial + two hands drawn as ONE polyline —
- * the usual "history" glyph adds a counter-clockwise arrow around the dial, which
- * is exactly the fine detail that turns to mud at rail size, so it is omitted.
- */
-/**
- * A metrics tab: three ascending bars. Lives here (not in the metrics feature) because
- * `TabBar`'s `TabKindIcon` is the shared switch over every tab kind — without this a
- * metrics tab falls through to the terminal glyph and reads as a shell.
- *
- * Same path data as the titlebar button's local glyph, deliberately: one mark for one
- * concept. Three bars rather than a line chart because at 13px a polyline with axis
- * ticks is mud, whereas three strokes of different heights stay unmistakable.
- */
+/** Metrics tab: three ascending bars, the same path as the titlebar button's glyph. Lives here
+ * because `TabBar`'s `TabKindIcon` switches over every tab kind (else it falls back to a shell). */
 export function ChartIcon({ size = 13 }: IconProps) {
   return (
     <svg {...base(size, "chart")}>
@@ -201,10 +163,7 @@ export function ChartIcon({ size = 13 }: IconProps) {
   );
 }
 
-/**
- * Agent Logs: a prompt chevron over two log lines — "what the
- * fleet printed", distinct from the diagnostics overlay's framed-lines glyph.
- */
+/** Agent Logs: a prompt chevron over two log lines (distinct from the diagnostics glyph). */
 export function LogStreamIcon({ size = 13 }: IconProps) {
   return (
     <svg {...base(size, "log-stream")}>
@@ -213,10 +172,7 @@ export function LogStreamIcon({ size = 13 }: IconProps) {
   );
 }
 
-/**
- * Network traffic: opposed up/down arrows — requests out,
- * responses in. Two strokes each, legible at 13px.
- */
+/** Network traffic: opposed up/down arrows (requests out, responses in). */
 export function NetworkIcon({ size = 13 }: IconProps) {
   return (
     <svg {...base(size, "network")}>
@@ -225,10 +181,7 @@ export function NetworkIcon({ size = 13 }: IconProps) {
   );
 }
 
-/**
- * Agent Village: a little house — roof, walls and a door — the
- * village's unit (one house per project folder).
- */
+/** Agent Village: a little house (one per project folder). */
 export function VillageIcon({ size = 13 }: IconProps) {
   return (
     <svg {...base(size, "village")}>
@@ -237,6 +190,7 @@ export function VillageIcon({ size = 13 }: IconProps) {
   );
 }
 
+/** History rail tab: a clock, without the usual counter-clockwise arrow (mud at rail size). */
 export function ClockIcon({ size = 13 }: IconProps) {
   return (
     <svg {...base(size, "clock")}>
@@ -246,16 +200,8 @@ export function ClockIcon({ size = 13 }: IconProps) {
   );
 }
 
-/**
- * DB rail tab: a database cylinder.
- *
- * Two strokes only — the top ellipse and the barrel's silhouette — plus ONE interior
- * band. The canonical "stacked disks" glyph draws three ellipses, which at 13px puts
- * three curves within ~3px of each other and renders as a grey smudge; one band still
- * reads unmistakably as a database and cannot be confused with the Files folder or the
- * Collections bookmark. The barrel is drawn as a single path so the vertical sides and
- * the bottom curve join without a seam at the ellipse.
- */
+/** DB rail tab: a cylinder with ONE interior band (three ellipses smudge at 13px). The barrel is
+ * one path so the sides and bottom curve join without a seam. */
 export function DatabaseIcon({ size = 13 }: IconProps) {
   return (
     <svg {...base(size, "database")}>
@@ -266,13 +212,7 @@ export function DatabaseIcon({ size = 13 }: IconProps) {
   );
 }
 
-/**
- * Collections rail tab: a bookmark (saved / curated items). Chosen over the
- * usual "layers" stack on purpose: layers is three near-parallel strokes ~2px
- * apart once rendered at 13px, which smears together, whereas the bookmark is a
- * single closed silhouette with a notch — unmistakable at any rail size, and not
- * confusable with the Files folder.
- */
+/** Collections rail tab: a bookmark, one closed silhouette (a "layers" stack smears at 13px). */
 export function BookmarkIcon({ size = 13 }: IconProps) {
   return (
     <svg {...base(size, "bookmark")}>
@@ -281,27 +221,9 @@ export function BookmarkIcon({ size = 13 }: IconProps) {
   );
 }
 
-/**
- * Tools rail tab: an open-end spanner.
- *
- * ONE closed silhouette, same discipline as the bookmark above: the whole wrench is a
- * single outline — jaw, head, handle — so there are no near-parallel strokes to smear
- * at 13px. Two shapes were rejected before this one:
- *
- *  - The crossed **wrench + screwdriver**. Two thin diagonals plus two detailed tips is
- *    six features inside a 13px box; it is the "three ellipses" mistake of DatabaseIcon
- *    in a different costume.
- *  - The **closed-ring** wrench head (the common Feather-style `tool` glyph). A circle
- *    with a thin diagonal rod is *exactly* the magnifying glass already sitting in the
- *    titlebar for Find — at rail size the small jaw notch is the only thing separating
- *    them, which is not a difference a user should have to look for.
- *
- * So the jaw is a deliberately WIDE bite (3.0 units across × 3.7 deep ≈ 2.4×3.0 px at
- * 13px, ~84° of the head's circumference) and the handle is a 3.4-unit BAR with a
- * rounded end, not a rod. Head ⌀7.4 centred at (9.9, 6.1), handle running down-left on
- * the 45° axis to (3.5, 12.5); everything stays inside x∈[1.7,14.2], y∈[1.8,14.3], so
- * the 1.25 stroke never touches the viewBox edge.
- */
+/** Tools rail tab: an open-end spanner as ONE closed silhouette; the wide jaw and bar handle keep
+ * it distinct from the titlebar's Find magnifier at 13px. Everything stays inside
+ * x∈[1.7,14.2], y∈[1.8,14.3] so the 1.25 stroke never touches the viewBox edge. */
 export function WrenchIcon({ size = 13 }: IconProps) {
   return (
     <svg {...base(size, "wrench")}>
@@ -310,11 +232,7 @@ export function WrenchIcon({ size = 13 }: IconProps) {
   );
 }
 
-/**
- * Git rail tab: the standard branch glyph — a trunk with one
- * branch forking off, three commit dots. Same 13px discipline as the wrench above:
- * two short strokes and three small circles, nothing near-parallel to smear.
- */
+/** Git rail tab: the branch glyph (trunk, one fork, three commit dots). */
 export function GitBranchIcon({ size = 13 }: IconProps) {
   return (
     <svg {...base(size, "git-branch")}>
@@ -327,11 +245,7 @@ export function GitBranchIcon({ size = 13 }: IconProps) {
   );
 }
 
-/**
- * The rail strip's overflow trigger: three dots on the horizontal
- * axis. Filled — at 13px a 1.25 stroke around a sub-2px circle reads as noise,
- * so these are the one deliberate exception to the outline style.
- */
+/** Rail strip overflow trigger: three FILLED dots (a stroked sub-2px circle reads as noise). */
 export function EllipsisIcon({ size = 13 }: IconProps) {
   return (
     <svg {...base(size, "ellipsis")} fill="currentColor" strokeWidth={0}>

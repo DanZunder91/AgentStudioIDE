@@ -1,24 +1,6 @@
-//! Navigation guard — the app window may only ever show the app.
-//!
-//! Without this, wry allows every navigation by default: a link clicked in the rendered
-//! Markdown preview (a cloned repo's README) replaced the whole IDE window with the
-//! linked page — no address bar, no back button, a perfect frame for a fake "paste your
-//! token" screen. Worse, Tauri treats any URL on a scheme the app registers (`preview://`)
-//! as a *local* origin and injects its IPC bridge into it, so a top-level preview page
-//! would get `invoke()`.
-//!
-//! The policy, as a pure function so it is unit-tested:
-//! * the app's own origin — `tauri://localhost` (macOS/Linux), `http(s)://tauri.localhost`
-//!   (Windows), and the Vite dev server in dev builds;
-//! * the HTML preview's scheme (`preview://…`, `http://preview.localhost/…` on Windows),
-//!   because wry's navigation callback cannot tell an iframe from the main frame and the
-//!   preview lives in a sandboxed iframe (no `allow-top-navigation`, so it cannot move the
-//!   main frame itself). The Markdown preview intercepts link clicks on the React side, so
-//!   nothing in the app steers the main frame there;
-//! * `about:blank`/`about:srcdoc` (frame bootstrapping).
-//!
-//! Everything else — `https://…`, `file://…`, `data:`, `javascript:` — is refused. External
-//! links go to the OS browser through `url_open`, never into this window.
+//! The app window may only show the app: wry allows any navigation, and a page on a registered
+//! scheme gets `invoke()`. Allowed: the app origin, the preview scheme (iframe; wry can't tell
+//! frames apart), `about:blank`/`srcdoc`. External links go to the OS browser via `url_open`.
 
 use tauri::Url;
 

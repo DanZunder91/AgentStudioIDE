@@ -1,21 +1,5 @@
-/**
- * ToolsPanel — the right rail's Tools tab.
- *
- * Small on purpose: the container's whole job is the rail chrome plus one child, and the
- * converter's own behaviour is pinned in `EpochTool.test.tsx`. What this file must prove
- * is the part only the container can get wrong.
- *
- * 1. **The root `data-testid` is a contract.** `App.test.tsx` asserts right-rail routing
- *    against `tools-panel` two-sidedly, so renaming it here would break a
- *    test in a file nobody editing this one is looking at. Pinned here too, next to the
- *    thing that could change it.
- * 2. **The panel passes NO props**, so the converter's defaults are what ship. Every test
- *    in `EpochTool.test.tsx` injects `clock` and `timeZone` to stay hermetic — which means
- *    the default `() => Date.now()` and `hostTimeZone()` would otherwise never run in
- *    anger. This is the only place they do. The system clock is frozen with fake timers so
- *    the assertion is still hermetic; the value asserted (an epoch in seconds) is
- *    zone-independent, so the host's real time zone cannot make it flake.
- */
+/** The `tools-panel` testid is a contract (App.test.tsx asserts rail routing on it). The panel
+ * passes NO props, so this is the only test where the converter's default clock and zone run. */
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";

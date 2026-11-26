@@ -1,12 +1,5 @@
-/**
- * A killed agent must not leave its tab frozen (copying must stay possible). When an
- * agent's `claude` dies mid-frame it never turns its own mouse tracking off, so xterm
- * kept routing every drag to a dead process and selection — copy — stopped working.
- * `noteAgentExited` resets the emulator's input modes; for an agent PTY it also makes the
- * tab read-only and says how it ended.
- *
- * Asserted on xterm's REAL parsed state (`term.modes`), not on the bytes we wrote.
- */
+/** A dead `claude` never turns its mouse tracking off, so xterm keeps routing drags to it and
+ * selection breaks. Asserted on xterm's real parsed state (`term.modes`), not the bytes written. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { asAgentId, asTerminalId } from "../../app/types";

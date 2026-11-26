@@ -1,26 +1,6 @@
-//! Windows connection tables, as bytes → rows → apps. **Pure, and compiled on every OS**, so the
-//! Windows backend's logic is tested on the Mac that writes it; only the three API calls that
-//! fill the buffers live behind `cfg(windows)` ([`super::windows`]).
-//!
-//! The tables are what `GetExtendedTcpTable` / `GetExtendedUdpTable` (iphlpapi) return for the
-//! `*_OWNER_PID` classes: a `u32` row count, then fixed-size rows. Any process may call them —
-//! no administrator rights, no prompt, nothing installed — and every row
-//! names the owning pid, including other users' and services'.
-//!
-//! Layouts (iprtrmib.h / tcpmib.h / udpmib.h; every field is a `DWORD` unless noted, so the
-//! structs have no padding and the rows start right after the count):
-//!
-//! | row | fields | size |
-//! |---|---|---|
-//! | `MIB_TCPROW_OWNER_PID`  | state, localAddr, localPort, remoteAddr, remotePort, pid | 24 |
-//! | `MIB_TCP6ROW_OWNER_PID` | localAddr\[16\], localScope, localPort, remoteAddr\[16\], remoteScope, remotePort, state, pid | 56 |
-//! | `MIB_UDPROW_OWNER_PID`  | localAddr, localPort, pid | 12 |
-//! | `MIB_UDP6ROW_OWNER_PID` | localAddr\[16\], localScope, localPort, pid | 28 |
-//!
-//! Addresses are in network byte order (the bytes in memory ARE the address). A port is a
-//! 16-bit value in network byte order stored in the low half of its `DWORD`, so its first two
-//! bytes in memory are the big-endian port; the upper half is documented as possibly
-//! uninitialised and is never read.
+//! Pure Windows connection-table parsing (bytes → rows → apps), tested on every OS. Rows are the
+//! `*_OWNER_PID` structs (all `DWORD`s, no padding, right after a `u32` count). Addresses are in
+//! network order; a port's first two bytes are big-endian; its `DWORD`'s upper half is unread.
 
 use super::procnet::display_addr;
 use super::{MachineProto, RawApp, RawConn};
@@ -157,14 +137,8 @@ pub fn tcp_state_name(state: u32) -> &'static str {
     }
 }
 
-/// Names for the two pids that are not programs. Pid 4 is the kernel ("System", Windows' own
-/// name — SMB, http.sys listeners). Pid 0 in a TCP table is **no process**: Windows reports
-/// connections whose program already closed them — `TIME_WAIT` (2 × MSL, up to 4 minutes) and
-/// teardown — under the Idle pseudo-process, and `netstat -ano` prints `0` for them. They are
-/// the same thing Linux shows as an inode-0 socket, so they share Linux's name
-/// ([`super::procnet::NO_PROCESS`], platform-native: one model where one works). Listing them
-/// as an app called "System Idle Process — 22 conns" would read as the Idle process
-/// doing networking.
+/// Pid 4 is the kernel ("System"). Pid 0 is no process (TIME_WAIT/teardown under Idle), named
+/// like Linux's inode-0 sockets ([`super::procnet::NO_PROCESS`]), not "System Idle Process".
 fn fixed_name(pid: u32) -> Option<&'static str> {
     match pid {
         0 => Some(super::procnet::NO_PROCESS),
@@ -173,13 +147,8 @@ fn fixed_name(pid: u32) -> Option<&'static str> {
     }
 }
 
-/// Group the rows by owning process, in first-seen order (TCP before UDP, as given).
-///
-/// `names` is the process snapshot (`pid → image name`, `chrome.exe`); a pid that exited
-/// between the table read and the snapshot is `pid <n>` — still listed, because its socket
-/// was. No byte counters: Windows only keeps per-connection counters after an administrator
-/// turns them on (`SetPerTcpConnectionEStats`), and we never ask for that (no OS permission
-/// may be required).
+/// Group rows by owning pid, first-seen order (TCP then UDP). A pid gone before the snapshot is
+/// `pid <n>`, still listed. No byte counters (they need admin-enabled EStats).
 pub fn assemble(tcp: &[TcpRow], udp: &[UdpRow], names: &HashMap<u32, String>) -> Vec<RawApp> {
     let mut apps: Vec<RawApp> = Vec::new();
     let mut index: HashMap<u32, usize> = HashMap::new();
@@ -250,14 +219,8 @@ pub fn strip_exe(name: &str) -> &str {
     }
 }
 
-/// The pid on the other end of a connection the capture proxy accepted: the row whose LOCAL
-/// endpoint is the client's (`peer`) and whose REMOTE port is our listen port. Both ends are
-/// on this machine, so the table has two rows for the connection — ours has the ports the
-/// other way round and is never matched.
-///
-/// The client's address is compared too (a second connection can reuse a port number on
-/// another local address); an IPv4 client that the table reports as IPv4-mapped IPv6 — or the
-/// reverse — is the same address.
+/// The proxy client's pid: the row whose LOCAL endpoint is `peer` and REMOTE port is ours (our
+/// own row has them reversed). IPv4-mapped IPv6 compares equal to IPv4.
 pub fn owner_pid(tcp: &[TcpRow], peer: SocketAddr, listen_port: u16) -> Option<u32> {
     let canon = |ip: IpAddr| match ip {
         IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),

@@ -1,15 +1,5 @@
-/**
- * SEAM TEST — Network · whole computer. Not a unit test.
- *
- * The samples and statuses fed in were produced by REAL Rust
- * (`src-tauri/tests/contract_goldens/machine.rs`): the nettop fixture through the real
- * `NetMachine` sampler (splitter → parser → rate tracker; the second sample has rates), and
- * synthetic `/proc/net/*` + `ss -tinH` text through the real Linux parsers, `assemble` and the
- * rate tracker with a real reverse-DNS cache. Only `invoke` / `listen` are mocked; `netmachineIpc`
- * → `machineStore` → `NetworkPanel` / `MachineView` / `machineFormat` / `AppPicker` are real.
- *
- * Every expected string is written out by hand.
- */
+/** SEAM TEST: inputs were produced by real Rust (`src-tauri/tests/contract_goldens/machine.rs`).
+ * Only `invoke` / `listen` are mocked; IPC, store and views are real. Expected strings: by hand. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

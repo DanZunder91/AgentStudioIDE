@@ -1,34 +1,6 @@
-//! The level heuristic — a **filter, not a verdict**.
-//!
-//! Terminal output carries no level. We guess one from the text so the Agent Logs view
-//! can offer error/warn/info/debug chips, and the UI says it is a guess.
-//!
-//! One refinement over a bare keyword match, deliberate: an **os_log compact row**
-//! (`log stream --style compact`, which is what `xcrun simctl … log stream` prints)
-//! carries its level in a column of its own —
-//!
-//! ```text
-//! 2026-01-01 12:00:00.250 E  Demo[1234:5678] …    ← Error
-//! 2026-01-01 12:00:00.250 Df Demo[1234:5678] …    ← Default (debug here)
-//! ```
-//!
-//! — and when that column is present it is the process's **own** declaration, so it
-//! wins over a keyword in the message. A `Df` row whose message mentions "error" is a
-//! chatty debug line about an error, not an error; letting the keyword win would paint
-//! half of a simulator log red and teach the user to ignore red.
-//!
-//! The same precedence applies to a **structured-logger level column** (a background
-//! service Claude started, e.g. `gazelle`):
-//!
-//! ```text
-//! 2026-01-01T12:00:05.152Z  INFO gazelle: listening on 0.0.0.0:8080     ← tracing
-//! [2026-01-01T12:00:05Z WARN  gazelle::db] pool nearly exhausted        ← env_logger
-//! time=… level=error msg="upstream failed"                              ← logfmt
-//! {"level":"debug","msg":"…"}                                           ← JSON loggers
-//! INFO gazelle: started                                                 ← tracing, no time
-//! ```
-//!
-//! An `INFO` row whose message says "error" is the service telling us it handled one.
+//! Level heuristic for the Agent Logs chips: a filter, not a verdict. A level column the
+//! process declares (os_log compact `E`/`Df`, tracing/env_logger/logfmt/JSON `level`) wins
+//! over keywords: a debug or `INFO` line mentioning "error" is not an error.
 
 use std::sync::LazyLock;
 

@@ -92,12 +92,7 @@ describe("anchorScrollDelta", () => {
 });
 
 describe("fitPreviewZoom", () => {
-  /*
-   * `diagram` and `pane` are device pixels measured AT `current`, so every case
-   * below states the zoom the measurement was taken at. The requirement is
-   * one button that lands on 50% in some cases and 200% in others — the first two cases
-   * are literally those two numbers, coming out of the same rule.
-   */
+  /* `diagram` and `pane` are device px measured at `current`, so each case states that zoom. */
 
   it("zooms IN on a diagram smaller than the pane, filling it (the 200% case)", () => {
     const fit = fitPreviewZoom(1, { width: 400, height: 300 }, { width: 800, height: 600 });
@@ -187,13 +182,8 @@ describe("fitPreviewZoom", () => {
   });
 
   it("returns the current zoom for a zero (or negative) dimension in EITHER box", () => {
-    // A pane collapsed to 0 while its split is dragged shut, and a diagram that
-    // mermaid has not laid out yet, both report zeros; dividing by them yields
-    // Infinity or 0 and a garbage zoom. Each of the four dimensions is listed
-    // separately because a guard covering only the diagram, or only the widths,
-    // is a real bug — and the sizes are chosen so that dropping the guard changes
-    // the answer in every line (a 0 paired with an equal-ratio partner would pass
-    // vacuously, proving nothing).
+    // Zeros (a collapsed pane, an unlaid diagram) must return `current`. One line per dimension,
+    // sized so dropping any guard changes the answer.
     const pane = { width: 800, height: 600 };
     const laidOut = { width: 1600, height: 1200 }; // would otherwise fit at 0.5
     expect(fitPreviewZoom(1.5, { width: 0, height: 1200 }, pane)).toBe(1.5);
@@ -209,11 +199,8 @@ describe("fitPreviewZoom", () => {
   });
 
   it("returns the current zoom for a non-finite dimension anywhere — NaN and Infinity alike", () => {
-    // NaN reaches here from an unmounted node's `getBoundingClientRect`
-    // arithmetic; Infinity from a division upstream. Both are load-bearing: NaN
-    // would propagate through Math.min and be laundered into 100% by the clamp
-    // (silently resetting the user's zoom), and Infinity would drive the
-    // ratio to 0 or ∞ and slam into a rail. Again, one line per dimension.
+    // NaN would pass Math.min and be clamped to 100% (resetting the zoom); Infinity would hit a
+    // rail. One line per dimension.
     const pane = { width: 800, height: 600 };
     const laidOut = { width: 1600, height: 1200 };
     expect(fitPreviewZoom(1.5, { width: Number.NaN, height: 1200 }, pane)).toBe(1.5);

@@ -1,11 +1,5 @@
-/**
- * City view — the IDE's plain consoles as floors: the pure mapper over the store's tabs and
- * the registry's PTY metadata, and the hook that polls "is something running?" only while the
- * city is on screen.
- *
- * Seams: the terminal registry (`getTerminalMeta`), the busy IPC (`terminalsBusy`) and the
- * supervisor's snapshot (`fleetSnapshot`) are mocked — a live PTY has no place in a unit test (tests stay hermetic); the store is real.
- */
+/** The terminal registry, busy IPC and supervisor snapshot are mocked (no live PTY in a unit
+ * test); the store is real. */
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

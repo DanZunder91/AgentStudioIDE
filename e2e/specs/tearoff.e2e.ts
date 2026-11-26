@@ -1,24 +1,6 @@
-/**
- * T1 — tab tear-off in the REAL app (docs/design/tab-tearoff.md): a tab leaves the main
- * window for a window of its own and comes back, and what it holds survives the trip.
- *
- * The real chain, no mocks: right-click a tab ▸ "Move to New Window" → `tearoff_open` (Rust) builds a
- * second OS window → its `TearoffApp` claims the tab from its mailbox → a terminal REATTACHES to the
- * same PTY (the shell never moves), an editor arrives with its unsaved buffer. "Move to Main Window"
- * in the detached window sends it home and the detached window closes itself.
- *
- * Three independent witnesses that a second window exists, because each can lie alone:
- *   - the X server (`xdotool search`, support/x11.ts) — an OS window titled "<tab> — Agent Studio";
- *   - Rust's tear-off ledger (`tearoff_holdings` over real IPC) — which window holds which tab;
- *   - WebDriver's window handles — the detached webview is driven directly for the move back.
- *
- * "The terminal output survived" is proven by behaviour, not pixels: the shell prints its own PID
- * before the trip and again after it — the same PID means the same shell process in the same PTY,
- * and the first command's output is still in that terminal's stream.
- *
- * The drag-out gesture (release a tab outside the window → new window at the cursor) is driven with
- * real X11 pointer events (xdotool), the only way to end an HTML5 drag outside a webview.
- */
+/** T1: tab tear-off in the real app (docs/design/tab-tearoff.md). Each witness can lie alone, so
+ * three: the X server, Rust's tear-off ledger, WebDriver handles. Same PID and tty after the trip
+ * prove the same shell in the same PTY; drag-out uses real X11 pointer events. */
 
 import { $, browser, expect } from "@wdio/globals";
 
@@ -114,10 +96,7 @@ async function waitForTtys(terminalId: string, n: number): Promise<string[]> {
   return ttys;
 }
 
-/**
- * `ps -o pid=,args=` lists the processes on this terminal: the shell is the line that is not `ps`.
- * Waits until a listing shows `pid` running bash — the same shell as before the trip.
- */
+/** The shell is the `ps` line that is not `ps`; waits until it shows `pid` running bash. */
 async function waitForShellInPs(terminalId: string, pid: string): Promise<void> {
   await browser
     .waitUntil(
@@ -157,10 +136,8 @@ describe("tab tear-off: Move to New Window and back, in the real app", () => {
     expect(x11Available()).toBe(true);
     term = await openTerminalFromEmptyPane();
     mainHandle = await browser.getWindowHandle();
-    // `${$}` is the shell's PID (`$$` without two identical keys in a row: WebKitWebDriver drops the
-    // second of a repeated key — terminal.ts). The output line `TEAROFF_PID_<digits>` can only come from the shell.
-    // `tty` names the PTY device the shell is attached to — the same device after the trip is the
-    // same PTY.
+    // `${$}` avoids two identical keys in a row (WebKitWebDriver drops the repeat; terminal.ts).
+    // The same `tty` after the trip proves the same PTY.
     await typeInTerminal(term.id, "echo TEAROFF_PID_${$}; tty");
     shellPid = await waitForPid(term.id, "TEAROFF_PID");
     shellTty = (await waitForTtys(term.id, 1))[0];
@@ -188,10 +165,8 @@ describe("tab tear-off: Move to New Window and back, in the real app", () => {
     await switchToDetached();
     await $(`.terminal-view[data-terminal-id="${term.id}"]`).waitForDisplayed({ timeout: 20_000 });
     await expect($(`[role="tab"][title="${term.title}"]`)).toBeDisplayed();
-    // Type into the reattached terminal: the same PTY and the same shell answer. Only UNSHIFTED keys
-    // from here on: once a second window has existed, WebKitWebDriver delivers characters without
-    // Shift — in that window AND back in main (`echo DETACHED_PID_$$` arrives as `echo detached-pid-44`).
-    // A driver quirk, not the app: `tty` and `ps -o pid=,args=` need no Shift.
+    // Unshifted keys only from here: once a second window existed, WebKitWebDriver drops Shift in
+    // every window (a driver quirk, not the app).
     await typeInTerminal(term.id, "tty");
     expect(await waitForTtys(term.id, 2)).toEqual([shellTty, shellTty]);
     await typeInTerminal(term.id, "ps -o pid=,args=");
@@ -271,11 +246,8 @@ describe("tab tear-off: Move to New Window and back, in the real app", () => {
       async () => (await holdings()).some((h) => h.label.startsWith("tearoff-") && h.keys.some((k) => k.includes(term.id))),
       { timeout: 20_000, timeoutMsg: "the drag-out did not hand the terminal to a detached window" },
     );
-    // The editor left behind in main is untouched by the drag: still unsaved. Asserted on the DOM: the
-    // dot is hidden by `:hover`, and after the X11 drag leaves the window WebKitGTK keeps the tab now
-    // sitting where the dragged one was "hovered" (it shows a × instead of the dot) — through
-    // WebDriver's synthetic moves, real pointer motion AND a real click on main
-    // (`matches(":hover")` stays true). So the still shows a ×; the marker is there all the same.
+    // Asserted on the DOM, not the still: after the X11 drag WebKitGTK keeps this tab `:hover`, so
+    // it shows a × instead of the unsaved dot.
     await expect($('[role="tab"][title="library.rs"] .pane-tab__dirty')).toBeExisting();
     await moment("terminal-dragged-out-to-new-window", TERMINAL_SETTLE);
 

@@ -1,25 +1,6 @@
-/**
- * The hand-off — a tab leaves this window, a tab arrives (docs/design/tab-tearoff.md).
- *
- * Leaving is three steps, in this order, and the order is the design:
- *   1. DESCRIBE the tab (`describeTab`): everything another realm needs to rebuild it —
- *      for an editor that includes the unsaved text and the undo stack;
- *   2. RELEASE it here (`releaseTab`): out of the layout WITHOUT closing it, and this
- *      window's view of it torn down WITHOUT killing anything — `TerminalRegistry.abandon`
- *      leaves the PTY running, `EditorRegistry.abandon` drops the buffer this window held,
- *      so the window the tab went to is the only live writer for that file;
- *   3. SEND the description (`tearoff_open` for a new window, `tearoff_send` for an
- *      existing one). If that fails the tab is ADOPTED straight back, exactly as a returning
- *      tab would be — one rehydration path, never two.
- *
- * Releasing BEFORE sending is deliberate: by the time the other window re-attaches a
- * terminal, nothing here can still push a resize at it.
- *
- * Arriving (`adoptTornTabs`) goes through the store's own open paths — a terminal through
- * `rebuildTerminalTabs`, which configures it to REATTACH (same PTY, ring replayed,
- * TUI repainted), never to spawn. Every arrival is idempotent by `tabKey`, because a detached
- * window's first claim can return the same tab twice (once as held, once as mail).
- */
+/** Tab hand-off (docs/design/tab-tearoff.md): DESCRIBE, RELEASE (PTY lives; receiver is the only
+ * writer), then SEND, so nothing here resizes it after re-attach; failure re-adopts. Arrivals are
+ * idempotent by `tabKey`: a detached window's first claim can return a tab twice (held + mail). */
 
 import {
   abandon as abandonEditor,
@@ -39,13 +20,8 @@ const state = () => useAppStore.getState();
 
 /* ─────────────────────────────── describing ─────────────────────────────── */
 
-/**
- * Describe `tabId` for another window, or `null` for a kind that cannot move (or an unknown
- * id). `history: false` is the periodic holdings report — text only, no undo stack.
- *
- * The switch is the authority on what can move; `TEAROFF_KINDS` mirrors it for the menu,
- * and a test pins the two together.
- */
+/** Describe `tabId` for another window, or `null` if it cannot move. `history: false` (holdings
+ * report) skips the undo stack. The switch rules; `TEAROFF_KINDS` mirrors it (tested). */
 export function describeTab(tabId: TabId, opts: { history: boolean } = { history: true }): TornTab | null {
   const s = state();
   const tab = s.tabs[tabId];
@@ -109,11 +85,8 @@ export function describeAll(opts: { history: boolean }): TornTab[] {
 
 /* ─────────────────────────────── releasing ──────────────────────────────── */
 
-/**
- * Take `tabId` out of this window without closing it: the layout forgets it, and this
- * window's view of the terminal / buffer is torn down without killing the PTY. `torn` is
- * the description taken BEFORE this call (the buffer cannot be read after it).
- */
+/** Take `tabId` out of this window without closing it or killing the PTY. `torn` must be
+ * described BEFORE this call (the buffer cannot be read after it). */
 export function releaseTab(tabId: TabId, torn: TornTab): void {
   state().layoutActions.releaseTab(tabId);
   if (torn.kind === "terminal" || torn.kind === "agent-terminal") {
@@ -133,10 +106,7 @@ export function findTabByKey(tabs: Record<TabId, Tab>, key: string): TabId | nul
   return null;
 }
 
-/**
- * Bring `tabId` to the front: switch to the view holding it, then make it its pane's active
- * tab (and that pane the focused one). A no-op for a tab this window does not hold.
- */
+/** Switch to the view holding `tabId`, make it the focused pane's active tab; no-op if absent. */
 export function revealTab(tabId: TabId): void {
   const s = state();
   const view = s.views.find((v) => viewTabIds(s, v.id).includes(tabId));
@@ -151,12 +121,8 @@ export function revealTab(tabId: TabId): void {
 /** >0 while this window is opening tabs it must show HERE (see `openHere`). */
 let openingHere = 0;
 
-/**
- * Run `open` with the store's open router out of the way (`routeOpensElsewhere`): a tab
- * arriving here must land here, even if the holdings cache — a broadcast that can trail the
- * mail by a moment — still says another window holds it. Also how a routed open falls back
- * when the window it was routed to turns out to be gone.
- */
+/** Run `open` with the open router bypassed: an arriving tab lands here even if the (trailing)
+ * holdings cache says otherwise. Also the fallback when a routed-to window is gone. */
 export function openHere<T>(open: () => T): T {
   openingHere += 1;
   try {
@@ -171,11 +137,8 @@ export function isOpeningHere(): boolean {
   return openingHere > 0;
 }
 
-/**
- * Rehydrate described tabs into this window, skipping any already here (by `tabKey`), and
- * bring the last one to the front — it is the one the user just moved. Returns the tab ids,
- * existing or new, in order.
- */
+/** Rehydrate tabs, skipping any here already (by `tabKey`), and front the last (the one just
+ * moved). Returns the tab ids, existing or new, in order. */
 export function adoptTornTabs(tabs: readonly TornTab[]): TabId[] {
   const ids = openHere(() => tabs.map(adoptOne));
   const last = ids[ids.length - 1];
@@ -238,17 +201,9 @@ function adoptOne(torn: TornTab): TabId {
   }
 }
 
-/**
- * An editor tab arrived for a file this window already has open — a duplicate the open
- * router could not prevent (it was opened from a window that cannot see where the file is
- * held, or the holdings cache trailed). One path is one tab here, so the arriving buffer
- * is folded into the one already open, and neither copy of unsaved text is lost:
- *  - nothing unsaved arrived (still loading, or `text === baseline`): the tab here stays;
- *  - the same text is already here: nothing to do;
- *  - otherwise the arriving text is applied to the tab here as an ordinary edit
- *    (`applyCarriedText`), so whatever this window had stays one Cmd/Ctrl+Z away — and if
- *    that was itself unsaved, the diagnostics log says so.
- */
+/** An editor arrived for a file already open here (one path, one tab): keep ours if nothing
+ * unsaved arrived or the text matches; else apply it via `applyCarriedText` so ours stays one
+ * undo away (logged if ours was unsaved too). */
 function foldIntoOpenEditor(torn: Extract<TornTab, { kind: "editor" }>): void {
   const incoming = torn.buffer;
   if (!incoming || incoming.text === incoming.baseline) return;
@@ -293,20 +248,14 @@ function applyName(torn: Extract<TornTab, { customTitle: string | null }>, tabId
 /** Moves under way: released here, their send not yet settled. */
 const inFlight = new Set<Promise<void>>();
 
-/**
- * Resolves once every move under way has settled. A detached window whose last tab just
- * left waits on this before closing itself: closing first would race the send, and a failed
- * send re-adopts the tab — into a window that must still be there to show it.
- */
+/** Resolves once every move under way settles; an emptied window waits on it before closing,
+ * as a failed send re-adopts the tab into it. */
 export function movesSettled(): Promise<void> {
   return Promise.allSettled([...inFlight]).then(() => undefined);
 }
 
-/**
- * Mark a move as under way and get the call that ends it. Begun BEFORE the tab is released:
- * releasing is what empties a window, and whoever reacts to that (closeIfEmpty) must already
- * see this move in flight — registering at the send would be one step too late.
- */
+/** Mark a move under way; returns its end call. Begun BEFORE release, since releasing empties
+ * the window and closeIfEmpty must already see the move. */
 function beginMove(): () => void {
   let end!: () => void;
   const settled = new Promise<void>((resolve) => (end = resolve));
@@ -333,11 +282,8 @@ async function move(tabId: TabId, torn: TornTab, send: () => Promise<unknown>, f
   }
 }
 
-/**
- * Move `tabId` into a NEW window — the "Move to New Window" command, and a tab dragged out
- * and released outside its window (`at` = where). Resolves whether it moved; a tab that
- * could not leave is back where it was, and the reason is in the diagnostics log.
- */
+/** Move `tabId` into a NEW window (menu command, or dragged out and dropped at `at`). Resolves
+ * whether it moved; on failure the tab is back and the reason is in the diagnostics log. */
 export async function moveTabToNewWindow(tabId: TabId, at: ScreenPoint | null = null): Promise<boolean> {
   const torn = describeTab(tabId);
   if (!torn) return false;
@@ -418,12 +364,8 @@ export function isRemoteRename(): boolean {
   return remoteRename > 0;
 }
 
-/**
- * Claim this window's mail and act on it. `recover` (boot only) also adopts the tabs Rust
- * says this window holds — how a detached window gets them back after its page reloads.
- * NOT on a doorbell: a tab closed here a moment ago can still be in Rust's copy until the
- * next report lands, and adopting it would resurrect it.
- */
+/** Claim and act on this window's mail. `recover` (boot only) also adopts what Rust says we hold
+ * (page reload); never on a doorbell, where it could resurrect a just-closed tab. */
 export async function drainMail(recover: boolean): Promise<void> {
   try {
     const claim = await tearoffClaim();

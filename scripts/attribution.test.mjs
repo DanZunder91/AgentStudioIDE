@@ -1,18 +1,5 @@
-/**
- * Tests for the third-party attribution generator (`scripts/attribution.mjs`).
- *
- * Same discipline as `audit.test.mjs`: the DECISIONS are pure functions and are
- * tested against literal, hand-written fixtures. Asserting on "the repo
- * currently has 202 production packages" would be a test that goes red the next
- * time anyone runs `npm install`, tells you nothing about whether the generator
- * is correct, and would train people to update the number instead of reading
- * the failure. Every expectation below is written out by hand — never read back
- * from the module under test.
- *
- * Runs under `npm test`: `vitest.config.ts`'s `test.include` covers
- * `scripts/**\/*.{test,spec}.mjs`. (A test outside that glob would silently
- * never run, which is worse than no test.)
- */
+/** Pure decisions tested on hand-written fixtures, never on live repo counts (which go red on every
+ * `npm install`). Literal expectations only. */
 
 import fs from "node:fs";
 import path from "node:path";
@@ -743,10 +730,7 @@ describe("the generator's declared constants", () => {
 });
 
 describe("vendored design assets (the icon sprite's credit survives regeneration)", () => {
-  // The section exists because the first Material credit was hand-APPENDED to
-  // the generated file — where the very next regeneration would have deleted
-  // it. The durable home is the VENDORED_ASSETS declaration; these tests pin
-  // that the declaration renders, and that its licence file really exists.
+  // Hand-appended credits die on regeneration; VENDORED_ASSETS is their durable home.
 
   const sampleAsset = {
     name: "Sample Icons",

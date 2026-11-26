@@ -1,35 +1,6 @@
-/**
- * curlShells — what cmd.exe and Windows PowerShell 5.1 do to a pasted command line
- * before curl.exe ever sees it. `curlParse` reads the bash form itself; this module
- * reads the two Windows forms, so a Windows user's paste lands as the request they
- * meant (the API client must fully work on Windows).
- *
- * Two layers, and the order is the whole point:
- *
- *   1. **The shell.** cmd.exe strips `^` carets (outside its own quotes), joins
- *      `^`-continued lines and stops at an unescaped `&`, `|`, `<` or `>`.
- *      PowerShell unquotes `'…'` / `"…"` and joins backtick-continued lines, then —
- *      in 5.1 — re-quotes each argument by its own legacy rule.
- *   2. **The C runtime.** curl.exe receives ONE command-line string and splits it
- *      into argv with the Microsoft C runtime's rules (`"` toggles quoting,
- *      backslashes only escape a `"`, `""` inside quotes is a literal quote).
- *
- * Everything here was checked against the real thing on Windows 11 (cmd.exe,
- * Windows PowerShell 5.1.26100, System32 curl.exe 8.22) before it was written:
- *
- *   • DevTools' "Copy as cURL (cmd)" — both the `\"` generation (to 2026-08) and
- *     the `""` one (Chromium main, 2026-11) — DOUBLES every backslash that is not
- *     before a quote: `{"a":"x\ny"}` reaches the server as `{"a":"x\\ny"}`. That is
- *     a DevTools bug, and the paste wants the browser's request, not the bug. Every
- *     backslash DevTools writes is caret-escaped (`^\`), so a run made only of
- *     careted backslashes that is not before a quote is read back at half length.
- *     A bare `\` — ours, or a human's — keeps the C runtime's meaning exactly.
- *   • PowerShell 5.1 wraps an argument in quotes when it holds whitespace after an
- *     EVEN number of `"` — counting escaped ones too — and silently drops an empty
- *     argument. `curl.exe --data-raw '{\"a\":\"x y\"}'` sends `{"a":"x`.
- *
- * Pure functions, no DOM, no Tauri: the risky logic, tested at the unit level.
- */
+/** cmd.exe / PowerShell 5.1 emulation, in order: the shell (carets, quotes, continuations, 5.1
+ * re-quoting), then the MS C runtime's argv split. Measured on Windows 11. DevTools' cmd export
+ * doubles each backslash not before a quote; careted-only runs are halved; a bare \ is CRT's. */
 
 /** One character after cmd.exe's caret pass, remembering whether a `^` escaped it. */
 export interface ShellChar {
@@ -37,16 +8,9 @@ export interface ShellChar {
   caret: boolean;
 }
 
-/**
- * cmd.exe's own pass over the FIRST command of a pasted line.
- *
- * CRs go first (cmd drops every one). Outside cmd's quotes a `^` escapes the next
- * character; a `^` that ends a line joins the next line and escapes ITS first
- * character — which is how DevTools gets a newline into an argument (`^` LF LF).
- * A plain `"` toggles cmd's quoting (inside it carets are literal) and is kept for
- * the C runtime. An unescaped newline, `&`, `|`, `<` or `>` ends the command:
- * "Copy all as cURL (cmd)" joins commands with ` &`, and the first one is the paste.
- */
+/** cmd.exe's pass over the FIRST command: drops CRs; outside quotes ^ escapes the next char, and
+ * a line-ending ^ joins and escapes the next line's first char. An unescaped newline, &, |, < or >
+ * ends the command ("Copy all as cURL (cmd)" joins commands with " &"). */
 export function cmdCaretPass(input: string): ShellChar[] {
   const s = input.replace(/\r/g, "");
   const out: ShellChar[] = [];
@@ -71,11 +35,8 @@ export function cmdCaretPass(input: string): ShellChar[] {
   return out;
 }
 
-/**
- * The Microsoft C runtime's command-line split (the post-2008 UCRT rules curl.exe
- * is built with), plus the one DevTools correction described at the top of this
- * file. Arguments end at an unquoted space or tab; a newline is ordinary text.
- */
+/** The UCRT (post-2008) argv split curl.exe uses, plus the DevTools backslash correction above.
+ * Args end at an unquoted space or tab; a newline is ordinary text. */
 export function crtSplit(chars: readonly ShellChar[]): string[] {
   const args: string[] = [];
   const n = chars.length;
@@ -139,14 +100,9 @@ const PS_ESCAPES: Readonly<Record<string, string>> = {
   v: "\v",
 };
 
-/**
- * PowerShell's argument-mode split for a native command — the subset a pasted curl
- * uses. `'…'` is literal (`''` is one quote); `"…"` takes backtick escapes and `""`,
- * and leaves `$name` as typed (we never expand a variable from a paste); a backtick
- * outside quotes escapes the next character, or continues the line before a
- * newline. Adjacent pieces form one argument. An unquoted newline, `;` or `|` ends
- * the statement — whatever follows is not this command's.
- */
+/** PowerShell's native-command split, as pasted curls use it: '…' literal ('' is one quote), "…"
+ * with backtick escapes and "", $name never expanded; a bare backtick escapes or continues the
+ * line. An unquoted newline, ; or | ends the statement. */
 export function tokenizePowerShell(input: string): string[] {
   const s = input.replace(/\r/g, "");
   const tokens: string[] = [];
@@ -203,12 +159,8 @@ export function tokenizePowerShell(input: string): string[] {
   return tokens;
 }
 
-/**
- * Windows PowerShell 5.1's legacy rule for re-quoting one native argument: quote
- * it when it holds whitespace after an EVEN number of `"` — every `"` counts, a
- * backslash-escaped one included. (Measured: `{\"a\":\"x y\"}` has three quotes
- * before its space, so it goes out bare and the C runtime splits it.)
- */
+/** 5.1 quotes an arg holding whitespace after an EVEN number of " (escaped ones count).
+ * Measured: {\"a\":\"x y\"} has three quotes before its space, so it goes out bare. */
 function needsQuotes51(arg: string): boolean {
   let quotes = 0;
   for (const c of arg) {
@@ -218,12 +170,8 @@ function needsQuotes51(arg: string): boolean {
   return false;
 }
 
-/**
- * The argv curl.exe receives when Windows PowerShell 5.1 passes these argument
- * strings: empty ones dropped (measured), the rest re-quoted by `needsQuotes51`,
- * joined with spaces and split again by the C runtime. One string in can be
- * several out — exactly the 5.1 behaviour that breaks naive JSON bodies.
- */
+/** 5.1 drops empty args (measured), re-quotes the rest by needsQuotes51 and joins them; the CRT
+ * re-splits that line, so one string in can be several out. */
 export function legacyNativeArgv(args: readonly string[]): string[] {
   const line = args
     .filter((a) => a !== "")

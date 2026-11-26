@@ -1,28 +1,6 @@
-//! Open pull requests for the current repo, by asking the GitHub CLI.
-//!
-//! One command, [`gh_prs`]: scope-check the requested root, then run
-//!
-//! ```text
-//! gh pr list --json number,title,author,url,headRefName,baseRefName,isDraft,updatedAt --limit 50
-//! ```
-//!
-//! in that directory and parse the JSON. We deliberately do **not** speak the
-//! GitHub API ourselves: `gh` already owns the credential, the host resolution
-//! (github.com vs GHES) and the base-repo inference — the same "ask the process
-//! that owns it" reasoning as `usage.rs`, and this module never touches
-//! a token or a socket.
-//!
-//! **Binary resolution is never a bare name** (a GUI-launched app has a minimal
-//! `PATH` — see `agent/claude.rs`). Detection sits behind a [`GhProber`] seam so
-//! it is unit-testable with a stub; the real prober searches `$PATH` plus the
-//! known install dirs (`/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`,
-//! `~/.local/bin`). No env var is ever *set* (that would race parallel tests);
-//! reading `$PATH` is fine.
-//!
-//! The spawn discipline is `usage.rs`'s (`run_usage_cli`): null stdin, piped
-//! streams, `kill_on_drop`, one 15 s timeout, lossy UTF-8. The classification of
-//! a finished run lives in the **pure** [`interpret`], driven by fixtures.
-//! Errors are `"<code>"` or `"<code>: <detail>"` with codes from [`ERROR_CODES`].
+//! Open PRs for the current repo via `gh pr list --json` (never the GitHub API: `gh` owns the
+//! credential, host and base repo). `gh` is found by absolute path via [`GhProber`] (GUI apps
+//! have a minimal `PATH`); runs are classified by the pure [`interpret`] into [`ERROR_CODES`].
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -55,11 +33,8 @@ pub const ERROR_CODES: [&str; 8] = [
     "unknown",
 ];
 
-/// Lowercase substrings meaning "gh is not authenticated". Consulted **only**
-/// when the run failed (non-zero exit) — never to second-guess output that
-/// parsed; see [`interpret`]. The real signed-out message ("To get started with
-/// GitHub CLI, please run: gh auth login … populate the GH_TOKEN environment
-/// variable with a GitHub API authentication token") carries the first two.
+/// Lowercase substrings meaning "gh is not authenticated", consulted ONLY on a non-zero exit
+/// (see [`interpret`]). gh's real signed-out message carries the first two.
 const SIGNED_OUT_MARKERS: [&str; 3] = ["gh auth login", "authentication token", "not logged in"];
 
 /// Lowercase substrings meaning "this directory has no usable GitHub remote"
@@ -90,10 +65,8 @@ pub struct PullRequest {
     pub updated_at: String,
 }
 
-/// Open PRs of the repository at `root` (any allowed directory).
-///
-/// `Err` is one of [`ERROR_CODES`], optionally `": <short detail>"`. A detail is
-/// never the full transcript — first non-blank ANSI-stripped line, truncated.
+/// Open PRs of the repo at `root` (any allowed directory). `Err` is an [`ERROR_CODES`] entry,
+/// optionally `": <detail>"` (first non-blank ANSI-stripped line, truncated).
 #[tauri::command]
 pub async fn gh_prs(app: tauri::AppHandle, root: String) -> Result<Vec<PullRequest>, String> {
     // Scope FIRST: both guard messages map to `out-of-scope`, so an
@@ -142,10 +115,9 @@ fn candidate_dirs() -> Vec<PathBuf> {
     )
 }
 
-/// [`candidate_dirs`] with its inputs injected. `PATH`'s absolute entries only (a relative one
-/// resolves against the app's cwd), and the Unix install dirs only off Windows: there
-/// `/usr/local/bin` is `<current drive>:\usr\local\bin`, a folder any standard user can
-/// create, and the Git panel's refresh would run a `gh.exe` planted in it.
+/// [`candidate_dirs`] with inputs injected. Only absolute `PATH` entries, and Unix install dirs
+/// only off Windows: there `/usr/local/bin` is a drive-relative folder any user could plant
+/// a `gh.exe` in.
 fn candidate_dirs_from(
     path: Option<&std::ffi::OsStr>,
     home: Option<&Path>,
@@ -262,12 +234,8 @@ fn spawn_error(kind: std::io::ErrorKind) -> String {
 // Interpreting a finished run (pure)
 // ---------------------------------------------------------------------------
 
-/// Turn a finished run into a PR list or a coded error.
-///
-/// The fence (same principle as `usage.rs`'s `looks_signed_out`): **markers are
-/// consulted only on a non-zero exit.** Exit 0 means `gh` answered — its JSON is
-/// parsed and never second-guessed, so a PR *titled* "run gh auth login" cannot
-/// masquerade as a signed-out CLI; and exit-0 garbage is honestly `parse`.
+/// Classify a finished run. Markers are consulted only on a non-zero exit: exit-0 JSON is never
+/// second-guessed (a PR titled "run gh auth login" isn't sign-out); exit-0 garbage is `parse`.
 pub fn interpret(captured: &Captured) -> Result<Vec<PullRequest>, String> {
     match captured.code {
         Some(0) => parse_pr_list(&captured.stdout),
@@ -295,10 +263,8 @@ fn classify_failure(captured: &Captured, code: i32) -> String {
     }
 }
 
-/// What `gh --json` actually prints per PR (verified against `gh` 2.87.3):
-/// `author` is an **object** — `{"id": …, "is_bot": …, "login": …, "name": …}`.
-/// Everything except `number` is defaulted so one odd PR degrades to empty
-/// fields instead of failing the whole listing.
+/// One PR as `gh --json` prints it (gh 2.87.3; `author` is an object). All fields but `number`
+/// are defaulted so one odd PR degrades to empty fields instead of failing the listing.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawPr {
@@ -691,13 +657,8 @@ mod tests {
     }
 
     // ── live smoke: the ONE test that talks to a real gh ──────────────────
-    //
-    // `#[ignore]`d so `cargo test` stays hermetic. EXTERNAL and
-    // non-blocking by design — GitHub's availability is not our regression.
-    // Exact path for the verify wiring:
-    //
-    //     cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored \
-    //         --exact gh_prs::tests::live_smoke_lists_prs_via_gh
+    // `#[ignore]`d so `cargo test` stays hermetic; external and non-blocking in verify.
+    // Run: `--ignored --exact gh_prs::tests::live_smoke_lists_prs_via_gh`.
     #[test]
     #[ignore = "spawns the real `gh` CLI against this repo — run with --ignored"]
     fn live_smoke_lists_prs_via_gh() {

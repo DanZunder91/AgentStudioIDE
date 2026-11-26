@@ -1,19 +1,6 @@
-/**
- * Layer 5 — the user-visible reattach flow, end to end, in a real browser.
- *
- * Reproduces exactly what a webview reload does: the Rust supervisor + PTYs are
- * alive, but the JS store is fresh. We drive the bridge's own sequence
- * (`applyFleetSnapshot(agents)` then `rebuildTerminalTabs(terminals)`), render
- * the real `<App>`, and confirm the whole chain the user depends on:
- *
- *   snapshot with live terminals
- *     → tabs rebuilt (rail no longer shows "Running" agents with no tabs)
- *     → selecting the agent activates its terminal tab
- *     → the terminal mounts and calls terminal_reattach (NOT terminal_open)
- *     → PTY output streams into the reattached xterm
- *
- * Unit tests pin each link; this proves they actually connect.
- */
+/** A webview reload end to end: the bridge's `applyFleetSnapshot` then `rebuildTerminalTabs`, the
+ * real `<App>`, and the terminal calling `terminal_reattach` with output streaming in. Unit tests
+ * pin each link; this proves they connect. */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

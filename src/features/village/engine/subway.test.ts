@@ -1,9 +1,4 @@
-/**
- * The subway's timetable (engine/subway.ts): one round per three minutes — eastbound at the start of
- * each cycle, westbound half a cycle later — coming in from far past the world's end, easing into the
- * station, standing there with its doors open, easing out and leaving past the other end. Checked
- * against the spec and against an independent kinematic model, never the code's own helpers.
- */
+/** Checked against the spec and an independent kinematic model, never the code's own helpers. */
 
 import { describe, expect, it } from "vitest";
 

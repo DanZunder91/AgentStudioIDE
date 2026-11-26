@@ -1,15 +1,6 @@
-/**
- * Agent Village — ground tiles and walls.
- *
- * Outdoor ground (grass, path, water, plaza) is OUR procedural pixel art,
- * deterministic per tile (hashed from col/row/variant) so nothing shimmers.
- * Indoor floors and walls use the vendored pixel-agents grayscale tiles,
- * colourised; without the art they degrade to flat fills of the same colour.
- *
- * Tile `variant` semantics: grass — tuft/flower pattern; floor — `variant % 9`
- * picks the floor pattern and `floor(variant / 9)` the tint; path/water/plaza/road —
- * a shade seed; sky — unused (it is drawn as nothing). Any non-negative integer is valid.
- */
+/** Outdoor ground is procedural, hashed per tile so nothing shimmers; indoor floors/walls are
+ * colourised vendored tiles, flat fills without the art. `variant` is any integer ≥ 0; a floor
+ * takes its pattern from `variant % 9` and its tint from `floor(variant / 9)`. */
 
 import { TILE, type TileKind } from "../villageTypes";
 import type { Camera } from "./camera";
@@ -157,11 +148,8 @@ function plaza(
   }
 }
 
-/**
- * The city's asphalt: specks of grit, a dark kerb line on the even (upper) lane, and a
- * dashed yellow centre line along the odd one's top edge — dashes every other tile, so
- * two lanes read as one road.
- */
+/** City asphalt: grit, a dark kerb on the even (upper) lane and a dashed yellow centre line on the
+ * odd one's top edge, every other tile, so two lanes read as one road. */
 function road(
   ctx: DrawTarget,
   cam: Camera,
@@ -227,14 +215,9 @@ export function drawTile(
   }
 }
 
-/**
- * One wall piece from the 4×4 auto-tile sheet (mask N=1 E=2 S=4 W=8 → sheet
- * cell `mask % 4, mask / 4`), colourised with its house's hue. Pieces are 16×32:
- * drawn 2 tiles tall, bottom on the tile's bottom edge — except a `front` (street)
- * wall, which stays inside its own tile: the piece's cap, then a darker facade strip
- * cut from the piece's bottom (so a door gap keeps its outlined jambs). A 2-tile
- * front wall would hide the room's last row behind a blank slab.
- */
+/** A wall piece from the 4×4 auto-tile sheet (mask N=1 E=2 S=4 W=8 → cell `mask % 4, mask / 4`),
+ * 16×32, drawn 2 tiles tall. A `front` wall stays in its own tile (cap + darker facade strip): a
+ * 2-tile front wall would hide the room's last row. */
 export function drawWall(
   ctx: DrawTarget,
   cam: Camera,

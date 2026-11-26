@@ -1,52 +1,6 @@
-/**
- * The CITY view: an option to see everything as a city, where everything
- * running is a building and every console or agent takes one floor — more consoles, more
- * floors — with, on each floor, one leader and the other agents working for it; the weather
- * and clock system stays.
- *
- *   planCity(agents)       → buildings, floors and who sits where (pure, stable)
- *   buildCityWorld(plans)  → a SIDE-VIEW World: sky, a street, buildings of floors
- *
- * One building per folder — the village's grouping (one house per folder). Each FLOOR is a
- * root agent or a plain IDE console (`VillageAgent.consoleId`), and that root is the
- * floor's LEADER; every sub-agent under it (sub-agents of sub-agents included) works on its
- * floor, and EVERY one of them has a desk. There is no cap and no "+N" (a floor
- * showing "+6" hid agents; the floor grows longer instead) — a crowded floor
- * makes its building WIDER, in desks of two, up to `ROW_DESKS` desks; past that (after
- * every 10 tables, continue vertically and make the floor bigger) the next desks go on a
- * NEW ROW below, so the floor grows TALLER instead. The most crowded floor sets the width AND the desk rows of
- * every floor of its building. The same rule as the lounge's (`capacityModel.loungeSeats`): everyone
- * sits, nobody overflows.
- *
- * The CAPACITY HQ stands in the CENTRE of the street, the projects' buildings on both
- * sides of it: its floors are Memory and Usage. Under the street, right below its door, is the LOUNGE (`CityLounge`): a bench per agent,
- * where agents wait to be called; a busy one rides the lounge's lift up to the far sidewalk, crosses
- * in front of the HQ, walks to its building and rides that building's lift (`CityBuilding.lift`, up
- * the door column) to its floor. Under the lounge is the SEATS hall — the selected agent's context
- * window, the same hall of `/context`'s 200 seats as the Village's Seats house (the
- * hall is in both views) — and under that the subway.
- *
- * It is the village engine, not a fork: the city is an ordinary `World` whose `houses` are
- * the FLOORS, so `VillageSim` seats a leader and its team on their own floor exactly as it
- * seats a house, and the draw list / renderer / weather run unchanged. What only a city has
- * (the building shells, their doors and signs) lives in `World.city`.
- *
- * A floor, top to bottom (tiles) — the 2-tile wall piece is the slab above AND the back wall:
- *
- *   s  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀     slab: the top half of the back-wall pieces in row W (the name plate)
- *   W  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓     back wall (wall tiles)
- *   H  .  . . R  ║  .. ..  ▤▤   headroom: the leader's head, bubble and marker stay on ITS floor; ▤ shelf, R Wi-Fi router
- *   A  p  . L .  ║  [DD][DD]  .   p plant, L leader's chair (faces the street), [DD] team desk + 2 PCs
- *   B  .  ███  ║  c c  c c  b   ███ leader's big desk (monitor from behind beside L, keyboard in front of L, coffee), c team chairs (face up)
- *   ·  .  . . .  ║  . .  . .  .   ┐ a floor with more than ROW_DESKS desks: per extra row an aisle,
- *   A' .  . . .  ║  [DD][DD]  .   │ a desk row and a chair row (ROW_PITCH tiles) — the floor grows
- *   B' .  . . .  ║  c c  c c  .   ┘ taller, never wider
- *
- * ║ is the building's lift (a building with a team has one), up the street door's column: it stops
- * at every chair row. So the leader
- * looks out of the building, and the team sits with its back to us at the PCs. Floors stack upward
- * from the street: more consoles, a taller building.
- */
+/** City view: one building per folder, one FLOOR per root agent or plain console (its leader), each
+ * sub-agent with a desk (no cap: crowded floors grow wider, then taller). The village engine, not a
+ * fork: floors are `World.houses`; city-only shells live in `World.city`. */
 
 import {
   TILE,
@@ -91,13 +45,8 @@ const EMPTY_FLOORS = 2;
 
 // ───────────────────────────── plan ─────────────────────────────
 
-/**
- * One floor of a building. How many sub-agents work on it is deliberately NOT here: the world
- * never reads it (a building's width is `CityPlan.team`, rounded up to desks of two), and the
- * panel rebuilds the world — re-placing everyone — whenever the plan's signature changes
- * (`planSignature`), so an exact count here would rebuild it on EVERY sub-agent spawn rather
- * than every second one on the building's most crowded floor.
- */
+/** One floor. No sub-agent count on purpose: the world never reads it, and an exact count would
+ * change `planSignature` and rebuild the world on EVERY sub-agent spawn. */
 export interface CityFloorPlan {
   /** The floor's house key (`floorKey` of its leader). */
   key: string;
@@ -111,11 +60,9 @@ export interface CityPlan {
   /** The folder. */
   key: string;
   label: string;
-  /**
-   * Team seats on EVERY floor of this building: its most crowded floor's sub-agents rounded UP to
-   * desks of two — never capped, so everyone has a desk. Rows of `ROW_DESKS` desks: up to one row
-   * it sets the building's width, past it every floor's desk rows (`deskRows`).
-   */
+  /** Team seats on EVERY floor: the most crowded floor's sub-agents rounded UP to desks of two,
+   * never capped. Within one `ROW_DESKS` row it sets the width; past it, every floor's
+   * `deskRows`. */
   team: number;
   /** Ground floor first. */
   floors: CityFloorPlan[];
@@ -126,17 +73,9 @@ export interface CityPlan {
 
 export interface CityRoster {
   plans: CityPlan[];
-  /**
-   * The characters for the sim, rewritten for the city: each leader's `folder` is its FLOOR's
-   * key (the sim seats by house), and EVERY sub-agent whose root is known hangs directly under
-   * its floor's leader (the sim anchors its desk to the parent's seat) — none is left out for
-   * lack of a desk, since the plan gives each floor one per sub-agent. Only a sub-agent whose
-   * root is unknown is left out: it has no floor to sit on.
-   *
-   * Order: each leader, then its team — busy sub-agents first, each group in input order.
-   * That is the order the sim hands out desks in (nearest the leader first) to sub-agents
-   * that arrive together; a desk once taken is kept, whatever the order later says.
-   */
+  /** Sim characters: a leader's `folder` is its floor's key; each sub-agent with a known root hangs
+   * under its floor's leader (unknown root: left out). Order: leader, busy subs, the rest; the sim
+   * hands out desks in that order, and a taken desk is kept. */
   agents: VillageAgent[];
 }
 
@@ -154,15 +93,8 @@ function floorRank(a: VillageAgent): number {
 /** Mid-turn: these take the desks nearest their leader when a team arrives together; finished ones sit further down. */
 const BUSY = new Set(["typing", "reading", "thinking", "waiting"]);
 
-/**
- * Buildings, floors and seating for `agents` (roots, sub-agents and console pseudo-agents).
- *
- * Stable by construction: buildings are ordered IDE-first then by folder (code-unit order,
- * the village's `planHouses` rule), floors by `floorRank` then input order (the fleet's
- * forest order, the tab order, the external scan's sorted order), and a floor's team keeps
- * its busy sub-agents first, each group in input order. Every sub-agent with a known root is
- * on its floor's team — no cap: a bigger team is a wider building.
- */
+/** Stable by construction: buildings IDE-first then by folder (code-unit order), floors by
+ * `floorRank` then input order, teams busy-first. No cap: a bigger team is a wider building. */
 export function planCity(agents: VillageAgent[]): CityRoster {
   const byKey = new Map(agents.map((a) => [a.key, a]));
   const roots = agents.filter((a) => a.parentKey === null);
@@ -222,10 +154,8 @@ function mostCommon(values: readonly (string | null | undefined)[]): string | nu
 
 // ───────────────────────────── world ─────────────────────────────
 
-/**
- * Interior width of a floor with `team` team seats: plant, big desk ×3, the lift's aisle, then
- * desks of two + an aisle each — at most `ROW_DESKS` of them (more go on another row) — and decor.
- */
+/** Interior width: plant, big desk ×3, the lift's aisle, then desks of two + an aisle each (at
+ * most `ROW_DESKS`; more go on another row), and decor. */
 export function floorWidth(team: number): number {
   return 5 + 3 * (Math.min(team, ROW_SEATS) / TEAM_BLOCK) + 1;
 }
@@ -240,10 +170,8 @@ export function floorHeight(rows: number): number {
   return FLOOR_H + ROW_PITCH * (rows - 1);
 }
 
-/**
- * Where team seat `i` stands from its floor's first desk (its PC's column offset and its row
- * offset): desks of two at a pitch of 3 columns, `ROW_DESKS` to a row, rows `ROW_PITCH` apart.
- */
+/** Team seat `i`'s PC column and row offsets from the floor's first desk: desks of two 3 columns
+ * apart, `ROW_DESKS` to a row, rows `ROW_PITCH` apart. */
 function deskSpot(i: number): { dc: number; dr: number } {
   const j = i % ROW_SEATS;
   return { dc: 3 * Math.floor(j / TEAM_BLOCK) + (j % TEAM_BLOCK), dr: ROW_PITCH * Math.floor(i / ROW_SEATS) };
@@ -254,12 +182,8 @@ function deskSpot(i: number): { dc: number; dr: number } {
 /** The HQ building's key and sign. */
 export const HQ_KEY = "cap/hq";
 export const HQ_LABEL = "Capacity HQ";
-/**
- * The HQ's floors, ground floor first. Its Seats are not a floor: they are the
- * selected agent's context window — the same hall of `/context`'s 200 seats as the Village's Seats
- * house (it is in both views) — dug in under the LOUNGE, so the skyline the landmarks are sized from
- * does not change (a third HQ floor made it the tallest roof of a small city, and Fuji left the frame).
- */
+/** The HQ's floors, ground first. Seats is not a floor but the hall under the LOUNGE, so the
+ * skyline the landmarks are sized from does not change (a third floor pushed Fuji out of frame). */
 const HQ_FLOORS: readonly CapacityKind[] = ["memory", "usage"];
 /** The HQ's interior width: eight racks in two banks of four, an aisle and a plant. */
 export const HQ_W = 12;
@@ -291,17 +215,12 @@ export const TUNNEL_ROWS = 5;
 const SUBWAY_BELOW = 1;
 /** Columns between the lounge's left wall and the subway entrance (whose stairs go down beside it). */
 const ENTRANCE_GAP = 3;
-/**
- * The station's platform, in columns: the whole train end to end and a tile beyond each end of it (34
- * for its eight cars), so the train always stops alongside it.
- */
+/** Platform width in columns: the whole train plus a tile beyond each end, so it always stops
+ * alongside. */
 export const STATION_W = Math.ceil(TRAIN_LEN / TILE) + 2;
 
-/**
- * The platform's columns [col0, col1): centred under the entrance (2 tiles wide from `entrance`), slid
- * whole into a world `cols` wide when the entrance is near one of its ends — never cut short there, or
- * the train would stand past it — and only as wide as the world if the world is narrower.
- */
+/** Platform columns [col0, col1): centred under the entrance, slid whole into the world near its
+ * ends (never cut short, or the train would overhang), no wider than the world. */
 export function stationCols(entrance: number, cols: number): { col0: number; col1: number } {
   const col0 = Math.max(0, Math.min(cols - STATION_W, entrance + 1 - Math.floor(STATION_W / 2)));
   return { col0, col1: Math.min(cols, col0 + STATION_W) };
@@ -312,11 +231,8 @@ export function benchRows(seats: number): number {
   return Math.max(1, Math.ceil(seats / LOUNGE_ROW_SEATS));
 }
 
-/**
- * Where lounge seat `i` is from the lift's column (`dc`) and from the first bench row (`dr`), in
- * reading order: a row's left half (two benches) left to right, then its right half, then the next
- * bench row, two rows down (the aisle between them is where a rider walks to the lift).
- */
+/** Lounge seat `i` from the lift's column (`dc`) and first bench row (`dr`), in reading order;
+ * bench rows are two apart, the aisle between being the riders' walk to the lift. */
 function benchSpot(i: number): { dc: number; dr: number } {
   const half = LOUNGE_ROW_SEATS / 2;
   const j = i % LOUNGE_ROW_SEATS;
@@ -333,16 +249,9 @@ function buildingHeight(heights: readonly number[]): number {
 /** One building on the street: the HQ, or a project's (`fh`: each of its floors' height). */
 type Slot = { hq: true; w: number } | { hq: false; w: number; plan: CityPlan; fh: number };
 
-/**
- * The side-view city for `plans` (in the given order). Pure and deterministic: the same
- * plans always produce an identical World, and every id is derived from a floor key, so a
- * leader keeps its desk (`<floor>:lead`) and a sub-agent its team seat across rebuilds.
- *
- * With a `capacity` layout the HQ stands in the CENTRE of the street and the world is as wide on
- * both sides of it; each project in turn goes on the side with less street taken so far (the right
- * on a tie), so the first ones stand nearest the HQ. Without one, the buildings stand in plan order,
- * centred.
- */
+/** Side-view city for `plans`. Pure and deterministic; ids derive from floor keys, so desks survive
+ * rebuilds. With `capacity` the HQ is centred and each project goes on the side with less street
+ * (right on a tie); without it, buildings stand centred in plan order. */
 export function buildCityWorld(plans: CityPlan[], capacity?: CapacityLayout): World {
   const projects: Slot[] = plans.map((plan) => ({ hq: false, plan, fh: floorHeight(deskRows(plan.team)), w: floorWidth(plan.team) + 2 }));
   const hqW = HQ_W + 2;
@@ -381,10 +290,8 @@ export function buildCityWorld(plans: CityPlan[], capacity?: CapacityLayout): Wo
   /** The lounge's back-wall row, and the wall row under its floor. */
   const loungeTop = street + STREET_ROWS + LOUNGE_DEPTH;
   const loungeFloor = loungeTop + 2 + 2 * benches;
-  /**
-   * The Seats hall's top wall row, under a row of earth below the lounge (its board hangs there), and
-   * the wall row under its floor.
-   */
+  /** The Seats hall's top wall row (under a row of earth below the lounge, where its board hangs)
+   * and the wall row under its floor. */
   const hallTop = loungeFloor + 1 + HALL_DEPTH;
   const hallFloor = hallTop + HALL_H + 1;
   /** The subway tunnel's ceiling row, under a row of earth below the Seats hall. */
@@ -551,10 +458,9 @@ export function buildCityWorld(plans: CityPlan[], capacity?: CapacityLayout): Wo
         props.push({ id: `${k}:chair:${i}`, kind: "chair", col: c, row: a + 1, w: 1, h: 1, facing: "up" });
         seats.push({ id: seatId, houseKey: k, col: c, row: a + 1, facing: "up", pcId, forSub: true });
       }
-      // A floor with a team gets its Wi-Fi router (engine/teamLan.ts cables the team's PCs to it; the
-      // leader talks to it over the air): on the back wall in the headroom row, over the end of the
-      // leader's desk — the next column is the lift's. A team makes the floor ≥ 9 wide, so the shelf
-      // (iw − 2) is clear of it. Not blocking.
+      // A team floor's Wi-Fi router (engine/teamLan.ts): back wall, headroom row, over the end of
+      // the leader's desk (the next column is the lift's). A team makes the floor ≥ 9 wide: shelf
+      // clear.
       if (plan.team > 0) props.push({ id: `${k}:router`, kind: "router", col: ic + 3, row: H, w: 1, h: 1 });
       props.push({ id: `${k}:shelf`, kind: "bookshelf", col: ic + iw - 2, row: H, w: 2, h: 1 });
       props.push({ id: `${k}:bin`, kind: "bin", col: ic + iw - 1, row: B, w: 1, h: 1 });
@@ -603,11 +509,8 @@ export function buildCityWorld(plans: CityPlan[], capacity?: CapacityLayout): Wo
   };
 }
 
-/**
- * Where city rain splashes: the street (sidewalks and road, at any x — it runs on past the
- * world's ends) and a building's roof (its top row). Anywhere else is open sky, where a drop
- * simply ends. For `WeatherFx.update`'s `ground`.
- */
+/** `WeatherFx.update`'s `ground`: the street (any x: it runs past the world) and building roofs;
+ * anywhere else is open sky, where a drop simply ends. */
 export function cityGround(world: World): (wx: number, wy: number) => boolean {
   const city = world.city as NonNullable<World["city"]>;
   const top = city.street * TILE;

@@ -1,12 +1,8 @@
-/**
- * The capture proxy's wire types — an exact mirror of `netcap::*` (serde camelCase).
- * Change the Rust side and this mirror together; the contract tests pin both.
- */
+/** Exact mirror of the capture proxy's `netcap::*` wire types (serde camelCase). Change the Rust
+ * side and this mirror together; the contract tests pin both. */
 
-/**
- * `bypass` is not traffic the proxy saw: an agent command that skipped it (`curl --noproxy`,
- * `NO_PROXY=*`), recorded from the command itself — see {@link BypassInfo}.
- */
+/** `bypass` is not traffic the proxy saw: an agent command that skipped it (`curl --noproxy`,
+ * `NO_PROXY=*`), recorded from the command itself; see {@link BypassInfo}. */
 export type FlowProto = "http" | "https" | "ws" | "wss" | "grpc" | "tunnel" | "bypass";
 export type FlowState = "pending" | "done" | "error";
 
@@ -39,49 +35,31 @@ export interface FlowSummary {
   /** "HTTP/1.1" | "HTTP/2" | "". */
   httpVersion: string;
   wsMessages: { up: number; down: number } | null;
-  /**
-   * The process on the other end of the proxy socket — resolved from
-   * the accepted socket's pid. Null = could not resolve.
-   */
+  /** The process on the other end of the proxy socket, from the accepted socket's pid; null if
+   * unresolved. */
   client: FlowClient | null;
-  /**
-   * Why the proxy did what it did with this flow, in words — e.g.
-   * "not decrypted: gazelle doesn't read the IDE's CA". Null = nothing to explain.
-   */
+  /** Why the proxy did what it did with this flow, in words; null = nothing to explain. */
   note: string | null;
-  /**
-   * Only on a `proto: "bypass"` row (Rust omits the key otherwise, so it is optional here):
-   * the command that skipped the proxy, and what could be parsed from it.
-   */
+  /** Only on a `proto: "bypass"` row (Rust omits the key otherwise): the command that skipped the
+   * proxy and what could be parsed from it. */
   bypass?: BypassInfo | null;
 }
 
-/**
- * An agent command that bypassed the capture proxy (`netcap::types::BypassInfo`). `method` /
- * `url` are parsed from a `curl` command line; null when it was not one or could not be read.
- */
+/** An agent command that bypassed the proxy (`netcap::types::BypassInfo`). `method` / `url` are
+ * parsed from a `curl` command line; null when it was not one or could not be read. */
 export interface BypassInfo {
   /** Verbatim, as the agent ran it. */
   command: string;
   method?: string | null;
   url?: string | null;
-  /*
-   * Rust always sends these four on a bypass row; optional here
-   * only so hand-written UI fixtures may leave them out.
-   */
-  /** The agent whose transcript held the command; the row's `terminalId` is its root terminal. */
+  /* Rust always sends these four on a bypass row; optional only so UI fixtures may omit them. */
   agentId?: string | null;
   /** The transcript's `tool_use.id` — the same id as the Agent Logs line (`LogLine.toolUseId`). */
   toolUseId?: string | null;
-  /**
-   * What bypassed, in command order: "--noproxy", "-x ''", "NO_PROXY=*", "NO_PROXY=",
-   * "*_PROXY=''", "unset *_proxy", "env -u *_proxy", "env -i", "--no-proxy".
-   */
+  /** What bypassed, in command order (e.g. "--noproxy", "NO_PROXY=*", "env -i"). */
   reasons?: string[];
-  /**
-   * True = the IDE's curl shim undid it (strict agent capture on, every reason a curl's own):
-   * the request itself IS captured as a normal row. False = it really was not captured.
-   */
+  /** True = the IDE's curl shim undid it (strict agent capture on, every reason a curl's own), so
+   * the request is captured as a normal row. False = it really was not captured. */
   neutralized?: boolean;
 }
 
@@ -123,21 +101,14 @@ export interface NetcapStatus {
   skippedReason: string | null;
   passthroughHosts: string[];
   flowCount: number;
-  /**
-   * Apps the user opted in to HTTPS decryption from the capture guide: the
-   * `.app` bundle name for a bundled app, else the executable name. Persisted by Rust.
-   */
+  /** Apps opted in to HTTPS decryption: the `.app` bundle name, else the executable name.
+   * Persisted by Rust. */
   decryptApps: string[];
-  /**
-   * Set when the persisted proxy port was taken at startup and a new one was bound — every app
-   * configured by hand still points at `from`. Null otherwise.
-   */
+  /** Set when the persisted proxy port was taken at startup and a new one bound: hand-configured
+   * apps still point at `from`. */
   portChanged: { from: number; to: number } | null;
-  /**
-   * "Capture agent curls even with --noproxy": the agent's `curl` is captured even when the
-   * command bypasses the proxy (the curl shim's pref). Optional: a Rust side that does not
-   * report it yet leaves the switch explained and disabled rather than guessing.
-   */
+  /** Capture an agent's `curl` even when it bypasses the proxy (the curl shim's pref). Optional:
+   * a Rust side that does not report it leaves the switch explained and disabled. */
   strictAgentCapture?: boolean;
 }
 

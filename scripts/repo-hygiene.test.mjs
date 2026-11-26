@@ -1,11 +1,5 @@
-/**
- * What the public repository may contain. Markdown is ignored by default: the repository publishes
- * the README and a fixed list of technical docs (architecture, testing, CSP, language detection, …)
- * that hold no real data. Local notes stay untracked. `.gitignore` carries the same allowlist; the
- * ignore rule stops an accidental `git add`, this test stops a forced one.
- *
- * Literal expectations, never read back from the file under test.
- */
+/** What the public repo may contain: Markdown only via an allowlist mirrored in .gitignore, which
+ * stops an accidental `git add`; this test stops a forced one. Literal expectations only. */
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";

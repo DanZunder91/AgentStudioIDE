@@ -198,10 +198,7 @@
   white-space: pre-wrap;
 }
 
-/* ── in-flight row: spinner + "Searching…" + the Stop control ────────────────
-   A search must be killable. The control lives WITH the
-   spinner rather than in the toolbar, so it exists exactly while there is
-   something to stop and appears where the user is already looking. */
+/* ── in-flight row: spinner + Stop, which exists exactly while there is something to stop ── */
 .find-panel__status--busy {
   display: flex;
   align-items: center;

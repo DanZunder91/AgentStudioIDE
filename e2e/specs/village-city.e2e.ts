@@ -1,63 +1,6 @@
-/**
- * V1 — the Agent Village and its City view in the REAL app, populated the
- * way a user's machine is: agents the IDE started AND `claude`s running outside it — in TOKYO.
- *
- *   - IDE side: one plain console (a City floor of its own) and one IDE agent (⚡ quick-launch; its
- *     `claude` is the E2E stub, wdio.conf's AGENTSTUDIO_CLAUDE_BIN).
- *   - Outside: eleven fake outside agents (support/outside-agents.ts) — a transcript under the
- *     CONTAINER's $HOME/.claude/projects plus a live process named `claude` claiming it. Two of them
- *     work in one repo (gazelle: two floors of one building); the BIG TEAM has 26 sub-agents — more
- *     than one desk row of ten desks holds, so its floor wraps onto a second row (after ten tables
- *     a row wraps, so a floor grows taller, not longer) — and six more `claude`s work in its repo,
- *     so its building is SEVEN floors, each two desk rows tall: the tall building, the one most
- *     likely to hide a landmark on zoom. The files their tool calls
- *     name make their projects' languages known (Rust, TypeScript, Python; the docs repo touches only
- *     Markdown, which never votes) — the City's NEON signs. Seeded only inside Docker; removed afterwards.
- *   - The app runs in Asia/Tokyo (support/app-zone.ts — only this spec's app; the container and this
- *     worker stay UTC): the Tokyo street theme (engine/streetTheme.ts: sakura, vending machines, a
- *     torii) and the skyline's landmarks are drawn for the zone the machine reports.
- *
- * Then: Titlebar ▸ Agent Village → the village shows them (HUD counts, canvas summary); the HUD's
- * Picture switch → City: the Capacity HQ in the middle of the street, its Seats a LOUNGE under the
- * street (a fixed 64 seats), and every busy
- * sub-agent COMMUTES from a lounge bench to its desk — the lounge's lift, the crossing in front of the
- * HQ, its building's lift (engine/commute.ts). One more sub-agent is started mid-spec so a newcomer
- * makes the whole trip on camera, and back to its bench when it is done. The sky chip's own override
- * (the product's HUD control — no test hook needed) → Afternoon, Evening and Night (Clear), then
- * Night + Rain. Each state is a named still (support/record.ts), in story order.
- *
- * WHAT IS REAL in the commute stills: every commuter is a real sub-agent the external
- * scan reported; the newcomer is a sidecar this spec appended, picked up by the real scan, and it heads
- * home because its parent's transcript really got its `<task-notification>`. Every seeded sub-agent is
- * BACKGROUND-shaped like the real CLI's (its launch answered at once), and the spec checks they all
- * read as working — not "done" at their launch (which used to leave the City empty). The anonymous agents on the FREE benches are
- * decoration: they stand for free seats (the lounge's card says how many), not for processes.
- *
- * Capacity: the Seats / Memory / Usage houses (Village), the HQ's floors and the
- * lounge (City) are canvas pixels, so the spec finds them through the canvas's `data-capacity-boxes`
- * (`VillageView.capacityBoxes`) — whole and below the HUD at Fit — and hovers each (the product's own
- * hover card). The Village's Seats are the selected agent's context window — a hall of /context's 200
- * seats, its board "Seats 23/200" from the stub's fixed reading; the City's lounge reads "Seats N/64",
- * and its card says the same N.
- *
- * Tokyo's landmarks (no building may hide Fuji or the towers — a backdrop that moves on zoom is
- * what would let one slide behind a building): the canvas's `data-landmark-boxes` gives
- * each far landmark's CROWN on screen (the towers' tip to their lowest deck, Fuji's snow cap). At Fit
- * and after wheel-zooming on the tall building's right wall and on the HQ, no building whose roof is
- * above a crown's bottom overlaps that crown; and a crown moves exactly with the street when the
- * picture is panned or zoomed (world-locked — no parallax left to slide it behind a building).
- *
- * Things with no product position hook (a project's house, a City floor, the plaza, the lounge, a
- * lift, a commuter) are located through support/village-scene.ts — a read-only look at the live
- * `VillageView`. It is also how the spec checks the STRUCTURE behind the stills (who sits where, which
- * props stand where, which building carries which language, where the newcomer went), never their
- * pixels — and how a commute still is timed: the page is watched every animation frame and the still
- * is asked for as the commuter reaches the moment, never by sleeping and hoping.
- *
- * The weather is never fetched here: in the Docker run (scripts/e2e-linux.mjs) the weather host
- * resolves to 127.0.0.1, so the Tokyo zone's live weather fails fast as "offline" — no coordinates
- * leave the container — and the day stills pin the sky through the chip, never the clock.
- */
+/** V1: the Agent Village and City in the real app, in Tokyo, with IDE agents and eleven fake
+ * outside agents (seeded in Docker only). Buildings, landmarks and commuters are found via product
+ * hooks or support/village-scene.ts; stills are timed in the page, never by sleeping. */
 
 import { lookup } from "node:dns/promises";
 
@@ -100,11 +43,7 @@ const PYTHON = ["app/main.py", "app/logger.py"];
 /** Docs only: Markdown never votes, so this project has no language — and no sign. */
 const MARKDOWN = ["docs/index.md", "docs/setup.md"];
 
-/**
- * The big team: one outside root whose 26 sub-agents all work on its one City floor (of the seven in its
- * building — see TALL_FLOORS) / in its folder's one house.
- * 26 > 20 = one desk row (10 desks of 2), so its floor wraps onto a second desk row.
- */
+/** 26 sub-agents > one desk row of 20 (10 desks of 2), so its floor wraps onto a second row. */
 const BIG_TEAM = {
   folder: "storefront",
   slug: "swift-violet-crane",
@@ -123,22 +62,15 @@ const LOUNGE_SEATS = 64;
 /** Lounge seats per bench row: two benches of four on each side of its lift (engine/city.ts). */
 const BENCH_ROW_SEATS = 16;
 
-/**
- * Gazelle: TWO roots in one repo — a building of two floors, so the newcomer rides its lift up past a
- * whole floor. One and three sub-agents: whichever floor is on top (the order follows the scan's
- * opaque keys), one more sub-agent still fits that floor's four desks, so the newcomer changes no
- * plan and the world is not rebuilt under the commute.
- */
+/** Two roots in one repo, so the newcomer rides past a whole floor. Whichever floor is on top,
+ * one more sub-agent still fits its four desks, so the world is not rebuilt mid-commute. */
 const GAZELLE: OutsideAgentSpec[] = [
   { folder: "gazelle", slug: "quiet-running-otter", doing: "subagents", subagents: ["Explore"], files: RUST },
   { folder: "gazelle", slug: "keen-copper-lynx", doing: "subagents", subagents: ["general-purpose", "Plan", "code-reviewer"], files: RUST },
 ];
 
-/**
- * The tall building (a seven-floor gazelle): six more `claude`s in the big team's
- * repo — seven floors, and every one of them two desk rows tall, because the most crowded floor (the
- * big team's 26) sets the desk rows of every floor of its building. A few have teams of their own.
- */
+/** Six more `claude`s in the big team's repo: seven floors, each two desk rows tall (the most
+ * crowded floor sets every floor's rows). The building most likely to hide a landmark on zoom. */
 const TALL_FLOORS: OutsideAgentSpec[] = [
   { folder: BIG_TEAM.folder, slug: "amber-quiet-lark", doing: "subagents", subagents: ["Explore", "Plan"], files: TYPESCRIPT },
   { folder: BIG_TEAM.folder, slug: "bold-cedar-wren", doing: "read", files: TYPESCRIPT },
@@ -166,13 +98,8 @@ const LANGUAGES: Readonly<Record<string, string | null>> = {
   handbook: null,
 };
 
-/**
- * How long a still takes to be GRABBED after the spec asks for it — the WebDriver round trip, ffmpeg's
- * start and the next paint. A commute still is asked for this long before its moment, so it lands on
- * it: a crossing lasts ~0.4 s and a one-floor lift ride ~0.6 s (engine/commute.ts speeds). Measured in
- * a Docker run: a still asked for 0.24 s before a lift ride's middle showed the rider
- * 0.05–0.1 s past the trigger point (riders 1–2 tiles into the ride), so the grab takes ~0.1 s.
- */
+/** Time from asking to grabbing a still (WebDriver round trip, ffmpeg start, next paint): ~0.1 s
+ * measured in Docker. Crossings last ~0.4 s, one-floor rides ~0.6 s (engine/commute.ts). */
 const STILL_LEAD_S = 0.1;
 
 interface HudView {
@@ -261,11 +188,8 @@ async function waitForCapacityWords(): Promise<string> {
   );
 }
 
-/**
- * Nothing the page SAYS about the picture carries a "+N" (no "+6" — everyone has
- * a desk; a full floor grows, a full Seats room grows): the whole HUD, the canvas's accessible name and
- * its capacity description.
- */
+/** Everyone has a desk, so no "+N" anywhere the page describes the picture: HUD, canvas name
+ * and capacity description. */
 async function expectNoPlusN(where: string): Promise<void> {
   const said = await browser.execute(() => ({
     hud: document.querySelector('[data-testid="village-hud"]')?.textContent ?? "",
@@ -279,11 +203,8 @@ async function expectNoPlusN(where: string): Promise<void> {
 
 /* ── the page's own errors ──────────────────────────────────────────────────────────────────── */
 
-/**
- * Collect the page's uncaught errors from now on. The picture is painted in a `requestAnimationFrame`
- * loop: a frame that throws leaves the canvas showing a half-painted picture and stops refreshing
- * `data-capacity-boxes` — every later check then reads stale numbers and fails somewhere confusing.
- */
+/** A throwing rAF frame leaves a half-painted canvas and stale `data-capacity-boxes`, so later
+ * checks would fail somewhere confusing. */
 async function watchPageErrors(): Promise<void> {
   await browser.execute(() => {
     const w = window as unknown as { __e2eErrors?: string[] };
@@ -383,11 +304,7 @@ async function waitForCapacityBuildings(what: string, kinds: readonly CapacityKi
   return last as Stage;
 }
 
-/**
- * At Fit every capacity building is WHOLE on screen and below the HUD (Fit used to cut the capacity
- * houses off in a ~720 px pane). The boxes are clipped to the canvas, so a cut-off
- * building shows up as a box touching an edge.
- */
+/** Boxes are clipped to the canvas, so a cut-off building shows as a box touching an edge. */
 function expectWholeBelowHud(s: Stage): void {
   for (const b of s.boxes) {
     const where = `${b.kind} ${JSON.stringify(b)} in ${JSON.stringify(s.canvas)}, HUD bottom ${s.hudBottom}`;
@@ -409,11 +326,8 @@ const boxOf = (s: Stage, kind: CapacityKind): CapacityBox => {
   return b;
 };
 
-/**
- * Recording only: put the REAL X pointer where the WebDriver pointer is (viewport px → screen px, via
- * the main window's client origin), so a still's cursor points at the building whose card is open.
- * The plain run never touches the X pointer.
- */
+/** Recording only: mirror the WebDriver pointer with the real X pointer (via the main window's
+ * client origin) so a still's cursor points at the open card. */
 function mirrorPointer(viewport: { x: number; y: number }): void {
   if (!recording()) return;
   const main = osWindows().sort((a, b) => b.width * b.height - a.width * a.height)[0];
@@ -426,11 +340,8 @@ async function pointerAt(s: Stage, p: { x: number; y: number }): Promise<void> {
   await browser.action("pointer", { parameters: { pointerType: "mouse" } }).move({ origin: "viewport", ...at }).perform();
 }
 
-/**
- * Off the canvas (onto the HUD's counts): its card closes and nothing is hovered in a still. The REAL X
- * pointer is parked in the blank lower part of the Files rail instead — parked on the HUD it sat on the
- * counts' text in every later still.
- */
+/** Off the canvas, so its card closes. The real X pointer parks in the blank lower Files rail (on
+ * the HUD it sat on the counts' text in every later still). */
 async function pointerAway(): Promise<void> {
   const park = await browser.execute(() => ({ x: window.innerWidth - 120, y: window.innerHeight - 160 }));
   mirrorPointer(park);
@@ -438,10 +349,7 @@ async function pointerAway(): Promise<void> {
   await $('[data-testid="village-capacity-card"]').waitForExist({ reverse: true, timeout: 5_000 });
 }
 
-/**
- * Hover a capacity building — the product's own way of reading it: its card opens with the exact
- * figures (`capacityModel.capacityCard`). Returns the card's text.
- */
+/** The product's hover card (`capacityModel.capacityCard`); returns its text. */
 async function hoverCapacity(s: Stage, kind: CapacityKind): Promise<string> {
   await pointerAt(s, centre(boxOf(s, kind)));
   const card = await $(`[data-testid="village-capacity-card"][data-kind="${kind}"]`);
@@ -453,12 +361,8 @@ async function hoverCapacity(s: Stage, kind: CapacityKind): Promise<string> {
 
 const zoomInBtn = (): ReturnType<typeof $> => $('[aria-label="Village zoom"] button[aria-label="Zoom in"]');
 
-/**
- * Drag the canvas (the product's pan) so `target` (canvas px) sits at the centre. A drag ends when the
- * pointer leaves the canvas or crosses the HUD (both float over it), so a far target is reached in
- * hops, each drawn symmetrically about the free band's centre — every point of it on the bare canvas.
- * That is also how a target OFF screen at Fit (a big village is framed on its civic row) is reached.
- */
+/** A drag ends when the pointer leaves the canvas or crosses the HUD, so far (even off-screen)
+ * targets are reached in hops, each symmetric about the free band's centre. */
 async function panTo(s: Stage, target: { x: number; y: number }): Promise<void> {
   const top = Math.ceil(s.hudBottom) + 12;
   const bottom = s.canvas.height - 12;
@@ -502,12 +406,8 @@ function fitsAfter(sc: Scene, box: Box, k: number): boolean {
   return x0 >= 4 && x0 + box.w * k <= sc.canvas.width - 4 && y0 >= sc.hudBottom + 4 && y0 + box.h * k <= sc.canvas.height - 4;
 }
 
-/**
- * A close-up a person can read: pan so `target` (canvas px) sits at the centre, then zoom in — the
- * buttons zoom about the centre, so it stays there. `zoom` is a number of presses, or `{ frame }`: press
- * while the box `frame` reads off the scene would still be whole on screen (at most `max` presses), so
- * a long floor or a whole house fills the still without being cut.
- */
+/** Pan, then zoom (buttons zoom about the centre). `zoom`: presses, or `{ frame }` to press while
+ * that box stays whole on screen (at most `max`). */
 async function closeUpOn(
   s: Stage,
   target: { x: number; y: number },
@@ -543,20 +443,13 @@ async function closeUpOnBox(what: string, frame: (sc: Scene) => Box, max = 4): P
   return near;
 }
 
-/**
- * The subway's train stands at the station with its doors wide open from 21.5 s to 26.5 s into each half
- * of its three-minute cycle (engine/subway.ts: 14 s cruising in and 6 s braking, then an 8-s stop whose
- * doors stay shut 0.8 s and slide 0.7 s at either end) — on the FRAME's clock, which is the page's
- * `performance.now()` (the animation loop's requestAnimationFrame timestamp, useVillageLoop.ts).
- */
+/** Doors open 21.5–26.5 s into each 90 s half cycle (engine/subway.ts), on the frame clock: the
+ * page's `performance.now()` (rAF timestamps, useVillageLoop.ts). */
 const TRAIN_HALF_CYCLE_MS = 90_000;
 const TRAIN_DOORS_OPEN_MS = 21_500;
 
-/**
- * Wait until the train stands in the station with its doors open (half a second in, for the still's
- * grab), so the subway close-up shows the whole train along the platform (eight cars). Read off
- * the page's own clock, never a guess: ≤ 90 s.
- */
+/** Half a second into the open doors (for the grab), so all eight cars show; read off the page's
+ * own clock (≤ 90 s). */
 async function trainInStation(): Promise<void> {
   const waitMs = await browser.execute(
     (half: number, open: number) => (open - (performance.now() % half) + half) % half,
@@ -589,12 +482,8 @@ async function clearSkyAt(time: "Afternoon" | "Evening" | "Night"): Promise<void
 
 /* ── the commute (engine/commute.ts), watched in the page ──────────────────────────────────────── */
 
-/**
- * A commute still: wait in the page (every animation frame) until the newcomer is {@link STILL_LEAD_S}
- * from the moment `cond` names, then take it. Its timing is logged (the lead is tuned on the Docker
- * run). A moment already passed — the commuter is off that leg of its trip — gets no still: a still
- * named for a moment it does not show would be a lie (the trip itself is asserted off the tracker).
- */
+/** Waits in the page until {@link STILL_LEAD_S} before the moment. A moment already passed gets
+ * no still: a still named for a moment it does not show would be a lie. */
 async function commuteStill(name: string, what: string, cond: WaitCond, timeoutMs: number): Promise<WaitResult> {
   const r = await waitInPage(cond, timeoutMs);
   const seen = { ok: r.ok, late: r.late, missed: r.missed, etaS: r.etaS, rate: r.rate, place: r.char?.place ?? null, detail: r.detail };
@@ -605,11 +494,8 @@ async function commuteStill(name: string, what: string, cond: WaitCond, timeoutM
   return r;
 }
 
-/**
- * The commute's whole route in one frame: the lounge under the street, the HQ, and gazelle (next to
- * the HQ — the newcomer's building). At Fit the City is drawn at ¼ in a ~720 px pane, too small to
- * see anyone walk, so the commute stills (the rush on the switch, the newcomer) are framed on this.
- */
+/** At Fit (¼ in a ~720 px pane) nobody visibly walks, so commute stills frame lounge, HQ and
+ * gazelle. */
 const commuteFrame = (sc: Scene): Box => grow(union([loungeOf(sc).box, hqOf(sc).box, buildingOf(sc, "gazelle").box]), sc.tilePx);
 
 /* ── Tokyo's landmarks: crowns no building may hide ─────────────────────────────────────────── */
@@ -620,12 +506,8 @@ const CROWN_KINDS = ["fuji", "skytree", "tokyo-tower"] as const;
 const WHEEL_STEP_PX = 50;
 const WHEEL_IDLE_MS = 150;
 
-/**
- * The bug, as a rule over what is ON SCREEN: a building HIDES a crown when its roof is above
- * the crown's bottom and it overlaps the crown horizontally (render/landmarks.ts CROWNS). Crown boxes
- * come from `data-landmark-boxes` (clipped, whole px), the buildings from the scene (camera-projected,
- * whole px) — so a crown and a wall that merely touch can share a rounded pixel; more is a hide.
- */
+/** A building hides a crown when its roof is above the crown's bottom and they overlap
+ * horizontally (render/landmarks.ts); one shared rounded pixel is only touching. */
 function hiddenCrowns(sc: Scene): string[] {
   const out: string[] = [];
   for (const c of sc.crowns)
@@ -645,12 +527,8 @@ async function expectCrownsClear(where: string, min: number): Promise<Scene> {
   return sc;
 }
 
-/**
- * Zoom in `steps` times with the WHEEL, about `at` (canvas CSS px) — the product's own wheel zoom
- * (VillagePanel: deltas add up to WHEEL_STEP_PX per step, about the pointer). Through WebDriver's wheel
- * input; should this driver not deliver one, the same `wheel` event is dispatched on the canvas (it
- * is what the panel listens for), and the run says so. Each step must land exactly one zoom step in.
- */
+/** The product's wheel zoom about `at`. Without driver wheel input, the same `wheel` event is
+ * dispatched on the canvas and the run says so. Each step must land exactly one zoom step. */
 async function wheelZoomAt(at: { x: number; y: number }, steps: number): Promise<void> {
   const first = await scene();
   const vp = { x: Math.round(first.canvas.left + at.x), y: Math.round(first.canvas.top + at.y) };
@@ -702,35 +580,20 @@ function inOrder(seen: readonly string[], want: readonly string[]): { ok: boolea
 
 /* ── Tokyo's backdrop (render/backdrop.ts), seen in the canvas's pixels ────────────────────────── */
 
-/**
- * The band read rises from {@link BAND_RISE_TILES} above the street's top — over its props: the tallest,
- * a torii, rises 2 tiles above it (engine/streetTheme.ts ART_ABOVE), a passer-by less — through the
- * lower {@link BAND_SKY} of the sky (the canvas's top to the street).
- */
+/** From {@link BAND_RISE_TILES} above the street (over its props: a torii rises 2 tiles) through
+ * the lower {@link BAND_SKY} of the sky. */
 const BAND_RISE_TILES = 3;
 const BAND_SKY = 0.4;
 /** Reads of the band, this far apart: a check holds on the WORST of them (a stuttering kana, a screen's scene, a blinking beacon). */
 const BAND_READS = 3;
 const BAND_GAP_MS = 1_000;
-/**
- * The share of the band that must be `coloured` by day and `neon` at night (support/village-scene.ts
- * PIXEL_CLASSES), in every read. The backdrop is world-locked (render/backdrop.ts hashes world x), so a
- * given city reads the same on every run. Measured on three Docker runs over this band of this city
- * (Fit, ¼ zoom: 32 538 px, the city's two open ends): by day 0.197 % coloured in the worst read and
- * 0.341 % once the canyon's screens change scene — its ends now fall mostly on the quiet apartments, not
- * the sign-lit shops — and at night 0.553–0.569 % neon. The plain haze over the same band holds 0.000 %
- * of either. So the day floor is ~⅖ of the backdrop's worst read (~26 pixels the haze would have to
- * grow); the night floor, set when the band read 0.78 % at least, is still ~½ of its worst read.
- */
+/** Share that must read `coloured` by day / `neon` at night. The backdrop is world-locked, so reads
+ * are stable: measured worst 0.197 % day, 0.553 % night, haze 0.000 %; floors at ~⅖ and ~½. */
 const BACKDROP_DAY_COLOURED = 0.0008;
 const BACKDROP_NIGHT_NEON = 0.003;
 
-/**
- * Where only the sky and the backdrop show: the open street beyond the city's two ends — from a tile past
- * its outermost building to the canvas's edge — less the columns under a far landmark's crown (the canvas's
- * `data-landmark-boxes`; Tokyo Tower and the Skytree are saturated too), each widened by its own width
- * either side: a tower's legs spread to about twice its deck's width (render/landmarks.ts profiles).
- */
+/** Open street beyond the city's ends, minus columns under landmark crowns (saturated too) widened
+ * by their own width each side: tower legs spread to about twice the deck's width. */
 function backdropBands(sc: Scene): Box[] {
   const city = sc.city;
   if (!city || city.buildings.length === 0) throw new Error(`no city to read the backdrop of (mode ${sc.mode})`);
@@ -844,12 +707,8 @@ describe("Agent Village + City in Tokyo: IDE and outside agents, a big team, the
     await expectNoPageErrors("the Village at Fit");
     await moment("village-ide-and-outside-agents");
 
-    // The capacity houses: Seats, Memory and Usage are drawn, whole and below the HUD
-    // at Fit, and each answers a hover with its own card. The VILLAGE's Seats are the selected agent's
-    // context window (seats mean what /context shows, and that is what the Seats must display):
-    // a hall of /context's 200 seats. The IDE agent just quick-launched is the
-    // selection; its /context comes from the stub `claude` (e2e/fixtures/claude-stub.sh) through the
-    // real `context_usage` command — a real reading, 109.9k of 1m.
+    // The Village's Seats are the selected agent's context window (a hall of /context's 200
+    // seats), from the stub through the real `context_usage` command.
     const s = await waitForCapacityBuildings("Village at Fit");
     console.log(`[village-city] village capacity boxes: ${JSON.stringify(s)}`);
     expectWholeBelowHud(s);
@@ -919,10 +778,8 @@ describe("Agent Village + City in Tokyo: IDE and outside agents, a big team, the
     await pickRadio("Picture", "City");
     const view = await waitForHud((h) => h.mode === "city" && /consoles/.test(h.counts), "City mode never came up");
 
-    // Everyone commutes: on the switch every busy sub-agent appears on a lounge bench under the street
-    // and rides to work. Framed at once on the route (Fit is too small to see anyone walk), the still
-    // waits (in the page, every frame) for the stream — ten of them out on the street at once — rather
-    // than the first moment, when they are all still stacked in the lounge lift's shaft.
+    // Wait for the stream (ten out on the street at once), not the first moment, when all are
+    // still stacked in the lounge lift's shaft.
     await closeUpOnBox("the rush from the lounge", commuteFrame);
     const rush = await waitInPage({ kind: "crowd", street: 10 }, 15_000);
     console.log(`[village-city] the switch to City: ${rush.detail}`);
@@ -1131,10 +988,7 @@ describe("Agent Village + City in Tokyo: IDE and outside agents, a big team, the
   });
 
   it("Tokyo's backdrop by day and at night: high-rises, the neon canyon and the yokochō shops behind the street — sign plates by day, neon at night", async () => {
-    // The buildings were too small, so the backdrop has towers, ramen shops and neon signs (ramen
-    // and soba in katakana, sushi in hiragana) — variant E (the towers, the canyon, the shops, open
-    // sky between their clusters), and it comes with the Tokyo street theme (render/city.ts
-    // `backdropOf`).
+    // The Tokyo theme's backdrop (render/city.ts `backdropOf`): towers, ramen shops, neon signs.
     const passes = [
       { time: "Afternoon", when: "day", what: "coloured", min: BACKDROP_DAY_COLOURED },
       { time: "Night", when: "night", what: "neon", min: BACKDROP_NIGHT_NEON },
@@ -1160,10 +1014,8 @@ describe("Agent Village + City in Tokyo: IDE and outside agents, a big team, the
   });
 
   it("the City's Capacity HQ, its lounge (a fixed 64 benches, a waiting agent on every free one) and the Seats hall under it (the selected agent's context window)", async () => {
-    // Capacity (show the agents' seats, the seats still free and the memory available for agents).
-    // First the REAL `machine_capacity` read against the processes
-    // this spec seeded: every fake outside agent is a live process named `claude` whose parent is not
-    // a `claude`, i.e. a session by capacity.rs's own rule.
+    // Real `machine_capacity` against the seeded processes: each is a live `claude` with a
+    // non-`claude` parent, a session by capacity.rs's rule.
     const cap = await browser.execute(async () => {
       const tauri = (window as unknown as { __TAURI_INTERNALS__?: { invoke: (c: string) => Promise<unknown> } }).__TAURI_INTERNALS__;
       return tauri ? ((await tauri.invoke("machine_capacity")) as MachineCapacity) : null;
@@ -1180,11 +1032,8 @@ describe("Agent Village + City in Tokyo: IDE and outside agents, a big team, the
     expect(c.agents?.claudeRssBytes ?? 0).toBeGreaterThan(0);
     expect(Math.abs(Date.now() - c.sampledAtMs)).toBeLessThan(5 * 60_000);
 
-    // The boards, through the canvas's description (the captions the boards paint: "Seats 23/200 ·
-    // Memory 1.2 GB · Usage 41% · 58% · Lounge 34/64"). The lounge: a FIXED 64 benches,
-    // whatever the machine — the agents fit, so it has not grown; and every
-    // live agent holds one. The Seats: the selected agent's context window (both are kept), the
-    // stub's reading — 23 of /context's 200 seats.
+    // Via the canvas description's board captions. The lounge is a fixed 64 benches, one per live
+    // agent; the Seats are the stub's reading, 23 of /context's 200.
     const seatsWanted = Math.min(16, Math.max(2, (c.logicalCpus ?? 0) - 2));
     const words = await waitForCapacityWords();
     console.log(`[village-city] capacity: ${words}`);
@@ -1364,10 +1213,8 @@ describe("Agent Village + City in Tokyo: IDE and outside agents, a big team, the
   });
 
   it("neon signs: every project whose agents' language is known wears it — lit from dusk into the night; Tokyo's street", async () => {
-    // The languages the scan voted from the seeded transcripts' tool calls (external_agents/language.rs):
-    // gazelle's .rs files, the storefront's .ts / .tsx, payments-api's .py — and the handbook's
-    // Markdown, which never votes, so no sign. On the building (the contract) AND drawn: the canvas's
-    // `data-neon-boxes` comes from the very draw items the renderer paints.
+    // Languages voted from the seeded tool calls (external_agents/language.rs); Markdown never
+    // votes. Checked on the building and as drawn (`data-neon-boxes`).
     await clearSkyAt("Evening");
     const fit = await scene();
     const drawn = Object.fromEntries(fit.neon.map((n) => [n.building, n.language]));

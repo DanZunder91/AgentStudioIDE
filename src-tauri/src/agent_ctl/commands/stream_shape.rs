@@ -1,27 +1,6 @@
-//! gRPC message shapes for an agent: what a method takes and returns, field by field, and an
-//! example request body it can edit and send. Built from a reflected [`DescriptorPool`].
-//!
-//! Field names are the protobuf-JSON names (`lowerCamelCase`), the ones a response uses; a
-//! request may use either those or the `.proto` names.
-//!
-//! A schema comes from the server, so it may be huge or built to blow up a naive walk: a message
-//! with hundreds of fields of its own type grows as fields^depth, and a name declared once (an
-//! enum's values, a oneof, a package) is repeated in every field that refers to it. Everything
-//! here is bounded by construction, never cut after the fact:
-//! * the walk visits at most [`MAX_VISITS`] schema nodes (messages, fields, enum values), and
-//!   describes at most [`MAX_METHODS`] methods, [`MAX_MESSAGES`] messages, [`MAX_FIELDS`] fields
-//!   each and [`MAX_ENUM_VALUES`] values per enum;
-//! * a server-chosen name is written whole up to [`NAME_BYTES`] and cut past it, and a field's
-//!   type lists about [`VALUES_BYTES`] of its enum's values, so no line of text and no entry of
-//!   data is more than a few KiB, whatever the schema;
-//! * the examples of one answer hold at most [`EXAMPLE_NODES`] values ([`EXAMPLE_BYTES`])
-//!   together, nest [`EXAMPLE_DEPTH`] deep, and write `{}` where a message would nest inside
-//!   itself;
-//! * the text ([`TEXT_BYTES`]) and the data ([`DATA_BYTES`]) are checked line by line and entry
-//!   by entry — each field on its own — before the next is built, so the work stops where the
-//!   budgets do.
-//!
-//! Every cut is said, in the text and in the data.
+//! gRPC shapes and example bodies from a reflected [`DescriptorPool`], in protobuf-JSON names.
+//! Schemas are server-controlled (fields^depth blowups), so all work and output is bounded by
+//! construction by the consts below, and every cut is said.
 
 use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};

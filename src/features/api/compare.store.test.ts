@@ -1,12 +1,5 @@
-/**
- * A/B compare — the store slice. What's under test:
- * the `compare` sub-state a fresh request is born with, and every `setCompare*`
- * action — including the rule that STARTING a send clears both previous
- * outcomes (a fresh run must never render one stale side next to one live
- * side) while each side then lands independently, leaving `sending` to the
- * executor. The executor itself is covered in compareExecute.test.ts; the
- * view in ComparePanel.test.tsx / the ApiRequestView seam tests.
- */
+/** The `compare` store slice: initial sub-state and every `setCompare*` action. STARTING a send
+ * clears both outcomes (no stale side beside a live one); `sending` belongs to the executor. */
 
 import { beforeEach, describe, expect, it } from "vitest";
 

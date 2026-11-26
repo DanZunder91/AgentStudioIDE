@@ -1,7 +1,4 @@
-/**
- * Which window is this realm? The answer decides what boots (the whole app, or a detached
- * window's shell) and who may write `layout-prefs.json` — so the edges are pinned here.
- */
+/** The role decides what boots and who may write `layout-prefs.json`, so its edges are pinned. */
 
 import { afterEach, describe, expect, it } from "vitest";
 

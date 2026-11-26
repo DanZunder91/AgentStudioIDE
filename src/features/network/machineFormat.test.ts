@@ -1,7 +1,4 @@
-/**
- * Whole-computer table rules. Every expected order and value below is written out by hand
- * — never derived from the function under test.
- */
+/** Expected orders and values are written by hand, never derived from the function under test. */
 
 import { describe, expect, it, vi } from "vitest";
 

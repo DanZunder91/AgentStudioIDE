@@ -1,19 +1,5 @@
-/**
- * PreviewFindBar — the presentational half of "search inside the rendered .md".
- * jsdom + @testing-library/react.
- *
- * The bar owns no matches, so what is testable here is exactly what it is
- * responsible for: the label it renders for a given (current, total), which
- * gestures call back with which delta, when the ↑ / ↓ are dead, and the focus
- * behaviour that makes a second Cmd/Ctrl+F useful rather than inert.
- *
- * The label deliberately comes from `findModel.formatCount` — the same function
- * the editor's find bar and the API response search render — so "3/17" cannot
- * come to mean three different things in three surfaces. The assertions below
- * pin the STRINGS a user sees, not a re-derivation of the formatter (a
- * test that computes its expectation from the code under test proves
- * nothing about values).
- */
+/** The bar owns no matches: pins its label, callbacks, dead ↑/↓ and refocus. Labels are literal
+ * strings, not recomputed via `findModel.formatCount`. */
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";

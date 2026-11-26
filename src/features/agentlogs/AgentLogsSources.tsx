@@ -1,21 +1,6 @@
-/**
- * AgentLogsSources — the Logs view's **Sources** control (with many apps running,
- * the view needs a per-app filter as well as an all-apps option).
- *
- * A compact popover off the toolbar, so the toolbar stays one row at ~900 px:
- *   - **IDE terminals & agents** — client-side; off hides every line that is not `machine` or
- *     `app` (a dev app's stream the user started from its card).
- *   - **Mac apps / System apps** — `SyslogFilter.enabled`, then the shared `AppPicker`
- *     over `syslog_apps`, a min-level select and a subsystem box. Every change goes to
- *     Rust through `syslog_set` (the store composes the whole filter). On Windows the
- *     picker lists Event Log sources (providers) and the box names one extra channel —
- *     the wording per backend is `syslogTexts`.
- *   - **iOS Simulator** — only when Rust saw a booted simulator (passively; never a
- *     `simctl` probe), with a free-text process list since there is no list to pick from.
- *
- * An unavailable backend shows its `reason` in place of the controls — never a dead
- * toggle.
- */
+/** Logs **Sources** popover (keeps the toolbar one row): IDE terminals & agents (client-side),
+ * Mac/System apps (`syslog_set`; per-backend wording in `syslogTexts`), and the iOS Simulator
+ * only when Rust saw one booted (never probed). An unavailable backend shows its `reason`. */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -31,11 +16,8 @@ const MIN_LEVELS: { level: SyslogLevel; label: string }[] = [
   { level: "error", label: "Error" },
 ];
 
-/**
- * A text box that applies on Enter or blur, never per keystroke — each apply restarts
- * `log stream`. Keyed on the active value by its parent, so a new value from Rust
- * resets the draft.
- */
+/** Applies on Enter or blur, never per keystroke (each apply restarts `log stream`). Keyed on
+ * the active value, so a new value from Rust resets the draft. */
 function CommitBox({
   label,
   value,

@@ -1,12 +1,6 @@
-/* Git rail panel. Rules of the rail (see tools.css for the full statement):
- * the rail is narrow (RAIL_MIN_W 180px) and clips — no fixed pixel widths,
- * min-width: 0 on every flex child, overflow-wrap: anywhere on values,
- * label above value. Branch names, SHAs and PR titles are the worst-case
- * unbreakable tokens this rail has hosted; every rule below answers that.
- *
- * VCS colors use the same `var(--x, #hex)` idiom as the file tree, with the
- * SAME fallback literals the workspace feature defines — the tokens may not
- * exist globally, and the two features must agree on the colors either way. */
+/* Git rail panel. The rail is narrow and clips (see tools.css): no fixed widths, `min-width: 0`
+ * on flex children, `overflow-wrap: anywhere` on values. VCS color fallbacks must match the
+ * workspace feature's literals. */
 
 .git-panel {
   display: flex;

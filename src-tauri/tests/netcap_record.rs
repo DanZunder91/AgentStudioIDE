@@ -1,15 +1,6 @@
-//! **The IDE's own API client in the Network view.** A request sent from the built-in API
-//! client used to never appear in Network: `http_send` / `ws_*` / `grpc_send` run inside the IDE
-//! process, so nothing of theirs crosses the capture proxy. They now record straight into the
-//! netcap store; this file is the seam test — the REAL client code paths
-//! (`http::send_via`, `ws::connect_via`, `grpc::send_via`), recorded into a real `Netcap`, against
-//! real loopback servers, asserting the row AND that `netcap://flow` (the `FlowSink`) carried it.
-//!
-//! Hermetic: every server is started here on 127.0.0.1 — an HTTP/1.1 server that
-//! echoes back the headers it RECEIVED (so the row's "as sent" headers are compared with the
-//! wire, not with our own reconstruction), a WebSocket echo / authenticating server, and a
-//! hand-rolled h2c gRPC server that speaks server reflection (tonic's server feature is not in
-//! the build, so the fixture answers the two reflection queries and one unary method by hand).
+//! The IDE's own API client runs in-process and never crosses the proxy, so it records straight
+//! into netcap. Drives the real `http::send_via` / `ws::connect_via` / `grpc::send_via` against
+//! loopback servers; the gRPC one is hand-rolled h2c (tonic's server feature is not in the build).
 
 use std::convert::Infallible;
 use std::path::PathBuf;

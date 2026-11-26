@@ -47,45 +47,29 @@ const plan = (i: number, floors: number, team = 2): CityPlan => ({
   floors: Array.from({ length: floors }, (_, f) => ({ key: `floor:${i}:${f}`, label: `a${i}.${f}`, ide: true })),
 });
 
-/**
- * A city of projects of `floors` floors each, with the capacity HQ (2 floors, Memory and Usage) in the
- * middle of the street unless `hq` is false — the first project right of it, the next left, and so on.
- */
+/** Projects of `floors` floors each, alternating right and left of the mid-street HQ (2 floors)
+ * unless `hq` is false. */
 const city = (floors: number[], hq = true): World => buildCityWorld(floors.map((f, i) => plan(i, f)), hq ? { seats: 6 } : undefined);
 
-/**
- * The typical city: the HQ, a one-floor project right of it, a two-floor one left of it. Its sky is the
- * shortest a city has (240 px: the HQ's and the two-floor building's 11 rows, the empty street's too).
- */
+/** HQ, one floor right, two left: the shortest sky a city has (240 px). */
 const typical = city([1, 2]);
 /** The HQ alone: the same 240-px sky, open street either side of the HQ — every landmark at its full size. */
 const alone = city([]);
-/**
- * A reference city: the HQ in the middle, `gazelle` left of it — 7 floors of up to 25
- * sub-agents, two desk rows each: 57 rows, 912 px tall and 608 px wide — and a one-floor project right.
- */
+/** HQ mid-street, `gazelle` left (7 floors of up to 25 sub-agents: 912 px tall, 608 wide), one
+ * floor right. */
 const referenceCity = buildCityWorld([plan(0, 1), plan(1, 7, 26)], { seats: 64 });
-/**
- * …and as it is on build-11: `gazelle` (the same 7 floors, 38 columns) RIGHT of the HQ,
- * a one-floor IDE building left of it. There the Skytree and Tokyo Tower stood side by side in the one gap
- * between the HQ and gazelle; the two towers must be separated by at least one or two buildings.
- */
+/** `gazelle` (7 floors) RIGHT of the HQ, one floor left: the one gap between them could hold both
+ * towers, yet they must stand at least one or two buildings apart. */
 const build11 = buildCityWorld([plan(0, 7, 26), plan(1, 1)], { seats: 64 });
-/**
- * …and a realistic five-floor city (at night, sized against the sky alone, Tokyo Tower was about 0.45 of
- * `gazelle` and the Skytree only about as tall as it — too small): `gazelle` (5 floors) left of the HQ,
- * the one-floor Agent Studio and workspace right of it, no sub-agents (planCity gives each a team of 0).
- */
+/** A realistic five-floor city (`gazelle` 5 floors left of the HQ, two one-floor ones right, no
+ * sub-agents): sized against the sky alone, its towers would be too small. */
 const real = buildCityWorld([plan(0, 1, 0), plan(1, 5, 0), plan(2, 1, 0)], { seats: 64 });
 const horizonOf = (w: World): number => w.city!.street * TILE;
 const H = horizonOf(typical);
 /** The tallest roof of `world` over its street, world px (−∞ for a street with no building). */
 const tallestRoof = (w: World): number => Math.max(...w.city!.buildings.map((b) => horizonOf(w) - b.row * TILE));
-/**
- * The FULL size of a far or tower landmark in `world` (before any is drawn smaller): the towers a share of
- * 1.5× the tallest roof — the Skytree's tip at most 5 tiles past the world's top, and never less than the
- * sky less a tile — Fuji a share of the sky less a tile.
- */
+/** FULL size of a far or tower landmark: towers a share of 1.5× the tallest roof (Skytree tip ≤ 5
+ * tiles past the world's top, ≥ the sky less a tile); Fuji a share of the sky less a tile. */
 const fullOf = (w: World, spec: LandmarkSpec): number => {
   const sky = referenceHeight(horizonOf(w));
   return Math.round((spec.layer === "tower" ? Math.max(sky, Math.min(1.5 * tallestRoof(w), horizonOf(w) + 5 * TILE)) : sky) * spec.height);
@@ -207,10 +191,8 @@ describe("size — real proportions against the city's sky", () => {
   });
 
   it("the towers' reference is 1.5× the tallest roof — its tip at most 5 tiles past the world's top — never less than the sky less a tile, which only a street of one-floor buildings, or none, keeps", () => {
-    // The realistic five-floor city: `gazelle`, five floors (416 px), the tallest, under a 496-px sky. The
-    // Skytree was the sky less a tile, 480 px — 1.15× gazelle, about as tall as it; the Tower 252. 1.5× gazelle
-    // would be 624, its tip 128 px past the world's top: it stops 5 tiles (80 px) past it, 576 px — 1.38×
-    // gazelle — and the Tower is 333/634 of that.
+    // `gazelle` is 416 px under a 496-px sky: 1.5× would put the Skytree's tip 128 px past the top,
+    // so it stops 5 tiles past: 576 px (1.38× gazelle); the Tower is 333/634 of that.
     expect(tallestRoof(real)).toBe(416);
     expect(referenceHeight(horizonOf(real))).toBe(480);
     expect(horizonOf(real)).toBe(496);
@@ -412,11 +394,8 @@ function roofOver(world: World, a: number, b: number): number {
 /** An eighth of the span Fit frames: the air two towers' crowns keep when no building can stand between them. */
 const farOf = (world: World): number => Math.round((layoutOf(world).span[1] - layoutOf(world).span[0]) / 8);
 
-/**
- * How far apart two tower crowns stand in `world` (at least one or two buildings
- * between them): 3 = two buildings or more WHOLLY between them (both walls between the crowns,
- * overlapping neither), 2 = one, 1 = none but an eighth of the span of air, 0 = less.
- */
+/** Two tower crowns' separation: 3 = two or more buildings WHOLLY between them, 2 = one, 1 = none
+ * but an eighth of the span of air, 0 = less. */
 function separation(world: World, a: WorldBox, b: WorldBox, bs = buildingsOf(world), far = farOf(world)): number {
   const [l, r] = a.x0 < b.x0 ? [a, b] : [b, a];
   const n = bs.filter((o) => o.x0 >= l.x1 && o.x1 <= r.x0).length;
@@ -441,11 +420,8 @@ function spotsOf(world: World, p: PlacedLandmark): WorldBox[] {
   return out;
 }
 
-/**
- * BRUTE FORCE — the best separation ANY arrangement of `world`'s Fuji and towers could have at the sizes
- * they were drawn: every pair of whole-px spots for the two towers, PAD clear, with Fuji on some spot
- * PAD clear of both. Independent of render/landmarks.ts's search: it shares nothing with it but the crowns.
- */
+/** BRUTE FORCE: the best separation any arrangement could have at the drawn sizes (every whole-px
+ * tower pair, PAD clear, Fuji PAD clear of both). Shares only the crowns with landmarks.ts. */
 function bestApart(world: World): number {
   const [fuji, tower, skytree] = (["fuji", "tokyo-tower", "skytree"] as const).map((k) => spotsOf(world, placed(world, k)));
   const [bs, far] = [buildingsOf(world), farOf(world)];
@@ -466,13 +442,9 @@ const spotsNow = (world: World): Spots => Object.fromEntries(crowned(world).map(
 /** How many pairs stand out of the composition's order: Fuji, the Tower, the Skytree, left to right. */
 const inversions = (xs: Spots): number => Number(xs.fuji > xs["tokyo-tower"]) + Number(xs.fuji > xs.skytree) + Number(xs["tokyo-tower"] > xs.skytree);
 
-/**
- * The NEAREST spots: Fuji and the towers, shortest first (at full size), at the sizes they were drawn, each
- * on the whole x nearest its preferred place (a tie going right) with its crown in the span, unhidden and
- * PAD clear of the crowns before it — where they would stand were they not kept apart, as they stood before
- * they were kept apart. Null where one finds no spot that way (the first ones taking the room a
- * later one needs), though an arrangement exists.
- */
+/** The NEAREST spots, shortest first: each on the whole x nearest its preferred place (ties go
+ * right), crown in the span, unhidden, PAD clear of earlier ones: where they would stand if not
+ * kept apart. Null when that greedy pass finds no spot though an arrangement exists. */
 function nearestSpots(world: World): Spots | null {
   const { span } = layoutOf(world);
   const before: WorldBox[] = [];
@@ -509,10 +481,8 @@ function fitOf(world: World, w: number, h: number, dpr: number): { cam: Camera; 
   return { cam: v.camera, view: v.view };
 }
 
-/**
- * Typical cities (1–5 buildings of 1–3 floors), with and without the capacity HQ — which stands in the
- * middle of the street, so a city with more built on one side runs on past its buildings on the other.
- */
+/** Typical cities (1–5 buildings of 1–3 floors), with and without the mid-street HQ, so a
+ * lopsided city runs on past its buildings on one side. */
 const TYPICAL: [string, World][] = [
   ["HQ alone", alone],
   ["HQ + 1", city([1])],
@@ -618,10 +588,9 @@ describe("placement — no building ever hides a crown", () => {
     expect(inGap(s)).toBe(inGap(t));
     expect(inGap(f)).toBe(1 - inGap(t));
     expect(f.x1 - f.x0).toBe(4 * TILE);
-    // Seven, nine and eleven floors with the HQ among them: every roof but the HQ's rises above every crown, and
-    // Fuji's snow (336 px) only fits over the HQ, between the nine- and seven-floor buildings either side of it
-    // (352 px) — so both towers stand in the open street left of them all, too short for an eighth of the span
-    // between them.
+    // Every roof but the HQ's tops every crown, and Fuji's snow (336 px) fits only over the HQ (352
+    // px between its neighbours), so both towers stand in the open street left of them all, under
+    // an eighth of the span apart.
     const tall = named("HQ + [7,9,11] (tall)");
     const [first, hqTall, next] = [...tall.city!.buildings].sort((p, q) => p.col - q.col);
     const [ft, tt, st] = (["fuji", "tokyo-tower", "skytree"] as const).map((k) => landmarkCrown(placed(tall, k)));

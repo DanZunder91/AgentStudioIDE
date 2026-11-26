@@ -1,8 +1,4 @@
-/**
- * UnsavedChangesDialog — the confirm shown when closing a DIRTY editor tab
- * (M4). The registry's `save` is mocked (it owns CM6); everything else is
- * real store wiring.
- */
+/** The registry's `save` is mocked (it owns CM6); the store wiring is real. */
 
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

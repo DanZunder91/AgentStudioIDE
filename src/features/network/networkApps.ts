@@ -1,25 +1,6 @@
-/**
- * Network ↔ dev apps: the IDE-traffic sidebar lists the same by-language
- * Apps as the Logs sidebar (`procs/DevAppsSection`), the user picks apps one by one, and each
- * row says whether that app's HTTP can reach this view at all (the capture guard — an agent can run
- * `gazelle` with every proxy variable stripped, and the view must say so). Pure: every function
- * here is a function of the flows, the picks and Rust's `procs_list`.
- *
- * ── Which flows are an app's ({@link flowInApp}) ──
- * 1. The flow's client pid IS the app's pid — the proxy resolved the socket to that process.
- * 2. Otherwise, by executable name (`processNameOf` — netcap's `client_name`), but only for a
- *    client pid that no LISTED app owns: that keeps an app's flows after it exits or restarts
- *    (the old pid is gone), while two `node` apps in two repos stay apart (each owns its pid).
- *
- * DECIDED: "the app's pid tree" is the app's own pid. `procs_list` does not send children
- * (a launcher like `cargo run` is already collapsed into the binary it runs, which is the
- * process that opens the sockets), and a child with another executable — a `curl` a script
- * runs — is its own process in the Process picker. Widening this needs Rust to send the tree.
- *
- * ── A pick is a snapshot ({@link AppPick}) ──
- * The selection keeps what matching needs (pid + process name), not just the key, so a picked
- * app that exits keeps showing its flows instead of hiding everything.
- */
+/** Network ↔ dev apps, pure over flows, picks and `procs_list`. A flow is an app's by client pid,
+ * else by executable name only for a pid no listed app owns (keeps exited apps' flows, keeps two
+ * `node` apps apart). An app is its own pid (no children sent); a pick snapshots pid + name. */
 
 import { processNameOf } from "../procs/procsFormat";
 import type { DevApp, DevRuntime } from "../procs/procsTypes";
@@ -72,16 +53,9 @@ export function appFlowCount(flows: readonly Pick<FlowSummary, "client">[], app:
   return n;
 }
 
-/**
- * One row's capture state:
- * - `captured` — its flows are arriving, or Rust verified its env points at the proxy;
- * - `uncaptured` — an IDE app whose env does not (Rust's `captured === false`) and nothing of
- *   it has arrived: its HTTP cannot show here — offer Restart with capture;
- * - `external` — started outside the IDE, nothing arrived: point it at the proxy by hand
- *   (Whole Mac's "Capture this app" guide);
- * - `unknown` — an IDE app whose env the OS hides, or the IDE injects no proxy.
- * Arrived flows win: they are proof, whatever the env said.
- */
+/** `captured`: flows arrived or Rust verified the env (arrived flows win: they are proof);
+ * `uncaptured`: IDE app, env lacks the proxy, nothing arrived; `external`: started outside the
+ * IDE, nothing arrived; `unknown`: IDE app whose env the OS hides, or no proxy injected. */
 export type CaptureState = "captured" | "uncaptured" | "external" | "unknown";
 
 export function captureState(app: Pick<DevApp, "origin" | "captured">, flowsSeen: number): CaptureState {

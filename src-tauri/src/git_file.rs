@@ -1,64 +1,12 @@
-//! Git ▸ Compare and Git ▸ Revert for one file in the workspace tree.
-//!
-//! Two commands, both keyed on a single absolute file path:
-//!
-//! * [`git_file_diff`] — "show me what I changed in this file versus HEAD". It
-//!   returns both sides ([`FileDiff`]) and lets the UI render the comparison; it
-//!   deliberately does **not** compute a hunk list, because the editor already owns
-//!   a diff view and a pre-baked patch would only constrain it.
-//! * [`git_file_restore`] — "throw away my changes to this file".
-//!
-//! ## 🔴 "Revert" here is `git restore`, NOT `git revert`
-//!
-//! The menu item is named **Revert** because that is what an IDE user calls it
-//! (IntelliJ says *Rollback*, VS Code says *Discard Changes*). In **git's own**
-//! vocabulary `git revert` means something completely different: it creates a new
-//! commit that undoes an earlier commit. That is not what this module does and must
-//! never become what it does. [`git_file_restore`] implements
-//! `git checkout HEAD -- <path>` / `git restore <path>` semantics for exactly one
-//! file: the working tree (and that path's index entry) is reset to the file's
-//! content at HEAD, and no commit is created, no history is touched.
-//!
-//! If you are here to "fix" the naming, fix the *comment*, not the behaviour.
-//!
-//! **Security scope.** Both commands take a user-supplied path, so both
-//! go through the server-authoritative guard every fs command uses:
-//! [`crate::fs_tree::resolve_in_scope`] against [`crate::fs_tree::allowed_roots`],
-//! *before* any git or filesystem access. For [`git_file_restore`] this is not a
-//! formality — it is a destructive write, and the scope check is what stands between
-//! a bad path and a clobbered file outside the workspace.
-//!
-//! **Why `git2` and not a subprocess.** Same reasons as `git_blame`/`git_status`: a
-//! GUI-launched app has a minimal `PATH` and may not be able to find the `git`
-//! binary at all (zero-install: no runtime requirement for users), and the crate is
-//! already in-tree, vendored and network-free.
-//!
-//! **Errors are plain human sentences, not codes — deliberately.** This repo has two
-//! error styles and the difference is about the *consumer*, not about taste.
-//! `git_status.rs` returns a coded vocabulary (`"out-of-scope"`, `"not-a-repo"`, …)
-//! because the frontend's `gitStore` has to *classify* the failure to decide whether
-//! to hide the whole decoration layer. `git_blame.rs` returns sentences because its
-//! consumer renders the message inline for a human to read. Compare and Revert are
-//! the second kind — a diff view and a menu action, each showing the string as-is —
-//! so they follow `git_blame`. If you are adding a caller that needs to branch on
-//! *which* failure happened, add a code; do not screen-scrape these sentences.
-//!
-//! All the logic lives in `*_scoped` free functions that take the allowed roots
-//! explicitly, so the tests drive real temporary repositories with no `AppHandle`;
-//! the `#[tauri::command]`s are thin glue. Tests are split the way `git_status`'s
-//! are: the pure helpers and the wire shape are unit-tested in this file, and the
-//! real-repository behaviour lives in `tests/git_file.rs`. Neither tier is
-//! `#[ignore]`d — matching `tests/git_blame.rs` and `tests/git_status.rs`, which are
-//! not either: these tests need no network, no Docker and no signed-in CLI, so a
-//! default `cargo test` must run them.
+//! Git ▸ Compare and Git ▸ Revert for one file. Revert is `git checkout HEAD -- <path>`, NEVER
+//! `git revert` (no commit). Both are scope-checked before any access; `git2`, not a subprocess.
+//! Errors are human sentences shown as-is (like `git_blame`); add a code if a caller must branch.
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-/// Both sides of one file: its content at `HEAD` and its content on disk.
-///
-/// Frontend contract (camelCase on the wire):
+/// One file at `HEAD` and on disk. Wire (camelCase):
 /// `{ path, relative, head, working, unchanged, binary }`.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -81,17 +29,9 @@ pub struct FileDiff {
     pub binary: bool,
 }
 
-/// Compare `requested` against `HEAD`, confined to `allowed_roots`.
-///
-/// Steps, in order: scope-check the path (out-of-scope fails before any git
-/// access), refuse anything that exists but is not a regular file, discover the
-/// containing repository, read the working-tree bytes and the `HEAD:<rel>` blob,
-/// and decide `unchanged`/`binary` from the **bytes** — never from a decoded
-/// string.
-///
-/// The working side is the file's bytes **on disk**, not the index: that is what
-/// the user sees in the editor, and "what I changed" means what is in front of
-/// them. (Consequence, on purpose: staging an edit changes neither side.)
+/// Compare `requested` against `HEAD`, scope check first. `unchanged`/`binary` come from bytes,
+/// never decoded strings. The working side is the bytes on disk, not the index, so staging an
+/// edit changes neither side.
 pub fn file_diff_scoped(requested: &Path, allowed_roots: &[PathBuf]) -> Result<FileDiff, String> {
     let real = resolve_file_in_scope(requested, allowed_roots)?;
     if real.exists() && !real.is_file() {
@@ -131,25 +71,9 @@ pub fn file_diff_scoped(requested: &Path, allowed_roots: &[PathBuf]) -> Result<F
     })
 }
 
-/// Discard the working-tree changes to `requested`, confined to `allowed_roots`.
-///
-/// **This is destructive and irreversible** — the user's edits to that file are
-/// gone. Everything about the implementation is shaped by that:
-///
-/// * The scope guard runs first, so an out-of-scope path never reaches a write.
-/// * A directory is refused: this reverts one file, never a subtree.
-/// * A path with no blob at `HEAD` is refused rather than "restored" to nothing.
-///   Overwriting is not an option (there is nothing to overwrite it *with*), and
-///   silently doing nothing would tell the user their revert worked.
-/// * The checkout is restricted with `.path(rel)`. **That restriction is the
-///   load-bearing safety property of this function**: without it, `checkout_head`
-///   with `.force()` would reset the *entire* working tree and destroy every other
-///   uncommitted change in the repository. `restore_touches_only_the_named_path`
-///   (in `tests/git_file.rs`) exists so that removing it cannot go unnoticed.
-///
-/// Semantics are `git checkout HEAD -- <path>`: both the working file and that
-/// path's index entry go back to HEAD, so a staged change is discarded too. See
-/// the module header for why this is called Revert and is not `git revert`.
+/// DESTRUCTIVE: reset one file and its index entry to HEAD. Refuses directories and paths with no
+/// HEAD blob. The `.path(rel)` restriction is load-bearing: without it `.force()` resets the whole
+/// tree (pinned by `restore_touches_only_the_named_path` in `tests/git_file.rs`).
 pub fn file_restore_scoped(requested: &Path, allowed_roots: &[PathBuf]) -> Result<(), String> {
     let real = resolve_file_in_scope(requested, allowed_roots)?;
     // A directory (the repo root included) and anything else that is not a regular
@@ -176,26 +100,9 @@ pub fn file_restore_scoped(requested: &Path, allowed_roots: &[PathBuf]) -> Resul
     Ok(())
 }
 
-/// Resolve `requested` against the scope, tolerating a file that is **gone from
-/// disk** — the deleted-in-worktree case, which is exactly the state Compare and
-/// Revert most need to handle.
-///
-/// [`crate::fs_tree::resolve_in_scope`] canonicalizes, so it cannot resolve a path
-/// that no longer exists. Rather than weaken the guard, this mirrors `fs_tree`'s own
-/// `resolve_new_in_scope` shape for not-yet-existing targets: when — and **only**
-/// when — the path is absent from the filesystem, the *parent* goes through the same
-/// `resolve_in_scope` call and the final component is joined onto the canonical
-/// parent. A `..` or an escaping symlink anywhere in the path is still resolved and
-/// rejected by that call, so the scope stays server-authoritative.
-///
-/// A path that *does* exist and is rejected keeps its rejection — the fallback never
-/// runs for it. `symlink_metadata` (which does not follow links) decides that, so a
-/// broken symlink counts as present rather than being laundered into "deleted file".
-///
-/// No name validation is needed here: `Path::file_name` already yields a single
-/// non-empty component — it returns `None` for `..` and normalizes away `.`, and a
-/// separator cannot appear inside one component — so the only way it can fail us is
-/// non-UTF-8 bytes, which is the one case checked.
+/// Scope-resolve `requested`, tolerating a file deleted from disk: only when absent, the parent
+/// goes through `resolve_in_scope` and the name is joined on. `symlink_metadata` decides absence,
+/// so a broken symlink stays present instead of being laundered into "deleted".
 fn resolve_file_in_scope(requested: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
     match crate::fs_tree::resolve_in_scope(requested, allowed_roots) {
         Ok(real) => Ok(real),
@@ -219,13 +126,8 @@ fn resolve_file_in_scope(requested: &Path, allowed_roots: &[PathBuf]) -> Result<
     }
 }
 
-/// The repository containing `real`, plus its **canonicalized** working directory.
-///
-/// Discovery starts at the file's parent (a file is not a directory to discover
-/// from). The workdir is canonicalized before it is ever used as a prefix: `real` is
-/// canonical, while libgit2 hands back the workdir in whatever spelling the repo was
-/// opened with (on macOS `/tmp` is a symlink to `/private/tmp`, so an uncanonicalized
-/// prefix would never match and every file would look "not inside the repository").
+/// The repo containing `real` (discovered from its parent) plus its canonicalized workdir: on
+/// macOS `/tmp` → `/private/tmp`, so an uncanonicalized prefix would never match `real`.
 fn discover_repo(real: &Path) -> Result<(git2::Repository, PathBuf), String> {
     let parent = real
         .parent()
@@ -241,13 +143,8 @@ fn discover_repo(real: &Path) -> Result<(git2::Repository, PathBuf), String> {
     Ok((repo, workdir))
 }
 
-/// `real` relative to the repository root, in git's spelling: `/`-separated UTF-8.
-///
-/// Used for both the wire's `relative` field and the checkout pathspec, so it has to
-/// be the form libgit2 matches against — a Windows `\` would silently match nothing,
-/// and a silent non-match in [`file_restore_scoped`] is a revert that quietly did not
-/// happen. Non-UTF-8 is refused for the same reason: a lossy path is a *different*
-/// path, and we will not aim a destructive checkout at a guess.
+/// `real` relative to the repo root as `/`-separated UTF-8, the form libgit2 matches: a `\` or a
+/// lossy path would silently match nothing, and a restore would quietly not happen.
 fn relative_git_path(workdir: &Path, real: &Path) -> Result<String, String> {
     let rel = real
         .strip_prefix(workdir)
@@ -258,13 +155,8 @@ fn relative_git_path(workdir: &Path, real: &Path) -> Result<String, String> {
     Ok(rel.replace(std::path::MAIN_SEPARATOR, "/"))
 }
 
-/// The bytes of the blob at `HEAD:<rel>`, or `None` when there is no such blob.
-///
-/// `None` covers three real states, all of which mean "nothing to compare against":
-/// an **unborn HEAD** (a fresh repo with no commits — libgit2 reports this as an
-/// error code, and it is not one), a path that is simply absent from HEAD
-/// (untracked, or added but not yet committed), and a path that exists in HEAD as a
-/// *tree* rather than a blob (it was a directory at that commit).
+/// The blob at `HEAD:<rel>`, or `None` (nothing to compare against) for an unborn HEAD, a path
+/// absent from HEAD, or a path that is a tree at HEAD.
 fn head_blob(repo: &git2::Repository, rel: &str) -> Result<Option<Vec<u8>>, String> {
     let head = match repo.head() {
         Ok(head) => head,
@@ -300,21 +192,15 @@ fn decode(bytes: Option<Vec<u8>>) -> Option<String> {
     bytes.and_then(|b| String::from_utf8(b).ok())
 }
 
-/// HEAD-vs-working-tree comparison for one file (Git ▸ Compare).
-///
-/// Frontend contract: `invoke<FileDiff>('git_file_diff', { path })`. `path` is an
-/// absolute file path. Out-of-scope / not-a-file / not-in-a-repo / nonexistent →
-/// `Err(<short message>)`, which the UI shows inline.
+/// Frontend: `invoke<FileDiff>('git_file_diff', { path })`; out-of-scope, not a file, not in a
+/// repo or missing → `Err(<short message>)`, shown inline.
 #[tauri::command]
 pub fn git_file_diff(app: tauri::AppHandle, path: String) -> Result<FileDiff, String> {
     file_diff_scoped(Path::new(&path), &crate::fs_tree::allowed_roots(&app))
 }
 
-/// Discard one file's working-tree changes (Git ▸ Revert) — see
-/// [`file_restore_scoped`], and the module header on why this is not `git revert`.
-///
-/// Frontend contract: `invoke<void>('git_file_restore', { path })`. **Destructive**:
-/// confirm with the user before calling it.
+/// Git ▸ Revert (see [`file_restore_scoped`]): `invoke<void>('git_file_restore', { path })`.
+/// DESTRUCTIVE: confirm with the user before calling it.
 #[tauri::command]
 pub fn git_file_restore(app: tauri::AppHandle, path: String) -> Result<(), String> {
     file_restore_scoped(Path::new(&path), &crate::fs_tree::allowed_roots(&app))
@@ -345,10 +231,8 @@ mod tests {
 
     #[test]
     fn a_nul_byte_alone_is_text_by_this_definition() {
-        // Deliberate divergence from libgit2's `Blob::is_binary()` heuristic (which
-        // sniffs for a NUL in the first 8000 bytes): the frozen contract says
-        // "not valid UTF-8", and NUL *is* valid UTF-8. Recorded as a test so the
-        // choice is visible rather than accidental.
+        // Deliberately unlike libgit2's `is_binary()` NUL sniff: the contract is "not valid
+        // UTF-8", and NUL is valid UTF-8.
         assert!(is_utf8(Some(&[0x61, 0x00, 0x62])));
     }
 

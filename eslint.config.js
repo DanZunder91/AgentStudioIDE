@@ -46,12 +46,7 @@ export default tseslint.config(
     },
   },
 
-  // ---------------------------------------------------------------------------
-  // Root-level build/config files (eslint.config.js, vite.config.ts,
-  // vitest.config.ts) run in Node, not the browser. So do the gate scripts in
-  // `scripts/` (e.g. the dependency audit) — a flat-config `*` never crosses a
-  // `/`, so they need their own pattern or `no-undef` fires on `process`.
-  // ---------------------------------------------------------------------------
+  // Node files: root configs and scripts/ (a flat-config `*` never crosses `/`, hence the glob).
   {
     files: ["*.{js,mjs,ts}", "scripts/**/*.{js,mjs}"],
     languageOptions: {
@@ -79,25 +74,9 @@ export default tseslint.config(
     },
   },
 
-  // ---------------------------------------------------------------------------
-  // Two overrides used to live here. Both are GONE because the
-  // CAUSES were fixed rather than suppressed:
-  //   1. `react-hooks/refs` was downgraded to warn for a render-phase ref write
-  //      in useTerminal.ts. That write was a REAL defect (impure,
-  //      and provably unobservable given useLayoutEffect + [terminalId] deps) —
-  //      it was deleted, not silenced.
-  //   2. `rules-of-hooks` was off for renderer.ts because a local helper named
-  //      `useWebgl` tripped the `use`-prefix heuristic. It was renamed to
-  //      `loadWebgl`.
-  // Both rules therefore stay at `error` everywhere. Do NOT re-add a suppression
-  // here without first trying to fix the cause — that is the whole point.
-  // ---------------------------------------------------------------------------
+  // No react-hooks overrides: those rules stay `error` everywhere. Fix the cause before adding one.
 
-  // ---------------------------------------------------------------------------
-  // Tests. Vitest runs with `globals: true` (see vitest.config.ts), and test
-  // doubles legitimately need `any` — a Tauri IPC mock has no honest type.
-  // Downgraded, not disabled: `any` in a test is still worth seeing.
-  // ---------------------------------------------------------------------------
+  // Tests: vitest globals; `any` is downgraded, not disabled: IPC mocks have no honest type.
   {
     files: [
       "**/*.{test,spec}.{ts,tsx}",

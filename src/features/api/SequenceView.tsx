@@ -1,31 +1,6 @@
-/**
- * SequenceView — a list of requests run in order.
- *
- * A sequence of requests to test a flow with: a list that
- * makes each request and response, headers included, easy to see, and whose
- * steps can be run manually one at a time, not only automatically.
- *
- * The layout is an **accordion**: collapsed rows that
- * read as a sequence top-to-bottom, and one expanded row showing the whole
- * request and response. Two consequences worth naming, because they are why this
- * shape works rather than incidental:
- *
- *  - **Only one step is open at a time**, so the expanded row can embed
- *    `<ApiRequestView/>` verbatim — the full editor, request headers, response
- *    status/headers/body — without the environment picker it carries being
- *    duplicated down the page. The accordion layout is what makes the reuse
- *    honest.
- *  - **Every row carries its own ▶**, because a sequence you can only run
- *    end-to-end is not a debugging tool. A manual step still sees the values
- *    captured by earlier steps (the bag lives on the sequence — see
- *    `SequenceState.captured`), which is what makes stepping through a flow work.
- *
- * The results half is deliberate too. Postman's runner is widely reported to say
- * *"failed"* without the assertion, the response body, or the URL it actually
- * sent — so the top-voted workaround is to re-run the request by hand to find
- * out what happened. Here the failing row states its reason inline and expands
- * to the real request and the real response.
- */
+/** Accordion: one step open at a time, so it can embed <ApiRequestView/> verbatim without repeating
+ * its env picker. Every row has its own run button, and a manual step still sees earlier captures
+ * (SequenceState.captured). A failing row states its reason inline. */
 
 import { useAppStore } from "../../app/store";
 import type { SequenceStep } from "../../app/store";

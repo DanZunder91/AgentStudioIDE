@@ -1,13 +1,6 @@
-//! Fuzzy **filename** search (the file-open "quick open" palette).
-//!
-//! A sibling of [`crate::find`]'s *content* search: same [`crate::find_walk`]
-//! enumeration (ignore rules prune directories, not files — so a gitignored
-//! `.env` IS findable), same
-//! [`crate::fs_tree::resolve_in_scope`] scope guard confining the walk to the
-//! workspace/recent roots, and the same result cap so a broad query cannot flood
-//! the UI/IPC. The difference: it never opens a file — it matches on the file's
-//! **path relative to the root** (basename included), so it is a cheap tree walk,
-//! not a grep.
+//! Fuzzy filename search (quick open), sibling of [`crate::find`]: same [`crate::find_walk`] walk
+//! (ignore rules prune directories, not files), scope guard and result cap, but it matches each
+//! file's root-relative path and never opens a file.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -16,15 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::find_cancel::{is_cancelled, CANCELLED};
 
-/// Hard cap so a broad query cannot flood the IPC channel / UI. On hit, the result
-/// is `truncated: true` and only the first [`MAX_FILES`] (by sorted path) are sent.
-///
-/// 🔴 **It bounds the OUTPUT, not the WORK** — and here that is even starker than in
-/// [`crate::find`]: the cap is applied *after* the whole tree has been walked and every
-/// match sorted, so a query with zero results costs a full walk. It cannot be an early
-/// break without changing which files a truncated result keeps (today: the first
-/// `MAX_FILES` in **sorted** order, not in walk order). Left alone deliberately; the
-/// answer to "this is slow" is the cancellation below, not a smaller cap.
+/// Caps the output (first [`MAX_FILES`] by sorted path, `truncated: true`), not the work: the whole
+/// tree is walked and sorted first. Slowness is answered by cancellation, not a smaller cap.
 const MAX_FILES: usize = 500;
 
 /// Options for `find_files`. Booleans default false, so the frontend can send a
@@ -57,19 +43,9 @@ pub struct FindFilesResult {
     pub truncated: bool,
 }
 
-/// Search `root`'s file tree for files whose relative path contains `query`,
-/// confined to `allowed_roots`.
-///
-/// Testable core (explicit roots, no `AppHandle`). The walk prunes ignored + VCS
-/// DIRECTORIES but hides no file; every yielded **file**'s path is taken relative to `root`
-/// (forward-slash separated) and kept when it contains `query` (case-insensitive
-/// unless `options.case_sensitive`). Results are sorted by path for a deterministic
-/// order and capped at [`MAX_FILES`]. An all-whitespace query returns an empty
-/// result. Errors: out-of-scope / nonexistent root, or a non-directory root.
-///
-/// The uncancellable entry point, signature unchanged, so the suite below exercises the
-/// walk directly. `#[cfg(test)]` because the product always goes through
-/// [`search_files_cancellable`].
+/// Files under `root` whose root-relative `/` path contains `query` (case-insensitive unless
+/// `options.case_sensitive`), sorted and capped. Test-only uncancellable entry point; the product
+/// uses [`search_files_cancellable`].
 #[cfg(test)]
 fn search_files(
     root: &Path,
@@ -80,16 +56,8 @@ fn search_files(
     search_files_cancellable(root, query, options, allowed_roots, None)
 }
 
-/// [`search_files`], plus a flag that stops the walk early.
-///
-/// `cancel` is `None` for a search nobody can cancel (the back-compat path, and every
-/// existing test). When it is `Some`, the flag is polled **once per directory entry** at
-/// the top of the walk loop — each iteration here is a `strip_prefix` plus a substring
-/// test, so that is genuinely the finest granularity `ignore::Walk` offers and a cancel
-/// lands within one entry.
-///
-/// The scope guard runs FIRST, before the walker or a single `readdir`: an out-of-scope
-/// root is refused without the process ever touching it.
+/// [`search_files`] plus an optional cancel flag, polled once per directory entry. The scope guard
+/// runs first, so an out-of-scope root is never touched.
 fn search_files_cancellable(
     root: &Path,
     query: &str,
@@ -165,20 +133,9 @@ fn search_files_cancellable(
     Ok(FindFilesResult { files, truncated })
 }
 
-/// Search the workspace file tree for files whose path matches `query`.
-///
-/// Frontend contract:
-/// `invoke<FindFilesResult>('find_files', { root, query, options, searchId })`.
-/// `root` must be inside an allowed workspace root (same scope as `read_dir` /
-/// `find_in_files`). Out-of-scope / non-directory root → `Err`; an all-whitespace
-/// query → an empty result; a search cancelled via `find_cancel` → `Err("cancelled")`,
-/// which the FE drops silently.
-///
-/// `searchId` is **optional**: a caller that omits it gets an ordinary, uncancellable
-/// search rather than an error.
-///
-/// 🔴 **`async` is load-bearing** — see [`crate::find::find_in_files`] and
-/// `find_cancel`'s module doc for why a sync command froze the whole window.
+/// Contract: `invoke<FindFilesResult>('find_files', { root, query, options, searchId })`; `root`
+/// must be in scope. Cancelled → `Err("cancelled")`; no `searchId` → uncancellable. `async` is
+/// load-bearing (see `find_cancel`'s module doc).
 #[tauri::command]
 pub async fn find_files(
     app: tauri::AppHandle,
@@ -304,10 +261,7 @@ mod tests {
         assert_eq!(hit.files.len(), 1);
     }
 
-    /// `.gitignore`d files are pruned by the walker and never returned.
-    /// ⚠️ The contract CHANGED — see the twin in `find.rs`. This
-    /// test used to assert `["kept.rs"]`, i.e. it *encoded* the bug:
-    /// typing `.env` in quick-open returned "No matching files".
+    /// Ignore rules prune directories only: a gitignored file such as `.env` is still returned.
     #[test]
     fn gitignore_prunes_directories_but_no_longer_hides_files() {
         let t = Tree::new("ignore");

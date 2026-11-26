@@ -1,12 +1,5 @@
-/**
- * Pane — one leaf: tab strip + toolbar + the active tab's view.
- *
- * Both terminal entry points are mocked:
- *   - `../features/terminal`        — what `store.ts` imports (effects).
- *   - `../features/terminal/TerminalView` — what `Pane.tsx` imports (the view).
- * The stub records its `terminalId` prop, which is how we assert the pane wires
- * the right PTY to the right tab without mounting a real xterm.
- */
+/** Pane: one leaf (tab strip + toolbar + active view). Both terminal entry points are mocked;
+ * the TerminalView stub records `terminalId` to assert PTY-to-tab wiring without xterm. */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -50,22 +43,16 @@ vi.mock("../features/sessions/SessionPicker", () => ({
   ),
 }));
 
-// A db-console tab renders <DbConsoleTab>, which mounts a real CodeMirror surface and
-// subscribes to the db slice — stubbed for the same reason CodeEditor is, and the stub
-// records the connectionId so this file can assert the pane wires the right console to
-// the right connection. The container's own behaviour is driven for real in
-// `features/db/console/DbConsoleTab.test.tsx`.
+// DbConsoleTab mounts CodeMirror and the db slice, so it is stubbed; the stub records
+// connectionId. Real behaviour: `features/db/console/DbConsoleTab.test.tsx`.
 vi.mock("../features/db/console/DbConsoleTab", () => ({
   DbConsoleTab: ({ connectionId }: { connectionId: string }) => (
     <div data-testid="db-console-tab" data-connection-id={connectionId} />
   ),
 }));
 
-// A diff tab renders <DiffView>, which constructs a real @codemirror/merge view
-// and fires `git_file_diff` — stubbed for exactly the reasons CodeEditor and
-// DbConsoleTab are, and the stub records the path so this file can assert the
-// pane wires the right file into the right tab. The view's own behaviour is
-// driven in `features/git/DiffView.test.tsx` (+ its browser tier).
+// DiffView builds a real @codemirror/merge view and calls `git_file_diff`, so it is stubbed;
+// the stub records the path. Real behaviour: `features/git/DiffView.test.tsx`.
 vi.mock("../features/git/DiffView", () => ({
   DiffView: ({ path }: { path: string }) => <div data-testid="diff-view" data-path={path} />,
 }));
@@ -108,16 +95,8 @@ const renderPane = (paneId: PaneId = leaf().id) =>
   render(<LivePane paneId={paneId} />);
 
 /* ───────────────── drag-to-edge: geometry + event plumbing ─────────────────
- * Two jsdom facts make the naive version of these tests worthless:
- *   1. NO LAYOUT ENGINE — every getBoundingClientRect() is 0×0, so `zoneFor`
- *      takes its degenerate branch and returns "center" for every coordinate.
- *   2. NO DragEvent — `window.DragEvent` is undefined, so RTL falls back to
- *      plain `Event`, which silently drops clientX/clientY from the init
- *      (verified: they arrive as `undefined`).
- * Either one alone makes `fireEvent.dragOver(pane, { clientX: 390 })` assert
- * "center" no matter where you aim — green for the wrong reason. So the rect is
- * stubbed and the coordinates are defined onto the event explicitly.
- */
+ * jsdom has no layout (0×0 rects: `zoneFor` says "center") and no DragEvent (clientX/Y dropped),
+ * so the rect is stubbed and coordinates are defined onto the event explicitly. */
 
 /** The pane body's rect, as if laid out: 400×300 below a 34px tab strip. */
 const BODY_RECT = { left: 0, top: 34, width: 400, height: 300 };
@@ -132,14 +111,8 @@ const AT = {
   tabBar: [200, 10], // above the body — over the tab strip
 } as const;
 
-/**
- * Lay the tab strip out: each tab 100px wide, left to right from x=0. Same
- * reason as the body rect — jsdom measures everything as 0×0, so without this
- * `insertionIndexAt` sees no midpoints to compare against and always returns
- * "append", making every index assertion below vacuously true.
- *
- * Re-stub after any re-render: React replaces the nodes, and the stub with them.
- */
+/** Lay out the strip: tabs 100px wide from x=0, else `insertionIndexAt` always appends under
+ * jsdom. Re-stub after any re-render (React replaces the nodes). */
 const TAB_WIDTH = 100;
 function stubTabRects(container: HTMLElement, width = TAB_WIDTH) {
   const tabs = [...container.querySelectorAll<HTMLElement>(".pane-tab")];
@@ -362,11 +335,7 @@ describe("Pane — body", () => {
   });
 
   it("renders the query console for a db-console tab, keyed to its connection", () => {
-    // 🔴 The case this asserts did not exist while the feature was otherwise "finished":
-    // both halves of the console shipped at 100% coverage, `openDbConsoleTab` opened a tab
-    // with the right title and icon, and the body rendered NOTHING, because `TabView`'s
-    // switch had no `db-console` arm. Every test on both sides stayed green. This is the
-    // one that goes red for it.
+    // Guards `TabView`'s `db-console` arm: both halves can pass their tests with an empty body.
     actions().openDbConsoleTab("conn-42");
     renderPane();
 
@@ -375,10 +344,7 @@ describe("Pane — body", () => {
   });
 
   it("renders the HEAD↔working diff for a diff tab, keyed to its file", () => {
-    // The seam between two fully tested halves — and this exact arm has been the
-    // missing one before (metrics, db-console, diff): `openDiffTab` can be
-    // perfect and `<DiffView>` at 100%, and the pane still shows an empty box if
-    // `TabView`'s switch has no `diff` case. This is the test that goes red.
+    // Guards `TabView`'s `diff` arm, the seam both fully tested halves miss.
     actions().openDiffTab("/w/src/main.rs");
     renderPane();
 
@@ -700,10 +666,8 @@ describe("Pane — drop zones", () => {
 
   describe("hit-test priority", () => {
     it("drops its highlight while over the tab strip", () => {
-      // Both are drop targets and the strip is INSIDE the pane, so its events
-      // bubble here. If the pane also claimed the drag, the user would see a
-      // split preview while actually reordering. (The preview itself is
-      // <PaneTreeRoot>'s — "yields to the tab strip" in PaneTree.test.tsx.)
+      // The strip sits INSIDE the pane, so its drag events bubble here; the pane must not also
+      // claim them (preview: "yields to the tab strip" in PaneTree.test.tsx).
       const { container, pane, dataTransfer } = twoTabPane();
       const strip = container.querySelector(`.${TABBAR_CLASS}`) as HTMLElement;
 
@@ -721,18 +685,8 @@ describe("Pane — drop zones", () => {
       const strip = container.querySelector(`.${TABBAR_CLASS}`) as HTMLElement;
       stubTabRects(container);
 
-      /**
-       * The body rect is deliberately overlapped onto the strip's coordinates
-       * (top: 0, so y=10 is inside it and x=5 is deep in the left edge band).
-       *
-       * That is what gives this test teeth. With the body in its natural place
-       * BELOW the strip, a drop at y=10 falls outside it → the pane reads
-       * "center" → `moveTab` into the pane the tab is already in → a silent
-       * no-op. So a missing `stopPropagation` would change nothing observable
-       * and this test would pass while asserting nothing (verified: it did).
-       * Overlapped, a second handler computes a LEFT edge and splits the pane
-       * — which the assertions below catch.
-       */
+      /** Body rect overlapped onto the strip (top: 0) on purpose: below it, a missing
+       * `stopPropagation` reads "center" and no-ops silently; overlapped, it splits LEFT. */
       stubBodyRect(container, { left: 0, top: 0, width: 400, height: 300 });
 
       // Drop on the far left of the strip → index 0 → reorder to the front.
@@ -762,12 +716,7 @@ describe("TabBar — reorder", () => {
     return { ...view, paneId, a, b, c, strip };
   }
 
-  /**
-   * x-coordinates. Tabs are 100px wide from x=0, so the midpoints that decide
-   * the insertion index are 50 / 150 / 250:
-   *   5   → before tab 0        120 → before tab 1 (past 0's midpoint)
-   *   220 → before tab 2        400 → past them all: append
-   */
+  /** x-coordinates against tab midpoints 50 / 150 / 250. */
   const OVER = { beforeFirst: 5, beforeSecond: 120, beforeThird: 220, past: 400 } as const;
 
   describe("insertion indicator", () => {

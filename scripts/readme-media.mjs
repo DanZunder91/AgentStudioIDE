@@ -1,22 +1,6 @@
 #!/usr/bin/env node
-/**
- * Regenerate the README screenshots + GIF in docs/media/.
- *
- *   node scripts/readme-media.mjs
- *
- * What it renders: the REAL <App/> (React UI, real CSS, real xterm/CodeMirror) in Playwright
- * Chromium, driven by scripts/readme-media/shots.media.tsx against a MOCKED Tauri backend
- * (src/e2e/harness.ts + extra canned handlers). The data is fictional (scripts/readme-media/
- * fixtures.ts, panelFixtures.ts): a "todo-api" TypeScript service and a "payments-service"
- * Rust crate, with agent/sub-agent names like "write-tests". No Rust core, no real `claude`,
- * nothing read from ~/.claude.
- *
- * Not a test gate: the spec uses its own config (scripts/readme-media/vitest.media.config.ts)
- * whose include glob no gate matches. Raw frames land in scripts/readme-media/.out/ (ignored).
- *
- * Needs: `npx playwright install chromium` (same as `npm run test:browser`) and ffmpeg on
- * PATH (or FFMPEG=/path/to/ffmpeg) for the GIF. Pass --no-gif to skip encoding the GIF.
- */
+/** Regenerate README media in docs/media/ from shots.media.tsx (mocked backend, fictional data; not
+ * a gate). Needs Playwright Chromium and ffmpeg on PATH (or FFMPEG=…); --no-gif skips the GIF. */
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";

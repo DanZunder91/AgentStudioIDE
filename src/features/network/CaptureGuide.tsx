@@ -1,21 +1,6 @@
-/**
- * The "Capture this app's requests…" panel under an expanded Whole Mac app row: the proxy
- * address, the CA path with Copy path, whether Decrypt is on, and the steps for
- * this app. Inline (not a dialog) so the address and the app row stay on screen together
- * while the user works in the other app. Which row's guide is open lives in `machineStore`
- * (the panel is a tab and remounts).
- *
- * Following the steps is not proof the app is routed: Postman, for one, can still connect
- * directly, and the guide would show nothing without saying why. So the guide says, live, whether
- * the app's requests are arriving ({@link routingState}, derived from the flows — nothing
- * stored), carries the per-app "decrypt its HTTPS" switch, and repeats the moved-port warning.
- *
- * An app the IDE itself started (its pid is an `origin: "ide"` dev app — it used to get the
- * external steps here, "set HTTPS_PROXY by hand … trust the CA in gazelle") is
- * never given manual steps: the IDE owns its environment, so the guide shows `IdeAppCapture`
- * instead — not captured: why + Restart with capture + its live connections; captured:
- * "✓ Receiving …", Show them, and exactly where they appear.
- */
+/** Inline capture guide under a Whole Mac app row (the open row lives in `machineStore`; the panel
+ * remounts). Shows live whether requests arrive ({@link routingState}), the per-app decrypt
+ * switch and the moved-port warning; IDE-started apps get `IdeAppCapture`, not manual steps. */
 
 import { useMemo, useState } from "react";
 
@@ -185,10 +170,7 @@ function ExternalGuide({ app, devApp }: { app: MachineApp; devApp: DevApp | null
   );
 }
 
-/**
- * The persisted port was taken at startup, so every app configured by hand
- * still points at the old one. Shown in the IDE traffic header and in the guide.
- */
+/** The persisted port was taken at startup, so hand-configured apps still point at the old one. */
 export function PortChangedBanner({ status }: { status: NetcapStatus | null }): React.JSX.Element | null {
   if (!status?.portChanged) return null;
   return (
@@ -224,11 +206,8 @@ function RoutingLine({ app, routing }: { app: string; routing: ReturnType<typeof
   );
 }
 
-/**
- * The per-app decrypt opt-in. Reflects `status.decryptApps` as RETURNED by Rust, never the click.
- * The hover lives on a non-disabled wrapper, so a switch waiting for the status still says
- * why (a disabled control must say what it is waiting for).
- */
+/** Reflects `status.decryptApps` as Rust returns it, never the click. The hover sits on a
+ * non-disabled wrapper so a waiting switch still says why. */
 function AppDecryptSwitch({ app, status }: { app: string; status: NetcapStatus | null }): React.JSX.Element {
   const setting = useNetworkStore((s) => s.setting);
   const on = status?.decryptApps.includes(app) ?? false;

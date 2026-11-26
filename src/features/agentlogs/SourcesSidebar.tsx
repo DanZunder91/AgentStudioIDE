@@ -1,49 +1,6 @@
-/**
- * SourcesSidebar — the Logs panel's primary navigation (this is an IDE,
- * so logs must help the reader, not confuse them). One row per
- * source, derived purely from the lines (`agentLogsRunning.ts`), grouped **Services**
- * (background tasks your agents started — e.g. `gazelle`) · **Terminals** · **Agents**
- * (root + sub-agents) · **Mac apps** (while they stream). **All** on top.
- *
- * A row is the stream: click = only that source (the toolbar's Source picker shows the same
- * pick, and a stream header above the list names it — the Source column stays whatever the
- * user chose under Columns ▾); click it again, or All, = every source. Each
- * row: ●/○ (running / stopped), the name, its line count — or, while the filter box or a
- * level chip narrows the stream, its MATCH count — and an error badge that is a
- * button: click jumps the list to the source's first error, ↑/↓ on it step through them.
- * Stopped rows carry a ✕ to dismiss (they come back if they log again). Open/closed
- * and the dismissals live in the store.
- *
- * Names are DISPLAY names: a background task's `gazelle · bg` reads `gazelle`
- * with a small `service` tag — the service's raw stream went unfound because the suffix hid
- * the name. Services are the first group and a RUNNING service is emphasised (bold name,
- * bright dot): it is the row a user is looking for. `data-source` keeps the
- * wire label — it is the key, and what the E2E specs select on.
- *
- * At the TOP, right under All, the **Apps** group (`procs/DevAppsSection`, its
- * own heading and poll; it replaced the older "On this Mac" group), grouped by runtime, each row
- * tagged `by claude · gazelle` (an IDE terminal / agent started it) or `external`. It is above
- * Services because the app an agent is running is the thing a user looks for
- * first. A dev app's log streams (`app` sources) are rows UNDER their app, labelled by file
- * (`server.log`); a stream whose app has exited is a row of its own at the end of that group
- * (`agentLogsApps.ts`). Clicking an app solos every stream of it (none yet → an empty pick;
- * the panel shows its card); clicking it again goes back to All. Picking anything else
- * deselects the app — the panel's `watchAppSelection`, so every way of picking (this list, the
- * toolbar, an error badge) obeys the same rule.
- *
- * **An Apps row IS its log stream**: a Service whose tailed
- * file is an app's stdout/stderr belongs to that app — the app's click solos it. The Service
- * keeps its row in Services (the flat list stays alongside), but NAMED after the
- * app (`gazelle`, even when the service was named after its launcher, `python3`), and a click
- * on it selects the app too, so both rows read as selected. Apps are grouped by runtime (every
- * runtime shown, `procs/DevAppsSection`); apps with a live stream sort first in their section.
- * **All apps**, the Apps group's first row, solos every app stream at once (the Source column
- * is left to Columns ▾ — it is on by default, and a selection never toggles it for the
- * user); with nothing streaming it is disabled and says why.
- *
- * An Agents row whose agent has IDE apps running says so (`2 apps`): the join
- * is the agent id its lines carry = `DevApp.agentId`.
- */
+/** Logs panel navigation: one row per source (`agentLogsRunning.ts`), grouped Apps · Services ·
+ * Terminals · Agents · Mac apps, All on top; a click solos the source. Names are display names;
+ * `data-source` keeps the wire label (the key E2E specs select on). Apps: `agentLogsApps.ts`. */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -81,11 +38,7 @@ export const RUNNING_TICK_MS = 15_000;
 
 const NO_APPS: readonly DevApp[] = [];
 
-/**
- * The empty sidebar's sentence. `machine` is the machine group's own name ({@link appsLabel}):
- * "Mac apps" on macOS, "System apps" on Windows and Linux — this used to say "Mac apps" on
- * every OS, naming a group a Windows user's sidebar never shows.
- */
+/** The empty sidebar's sentence; `machine` is the machine group's name ({@link appsLabel}). */
 export function sourcesEmpty(machine: string): string {
   return `Nothing yet — terminals, services your agents start, agents and ${machine} you stream show up here.`;
 }

@@ -1,42 +1,6 @@
-/**
- * Fake "agents outside the IDE" for the Agent Village E2E — what `list_external_agents`
- * (src-tauri/src/external_agents.rs) sees for a `claude` running in some other terminal:
- *
- *   1. a Claude-format transcript, `$HOME/.claude/projects/<cwd-slug>/<session>.jsonl` (+ sub-agent
- *      sidecars under `<session>/subagents/`), touched just now;
- *   2. a LIVE process whose argv[0] is `claude` and whose argv carries `--session-id <session>` —
- *      liveness is per session, and a transcript no live process claims is not shown at all.
- *      The process is `/bin/sh -c 'sleep …'` with argv0 = "claude": it does nothing, holds nothing.
- *
- * Two roots may share a folder (two `claude`s in one repo): one building, a floor each, in the City.
- *
- * The files a seeded agent's tool calls name (`OutsideAgentSpec.files`) are what makes its
- * project's LANGUAGE known — the City's neon sign: the scan votes by the
- * extensions of the files a session's `tool_use` inputs name (`external_agents/language.rs`, the
- * shared `projectLanguages.json`). No file is ever created at those paths: the app only reads the
- * transcript that names them, never the project (zero permission prompts).
- *
- * Every sub-agent is BACKGROUND-shaped, the way the real CLI (2.1.30x) launches every ordinary Agent
- * call: its `.meta.json` says `requestShape: "background"`, and the parent's launch `tool_result` comes
- * back AT ONCE ("Async agent launched…") — so that answer must not end it (it used to: the City showed
- * nobody working). It runs until its parent's queue gets its `<task-notification>` (`finish()`).
- *
- * Mid-run, `addSubagent` starts one more sub-agent under a seeded root — what a working agent does
- * when it fans out — and its handle's `finish()` ends it the way the CLI does: the sub-agent's final
- * reply, then the parent's `<task-notification>` (completed). The City's commute (a newcomer rides
- * from the Seats lounge to its desk, and back when it is done) is filmed off it.
- *
- * While seeded, every transcript is TOUCHED every {@link HEARTBEAT_MS} (what a working agent's
- * transcript does as it grows): `external_agents.rs` takes a sub-agent silent for 5 min as finished
- * (`SUBAGENT_STALE_MS`) and drops a session quiet for 10 (`DEFAULT_WINDOW_MINS`) — a recorded run
- * of the Village spec is longer than that, and its later stills would lose the big team.
- *
- * 🔴 `$HOME/.claude` is a real person's Claude Code config on any machine but a throwaway container
- * (the app and its tests must never write there). This module REFUSES to run unless `/.dockerenv`
- * exists, and it only ever creates and removes the project directories it names itself (prefix
- * `-tmp-e2e-outside-`).
- * The app under test only READS them — which is the product.
- */
+/** Fake Claude sessions outside the IDE: a transcript plus a live `claude`-argv0 process each (no
+ * live process, no agent). Heartbeats beat the 5/10-minute staleness windows. Docker only
+ * (/.dockerenv): creates and removes only its own `-tmp-e2e-outside-` dirs under $HOME/.claude. */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -59,12 +23,8 @@ export interface OutsideAgentSpec {
   doing: "read" | "subagents" | "idle";
   /** Sub-agent types to spawn under it (only with `doing: "subagents"`). */
   subagents?: string[];
-  /**
-   * Source files (relative to the agent's cwd) its tool calls name — what makes its project's
-   * language known (see the module note). A "read" root is reading the first; sub-agent i works on
-   * file i mod n (an Edit or a Read, in turn); an idle root read the first earlier in its turn (an
-   * answered call). Absent: the old calls (a Grep with no path, a README.md) — no language.
-   */
+  /** Files its tool calls name, from which the scan infers the project's language; never created.
+   * Absent: no language. */
   files?: string[];
 }
 
@@ -80,10 +40,7 @@ export interface SeededSession {
 export interface NewSubagent {
   /** Its sidecar's agent id (`agent-<id>.jsonl`). */
   agentId: string;
-  /**
-   * End it the way the CLI does: its pending tool is answered and it replies, then its parent's queue
-   * gets its `<task-notification>` (completed), stamped after that reply — the scan then reports it done.
-   */
+  /** Ends it as the CLI does: tool answered, reply, then the parent's `<task-notification>`. */
   finish: () => void;
 }
 
@@ -92,18 +49,11 @@ export interface SeededOutside {
   roots: number;
   /** How many sub-agents were seeded under them, all of them mid-tool (running). */
   subagents: number;
-  /**
-   * How many seeded agents are mid-turn and so hold a Seats desk (`capacityModel.seatHolders`: not
-   * idle / done): every root whose `doing` is not "idle", plus every sub-agent.
-   */
+  /** Agents holding a Seats desk (`capacityModel.seatHolders`): non-idle roots plus sub-agents. */
   busy: number;
   sessions: SeededSession[];
-  /**
-   * Start one more sub-agent under the seeded root `slug`, mid-task: its `.meta.json` and sidecar
-   * (each written aside and RENAMED into place, so a scan never sees half of one), and the root's
-   * `Agent` call that launched it appended to the root's transcript. The app's external scan
-   * (~3 s) picks it up; the heartbeat keeps it fresh like the others.
-   */
+  /** Sidecars are written aside and renamed into place, so a scan never sees half of one; the app's
+   * external scan (~3 s) picks the sub-agent up. */
   addSubagent: (slug: string, opts: { agentType: string; file: string }) => NewSubagent;
   cleanup: () => void;
 }
@@ -135,10 +85,8 @@ function fileCall(id: string, i: number, file: string): object {
     : { type: "tool_use", id, name: "Read", input: { file_path: file } };
 }
 
-/**
- * The parent's record answering background launches at once (the CLI's own wording: the launch is
- * acknowledged, the sub-agent runs on) — one `tool_result` per launch.
- */
+/** Real CLI sub-agents are background-shaped: the launch `tool_result` acks at once, so it must
+ * not end the sub-agent; its `<task-notification>` does. */
 function launchAcks(base: object, launches: { toolUseId: string; agentId: string }[]): object {
   return {
     ...base,

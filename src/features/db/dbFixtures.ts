@@ -1,30 +1,6 @@
-/**
- * Hand-written `EngineSpec` fixtures for the connection dialog's tests.
- *
- * ── Why these are hand-written and live in the repo ──────────────────────────
- * The real descriptors are Rust's (`db::engines::spec_for`) and arrive over
- * `db_engines()`. Testing the dialog against *those* would make the frontend tests
- * hostage to the backend, and — more importantly — it would fall into a known trap:
- * a test whose expectation comes from the same table the code reads proves plumbing,
- * never content. So these fixtures are
- * **inputs**, and every expectation in the tests is written out literally beside it.
- *
- * They are shaped like the real thing but they are NOT a mirror of it and must never
- * become one: if a value here matters to production, it is in the wrong file.
- *
- * Postgres and MongoDB are the pair whose connection forms differ most
- * (Mongo grows `authSource`/`replicaSet`/`readPreference`); Redis covers
- * `supportsUser: false` and the engine where read-only is *not* server-enforced; and
- * `AWKWARD_ENGINE` exists to prove the dialog copes with the descriptor shapes that
- * would otherwise crash or mislead it — `databaseLabel: null`, no SSL modes at all,
- * and a `select` with no choices.
- *
- * Two shapes that used to live here are now **unrepresentable**, which is the better
- * outcome: a `kind: "password"` extra field (it would have persisted a credential to
- * disk) and a `defaults.readOnly: false` (it would have let data weaken the read-only
- * safety default). Both were removed from `types.ts` after the implementation
- * had to defend against them — the defences went with them.
- */
+/** Hand-written EngineSpec INPUTS, never a mirror of Rust's db::engines::spec_for: tests write
+ * expectations literally. Postgres/MongoDB differ most; Redis has no user and no server-side
+ * read-only; AWKWARD_ENGINE has a null databaseLabel, no SSL modes and a choiceless select. */
 
 import type { EngineSpec } from "./types";
 
@@ -172,10 +148,7 @@ export const REDIS_ENGINE: EngineSpec = {
   queryLanguage: "commandline",
 };
 
-/**
- * Deliberately awkward. Every property here is one the dialog has to cope with rather
- * than assume away, so it is a fixture and never a template.
- */
+/** Awkward on purpose: a fixture, never a template. */
 export const AWKWARD_ENGINE: EngineSpec = {
   id: "clickhouse",
   family: "clickhouse",

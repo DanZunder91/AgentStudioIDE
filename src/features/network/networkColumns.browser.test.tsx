@@ -1,28 +1,5 @@
-/**
- * Network table columns — the fixed-width columns must fit their widest real value.
- *
- * Browser tier because the bug is pure layout: jsdom has no text metrics. In the real panel
- * in Chromium, `.net-col--time { width: 9ch }`
- * gave 65px while `11:40:57` plus the cell's 6px + 6px padding needs 70px, so every row
- * read `11:40:…`. A `ch` width counts glyphs, not padding.
- *
- * `.net-col--size` clipped `1023.0KB` (70 > 65) — fixed alongside.
- *
- * Falsified: restoring `width: 9ch` on `.net-col--time` →
- *   `time: "20:58:58": expected 70 to be less than or equal to 65`.
- *
- * The Whole-computer table holds the same lesson for its fixed numeric columns:
- * `1023.0KB/s` is 10 glyphs, so `.netm-col--rate` is `calc(10ch + 16px)`.
- *
- * Columns can be widened and hidden: widths
- * come from the shared `components/columns` layout as inline `<col style>`, and the table's
- * floor is computed from the visible columns. The last describe proves the drag and the
- * hide reach real pixels, that Path still never collapses, and that the Whole Mac numeric
- * columns are on screen at 880px (they were pushed off by the IDE table's 160ch floor).
- *
- * Run: `npx vitest run --config vitest.browser.config.ts \
- *        src/features/network/networkColumns.browser.test.tsx`
- */
+/** Browser tier: column fit is layout, and jsdom has no text metrics. A `ch` width counts glyphs,
+ * not the cell's 6px + 6px padding, so widths are checked against real rendered values. */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,10 +126,7 @@ describe("network table column widths", () => {
   });
 
   it("in a narrow (720px) pane Path keeps a real share and nothing scrolls sideways (fitColumns)", async () => {
-    // At the default window with both rails open the pane is 720px and Path rendered at 0px
-    // (the table's `min-width` floor fixed that by scrolling). Status / Path / Source then sat
-    // off the right edge in that same pane: the fit now squeezes instead — Path still never
-    // collapses.
+    // At 720px (default window, both rails open) the fit squeezes columns; Path never collapses.
     ipc.netcapSnapshot.mockResolvedValue([{ ...WIDE, proto: "https", method: "GET", path: "/widgets/wgt_0123456789abcdef01234567/bookings" }]);
     render(
       <div style={{ width: 720, height: 600, display: "flex", flexDirection: "column" }}>
@@ -269,13 +243,7 @@ describe("resizable + hideable columns, in real pixels", () => {
   });
 });
 
-/*
- * At the 1280 px window only Time / Proto / Method / Host used to be on screen. The Network tab
- * sits in the centre pane between the agent rail (260 px) and the file rail (300 px), so the
- * panel is the window minus 560 px, and the Apps sidebar takes 280 of that.
- * Falsified: `fitColumns` returning `base` unconditionally → Status, Path and Source are past
- * the scroll box's right edge at 1280 and this goes red.
- */
+/* The Network tab is the window minus both rails (260 + 300 px); the Apps sidebar takes 280. */
 describe("fit to the pane: the important columns are on screen at common window sizes", () => {
   const RAILS = 260 + 300;
   const CORE = ["time", "proto", "method", "status", "host", "path", "source"];

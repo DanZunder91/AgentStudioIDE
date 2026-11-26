@@ -1,15 +1,5 @@
-/**
- * render/hall.ts — the Seats hall: `/context`'s 200 seats as a little cinema (that grid of seats
- * shown in the village as characters, in both places — the Village's Seats house and the City's
- * hall under the lounge). It is width-aware: the
- * seats and the screen are centred in whatever width the prop is (`hallLeft`, `drawHall`'s widthPx).
- * Seat geometry (20 to a row, two blocks of ten either side of the aisle), each seat's look and its
- * brief shifting, the screen's legend and fill bar, and what every kind of seat paints — a character
- * in its category's colour, an empty velvet chair, a reserved card, a grey chair with no reading.
- * Draw calls through the recording fake; the real pixels are hall.browser.test.tsx's.
- *
- * Every expected colour and pixel position is a literal written by hand.
- */
+/** The Seats hall via the recording fake; real pixels are hall.browser.test.tsx's. Every expected
+ * colour and pixel position is a literal written by hand. */
 
 import { describe, expect, it } from "vitest";
 

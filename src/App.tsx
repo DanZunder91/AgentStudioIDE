@@ -44,18 +44,10 @@ import {
 import { ToolsPanel } from "./features/tools";
 import { RailTabs, WorkspaceTree } from "./features/workspace";
 
-/**
- * The 3-pane shell.
- * Left: agent fan-out tree (static until M2) · Center: LIVE tabbed/split work
- * area with real PTY terminals (M1) · Right: workspace tree (static until M2).
- * See docs/design/ARCHITECTURE.md.
- */
+/** The 3-pane shell; see docs/design/ARCHITECTURE.md. */
 export default function App() {
-  // A shipped Content-Security-Policy fails SILENTLY (a blocked stylesheet is a
-  // blank pane, not an error), and a packaged build has no console to check. So
-  // the webview's own `securitypolicyviolation` reports go into the diagnostics
-  // log — open the Logs panel and you SEE what the policy blocked.
-  // See docs/design/csp.md; `startCspReporter` returns its own unsubscribe.
+  // A CSP fails silently and a packaged build has no console, so `securitypolicyviolation`
+  // reports go to the Logs panel (docs/design/csp.md). `startCspReporter` returns its unsubscribe.
   useEffect(startCspReporter, []);
   // Watch the OPEN files for changes made outside this app — which, in an IDE for
   // orchestrating agents, is the normal case. Refcounted + idempotent, so a
@@ -82,28 +74,11 @@ export default function App() {
 
   return (
     <div className="app" data-testid="app-shell">
-      {/* The titlebar carries ACTIONS only — no project label.
-
-          It used to render `basename(workspaceRoot)`, and that had become a lie. This
-          app is deliberately MULTI-root: agents are grouped by their own folder in the
-          left rail and the Files tree mounts one root per agent cwd. But
-          `workspaceRoot` is a SINGLE value, so with two projects open the titlebar
-          picked one of them arbitrarily and implied a "current project" that scopes
-          nothing — every real scope here is per-agent or per-root. It also duplicated,
-          less accurately, information already on screen twice (the folder group rows,
-          and the selected agent's cwd), and the leading dot read like a
-          connection/status indicator it never was.
-
-          `workspaceRoot` still exists and still matters — it is a fallback launch
-          directory. That information moved to the ⚡ quick-launch button's tooltip in
-          `LeftRail`, i.e. onto the control it actually governs, which is more useful
-          than a passive label. The native window title still shows the app name, so no
-          branding is lost. */}
+      {/* Actions only, no project label: the app is multi-root, and `workspaceRoot` is
+          only a fallback launch dir (in LeftRail's quick-launch tooltip), not a scope. */}
       <header className="titlebar">
-        {/* Right-aligned cluster (this wrapper carries the `margin-left: auto`
-            now that `.titlebar__hint` is conditionally omitted): the rail
-            toggles, then a new API request tab, then the shortcuts reference
-            (also Cmd/Ctrl+/). */}
+        {/* Right-aligned cluster; this wrapper carries `margin-left: auto` since
+            `.titlebar__hint` is conditionally omitted. */}
         <div className="titlebar__actions">
           <button
             type="button"
@@ -164,15 +139,8 @@ export default function App() {
         {/* Drag handle on the left rail / center seam (hidden when collapsed). */}
         <RailResizer side="left" />
 
-        {/* CENTER — live work area: real PTY terminals, tabs, split panes (M1).
-            Both children self-subscribe to the layout store.
-
-            <ViewBar/> is the TOP-LEVEL strip of views — one chip per whole
-            arrangement of terminals (four terminals in one view, then a switch
-            to another view that holds two more).
-            Today's per-pane tab strips read as the sub-level beneath it. It
-            renders nothing until the store's view slice exists, so mounting it
-            is inert until then. */}
+        {/* <ViewBar/> is the top-level strip of views (whole terminal arrangements);
+            per-pane tab strips sit beneath it. Inert until the store's view slice exists. */}
         <main className="center">
           <ViewBar />
           <PaneTreeRoot />
@@ -181,23 +149,9 @@ export default function App() {
         {/* Drag handle on the center / right rail seam (hidden when collapsed). */}
         <RailResizer side="right" />
 
-        {/* RIGHT RAIL — workspace of the selected agent. The tabs are REAL:
-            Files = the multi-root file tree, Vault = the
-            secrets / environment manager, History = the API request log, Collections =
-            the saved-request library (HTTP/WS/gRPC), DB = the saved database
-            connections, Tools = the self-contained developer utilities, Git =
-            working-tree changes + open pull requests. Find is a momentary action in
-            the titlebar — it opens the global Find-in-Files overlay and does NOT
-            change the mounted panel.
-
-            Every arm below is EXPLICIT, including the last. The chain's final `else`
-            used to be a bare `<DbPanel/>`: correct only because "db" happened to be the
-            last member of `RightRailTab`, and silently wrong the moment another tab is
-            appended — adding Git after Tools would have rendered the Tools panel, with
-            no type error and no failing render. The fallthrough is now `git`
-            (the union's last member) and the `never` exhaustiveness is carried by the
-            union itself, so the cost of getting this wrong is one visibly blank rail
-            rather than one convincingly wrong panel. */}
+        {/* Every arm is explicit; the fallthrough is `git`, the union's last member. A new
+            `RightRailTab` without an arm would render the wrong panel with no type error.
+            Find is a titlebar overlay, not a panel. */}
         <aside className="rail rail--right">
           <RailTabs />
           {rightRailTab === "files" ? (
@@ -230,11 +184,8 @@ export default function App() {
 
       {/* Global: the unsaved-changes confirm for closing a dirty editor tab. */}
       <UnsavedChangesDialog />
-      {/* "Are you sure?" before a close would kill a terminal that is still
-          working. Mounted at the root, like the unsaved-
-          changes confirm, because the gestures it guards are not all per-tab:
-          closing a PANE takes several terminals at once, and the fleet rail's ✕
-          closes an agent by id. It renders nothing unless a close is pending. */}
+      {/* Mounted at the root: pane closes and the fleet rail's ✕ close terminals outside
+          a tab. Renders nothing unless a close is pending. */}
       <CloseTerminalDialog />
 
       {/* Global: project-wide search. Self-contained overlay — it

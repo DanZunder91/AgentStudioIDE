@@ -1,16 +1,6 @@
-/**
- * The terminal half of tab tear-off (docs/design/tab-tearoff.md §3): "a hand-off needs
- * 'abandon without killing', which does not exist."
- *
- *  - `abandon` tears down THIS window's view of a terminal and leaves the PTY running — the
- *    window the tab went to re-binds the same process with `terminal_reattach`;
- *  - `dispose` of a terminal this window never mounted either kills a never-shown REATTACH
- *    tab's PTY (it used to leak), or hands the close to the window holding it;
- *  - a reattached terminal sends no resize until it has been FITTED once: xterm's 24×80
- *    default is a guess, and pushing it would reflow a live `claude` TUI on every arrival.
- *
- * jsdom, like `reattach.test.ts`: `ensureTerminal` opens the PTY without `term.open()`.
- */
+/** Tear-off's terminal half (docs/design/tab-tearoff.md §3). A reattached terminal must not
+ * resize before its first fit: xterm's 24×80 default would reflow a live TUI. jsdom works because
+ * `ensureTerminal` opens the PTY without `term.open()`. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

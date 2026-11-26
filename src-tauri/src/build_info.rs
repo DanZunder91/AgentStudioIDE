@@ -1,38 +1,12 @@
-//! Which build is this? — the identity shown next to the app name in the window
-//! title.
-//!
-//! The point is telling two installers apart, and the version alone cannot: it stays
-//! `0.1.0` across many builds, so on its own it would answer the question with the
-//! same string every time. The commit is what discriminates, so the title carries
-//! both:
-//!
-//! ```text
-//! Agent Studio 0.1.0 (5312aa6b)
-//! ```
-//!
-//! ## The version is not written down here
-//!
-//! It comes from `package_info()`, which `generate_context!` fills from
-//! `tauri.conf.json`'s `version` field (tauri-codegen `context.rs:273` — the
-//! Cargo version is only its fallback). That is the same value that ends up in
-//! the bundle's `Info.plist`, so the title cannot claim a version the installer
-//! does not have. Three files declare a version in this repo; `versions_agree`
-//! below keeps them from drifting apart.
+//! Build identity for the window title: version plus commit, since the version stays `0.1.0`
+//! across builds. The version comes from `tauri.conf.json` via `package_info()` (same value as
+//! the bundle's Info.plist); `versions_agree` keeps the three version files in sync.
 
-/// The short SHA of `HEAD` when the Rust crate was last compiled, or `""` when
-/// the build had no git available. Stamped by `build.rs`.
-///
-/// ⚠️ It names HEAD, not the working tree: a build made with uncommitted changes
-/// carries the SHA of the commit it was *based on*. What makes it trustworthy is
-/// the release rule, not the label — every installer that is shipped is built from a
-/// committed tree (the gates in `scripts/verify.mjs` green first, then commit).
+/// Short SHA of `HEAD` at compile time (stamped by `build.rs`), or `""` without git.
+/// Names HEAD, not the working tree: shipped installers are built from a committed tree.
 pub const COMMIT: &str = env!("AGENTSTUDIO_COMMIT");
 
-/// The window title: `Agent Studio 0.1.0 (5312aa6b)`, or `Agent Studio 0.1.0` when
-/// the commit is unknown.
-///
-/// Pure, and split from the window it gets set on, because the formatting holds
-/// the only decision in the feature (test the seam).
+/// `Agent Studio 0.1.0 (5312aa6b)`, or `Agent Studio 0.1.0` when the commit is unknown.
 pub fn window_title(name: &str, version: &str, commit: &str) -> String {
     let commit = commit.trim();
     if commit.is_empty() {
@@ -82,10 +56,8 @@ mod tests {
         );
     }
 
-    /// Three files declare the version — `tauri.conf.json` (what the bundle and
-    /// this title show), `Cargo.toml` (what cargo builds) and `package.json`
-    /// (what npm reports). Nothing keeps them in step, and a title that disagrees
-    /// with the installer it came from is worse than no title at all.
+    /// `tauri.conf.json` (bundle + title), `Cargo.toml` and `package.json` each declare the
+    /// version; nothing else keeps them in step.
     #[test]
     fn versions_agree() {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));

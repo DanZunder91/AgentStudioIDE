@@ -1,12 +1,5 @@
-/**
- * FileIcon — the sprite-referencing per-file icon (file-icons.md §6).
- *
- * The resolver module is spy-mocked (`{ spy: true }`: real implementations,
- * observable calls) so these tests pin the COMPONENT's contract — "render
- * whatever id the resolver returns as `#mi-<id>` + `data-icon-id`" — without
- * coupling to the generated map's contents (which the generator's drift test
- * pins), and so the React.memo bailout is observable as a call count.
- */
+/** The resolver is spy-mocked (real impls, observable calls): pins the component contract without
+ * coupling to the generated map, and makes the React.memo bailout a call count. */
 
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

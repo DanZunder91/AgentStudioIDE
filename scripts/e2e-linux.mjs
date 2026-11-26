@@ -1,42 +1,7 @@
 #!/usr/bin/env node
-/**
- * WebDriver E2E on real Ubuntu, in Docker — the local way to run e2e/ (verify the real thing
- * in the running app).
- *
- * Why Docker: `tauri-driver` cannot drive a WKWebView, so the WebDriver suite can never run
- * on the macOS dev host, and the gate runs locally, not in CI. The image
- * (docker/linux-check/Dockerfile.e2e) carries the Tauri build deps, WebKitWebDriver, xvfb,
- * Node 22 and tauri-driver — dev-image dependencies, never a user install.
- *
- *   node scripts/e2e-linux.mjs              # the Agent logs + Network specs
- *   node scripts/e2e-linux.mjs --all        # every LOCAL spec in e2e/specs (no public internet)
- *   node scripts/e2e-linux.mjs --external   # only the specs that reach the public internet
- *                                           # (EXTERNAL_SPECS: example.com) — verify reports
- *                                           # them without blocking on a third party's outage
- *   node scripts/e2e-linux.mjs e2e/specs/boot.e2e.ts [...]   # just these
- *   node scripts/e2e-linux.mjs --record [...]  # + VIDEO: an mp4 + GIF of the whole virtual display per
- *                                           # spec, and whole-display PNG stills at each spec's named
- *                                           # moments, in E2E_ARTIFACTS/media (also: E2E_RECORD=1).
- *                                           # Opt-in; off, the run is exactly the plain one.
- *
- * The build happens inside the container: wdio's onPrepare runs `tauri build --debug
- * --no-bundle` (the `npm run e2e:build` equivalent) and fails loudly if the binary is missing.
- *
- * Host isolation — the repo is bind-mounted, so everything the container writes that the
- * host also owns is shadowed by a named volume instead:
- *   src-tauri/target → agent-studio-linux-e2e        (Linux build, never the host's target)
- *   node_modules     → agent-studio-linux-e2e-node   (Linux-native deps, never the host's)
- *   dist             → agent-studio-linux-e2e-dist   (the frontend bundle the build writes)
- * The only repo write is wdio.conf's throwaway fixture repo (e2e/fixtures/workspace/.git,
- * git-ignored). Failure screenshots land in E2E_ARTIFACTS (default: <tmpdir>/agent-studio-e2e).
- *
- * Nothing leaves the container during the local specs: the servers, the IDE's proxy and curl
- * are all inside it. Only EXTERNAL_SPECS reach out, and only to https://example.com/. (Building the image and `npm ci` do download, as any build does.)
- * BLOCKED_HOSTS resolve to 127.0.0.1 inside the container, so an app feature that would call out on
- * its own fails fast instead: the village-city spec runs its app in Asia/Tokyo (e2e/support/app-zone.ts),
- * and the Village's live weather would otherwise send Tokyo's coordinates to Open-Meteo (weather.rs).
- * The list is passed in as E2E_BLOCKED_HOSTS, and that spec asserts the block held.
- */
+/** WebDriver E2E on Ubuntu in Docker (tauri-driver can't drive WKWebView). Flags: --all,
+ * --external, --record, or spec paths. Builds use named volumes, never the host's. Only
+ * EXTERNAL_SPECS go online; BLOCKED_HOSTS resolve to 127.0.0.1 so app calls out fail fast. */
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, readdirSync } from "node:fs";

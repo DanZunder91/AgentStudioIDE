@@ -1,12 +1,5 @@
-/**
- * N1 — Network shows an IDE terminal's HTTP call, captured by the in-process proxy.
- *
- * The real chain, no mocks: a real bash in a real PTY spawned with `http_proxy` pointing at
- * the netcap proxy (userinfo = the terminal id, for attribution) → `curl` → the proxy on
- * 127.0.0.1 → the probe server on this machine's non-loopback address → the flow ring →
- * `netcap://flow` / `netcap_snapshot` / `netcap_flow` over real Tauri IPC → the DOM.
- * Nothing leaves the machine (or the container): client, proxy and server are all local.
- */
+/** N1: a real PTY's curl through the netcap proxy (userinfo = terminal id, for attribution) to a
+ * local probe server, then over real IPC to the DOM. No mocks; nothing leaves the machine. */
 
 import { lookup } from "node:dns/promises";
 import http from "node:http";

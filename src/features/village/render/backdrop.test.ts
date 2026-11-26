@@ -1,8 +1,4 @@
-/**
- * The backdrop's contract (render/backdrop.ts): the roof limit that keeps every landmark crown in sight
- * (landmarks are never hidden), the open sky between its clusters, and the sign
- * words — every one of which the kana font spells.
- */
+/** Backdrop invariants: every landmark crown stays in sight; the kana font spells every sign. */
 
 import { describe, expect, it } from "vitest";
 

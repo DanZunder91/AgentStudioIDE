@@ -1,14 +1,5 @@
-/**
- * The OS side of the E2E display (xvfb inside the Docker E2E image): which top-level windows exist,
- * and the one gesture WebDriver cannot synthesise — a REAL pointer drag that leaves the window.
- *
- * Why not WebDriver for these: a WebDriver session sees webviews, not OS windows, and its pointer
- * actions are dispatched INTO the page — an HTML5 drag that has to end outside the window (tab
- * tear-off's drag-out, docs/design/tab-tearoff.md §5) needs the X server to see a press, motion and
- * a release over the desktop. `xdotool` produces exactly that (XTEST), and `xdotool search` lists the
- * windows by title independently of any webview. Both come from the image (Dockerfile.e2e); outside
- * it these helpers report "unavailable" instead of throwing, so a spec can say so honestly.
- */
+/** OS side of the E2E display: list OS windows and do real XTEST drags out of the window, which
+ * WebDriver can't (docs/design/tab-tearoff.md §5). Without xdotool they report "unavailable". */
 
 import { spawnSync } from "node:child_process";
 
@@ -31,12 +22,8 @@ export function x11Available(): boolean {
   return spawnSync("xdotool", ["version"], { stdio: "ignore" }).status === 0;
 }
 
-/**
- * A window's title as UTF-8. `xdotool getwindowname` reads WM_NAME, which GTK writes as COMPOUND_TEXT
- * when the title is not Latin-1 — a torn-off window is "<tab> — Agent Studio" (an em dash), and xdotool's
- * name search MISSES it (the window is on screen, the search returns only main).
- * `_NET_WM_NAME` is UTF8_STRING; xprop prints its non-ASCII bytes as octal escapes in a C locale.
- */
+/** Reads `_NET_WM_NAME` (UTF8_STRING): GTK writes a non-Latin-1 WM_NAME as COMPOUND_TEXT, which
+ * xdotool's search misses. xprop prints non-ASCII bytes as octal escapes in a C locale. */
 function windowName(id: string): string {
   const r = spawnSync("xprop", ["-id", id, "_NET_WM_NAME"], { encoding: "latin1", timeout: 10_000 });
   const m = /=\s*"((?:[^"\\]|\\.)*)"/.exec(r.stdout ?? "");
@@ -45,12 +32,8 @@ function windowName(id: string): string {
   return Buffer.from(bytes, "latin1").toString("utf8");
 }
 
-/**
- * Every VISIBLE top-level window of the app whose title contains `needle` (default: the app's name),
- * with its on-screen geometry. Found by WM_CLASS, which carries the app's name in some spelling
- * (`agent studio`, `agent-studio`, the binary `agent-studio-scaffold`), hence the pattern; the name
- * search alone misses a torn-off window's title (see `windowName`).
- */
+/** Visible app windows found by WM_CLASS (the app name in several spellings, hence the pattern):
+ * the name search misses torn-off titles. */
 export function osWindows(needle = "Agent Studio"): OsWindow[] {
   const ids = new Set<string>();
   for (const q of [["--class", "agent.?studio"], ["--name", needle]]) {
@@ -86,10 +69,7 @@ export function describeDisplay(): string {
 
 const pause = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/**
- * Press at `from`, move in small steps (GTK starts a drag only after motion past its threshold, and
- * WebKit needs motion events to track it), go to `to`, release. Screen coordinates.
- */
+/** Small steps: GTK drags only past a motion threshold, and WebKit needs motion to track it. */
 export async function realDrag(from: { x: number; y: number }, to: { x: number; y: number }): Promise<void> {
   const at = (p: { x: number; y: number }): string[] => ["mousemove", String(Math.round(p.x)), String(Math.round(p.y))];
   xdotool(at(from));
@@ -106,12 +86,8 @@ export async function realDrag(from: { x: number; y: number }, to: { x: number; 
   xdotool(["mouseup", "1"]);
 }
 
-/**
- * Put the REAL X pointer at screen `p`. WebDriver's pointer actions are synthetic events inside the
- * page, so a recorded still otherwise shows the X cursor wherever it last was — nowhere near the
- * building whose hover card is open. Returns false without
- * xdotool.
- */
+/** WebDriver pointer actions are synthetic, so without this a still shows the X cursor wherever it
+ * last was. Returns false without xdotool. */
 export function movePointer(p: { x: number; y: number }): boolean {
   return xdotool(["mousemove", String(Math.round(p.x)), String(Math.round(p.y))]).ok;
 }

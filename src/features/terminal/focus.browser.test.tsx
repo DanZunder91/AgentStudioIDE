@@ -1,37 +1,6 @@
-/**
- * Layer 5 — pointing at the terminal owns the keyboard, in every mode.
- *
- * ## Background
- *
- * The symptom: arrows work in a plain terminal but not inside claude. The
- * browser tier proves the *encoding* is fine — xterm forwards the correct arrow
- * bytes for ↑ in the full claude context, as long as the terminal is focused.
- * (Real claude sets NO DECCKM — verified from a PTY capture of its startup — so
- * ↑ is legacy CSI `ESC [ A`, not SS3. The one-time SS3/DECCKM theory was a red
- * herring.) The remaining hypothesis was focus loss on click under mouse
- * tracking; the actual root cause was no auto-focus at all (see
- * autoFocus.browser.test.tsx).
- *
- * ## What is actually true about focus (verified)
- *
- * xterm 6 already calls `this.focus()` unconditionally in its own mousedown
- * handler, before it reports the mouse event to the app — confirmed in the
- * bundle and by the "realistic path" tests below, which pass with OR without our
- * own handler. So on the `.xterm-screen`, focus is not lost in Chromium, and a
- * JS `term.focus()` behaves the same in any engine.
- *
- * Our added handler is therefore defence-in-depth, and the one test that pins it
- * exercises the gap it genuinely closes: a pointer-down that lands on the host
- * *outside* xterm's screen element (padding/scrollbar), which xterm's own
- * screen-level listener never sees. That test fails without our handler and
- * passes with it. The realistic-path tests are invariant guards, not proof of
- * our handler — labelled as such.
- *
- * ## Synthetic mousedown, not a real CDP click
- *
- * A real `userEvent.click` under mouse tracking deadlocked the run. We only need
- * the mousedown the fix listens for, and `document.activeElement` afterwards.
- */
+/** xterm 6 already focuses on its own mousedown, so the realistic-path tests are invariant guards;
+ * the test pinning our handler targets the host outside `.xterm-screen` (padding/scrollbar).
+ * Synthetic mousedown, not a real click: a real click under mouse tracking deadlocked the run. */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -43,11 +12,8 @@ import { disposeAll, getTerminal } from "./TerminalRegistry";
 import { TerminalView } from "./TerminalView";
 
 const ESC = 0x1b;
-/**
- * claude's real terminal state, per a PTY capture of its startup: alt screen +
- * SGR mouse tracking + bracketed paste + focus reporting. Notably NO DECCKM
- * (`?1h`), so arrows are legacy CSI `ESC [ A`.
- */
+/** claude's startup state per a PTY capture: alt screen, SGR mouse, bracketed paste, focus
+ * reporting; no DECCKM (`?1h`), so arrows are legacy CSI `ESC [ A`. */
 const CLAUDE_CONTEXT = "\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[?1004h";
 
 async function settle(ms = 120): Promise<void> {
@@ -117,10 +83,8 @@ describe("terminal focus — pointing at the terminal owns the keyboard", () => 
   const screen = (): HTMLElement => host.querySelector<HTMLElement>(".xterm-screen")!;
 
   it("focuses on a pointer-down the host catches but xterm's screen does not (the fix)", async () => {
-    // The gap our handler closes: a mousedown whose target is the host container
-    // itself (padding / scrollbar gutter), not `.xterm-screen`. xterm's own
-    // mousedown listener is on the screen element, so it never fires here — only
-    // our capture-phase host listener does. Remove the handler and this fails.
+    // The host itself (padding/scrollbar), not `.xterm-screen`: xterm's own listener never
+    // fires here, only our capture-phase host listener does.
     await mount();
     sink.focus();
     expect(textareaIsFocused()).toBe(false);

@@ -1,8 +1,3 @@
-/**
- * Searching a query result. Pure, so the ordering and the edge cells are pinned
- * without a DOM or a scroll box.
- */
-
 import { describe, expect, it } from "vitest";
 
 import { findCells, matchRange, scrollToRow } from "./gridSearch";

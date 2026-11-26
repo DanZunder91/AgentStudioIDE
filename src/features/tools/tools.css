@@ -1,26 +1,6 @@
-/* ── Tools rail panel: the epoch ⇄ date converter ─────────────────────────────
-   Theme variables come from App.css, with the same literal fallbacks `db.css` uses so
-   this renders sanely if it is ever mounted before the theme.
-
-   ⚠️ THE RAIL IS NARROW AND IT CLIPS. `RAIL_MIN_W` is 180px, the default is 300px, and
-   `.rail` is `overflow-x: hidden` — over-wide content is not scrolled, it is silently
-   CUT OFF, and nothing on screen says so. This repo has shipped that bug twice (the
-   Vault's fixed 200px input; the clipped "Collections" label), so every rule below is
-   written against it:
-
-     * no fixed pixel width anywhere — the only `width` is `100%`;
-     * `min-width: 0` on every flex child, because the flex default (`auto`) refuses to
-       shrink below the content's min-content size and pushes the overflow out of the
-       rail rather than wrapping it;
-     * `overflow-wrap: anywhere` on every VALUE, because the values are exactly the
-       unbreakable strings — `1700000000123456789`, `2023-11-14T22:13:20.123456789Z` —
-       that have no space to break at;
-     * label ABOVE value, never a two-column row. At 180px a side-by-side layout leaves
-       ~100px for an ISO timestamp, and the honest options are ellipsis (hides the digits
-       that are the whole point) or clipping (hides them AND lies about it).
-
-   Values are monospace so digits line up column-wise between the four epoch rows —
-   comparing `1700000000` with `1700000000123` by eye is most of what this tool is for. */
+/* The rail is narrow and CLIPS (min 180px, `overflow-x: hidden`): no fixed widths, `min-width: 0`
+   on flex children, `overflow-wrap: anywhere` on values, labels above values. Values are
+   monospace so the epoch rows line up digit by digit. */
 
 .tools-panel {
   display: flex;

@@ -1,12 +1,3 @@
-/**
- * Three requirements on the API client:
- *   • a Command+F search inside a request's response body, in both the A/B
- *     compare and the ordinary view;
- *   • a copy button for the response;
- *   • a button on the HTTP request that duplicates it into a new tab with the
- *     same parameters, as Postman does.
- */
-
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -348,16 +339,8 @@ describe("duplicate a request", () => {
   });
 });
 
-/**
- * The Raw/Formatted seam (copy and search must work in the tree view as well
- * as in Raw, and the tree view is named Formatted rather than Tree).
- *
- * This block owns the SEAM: `ResponseBody` and `JsonView` are
- * each fully covered on their own, and the bug that shipped lived entirely
- * in the join — two branches, one of which rendered the tools and one of which
- * did not. So every test here drives the pair through a real gesture, with both
- * halves built from ONE value the way `ApiRequestView` builds them.
- */
+/** Seam: each half is covered alone, but the shipped bug lived in the join. Both halves are built
+ * from ONE value, as ApiRequestView builds them. */
 describe("Raw / Formatted — one tools row, one Copy, one search", () => {
   beforeEach(() => resetStore());
   // The pinning/scroll tests define `scrollIntoView`, which jsdom does not
@@ -579,15 +562,8 @@ describe("both surfaces get the same tools", () => {
   });
 });
 
-/**
- * The bug: the find bar still disappeared when moving
- * between tabs. `Pane` renders only the ACTIVE tab and a cross-pane drag
- * re-parents the subtree, so ResponseBody UNMOUNTS on every tab switch/move —
- * the bar's open/query/cursor/view now live in `findBars[findKey]` and must
- * survive the round trip. At this unit tier, unmount + remount IS the tab
- * switch; each real surface repeats the trip in its own suite
- * (ApiRequestView.test.tsx / ComparePanel.test.tsx).
- */
+/** Pane unmounts inactive tabs, so unmount + remount is the tab switch at this tier; the real
+ * surfaces repeat it (ApiRequestView.test.tsx, ComparePanel.test.tsx). */
 describe("the find bar survives the tab (store-backed)", () => {
   beforeEach(() => resetStore());
 
@@ -768,25 +744,9 @@ describe("the find bar survives the tab (store-backed)", () => {
 
 /* ═══════════════════ Cmd/Ctrl+F seeds from the selection ═══════════════════ */
 
-/**
- * Pressing Command+F with something selected should search for that selection.
- *
- * The rule is `features/editor/find/selectionSeed`, shared with the editor's own
- * bar and every other find surface, and the seed is written through the SAME
- * `patchFindBar({ query, cursor: 0 })` the input's onChange uses — so what is
- * asserted is that the response was SEARCHED (the marks, the count), not that
- * the box has text in it.
- *
- * 🔴 Two jsdom facts shape these tests:
- *   1. `HTMLElement.focus()` ends with `getSelection().collapse(this, 0)`, which
- *      no real browser does for a non-editable element. So the selection is made
- *      AFTER the box is focused — which is also the real order (mousedown
- *      focuses, the drag selects).
- *   2. `Selection.toString()` is `Range.toString()`: it concatenates character
- *      data and never inserts the line breaks a browser puts between blocks. The
- *      raw view is a single `<pre>`, so a pretty-printed body's own `\n`s give
- *      an honest multi-line selection in both engines.
- */
+/** Asserts the response was SEARCHED, not just the box filled. jsdom's focus() collapses the
+ * selection (browsers don't), so select AFTER focusing. Selection.toString() adds no block breaks,
+ * so the raw view's single <pre> gives an honest multi-line selection. */
 describe("response search — Cmd/Ctrl+F seeds from the selection", () => {
   beforeEach(() => resetStore());
 

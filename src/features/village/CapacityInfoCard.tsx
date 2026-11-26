@@ -1,8 +1,5 @@
-/**
- * The hover card over a capacity building: its exact numbers, where they come from,
- * and — for the seats — that the figure is an ESTIMATE. Positioned by the panel at the pointer
- * (CSS px inside the stage), like the agents' card. The words are `capacityModel.capacityCard`'s.
- */
+/** Hover card over a capacity building; seat figures are flagged as an ESTIMATE. The panel places
+ * it at the pointer (CSS px inside the stage); its words come from `capacityModel.capacityCard`. */
 
 import type { CapacityCard } from "./capacityModel";
 

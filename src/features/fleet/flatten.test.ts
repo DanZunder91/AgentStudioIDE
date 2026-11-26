@@ -1,10 +1,4 @@
-/**
- * The fleet render model: recursion at build time, flat rows out.
- *
- * This is the M3-critical decision (a recursive component tree cannot be
- * virtualized), so the walk is tested for arbitrary depth *now* — M2 only ever
- * has roots, and a bug here would surface the day the headline feature ships.
- */
+/** Arbitrary depth is tested now: the flat build is what makes the fan-out tree virtualizable. */
 
 import fc from "fast-check";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -192,10 +186,8 @@ describe("flattenFleet — roll-up (the collapsed-subtree summary)", () => {
   });
 
   it("rolls idle and waiting_input UP a subtree (grandchildren count toward the root)", () => {
-    // Guards the recursive sum for idle/waiting_input specifically: root's own
-    // direct child (mid) is running, so root's idle/waiting_input counts can only
-    // come from the recursive `acc.idle += sub.idle` / `acc.waiting_input += ...`
-    // lines — a `-=` sign flip there would drive them negative.
+    // root's idle/waiting_input can only come from the recursive sums (its direct child runs), so
+    // a sign flip there goes negative.
     const agents = statusForest({
       root: { children: ["mid"], status: "running" },
       mid: { children: ["li", "lw"], status: "running" },
@@ -560,10 +552,7 @@ describe("flattenFleet — folder grouping", () => {
   });
 
   it("rolls idle/running/waiting_input up onto the folder header (not only done/error)", () => {
-    // The header aggregate sums each root's subtree per status. done/error are
-    // already asserted above; this pins idle/running/waiting_input, whose counts
-    // here come ONLY from the subtree sums (`acc.idle/running/waiting_input +=
-    // sub.*`) because the root's own status is `done`. A `-=` flip => negative.
+    // The root is `done`, so idle/running/waiting_input come only from the subtree sums.
     const agents = folders({
       root: { cwd: "/w/gazelle", children: ["ci", "cr", "cw"], status: "done" },
       ci: { cwd: "/w/gazelle", status: "idle" },

@@ -1,18 +1,5 @@
-/**
- * Used on a real service, the view must make it easy to see which apps are running and which
- * requests were made, and a request must be viewable and copyable.
- *
- * 1. A Process picker (by `client.name`, "unknown" for null) next to the Source picker — so
- *    "only gazelle" is one click; it composes with the other filters, is named in the
- *    "hidden by" explanation, and "Show all flows" resets it.
- * 2. The Source picker keyed by terminal id, so a pick survives the title changing under it
- *    (an agent terminal retitles itself as it works — which made "Only" hide everything).
- * 3. The request tab leads with its request line; Copy request / Copy response / Copy body
- *    copy exact raw-HTTP strings; tunnels and failed handshakes say what IS known — never an
- *    empty pane.
- *
- * Only `./netcapIpc` / `./netmachineIpc` are mocked; stores, formatters and the AppPicker are real.
- */
+/** Only `./netcapIpc` / `./netmachineIpc` are mocked; stores, formatters, AppPicker are real.
+ * The Source picker is keyed by terminal id because agent terminals retitle themselves. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

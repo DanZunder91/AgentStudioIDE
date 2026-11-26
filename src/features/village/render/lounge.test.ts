@@ -1,9 +1,4 @@
-/**
- * render/lounge.ts — the City's Seats lounge: a bench seat (one of four in a row), the anonymous
- * agent waiting on a free one (its pose, asleep at night, no art), and the hall's dressing (frieze,
- * lamps, wainscot, plants — clear of the lift). Draw calls through the recording fake; the real
- * pixels are lounge.browser.test.tsx's.
- */
+/** Draw calls through the recording fake; the real pixels are lounge.browser.test.tsx's. */
 
 import { describe, expect, it } from "vitest";
 

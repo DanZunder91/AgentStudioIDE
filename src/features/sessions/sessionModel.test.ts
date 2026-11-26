@@ -1,10 +1,5 @@
-/**
- * `sessionModel` — the "Recover session" picker rows' pure formatting.
- *
- * Timestamps are built with the LOCAL-time Date constructor (never a UTC
- * epoch literal), so the expected strings hold on any runner timezone; `now`
- * is passed explicitly so the current-year rule never depends on wall clock.
- */
+/** Local-time Date constructor (not UTC epochs) so strings hold in any timezone; `now` is passed
+ * explicitly so the current-year rule never depends on the wall clock. */
 
 import { describe, expect, it } from "vitest";
 

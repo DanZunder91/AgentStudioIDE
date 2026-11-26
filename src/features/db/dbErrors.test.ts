@@ -1,20 +1,6 @@
-/**
- * `dbErrors` — the rejection → one-honest-sentence path.
- *
- * Two properties are worth pinning hard, and they are not the same property:
- *
- * 1. **Every code maps to a distinct, non-empty sentence.** A `switch` that fell through
- *    for one code would return `undefined` and render as "undefined" in a rail; two codes
- *    sharing a sentence would make the mapper useless for the case it exists for.
- * 2. **A driver string never survives.** The whole reason this file exists: `sqlx`
- *    and libpq echo the DSN they dialled into their error text, so a detail carrying a
- *    password must not reach the output. That is asserted with a hostile detail, not
- *    described.
- *
- * The code list is written out LITERALLY below rather than imported from `DB_ERROR_CODES`:
- * an expectation read from the table under test can only catch plumbing, so
- * a code silently dropped from that array would pass a derived test.
- */
+/** Every code maps to a distinct, non-empty sentence, and a driver string never survives (sqlx and
+ * libpq echo the DSN, password included). Codes are listed literally, not read from
+ * DB_ERROR_CODES, so a dropped code can't pass. */
 
 import { describe, expect, it } from "vitest";
 
@@ -84,13 +70,8 @@ describe("parseDbError", () => {
   });
 
   it("🔴 now READS a plain object carrying a `message` — a deliberate behaviour change", () => {
-    // This line used to assert `unknown` for `{ message: "auth: nope" }`, and that assertion was
-    // pinning a BUG. Three copies of this parser existed (db, usage, portability); two required
-    // `instanceof Error`, one duck-typed `.message`, so the same wire string classified differently
-    // depending on which feature received it. The copies were unified into
-    // `lib/wireCode`, keeping the permissive behaviour — because an `Error` that crossed a realm
-    // boundary (a worker, the webview bridge) fails `instanceof` while carrying a perfectly good
-    // message, and calling that `unknown` throws away the only useful thing it had.
+    // Duck-typed .message on purpose (lib/wireCode): a cross-realm Error fails instanceof
+    // but still carries a good message.
     expect(parseDbError({ message: "auth: nope" })).toBe("auth");
     const crossRealm = { name: "Error", message: "timeout: 30s" };
     expect(crossRealm instanceof Error).toBe(false);
@@ -130,11 +111,8 @@ describe("describeDbError", () => {
     expect(describeDbError("secret-missing")).toBe(
       "The saved password reference has nothing behind it in the Vault — type the password again and save the connection.",
     );
-    // `blocked` used to name BOTH guards it can mean, on the reasoning that a code cannot
-    // distinguish them and picking one would be a fabrication. True — and then a plain
-    // two-statement buffer hit it, and nobody could tell which guard had fired. The answer was
-    // not a better guess from the code: it was to stop discarding Rust's sentence, which has always
-    // known. This is the bare-code fallback now, and it claims only what a code can support.
+    // A bare code can't tell which guard fired, so the fallback claims only what it can;
+    // Rust's own sentence names the guard.
     expect(describeDbError("blocked")).toBe(
       "That statement was blocked by this connection's safety settings before it ran.",
     );
@@ -170,15 +148,8 @@ describe("dbErrorMessage", () => {
   });
 });
 
-/**
- * The misattribution bug, pinned at the layer that caused it.
- *
- * When `select * from temp_playlists limit 10;` was typed into a MongoDB console, Rust rejected
- * with `invalid-config: That is not a MongoDB command document…` and this file replaced that
- * sentence with advice about a host and a port belonging to a connection that had just succeeded.
- * The fix is two-sided — a distinct code, and a narrow exception to "drop the detail" — so both
- * sides are asserted here, including the part that must NOT change.
- */
+/** A statement error (SQL sent to MongoDB) must not read as a connection problem: its own code,
+ * invalid-statement, keeps Rust's detail, while invalid-config must still mean settings. */
 describe("a statement problem is not a connection problem", () => {
   const MONGO_PARSE =
     'invalid-statement: That is not a MongoDB command document. A command is one JSON object ' +
@@ -237,12 +208,8 @@ describe("a statement problem is not a connection problem", () => {
   });
 
   it("🔴 a `blocked` detail is safe to render only because RUST made it so", () => {
-    // Four mappers used to put third-party text under this code (Postgres 25006, ClickHouse 164,
-    // DynamoDB's throughput/conflict pair, redis's replica refusal). Each now carries our own
-    // sentence, enforced by a single `DbError::blocked` constructor and a Rust test that fails on
-    // any raw construction. This assertion is the frontend's half of that contract: if a driver's
-    // DSN ever rides a `blocked` again, it reaches the screen — so the guarantee lives in Rust and
-    // this test records that we are relying on it.
+    // blocked carries only our sentence, guaranteed in Rust (DbError::blocked plus a Rust test);
+    // this records that the frontend relies on it.
     const leaky = "blocked: refused; dsn=postgresql://ro:hunter2@db.internal:5432/maestro";
     const out = dbErrorMessage(leaky);
     // It DOES pass through — that is the deal — which is why the Rust-side constructor test exists.

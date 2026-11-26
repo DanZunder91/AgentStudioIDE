@@ -1,13 +1,4 @@
-/**
- * The City's neon signs (every building wears a neon sign naming its
- * language, in that language's style — gazelle is Rust, so its sign is Rust's): the styles and
- * the shared language table, the 5×7 tube font, where a sign hangs (never over a room, the door,
- * the name, a neighbour or the street's props), the deterministic flicker, the night light — and
- * the engine's emission and the frame's dispatch that carry it on screen.
- *
- * Expectations are written by hand: the letters' pixels are drawn here, not read
- * back off the font under test.
- */
+/** Expectations are written by hand: the letters' pixels are drawn here, not read off the font. */
 
 import { describe, expect, it } from "vitest";
 

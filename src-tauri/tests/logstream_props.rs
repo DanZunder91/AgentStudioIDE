@@ -1,13 +1,6 @@
-//! Property-style tests of the Agent Logs line splitter and level heuristic
-//! (`logstream/splitter.rs`, `logstream/level.rs`).
-//!
-//! `proptest` is not a dependency, so these are hand-rolled generators driven by `rand`
-//! with **fixed seeds**: every run explores exactly the same few thousand cases, a failure
-//! prints the seed that produced it, and re-running reproduces it bit for bit. Pure and
-//! clock-free — no runtime, no I/O.
-//!
-//! The contract numbers are restated as literals: a test that reads the
-//! constant it checks cannot fail when the constant is wrong.
+//! Property-style tests of the Agent Logs splitter and level heuristic: hand-rolled `rand`
+//! generators on fixed seeds (no `proptest`), so a failure prints a reproducible seed. Contract
+//! numbers are restated literals on purpose.
 
 use agent_studio_scaffold_lib::logstream::splitter::LineSplitter;
 use agent_studio_scaffold_lib::logstream::{classify_level, LogLevel};
@@ -465,10 +458,8 @@ fn the_level_function_never_panics_on_arbitrary_unicode() {
     }
 }
 
-/// A standalone keyword (at a word boundary) decides the level with the precedence
-/// error > warn > debug > info, whatever filler surrounds it — in the MESSAGE: the line
-/// opens with a word, because a level token that opens the line is a logger's level
-/// column, which wins (`a_leading_level_column_wins_over_any_keyword`).
+/// A word-boundary keyword in the MESSAGE decides error > warn > debug > info; lines open with
+/// a word because a leading level token is a logger column, which wins.
 #[test]
 fn keywords_decide_the_level_with_error_over_warn_over_debug() {
     for seed in 0..CASES {

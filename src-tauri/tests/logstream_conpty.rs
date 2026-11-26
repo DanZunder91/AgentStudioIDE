@@ -1,29 +1,6 @@
-//! Agent Logs on Windows: what ConPTY really sends, and the lines the Windows splitter makes of it.
-//!
-//! With the stream splitter alone, every command typed in a PowerShell terminal on Windows
-//! reached Agent Logs as `GeGetGet-Get-LGet-Lo…Get-Location`, the prompt was glued to
-//! the previous output, and resizing a pane logged the visible screen again. ConPTY is a screen
-//! renderer: it repaints rows with cursor moves and erases, not with `\r`/`\n`, so the stream
-//! splitter (`logstream::splitter`, right for a Unix PTY) concatenated the repaints. The Windows
-//! answer is `logstream::screen` (platform-native: a native one per OS) — this file holds it
-//! to bytes ConPTY really produced.
-//!
-//! # The fixtures
-//!
-//! `tests/fixtures/logstream/conpty/*.vt` were RECORDED by [`record_conpty_fixtures`] below,
-//! through the app's own PTY layer (`pty::spawn_pty`: vendored portable-pty → ConPTY), on
-//! Windows 11 ARM64 with Windows PowerShell 5.1 + PSReadLine and with cmd. Re-record on Windows:
-//!
-//! ```text
-//! cargo test --manifest-path src-tauri/Cargo.toml --test logstream_conpty -- --ignored record_conpty_fixtures
-//! ```
-//!
-//! Format (escaped text, so git's EOL normalisation can never change a byte): one PTY read per
-//! `< ` line, bytes outside printable ASCII as `\xNN`, a backslash as `\\`; `# ` lines say what
-//! the recorder did at that point (a key typed, a resize). The replay tests below feed the reads
-//! in order — and once more byte by byte, so no assertion depends on where a read happened to end.
-//!
-//! The replay tests run on every OS (the interpreter is pure). Only recording needs Windows.
+//! Agent Logs on Windows: ConPTY repaints rows with cursor moves, so `logstream::screen`, not
+//! the stream splitter, makes the lines. Replays (every OS) use recorded `conpty/*.vt` fixtures;
+//! re-record on Windows with `-- --ignored record_conpty_fixtures`.
 
 #[cfg(windows)]
 mod common;
@@ -290,10 +267,8 @@ fn cmd_reads_as_the_screen_did() {
 }
 // ── The real thing: supervisor → ConPTY → hub ────────────────────────────────────────────────────
 
-/// End to end on Windows, the way it happens in practice: a PowerShell terminal opened through the
-/// real supervisor (so the hub gets the PTY size at spawn and on each resize), `Get-Location`
-/// typed key by key, then two pane resizes. The command is logged once, its output once, and no
-/// keystroke repaint leaks. Every wait has a deadline.
+/// End to end: PowerShell via the real supervisor, `Get-Location` typed key by key, two pane
+/// resizes; the command and output are logged once each, no keystroke repaint leaks.
 #[cfg(windows)]
 #[tokio::test]
 async fn a_powershell_terminal_logs_a_typed_command_once_through_the_supervisor() {
@@ -600,10 +575,8 @@ mod recorder {
         hay.windows(needle.len()).any(|w| w == needle)
     }
 
-    /// Windows PowerShell 5.1 started the way an IDE terminal starts it (the app's own startup
-    /// arguments), PSReadLine on: type `Get-Location` key by key, run `ping -n 2 127.0.0.1` and
-    /// resize mid-output (narrow enough to wrap the statistics line), then resize twice at the
-    /// idle prompt — a split pane.
+    /// Windows PowerShell 5.1 with the IDE's startup args: type `Get-Location`, run `ping`,
+    /// resize mid-output (to wrap), then resize twice at the idle prompt.
     pub fn record_powershell() {
         let args = pty::shell_startup_args("powershell", Vec::new(), true);
         let mut r = Rec::start(

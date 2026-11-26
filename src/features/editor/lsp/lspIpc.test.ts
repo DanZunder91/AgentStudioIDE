@@ -1,7 +1,4 @@
-/**
- * `lspIpc` — the LSP relay at the wire (M5). Thin wrappers, so the command
- * *names* and arg *shapes* are the whole contract with a866's Rust side.
- */
+/** The command names and arg shapes are the whole contract with the Rust relay. */
 
 import { Channel } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

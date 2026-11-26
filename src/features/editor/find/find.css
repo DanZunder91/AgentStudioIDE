@@ -1,7 +1,4 @@
-/* ── in-file find bar ────────────────────────────────────────
-   The IntelliJ-style search bar docked at the top of the code editor.
-   Uses the same CSS custom properties (with the same dark fallbacks) as
-   src/features/editor/editor.css so it follows the app theme. */
+/* In-file find bar; uses editor.css's custom properties and dark fallbacks to follow the theme. */
 
 .cm-editor .cm-panels.cm-panels-top {
   background: var(--bg-surface, #161b22);

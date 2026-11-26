@@ -1,30 +1,6 @@
-//! **Agent Village — live weather** (`village_weather`; wire type `WeatherWire` in
-//! `src/features/village/villageTypes.ts`, "ambience" section).
-//!
-//! Show the weather and time of day of the user's own location —
-//! rain when it is raining there, afternoon outside the house when it is afternoon. The clock
-//! half is pure frontend; this module answers "what is the sky doing where I am, right now".
-//!
-//! ## Location without a permission prompt
-//! No CoreLocation, no geolocation API, no IP lookup. The frontend passes its IANA time zone
-//! (`Intl.DateTimeFormat().resolvedOptions().timeZone`, e.g. `"America/Vancouver"`) and we map it to
-//! the zone's **principal city** coordinates from the system tz database table
-//! (`/usr/share/zoneinfo/zone1970.tab`, then `zone.tab` — ISO 6709 coordinates such as
-//! `+404251-0740023`), falling back to a small embedded table of common zones (and for Windows,
-//! which ships no tz table). The place name is the city part of the zone (`"New York"`).
-//! An unknown zone (or `UTC`) is the coded error `"no-location"`.
-//!
-//! ## What leaves the machine
-//! **Only city-level coordinates, rounded to 2 decimals**, sent to Open-Meteo
-//! (`api.open-meteo.com`, no API key, no account, no cookies) over https. Nothing else —
-//! not the zone name, not a user id, not anything about agents or the workspace.
-//!
-//! ## Caching and failure
-//! The last good report per zone is cached in-process for [`FRESH_MS`] (10 min). A failed
-//! fetch falls back to a cached report younger than [`STALE_MS`] (2 h) — its `fetchedAtMs`
-//! says how old it is — otherwise a coded error: `"offline"` (no connection / timeout),
-//! `"http-<status>"`, or `"bad-response"`. The clock is a parameter everywhere below the
-//! command, so the policy is tested without sleeping.
+//! Agent Village live weather (`village_weather`; wire `WeatherWire` in `villageTypes.ts`).
+//! No location prompt: the IANA zone's principal city from the tz table; only coordinates
+//! rounded to 2 decimals go to Open-Meteo. Cached [`FRESH_MS`]; stale fallback to [`STALE_MS`].
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -261,10 +237,8 @@ pub fn lookup_zone_tab(text: &str, zone: &str) -> Option<(f64, f64)> {
     })
 }
 
-/// Zone → principal-city location: the given system tables in order, then the embedded
-/// fallback — first under the given name, then under its current IANA name when it is a
-/// legacy alias ([`ZONE_ALIASES`]; the place is then named from the current name).
-/// `Err("no-location")` for an invalid or unknown zone.
+/// Zone → principal-city location: the given tables in order, then the embedded fallback, also
+/// under the current name of a legacy alias ([`ZONE_ALIASES`]). `Err("no-location")` otherwise.
 pub fn locate(zone: &str, tables: &[String]) -> Result<Location, String> {
     if !valid_zone(zone) {
         return Err(ERR_NO_LOCATION.into());

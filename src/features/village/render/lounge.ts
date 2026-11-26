@@ -1,23 +1,6 @@
-/**
- * Agent Village — the City's Seats LOUNGE under the street (64 seats in
- * an area below ground, where idle agents wait to be called; busy agents move to the building
- * that needs them). Our own procedural pixel art, anchored like every prop:
- * (x0, bottom) = a footprint's left and bottom edges, world px.
- *
- *   - `drawBench` — one lounge seat (`bench` prop), seen from the front: four seats in a row read
- *     as ONE bench (a backrest and a seat running through, an armrest and legs at its two ends, a
- *     leg pair under its middle). On a free seat an anonymous agent sits facing us, waiting to be
- *     called (the engine's `waiter` reading: its look and pose); asleep at night, with a "z".
- *   - `drawLounge` — the hall itself (`lounge` DrawItem), painted right after its back wall's pieces
- *     and before its benches: a tiled frieze along the back wall's face, warm pendant lamps hanging
- *     from it, a panelled wainscot behind each bench row, a potted plant at each row's ends. Calm on
- *     purpose: the waiting agents are the subject. It keeps clear of the lift's column and the aisle
- *     either side of it (the shaft and its car are render/lift.ts's).
- *
- * The waiters are a picture of FREE SEATS, not of processes (decoration, and said so): the Seats
- * card says so.
- * Deterministic: everything here is a function of its inputs and the clock passed in.
- */
+/** The City's Seats lounge under the street: `drawBench` (four seats read as one bench; a waiter
+ * on each free seat) and `drawLounge` (the hall, clear of the lift's column and aisles). Waiters
+ * picture FREE SEATS, not processes. Deterministic in its inputs and the clock. */
 
 import { SIT_OFFSET } from "../engine/sim";
 import { SEAT_LIFT, TILE, type Ambience, type DrawItem, type PropReading } from "../villageTypes";
@@ -60,11 +43,8 @@ export const SNORE = "#eef3ff";
 /** Seats on one bench (engine/city.ts `BENCH`): a seat's place on its bench is its number mod this. */
 export const BENCH_SEATS = 4;
 
-/**
- * World px from a sitter's frame top down to its seat tile's bottom — where a sim character seated
- * on the bench is drawn too (characters.ts: feet at the tile's bottom + SIT_OFFSET, the sheet's feet
- * on its row 31, the sprite raised SEAT_LIFT).
- */
+/** World px from a sitter's frame top to its seat tile's bottom, where a seated sim character is
+ * drawn too (characters.ts: feet at tile bottom + SIT_OFFSET, sheet feet on row 31, SEAT_LIFT). */
 export const SITTER_TOP = 31 + SEAT_LIFT - SIT_OFFSET;
 
 /** Character-sheet column of each pose, facing us (row 0): seated still, the other hand, a paper. */
@@ -73,11 +53,8 @@ export const POSE_COL = { still: 3, shift: 4, read: 5 } as const;
 /** Columns from the lift kept clear of the dressing: the shaft and the aisle either side of it. */
 const LIFT_CLEAR = 1;
 
-/**
- * One lounge seat at (x0, bottom): seat `index`'s part of its bench of four (its place, `index %
- * BENCH_SEATS`, picks the ends), then — when the engine seats a waiter on it — the waiter. Paints
- * inside its own tile and, for a waiter, the tile above it (its head, and a "z" at night).
- */
+/** Seat `index` of its bench of four at (x0, bottom) (`index % BENCH_SEATS` picks the ends), then
+ * its waiter if any. Paints its tile and, for a waiter, the tile above. */
 export function drawBench(
   ctx: DrawTarget,
   cam: Camera,
@@ -154,11 +131,8 @@ function drawWaiter(
 /** A waiter's body without art, by sheet (characters.ts's fallback colours). */
 const FALLBACK_BODY = ["#d9534f", "#3d6fc4", "#5cb85c", "#f0ad4e", "#9b59b6", "#1abc9c"];
 
-/**
- * The hall, painted on its back surface (under its benches, its waiters and the lift's riders):
- * a frieze and pendant lamps under the ceiling, a wainscot and a plant at each end of every bench
- * row — none of it in the lift's column or the aisle either side of it.
- */
+/** The hall on its back surface, under benches, waiters and riders; nothing in the lift's column
+ * or the aisle either side. */
 export function drawLounge(ctx: DrawTarget, cam: Camera, item: Extract<DrawItem, { t: "lounge" }>): void {
   const x0 = item.col * TILE;
   const x1 = (item.col + item.w) * TILE;
@@ -190,20 +164,13 @@ export function drawLounge(ctx: DrawTarget, cam: Camera, item: Extract<DrawItem,
   }
 }
 
-/**
- * The columns the pendant lamps hang in: the hall's two end columns and the gaps between each side's
- * two benches (6 from the lift: engine/city.ts's margin, bench, gap, bench, aisle) — over no
- * sitter's head, and never in the lift's way.
- */
+/** Lamp columns: the hall's end columns and the gaps between each side's two benches (6 from the
+ * lift, per engine/city.ts's layout): over no sitter, never in the lift's way. */
 export function lampCols(item: Extract<DrawItem, { t: "lounge" }>): number[] {
   return [item.col, item.lift - 6, item.lift + 6, item.col + item.w - 1];
 }
 
-/**
- * A pendant lamp in the tile column at x0, hung from the frieze on the back wall (row top `wall`)
- * down into the headroom row: its cord, a brass-rimmed shade, the lit bulb under it and the warm
- * pool it throws on the tiles below.
- */
+/** A pendant lamp in the column at x0, hung from the frieze (row top `wall`) into the headroom. */
 function lamp(ctx: DrawTarget, cam: Camera, x0: number, wall: number): void {
   const shade = wall + TILE + 1;
   rect(ctx, cam, x0 + 1, shade + 2, 14, 10, LOUNGE.glow);

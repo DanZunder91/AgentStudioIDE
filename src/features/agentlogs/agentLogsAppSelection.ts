@@ -1,20 +1,6 @@
-/**
- * The dev-app selection rule of the Logs view, as one store subscription rather than a check at
- * every call site: whatever changes the SOURCE PICK — a sidebar row, All, the stream header's
- * "All sources", the toolbar picker, an
- * error badge, a block's "→ open stream" link — a pick that is not all the selected app's own
- * streams deselects the app (`selectDevApp(null)`), which unmounts its card.
- *
- * Only a change of `filter.onlySources` is judged — never a level chip or the text box (they
- * keep the array's identity), and never the selection itself: selecting an app sets the
- * procs store first and solos second, so the solo is what gets judged, and it is the app's.
- * The Service that tails the app's console counts as the app's own (`isAppSource`).
- * A selected app that is no longer listed (it exited) is let go on the next pick too.
- *
- * Also: when the selected app disappears from the list while its empty "nothing streams yet"
- * pick is on screen, the pick goes back to All — an empty pick with no card above it would
- * be a blank stream with no way to tell why.
- */
+/** Dev-app selection rule as one store subscription: a `filter.onlySources` change that is not
+ * all the selected app's own streams (`isAppSource`) deselects it. If the app vanishes while its
+ * empty pick shows, the pick returns to All (else a blank stream with no explanation). */
 
 import { selectDevApp, useProcsStore } from "../procs/procsStore";
 import type { DevApp } from "../procs/procsTypes";
@@ -47,12 +33,8 @@ export function watchAppSelection(): () => void {
   };
 }
 
-/**
- * Select `app` in the Logs view — the sidebar row's click and the stream header's app links
- * share it: the procs store first, then the solo of its streams (none yet →
- * the empty pick, and the card says what to do), so {@link watchAppSelection} judges the solo
- * and it is the app's own.
- */
+/** Select `app` in Logs (sidebar row, stream header links): procs store first, then solo its
+ * streams, so {@link watchAppSelection} judges a solo that is the app's own. */
 export function selectAppInLogs(app: DevApp): void {
   selectDevApp(app.key);
   const p = useProcsStore.getState();

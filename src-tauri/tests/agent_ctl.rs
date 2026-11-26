@@ -1,9 +1,6 @@
-//! Agent control end to end, without the GUI: the real listener's `/ctl` route over real TCP, and
-//! the real app binary run as `agent-studio db …` against it — the path an agent's
-//! `agent-studio db connect <url>` takes, minus the webview.
-//!
-//! Hermetic: every store is in a temp dir, the database is a port nothing listens on, and the
-//! listener is on loopback.
+//! Agent control end to end without the GUI: the real `/ctl` route over TCP and the real binary
+//! as `agent-studio db …` (an agent's `db connect <url>`). Hermetic: temp stores, a dead DB
+//! port, a loopback listener.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

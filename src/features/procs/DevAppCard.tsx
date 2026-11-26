@@ -1,33 +1,6 @@
-/**
- * DevAppCard — the app card shown above the Logs stream when a dev app is selected: pid,
- * runtime, cwd (copy), the command
- * (masked by Rust, ellipsised, full in the tooltip), uptime, ports (each → its connections in
- * Whole Mac), the app's log sources with Stream / Stop, the console state, and — when the console
- * is a terminal or pipe we cannot read — **Restart in the IDE**.
- *
- * Where each file is listed (DECIDED): when the console itself is redirected to a file
- * (`console: "file"`), the stdout/stderr files are shown on the Console line — that is what the
- * user is looking for — and the Log files list holds only the other logs, so no file has two
- * Stream buttons. Otherwise every file is in the list (a `2>err.log` under a terminal console is
- * just a log). Files the user picked and is streaming are listed too, so they can be stopped.
- *
- * An app the IDE itself started (`origin: "ide"`) never offers "Restart in the
- * IDE" — it is already in the IDE. Its console is usually an IDE terminal (`ide-terminal`):
- * the card names that terminal and opens it. It also links to its **requests** (Network › IDE
- * traffic with the Process picker on its executable's name), since an IDE terminal's traffic
- * goes through the IDE's proxy. A file that a Service stream already tails (a task line's
- * `detail` lists it — `agentLogsLinks.servicePaths`) is not tailed a second time: the card says
- * "Already streaming as <service>" and links to that stream instead.
- *
- * **The capture guard**: an IDE app's card says whether its HTTP reaches
- * Network (`network/IdeAppCapture`): not captured — why, **Restart with capture** (the same
- * confirm + two Rust steps as Restart in the IDE, worded for capture) and its live connections;
- * captured — "✓ Receiving …", Show them, and exactly where they appear.
- *
- * Every piece of flow state (in-flight streams, errors, the restart confirm) is in the store, so
- * a tab switch mid-restart keeps the confirm/failure. Holds the poll while mounted,
- * so uptime and ports stay current even with the sidebar collapsed.
- */
+/** The selected dev app's card above the Logs stream. A console redirected to a file shows its
+ * files on the Console line, not in Log files, so no file has two Stream buttons. IDE-started apps
+ * never offer Restart in the IDE. All flow state is in the store, so a tab switch keeps it. */
 
 import { useState } from "react";
 
@@ -66,10 +39,8 @@ export interface TailedBy {
 
 export interface DevAppCardProps {
   app: DevApp;
-  /**
-   * A stream to show, by its `source`, so the Logs view solos it: one just started here, or
-   * the service stream that already tails one of the app's files ("Already streaming as …").
-   */
+  /** A stream to solo, by `source`: one just started here, or the service stream already tailing
+   * one of the app's files ("Already streaming as …"). */
   onStreamStarted: (source: string) => void;
   /** Restart in the IDE succeeded, or "Open terminal" on an `ide-terminal` console: focus/open this terminal. */
   onOpenTerminal: (terminalId: string) => void;

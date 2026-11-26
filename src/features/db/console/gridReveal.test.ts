@@ -1,17 +1,5 @@
-/**
- * gridReveal tests — the horizontal half of "take me to the match".
- *
- * Pure arithmetic over two extents and a scroll offset, so this file needs no DOM
- * and makes no claim about one. It is the counterpart to `gridSearch.test.ts`'s
- * `scrollToRow` block, and the two share a contract worth stating once: **`null`
- * means "already on screen, do not touch the box"**, never "I could not work it
- * out". Every caller treats null as "no write", so a function that returned a
- * position for a visible hit would make the grid jitter on every step.
- *
- * The numbers here are viewport pixels, the units `getBoundingClientRect` speaks,
- * because that is what `ResultsGrid` reads off the header cell. The component tier
- * proves the component passes the right ones; this tier proves the answer.
- */
+/** null means "already on screen" (callers then write nothing), never "unknown". Units are
+ * viewport pixels, as getBoundingClientRect reports them. */
 
 import { describe, expect, it } from "vitest";
 

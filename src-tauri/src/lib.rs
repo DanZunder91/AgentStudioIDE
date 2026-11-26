@@ -1,16 +1,9 @@
-//! Agent Studio — Rust core.
-//!
-//! Module layout mirrors the two data planes (ARCHITECTURE §3):
-//! `pty` + `stream` = the **hot** byte plane (PTY bytes → `ipc::Channel`, never
-//! through React state, never JSON); `supervisor` = the **cold** control plane
-//! (an actor owning every terminal, driven by an mpsc command loop).
-//!
-//! M1 ships terminals. `agent/` (fan-out) and `workspace/` (fs watch) follow.
+//! Agent Studio Rust core. Modules mirror the two data planes (ARCHITECTURE §3): `pty` +
+//! `stream` = hot byte plane (PTY bytes → `ipc::Channel`, never React state or JSON);
+//! `supervisor` = cold control plane (an actor owning every terminal, mpsc command loop).
 
-// `pub` (not `mod`) so `src-tauri/tests/**` — which links this crate as an rlib —
-// can drive the real PTY/coalescer/supervisor code. Visibility only:
-// nothing here is part of the JS wire contract, which is the `#[tauri::command]`
-// surface in `supervisor::commands`.
+// `pub` so `src-tauri/tests/**` (linking this crate as an rlib) can drive the real code. The
+// JS wire contract is the `#[tauri::command]` surface in `supervisor::commands`, not this.
 pub mod agent;
 pub mod agent_ctl;
 pub mod api_store;
@@ -107,12 +100,8 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Install the ONE rustls crypto provider (`ring`) before anything can open a socket
-    // `reqwest` is built with `rustls-no-provider`, so its `ClientBuilder`
-    // PANICS if no process default is installed — and doing it here, once, is what makes
-    // `http_send`, `ws_connect` and the gRPC dial provably share a backend instead of
-    // each falling back to its own crate-feature default. Idempotent: the clients call it
-    // again defensively (see `src/tls.rs` for why).
+    // Install the ONE rustls provider (`ring`) before any socket: reqwest's builder panics
+    // without one, and one install keeps HTTP, WS and gRPC on one backend. Idempotent.
     tls::install_crypto_provider();
 
     tauri::Builder::default()
@@ -125,50 +114,36 @@ pub fn run() {
         // Windows: WebView2's own browser keys off in every window — Ctrl+R/F5 reloaded the
         // whole IDE, Ctrl+P printed it (see `webview_keys`). A no-op on macOS/Linux.
         .plugin(webview_keys::plugin())
-        // `preview://` — the rendered HTML preview's transport. Registering a
-        // scheme is Rust-only: it needs no `tauri.conf.json` entry, but the app CSP
-        // must name it in `frame-src` or the iframe is blocked. Asynchronous so the
-        // asset read runs on a blocking worker rather than the event-loop thread.
+        // `preview://` (HTML preview): no `tauri.conf.json` entry, but the app CSP must
+        // name it in `frame-src`. Async so asset reads run on a blocking worker.
         .register_asynchronous_uri_scheme_protocol(html_preview::SCHEME, html_preview::handle)
         // Tab tear-off (docs/design/tab-tearoff.md): the registry of which detached window
         // holds which tab, and their lifecycle — a detached window's tabs go back to the
         // main window when it closes, and closing the main window quits the app.
         .manage(tearoff::Tearoff::default())
         .on_window_event(|window, event| {
-            // The main window going away IS the app quitting (`tearoff` exits on it):
-            // raise the supervisor's shutting-down flag before anything can tear a PTY
-            // down, so the agents stay in `open-agents.json` and come back next launch.
-            // `Destroyed`, not `CloseRequested`: a close request can still be refused.
+            // Main window gone = app quitting: flag shutdown before any PTY dies, so agents
+            // stay in `open-agents.json`. `Destroyed`: `CloseRequested` can be refused.
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 begin_fleet_shutdown(window.app_handle());
             }
             tearoff::on_window_event(window, event);
         })
         .setup(|app| {
-            // The Network view's capture proxy. FIRST,
-            // so its port is known before any PTY (pinned-agent restore included) asks
-            // `netcap::pty_env` for the proxy vars — and the CA bundle is on disk before it
-            // returns, so no PTY gets a CA variable naming a missing file.
-            // A bind failure logs and runs on.
+            // Capture proxy FIRST: its port and CA bundle must exist before any PTY asks
+            // `netcap::pty_env`. A bind failure logs and runs on.
             netcap::start(app.handle());
             // The `agent-studio` command every terminal gets (agent_ctl::tools), before any PTY
             // exists. Real boot only; a failure logs and terminals open without it.
             if let (Ok(dir), Ok(exe)) = (app.path().app_config_dir(), std::env::current_exe()) {
                 agent_ctl::tools::install(&dir, exe);
             }
-            // One supervisor for the whole app; the handle is cheap to clone and
-            // is how every command reaches the registry.
-            //
-            // The sink and the adapter list are injected (rather than built inside
-            // the supervisor) so the whole agent lifecycle stays testable without
-            // a Tauri app or a real `claude`. Adding a runtime is one more entry
-            // here and one more impl of `AgentAdapter` — the adapter seam.
+            // One supervisor for the app. Sink and adapters are injected so the lifecycle is
+            // testable without Tauri or `claude`; a new runtime is one more `AgentAdapter`.
             let sink = Arc::new(events::TauriEventSink(app.handle().clone()));
 
-            // Bind the ad-hoc-detection listener FIRST: its URL + token
-            // must exist before the supervisor spawns any PTY, because every PTY
-            // gets them injected. If binding fails (no localhost?), the app still
-            // runs — just without ad-hoc `claude` detection.
+            // Bind the ad-hoc-detection listener FIRST: every PTY gets its URL + token.
+            // If binding fails, the app runs without ad-hoc `claude` detection.
             let adapters = || vec![Arc::new(agent::claude::ClaudeAdapter::new()) as _];
             // The Agent Logs hub: every PTY's pump
             // taps into it, and the fan-out tailers feed it tool calls.
@@ -216,19 +191,12 @@ pub fn run() {
                 }
             };
 
-            // Re-open every agent of the last session — the open ones and the pinned
-            // ones, once each (`open_agents.rs`; a resume-or-fresh ladder per agent). Reads
-            // the real stores — ONLY on real app boot, a path `cargo test` never runs.
-            // Enqueued synchronously, before the webview exists, so its
-            // first `fleet_snapshot` already has them and the layout restore puts each
-            // back in its pane via the terminal re-attach path.
+            // Re-open last session's open and pinned agents (`open_agents.rs`), real boot only.
+            // Enqueued before the webview exists, so the first `fleet_snapshot` has them.
             open_agents::restore_on_boot(app.handle(), &handle);
 
-            // Dev apps on this machine: discovery,
-            // their log tails into the hub, Restart in the IDE. Managed after the supervisor
-            // because it reads the supervisor's terminal table to say which app an IDE
-            // terminal or agent started. Nothing runs until the view asks
-            // (`procs_list`); the docker CLI is only `stat`ed here.
+            // Dev-app discovery, log tails, Restart. After the supervisor: it reads the terminal
+            // table. Nothing runs until `procs_list`; the docker CLI is only `stat`ed here.
             app.manage(procscan::Procs::for_app(procs_logs, handle.ide_terminals()));
 
             app.manage(handle);
@@ -241,12 +209,8 @@ pub fn run() {
             // menu failure logs and keeps the default menu, never blocks startup.
             menu::install(app);
 
-            // Stamp the build identity into the window title.
-            // Set here rather than in `tauri.conf.json` for two reasons: the commit
-            // is only known at compile time, and a static title would repeat the
-            // version by hand — a second copy, free to drift from the one the
-            // bundle carries. `package_info()` gives us both halves from the same
-            // place the installer reads them.
+            // Build identity in the window title: the commit is only known at compile time,
+            // and `package_info()` avoids a hand-copied version drifting from the bundle's.
             match app.get_webview_window("main") {
                 Some(window) => {
                     let info = app.package_info();
@@ -407,10 +371,8 @@ pub fn run() {
             db::db_saved_query_delete,
             db::db_query,
             db::db_cancel,
-            // ── shareable config bundles (export/import). The bundle's BYTES never cross this
-            //    boundary in either direction: Rust reads and writes the file itself, given a
-            //    path the user picked with the dialog plugin, and the webview only ever sees a
-            //    header, a plan or a result. See `portability/mod.rs`.
+            // ── shareable config bundles: the bundle's BYTES never cross IPC; Rust reads
+            //    and writes the user-picked path (see `portability/mod.rs`).
             portability::portability_export,
             portability::portability_inspect,
             portability::portability_import,
@@ -433,12 +395,8 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // The other two ways a quit announces itself. On macOS, ⌘Q goes through
-            // `applicationWillTerminate` and only ever reaches us as `Exit` (tao 0.35
-            // emits no `ExitRequested` for it); closing the last window and
-            // `app.exit()` come as `ExitRequested` first. Either way the PTYs are still
-            // alive here — they die with the process — so raising the flag now keeps
-            // every open agent in `open-agents.json`. Nothing here prevents the exit.
+            // Other quits: macOS ⌘Q arrives only as `Exit`; last-window close and `app.exit()`
+            // as `ExitRequested`. PTYs still live here, so flag shutdown to keep agents saved.
             if matches!(
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit

@@ -1,13 +1,5 @@
-/**
- * Agent Village — per-pixel recolouring of RGBA buffers (pure, no DOM).
- *
- * Two operations, both run once per variant and cached by the sprite bank:
- *   - `hueShiftPixels` rotates every opaque pixel's hue (character diversity
- *     beyond the six pre-coloured sheets);
- *   - `colorizePixels` is Photoshop-style "Colorize": luminance is kept, hue
- *     and saturation are replaced, then contrast/brightness adjust lightness —
- *     one grayscale floor or wall tile serves every colour.
- */
+/** Per-pixel RGBA recolouring (pure, no DOM), run once per variant and cached by the sprite bank.
+ * `colorizePixels` keeps luminance, so one grayscale floor or wall tile serves every colour. */
 
 import type { Hsbc } from "./renderTypes";
 

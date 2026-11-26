@@ -1,10 +1,5 @@
-/**
- * "Hide AI providers": with many agents, every turn of every agent is a request from its CLI to a
- * model provider, and they bury the traffic worth reading. The checkbox, in the header's right corner, hides only an agent CLI's OWN
- * calls; an agent's curl or script to the same host stays.
- *
- * Only `./netcapIpc` / `./netmachineIpc` are mocked; the store, filter and table are real.
- */
+/** "Hide AI providers" hides only an agent CLI's own calls; an agent's curl or script to the same
+ * host stays. Only the IPC modules are mocked; the store, filter and table are real. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

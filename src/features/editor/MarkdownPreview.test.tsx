@@ -1,14 +1,5 @@
-/**
- * MarkdownPreview tests. jsdom + @testing-library/react.
- *
- * `mermaid` is mocked at the module boundary: the real renderer needs a live SVG
- * layout engine jsdom does not have, and mocking lets us drive both the success
- * and the parse-error paths deterministically — plus the unmount race guard.
- *
- * NOTE on ordering: the component inits mermaid once (module-global flag), so the
- * FIRST test that renders a diagram exercises the init; later diagram tests
- * exercise the already-initialised path. Both branches are covered as a result.
- */
+/** `mermaid` is mocked (jsdom has no SVG layout). It inits once per module, so the first diagram
+ * test covers init and later ones the already-initialised path. */
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,28 +25,15 @@ import { anchorScrollDelta, fitPreviewZoom, wheelPreviewZoom } from "./previewZo
 // A fenced-block delimiter kept out of the template literals below.
 const F = "```";
 
-/**
- * Dispatch a NATIVE wheel event and return it. `fireEvent.wheel` does not set
- * `cancelable`, and `defaultPrevented` is only observable on a cancelable event
- * — the whole point of several assertions below.
- */
+/** `fireEvent.wheel` isn't cancelable, and `defaultPrevented` is only observable on one. */
 function wheel(el: HTMLElement, init: WheelEventInit): WheelEvent {
   const evt = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
   el.dispatchEvent(evt);
   return evt;
 }
 
-/**
- * Run `fn` and collect anything React reports as an UNCAUGHT error.
- *
- * `expect(() => fireEvent.click(x)).not.toThrow()` is worthless against a React
- * event handler: React catches the throw and re-reports it via `reportError`,
- * which jsdom turns into a window "error" event. Vitest then prints
- * "53 passed | 1 error" — a red run being polite — and any
- * assertion phrased as "did not throw" sails straight past it. Verified against
- * a real mutant: deleting the handler's `!block || !svg` bail throws a
- * TypeError that `not.toThrow()` did not catch and this helper does.
- */
+/** React catches a handler's throw and re-reports it as a window error, which `not.toThrow()`
+ * misses; this collects those instead. */
 function errorsDuring(fn: () => void): unknown[] {
   const seen: unknown[] = [];
   const onError = (e: ErrorEvent): void => {
@@ -71,31 +49,14 @@ function errorsDuring(fn: () => void): unknown[] {
   return seen;
 }
 
-/**
- * jsdom's scrollLeft/scrollTop are inert (no layout → no scrolling box), so
- * replace them with plain writable values. Stubbed, and honest about it (the
- * ResultsGrid measurement-stub precedent): this pins the component's scroll
- * ARITHMETIC; it cannot prove real scroll clamping under a layout engine.
- */
+/** jsdom scroll offsets are inert; plain writable values pin the arithmetic, not real clamping. */
 function stubScroll(el: HTMLElement): void {
   Object.defineProperty(el, "scrollLeft", { value: 0, writable: true, configurable: true });
   Object.defineProperty(el, "scrollTop", { value: 0, writable: true, configurable: true });
 }
 
-/**
- * Feed the Fit handler the two measurements it takes at click time. jsdom has no
- * layout engine, so every `getBoundingClientRect()` is 0×0 and every
- * `clientWidth`/`clientHeight` is 0 — a Fit click here would measure a collapsed
- * pane and (correctly) do nothing, which makes an unstubbed assertion vacuous.
- *
- * Stubbed, and honest about it — the `stubScroll` caveat above applies in full:
- * this pins the WIRING (which element is measured, that the pane's padding comes
- * off the client box, and that `fitPreviewZoom`'s number is what reaches
- * `onZoomChange`) and nothing else. It proves nothing about real geometry —
- * mermaid's own SVG size, the `calc(100% * var(--mdp-zoom))` ceiling, a
- * scrollbar eating clientWidth. That is the browser tier's job
- * (`markdownPreviewZoom.browser.test.tsx`), under a real engine.
- */
+/** jsdom measures 0×0, so an unstubbed Fit does nothing. Pins the wiring only; real geometry is
+ * in `markdownPreviewZoom.browser.test.tsx`. */
 function stubFitGeometry(
   preview: HTMLElement,
   {
@@ -281,14 +242,8 @@ describe("MarkdownPreview — mermaid diagrams", () => {
       expect.objectContaining({
         startOnLoad: false,
         securityLevel: "strict",
-        // 🔴 The fix for the leaked-error-graphic bug. Without this flag mermaid
-        // paints its red "Syntax error in text" graphic into the temp div it
-        // appends to document.body and then throws one statement BEFORE its own
-        // cleanup runs — so the graphic is stranded outside React, one per
-        // failed render, until the app restarts. Asserted here because this is
-        // the only test in the file that observes `initialize`: init is
-        // module-global and idempotent, so every later diagram test runs
-        // against the already-initialised path (see the file header).
+        // Without it mermaid strands its error graphic on document.body (it throws before cleanup).
+        // Only this test sees `initialize`: init is module-global.
         suppressErrorRendering: true,
       }),
     );
@@ -312,14 +267,8 @@ describe("MarkdownPreview — mermaid diagrams", () => {
     expect(container.querySelector("svg")).toBeNull();
   });
 
-  /**
-   * mermaid's default is `useMaxWidth: true` for every diagram type, which emits
-   * `width="100%" style="max-width: <natural>px"` — shrink-to-fit-the-pane. Under
-   * CSS `zoom` that clamp makes zooming a NO-OP for diagrams (the pane's CSS width
-   * is itself divided by the zoom, so `100%` paints back to the same device pixels
-   * at every level), and it is why a wide schema was unreadable at 100% in the
-   * first place. The hydration step pins the natural width instead.
-   */
+  /** mermaid's default `useMaxWidth` clamps to the pane, which makes CSS `zoom` a no-op for
+   * diagrams; hydration pins the natural width instead. */
   describe("sizes the rendered diagram so zoom can scale it", () => {
     const hydrate = async (svg: string) => {
       mermaidMock.render.mockResolvedValue({ svg });
@@ -405,33 +354,9 @@ describe("MarkdownPreview — mermaid diagrams", () => {
   });
 });
 
-/**
- * The leaked-error-graphic bug: a markdown file
- * whose mermaid diagrams fail to parse filled the app with mermaid's red
- * *"Syntax error in text / mermaid version 11.16.1"* graphic — stacked many
- * times, overlapping the left rail and the terminal, persisting across screens
- * and surviving the source file being fixed. Only restarting cleared them.
- *
- * Two independent fixes, falsifiable independently:
- *
- *   1. `suppressErrorRendering` stops mermaid drawing the graphic at all, and
- *      makes it run its own `removeTempElements()` before rethrowing. Pinned by
- *      the `initialize` assertion above (the only place in this file that can
- *      see the init), and END-TO-END against the real library in
- *      `mermaidLeak.browser.test.tsx`.
- *   2. Our own `finally` sweep, for the ~20 lines of `render()` that sit in no
- *      try/catch at all and can still strand the div with suppression on. That
- *      is what this block pins, and the MOCK is the right instrument for it:
- *      it reproduces mermaid's leak exactly (append `#d{id}` to document.body,
- *      then reject) while removing every other reason the node might vanish, so
- *      only our sweep can be what cleans it.
- *
- * 🔴 Every assertion here looks at `document.body`, OUTSIDE the RTL container.
- * That is the whole point: the leaked node is a SIBLING of the container, which
- * is exactly why the pre-existing invalid-diagram test — `mockRejectedValue`
- * (which by construction cannot leak) asserted within `container` — could not
- * have caught this.
- */
+/** Two fixes: `suppressErrorRendering` (pinned above and in `mermaidLeak.browser.test.tsx`) and
+ * our own `finally` sweep, pinned here. Assertions look at `document.body`, since the leaked node
+ * is a sibling of the RTL container. */
 describe("MarkdownPreview — a failed diagram leaves nothing on document.body", () => {
   const doc = `${F}mermaid\ngraph TD; A-->B;\n${F}`;
 
@@ -448,13 +373,8 @@ describe("MarkdownPreview — a failed diagram leaves nothing on document.body",
     });
   }
 
-  /**
-   * mermaid's leak, at the module boundary: `render(id, text)` with no
-   * container argument builds the diagram in a temp `<div id="d{id}">` appended
-   * to `document.body`, paints the bomb into it, and throws before its cleanup.
-   * Returns the ids it was called with, so the assertions never have to guess
-   * at the component's monotonic counter.
-   */
+  /** Mimics mermaid's leak: appends `<div id="d{id}">` to `document.body`, then rejects. Returns
+   * the ids used. */
   function leakThenReject(error: unknown): string[] {
     const ids: string[] = [];
     mermaidMock.render.mockImplementation((id: string) => {
@@ -499,10 +419,8 @@ describe("MarkdownPreview — a failed diagram leaves nothing on document.body",
   });
 
   it("does not accumulate them across mount / unmount cycles", async () => {
-    // The graphic stuck on every screen: `Pane` mounts only the ACTIVE
-    // tab, so every switch away and back re-runs the hydration with a fresh
-    // monotonic id — and mermaid's own `removeExistingElements` only reclaims a
-    // node of the SAME id, so the count was unbounded over a session.
+    // Each tab switch re-hydrates with a fresh id, and mermaid only reclaims a node of the same id,
+    // so leaks were unbounded.
     const ids = leakThenReject(parseError());
     for (let pass = 0; pass < 3; pass++) {
       const { container, unmount } = render(<MarkdownPreview text={doc} />);
@@ -533,12 +451,8 @@ describe("MarkdownPreview — a failed diagram leaves nothing on document.body",
   });
 
   it("does not re-render a block that already failed", async () => {
-    // The retry amplifier. The hydration effect re-runs whenever `isControlled`
-    // flips, over a DOM React has NOT re-injected (the html string is
-    // unchanged), so without an "already dealt with" marker on the failed block
-    // the pass reads the error note's own prose back out of `textContent` and
-    // feeds it to mermaid as diagram source — a fresh id, a fresh leak, and
-    // "Diagram error" stacking on itself, on every pass.
+    // The effect re-runs when `isControlled` flips over un-reinjected DOM; without a marker on the
+    // failed block it feeds the error note's text back to mermaid, leaking again each pass.
     mermaidMock.render.mockRejectedValue(parseError());
     const { container, rerender } = render(<MarkdownPreview text={doc} />);
     await waitFor(() =>
@@ -560,13 +474,7 @@ describe("MarkdownPreview — a failed diagram leaves nothing on document.body",
   });
 });
 
-/**
- * What the inline note SAYS. It used to be a bare "Diagram error"
- * next to the source — true, and useless: a real diagram had to be diagnosed
- * by hand (it was a `;` inside a `Note` line, which the sequence
- * grammar reads as a statement separator). The thrown error already carries the
- * line, the token and what the parser expected there.
- */
+/** The thrown error carries the line, token and expectation; the note must show them. */
 describe("MarkdownPreview — what a diagram error says", () => {
   const doc = `${F}mermaid\nsequenceDiagram\n  Note over A: a; b\n${F}`;
 
@@ -584,11 +492,8 @@ describe("MarkdownPreview — what a diagram error says", () => {
       Object.assign(new Error("Parse error on line 3:\n…"), {
         hash: {
           token: "NEWLINE",
-          // 🔴 `line` and `loc.first_line` DISAGREE, and this pair is not
-          // invented: measured against mermaid 11.16.1, a flowchart failure on
-          // the third line reports `line: 2` (jison's 0-based `yylineno`) and
-          // `first_line: 3`, and only `loc` agrees with mermaid's own
-          // "Parse error on line 3:". Reading `hash.line` would be off by one.
+          // Measured on mermaid 11.16.1: `line` is 0-based, `loc.first_line` matches its
+          // "Parse error on line N"; reading `hash.line` is off by one.
           line: 2,
           loc: { first_line: 3 },
           expected: ["'SOLID_ARROW'", "'DOTTED_ARROW'", "'SOLID_CROSS'", "'SOLID_POINT'"],
@@ -698,19 +603,8 @@ describe("MarkdownPreview — what a diagram error says", () => {
   });
 });
 
-/**
- * Regression guard for the un-hydration bug: clicking the preview
- * focuses the pane, which re-renders the editor, which re-rendered this
- * component — and React 19 re-assigns `innerHTML` whenever the
- * `dangerouslySetInnerHTML` prop OBJECT is a new reference (it never compares
- * the `__html` strings). That wiped every post-mount mutation — the mermaid SVG
- * reverted to its raw source text, inlined images lost their data URLs — and it
- * was permanent, because the hydration effects are keyed on the unchanged HTML.
- *
- * These tests re-render with the SAME text and assert the hydrated DOM survives.
- * They exercise React's real prop diffing, so they fail if the memoised
- * `htmlProp` is ever inlined back into the JSX.
- */
+/** React 19 re-assigns `innerHTML` whenever the `dangerouslySetInnerHTML` object is new, wiping
+ * hydration; these fail if the memoised `htmlProp` is inlined back into the JSX. */
 describe("MarkdownPreview — hydration survives unrelated re-renders", () => {
   const doc = `${F}mermaid\ngraph TD; A-->B;\n${F}`;
 
@@ -1047,28 +941,13 @@ describe("MarkdownPreview — canvas zoom (ctrl/cmd+wheel)", () => {
   });
 });
 
-/**
- * The per-diagram "Fit" control (a button over the diagram that zooms it
- * automatically, to 50% in some cases and 200% in others). Both of those
- * numbers come out of one rule, so the tests below drive the same
- * click into a pane the diagram overflows and a pane it under-fills.
- *
- * Two things about the control are structural rather than cosmetic, and each
- * gets its own case: it exists ONLY on a block that really became a diagram
- * (nothing else can be measured), and only when zoom is controlled (otherwise
- * the button is a dead affordance). The click itself is handled by DELEGATION
- * from the container — the button carries no closure — so these tests dispatch
- * a real click on the button and let it bubble.
- */
+/** The control exists only on a hydrated diagram with controlled zoom. Clicks are delegated from
+ * the container, so tests click the real button and let it bubble. */
 describe("MarkdownPreview — per-diagram Fit control", () => {
   const doc = `${F}mermaid\ngraph TD; A-->B;\n${F}`;
   const DIAGRAM_SVG = '<svg data-testid="mermaid-svg"><g></g></svg>';
 
-  /**
-   * Render controlled and wait for the diagram to hydrate — the only state in
-   * which the control exists at all. Returns the scrolling container, which is
-   * both what gets measured and what the delegated listener sits on.
-   */
+  /** The control exists only once hydrated; returns the container, where the listener sits. */
   const renderFitted = async (
     onZoomChange: (zoom: number) => void,
     zoom = 1,
@@ -1083,12 +962,7 @@ describe("MarkdownPreview — per-diagram Fit control", () => {
     return screen.getByTestId("markdown-preview");
   };
 
-  /**
-   * The delegated listener sits on the container, so it runs for EVERY click in
-   * the preview — including in documents and modes where no Fit control exists.
-   * Its two early bails are what make that safe, and both are reachable from
-   * user content rather than being unreachable belt-and-braces.
-   */
+  /** The delegated listener runs for every click, so its two early bails must be safe. */
   it("an uncontrolled preview ignores clicks instead of throwing", async () => {
     // No `onZoomChange`, so no control is rendered — but the handler is still
     // bound and still fires. The `!onZoomChange` bail is also what narrows the
@@ -1107,10 +981,8 @@ describe("MarkdownPreview — per-diagram Fit control", () => {
   });
 
   it("ignores a `data-mdp-fit` element the DOCUMENT supplied, outside any diagram", async () => {
-    // markdown-it runs with html:true and DOMPurify keeps `data-*`, so a README
-    // can contain the very attribute the delegation matches on. Walking up from
-    // it finds no diagram to measure, and the handler must decline rather than
-    // read dimensions off `null`.
+    // html:true + DOMPurify keeping `data-*` let a README carry the matched attribute; with no
+    // diagram above it the handler must decline.
     const onZoomChange = vi.fn();
     render(
       <MarkdownPreview
@@ -1266,11 +1138,7 @@ describe("MarkdownPreview — per-diagram Fit control", () => {
     const onZoomChange = vi.fn();
     await renderFitted(onZoomChange);
 
-    // Nothing stubbed: jsdom measures 0×0 for both the diagram and the pane —
-    // the same numbers a collapsed or not-yet-laid-out pane reports for real.
-    // `fitPreviewZoom` returns the current zoom for a zero dimension and the
-    // handler bails, so a garbage zoom never reaches the store, and the missing
-    // measurements never throw.
+    // Unstubbed 0×0, like a collapsed pane: `fitPreviewZoom` keeps the zoom and the handler bails.
     expect(() => fireEvent.click(screen.getByTestId("diagram-fit"))).not.toThrow();
     expect(onZoomChange).not.toHaveBeenCalled();
   });
@@ -1302,12 +1170,8 @@ describe("MarkdownPreview — per-diagram Fit control", () => {
     );
     expect(mermaidMock.render).toHaveBeenCalledTimes(1);
 
-    // The hydration effect is keyed on [html, isControlled], so zoom becoming
-    // controlled re-runs it over a subtree that is ALREADY SVG. The `--rendered`
-    // guard is what stops the second pass, and it is load-bearing: `source` is
-    // read back from `textContent`, which after hydration is the SVG's own text
-    // plus the "Fit" label — mermaid would be handed that garbage as a diagram,
-    // and the block would collect a second control.
+    // Controlled zoom re-runs hydration over existing SVG; the `--rendered` guard stops mermaid
+    // getting the SVG text as source and the block gaining a second control.
     rerender(<MarkdownPreview text={doc} zoom={1} onZoomChange={vi.fn()} />);
     await Promise.resolve();
 
@@ -1317,10 +1181,8 @@ describe("MarkdownPreview — per-diagram Fit control", () => {
     const block = container.querySelector<HTMLElement>(".markdown-preview__mermaid")!;
     expect(block.querySelectorAll("svg")).toHaveLength(1);
     expect(block.textContent).not.toContain("graph TD");
-    // The honest consequence of that guard: a block hydrated while the preview
-    // was UNCONTROLLED never gains a control retroactively. Inert in the app —
-    // CodeEditor always passes `onZoomChange`, so a diagram hydrates controlled
-    // or not at all — but a future caller that toggles the prop would see this.
+    // So a block hydrated uncontrolled never gains a control; CodeEditor always passes
+    // `onZoomChange`.
     expect(screen.queryAllByTestId("diagram-fit")).toHaveLength(0);
   });
 });
@@ -1411,35 +1273,9 @@ describe("MarkdownPreview — pan (ctrl/cmd+drag)", () => {
   });
 });
 
-/**
- * Find inside the RENDERED preview (search must work inside the rendered .md
- * file, not only in its source).
- *
- * This is the SEAM: `previewFind.ts` and `PreviewFindBar.tsx` are
- * each fully unit-tested on their own, and two 100%-covered halves do not add up
- * to a working feature. What is only assertable here is the join — that the key
- * reaches a handler at all, that the ranges come from THIS preview's DOM, that
- * the count is the count of addressable matches, and that closing retires the
- * highlights.
- *
- * Two things are asserted that look like implementation detail and are not:
- *
- *   - **Nothing is ever injected into the body.** That is the entire reason this
- *     uses `CSS.highlights` instead of `<mark>`s. A `<mark>` inside an
- *     un-hydrated ```mermaid block would be read back by the hydration pass as
- *     diagram SOURCE and rendered as *"Diagram error"* — a diagram broken
- *     **because the user searched** — and any injected node is erased outright
- *     by the next `innerHTML` assignment.
- *   - **The window-level fallback.** A strictly container-scoped handler is not
- *     the feature: the usual flow puts focus on a tree row or a tab, not in
- *     the preview, which is precisely why today's build answers Cmd+F with
- *     nothing.
- *
- * jsdom has no `CSS.highlights`, so `paintHighlights` is inert here by default;
- * where the painting itself is the claim the registry is stubbed, and the stub's
- * absence is asserted first so the test cannot pass by measuring nothing. The
- * real API is exercised in `previewFind.browser.test.tsx`.
- */
+/** The seam between `previewFind.ts` and `PreviewFindBar.tsx`. Nothing is injected into the body
+ * (`CSS.highlights`, not `<mark>`, which hydration would read as diagram source); the handler also
+ * has a window-level fallback. The real API is in `previewFind.browser.test.tsx`. */
 describe("MarkdownPreview — find in the rendered preview", () => {
   /** A Setlike stand-in for `Highlight`, enough for what is asserted below. */
   class FakeHighlight {
@@ -1506,11 +1342,7 @@ describe("MarkdownPreview — find in the rendered preview", () => {
     fireEvent.keyDown(el, { key: "Escape" });
 
     expect(screen.queryByTestId("preview-find")).toBeNull();
-    // Reopening WITH NOTHING SELECTED starts clean rather than restoring a
-    // stale search. The qualifier is load-bearing: Cmd+F now
-    // seeds from the selection, and `pressFind` focuses the container first —
-    // which in jsdom collapses the selection — so this is the no-selection path
-    // (the seeded one is its own describe below).
+    // The no-selection path: `pressFind` focuses first, which in jsdom collapses the selection.
     pressFind(el);
     expect(screen.getByTestId("preview-find-input")).toHaveValue("");
   });
@@ -1731,21 +1563,8 @@ describe("MarkdownPreview — find in the rendered preview", () => {
 
   /* ═══ Cmd/Ctrl+F seeds from the selection ══════════════════════════════════ */
 
-  /**
-   * Pressing Cmd+F with text selected must search for that selection.
-   *
-   * Same rule as the editor's own bar (`find/selectionSeed`), and the seed is
-   * written through the same `patchBar({ query })` the input's onChange uses —
-   * so what is asserted here is not "the box has text in it" but that the
-   * preview SEARCHED: the count, and the painted Ranges.
-   *
-   * 🔴 The multi-line fixture is a fenced code block on purpose. jsdom's
-   * `Selection.toString()` is `Range.toString()` — it concatenates character
-   * data and does not insert the line breaks a real browser puts between block
-   * elements — so a selection spanning two `<p>`s would arrive here as a
-   * single-line string and the test would pass against nothing. A `<pre>`'s text
-   * node carries real `\n`s, so it means the same thing in both engines.
-   */
+  /** Asserts the preview searched (count, painted ranges), not just filled the box. Multi-line
+   * uses a fenced block: jsdom's selection text has no line breaks between block elements. */
   describe("Cmd+F seeds from the selection", () => {
     const SEED_DOC = [
       "# Release notes",
@@ -1762,18 +1581,8 @@ describe("MarkdownPreview — find in the rendered preview", () => {
 
     afterEach(() => window.getSelection()?.removeAllRanges());
 
-    /**
-     * The real gesture, in the order it really happens: the mousedown focuses
-     * the preview (`onPointerDown`), the drag makes the selection, then the key
-     * is pressed.
-     *
-     * 🔴 That order is load-bearing HERE and nowhere else: jsdom's
-     * `HTMLElement.focus()` ends with `getSelection().collapse(this, 0)`, which
-     * no real browser does for a non-editable element. Calling the file's
-     * `pressFind` helper (which focuses first) after selecting would therefore
-     * wipe the selection and quietly test the empty-bar path instead — a test
-     * that passes against nothing.
-     */
+    /** Focus before selecting, as a real mousedown does: jsdom's `focus()` collapses the selection,
+     * so focusing after would silently test the empty-bar path. */
     function pressFindAfterSelecting(text: string): void {
       const el = screen.getByTestId("markdown-preview");
       el.focus();
@@ -2046,11 +1855,8 @@ describe("MarkdownPreview — find in the rendered preview", () => {
   });
 
   describe("the bar survives a tab move — store-kept per path", () => {
-    // `Pane` unmounts inactive tabs and a cross-pane drag re-parents the
-    // subtree, so open/query/cursor live in `findBars` keyed `preview:${path}`
-    // (the previewZoom precedent). These tests drive the REAL store — the same
-    // singleton the app uses — so the reset below is load-bearing: a leaked
-    // record would make "the bar starts closed" fail three tests later.
+    // Find state lives in the real store's `findBars` keyed `preview:${path}`; the reset matters,
+    // or a leaked record fails later tests.
     const PATH = "/repo/docs/notes.md";
     const KEY = `preview:${PATH}`;
     const barRecord = (key: string): FindBarState | undefined =>

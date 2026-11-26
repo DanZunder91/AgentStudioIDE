@@ -1,38 +1,11 @@
-/**
- * folderSemantics — IntelliJ-style semantic folder roles for the Files tree.
- *
- * Pure, table-driven: a folder NAME (plus, for the context-dependent rows, its
- * PARENT's name) maps to a role the tree colors by — `src` (blue), `test`
- * (green), `generated` (dim orange, IntelliJ's "excluded" feel) — or `null` for
- * a plain folder. Comparison is lowercase on both name and parent; paths never
- * enter this module (the tree passes `basename(parentPath(entry.path))`).
- *
- * SCOPE: designed for **Rust, Kotlin (Gradle/Maven) and
- * web (JS/TS)** projects. Other ecosystems are deliberately out of scope
- * until the scope is widened; rows no supported project produces would be
- * unreviewed dead data, which is why there are no Python rows
- * (`__pycache__`, `.venv`) "just in case".
- *
- * The tables are deliberately PRIVATE (an exported table invites
- * self-referential tests); `folderSemantics.test.ts` pins every row with
- * explicit literal assertions instead.
- *
- * Rust convention note: `src/`, `tests/`, `benches/` and `target/` are all
- * covered by the rows below — no Rust-specific rows are needed.
- *
- * Deliberate omission: `fixtures` is NOT a test row. It is too generic — a
- * `src/fixtures` of app data vs. a test-data `fixtures/` is ambiguous, and a
- * wrong green is worse than no color.
- */
+/** IntelliJ-style folder roles for the Files tree, from a folder NAME (some rows: its parent's
+ * name), lowercased; never paths. Scoped to Rust, Kotlin and web, so no other ecosystems' rows.
+ * Tables are private on purpose (the test pins each row); `fixtures` is too generic to color. */
 
 export type FolderRole = "src" | "test" | "generated";
 
-/** Test-code folders (green): `test(s)`/`spec(s)` (generic + Rust `tests`),
- *  Jest's `__tests__`, e2e suites, Android's `androidTest` source set, Rust's
- *  `benches`. `testdata` is kept although it is best known from Go: it also
- *  appears as a conventional test-input dir in Rust and web repos, and it is
- *  unambiguous — flagged as a judgment call, easy to drop if it proves
- *  wrong. */
+/** Test-code folders (green). `testdata` is a judgment call: best known from Go, but also an
+ * unambiguous test-input dir in Rust and web repos. */
 const TEST_DIRS = new Set([
   "test",
   "tests",
@@ -45,12 +18,8 @@ const TEST_DIRS = new Set([
   "testdata",
 ]);
 
-/** Build outputs / dependency caches (dim orange): never hand-edited, so the
- *  tree de-emphasizes them the way IntelliJ marks "excluded" roots. Rust:
- *  `target`; Gradle: `build`, `.gradle`, `out` (IDEA's output dir); web:
- *  `node_modules`, `dist`, `.next`, `coverage`. `vendor` is kept by choice:
- *  vendored dependencies are common in web monorepos (and beyond), and the
- *  dir is never hand-edited wherever it appears. */
+/** Build outputs / dependency caches (dim orange): never hand-edited, so de-emphasized like
+ * IntelliJ's "excluded" roots. `vendor` is kept by choice: common in web monorepos. */
 const GENERATED_DIRS = new Set([
   "target",
   "build",
@@ -68,12 +37,8 @@ const GENERATED_DIRS = new Set([
  *  they are plain folders (a top-level `java/` says nothing). */
 const JVM_SOURCE_SET_CHILDREN = new Set(["java", "kotlin", "scala", "groovy", "resources"]);
 
-/**
- * The role of a folder named `name` whose parent folder is named `parentName`
- * (pass the parent's NAME, not its path; omit/null when unknown), or `null`
- * for a plain folder. The literal tables above are disjoint, so lookup order
- * carries no precedence semantics.
- */
+/** Role of folder `name` whose parent is NAMED `parentName` (not a path; omit when unknown), or
+ * `null`. The tables are disjoint, so lookup order carries no precedence. */
 export function folderRole(name: string, parentName?: string | null): FolderRole | null {
   const n = name.toLowerCase();
   const parent = parentName == null ? null : parentName.toLowerCase();

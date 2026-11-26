@@ -1,9 +1,3 @@
-/**
- * LSPClient cache (M5). One client per (root, language), lazily started; an
- * absent server degrades to a calm install hint. The real `LSPClient` is driven
- * over a mocked `lsp_start`/`lsp_send` — no rust-analyzer needed.
- */
-
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { useAppStore } from "../../../app/store";
@@ -75,11 +69,8 @@ describe("ensureClient", () => {
 });
 
 describe("onShowMessage — the dialog-spam guard", () => {
-  // rust-analyzer re-sends "Failed to discover workspace" once per open file;
-  // the library's default handler dialogs EVERY one (eighteen stacked "OK"s on
-  // a real screen). Contract: every message reaches the diagnostics
-  // log; only the FIRST (language, text) pair reaches the default dialog
-  // (returning false = not handled = the library shows it).
+  // rust-analyzer repeats "Failed to discover workspace" per open file: every message is logged,
+  // only the first (language, text) pair reaches the dialog (false = the library shows it).
 
   beforeEach(() => {
     resetClients(); // also clears the dedupe set

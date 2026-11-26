@@ -1,11 +1,6 @@
-/**
- * ⚠️ GENERATED — do not edit; source: scripts/icons/mapping.mjs (+ the vendored
- * SVGs in src/assets/file-icons/svg); upstream v5.37.0.
- * Regenerate with `node scripts/icons/generate.mjs`.
- *
- * One inline SVG sprite (file-icons.md §4): every vendored icon is a
- * `<symbol id="mi-<id>">`, consumed via `<use href="#mi-<id>">`.
- */
+/** GENERATED — do not edit: `node scripts/icons/generate.mjs` from scripts/icons/mapping.mjs
+ * and the SVGs in src/assets/file-icons/svg (upstream v5.37.0).
+ * One inline SVG sprite (file-icons.md §4): each icon is a `<symbol id="mi-<id>">` for `<use>`. */
 
 export const FILE_ICON_SPRITE: string =
   '<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +

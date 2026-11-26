@@ -1,24 +1,6 @@
-/* ── Context window — the Metrics panel's per-agent card ─────────────────────
-
-   A dark card: header row, a full-width stacked
-   bar (or the /context grid), a wrapping legend, a quiet footer. Built on the app's
-   own tokens (`--bg-elev`, `--border`, `--text`, `--text-dim` from App.css) so it
-   sits in the dashboard rather than on top of it.
-
-   Narrow panes are a requirement, not a nicety: every row here wraps, nothing has a
-   fixed width larger than its content, and the grid's cells SHRINK (minmax(0, …))
-   rather than pushing the card wider than its pane. `context.browser.test.tsx`
-   measures that in real Chromium.
-
-   ── the category palette ────────────────────────────────────────────────────
-   Declared here rather than borrowed from `metrics.css` / `usage.css` so this card has
-   no CSS load-order dependency on another feature (the same reasoning metrics.css
-   gives for re-declaring its tones). The hues follow /context's own
-   (greys for the system, cyan for MCP, orange memory, yellow skills, purple
-   messages); the orange is `--metrics-series-2`'s validated #d97430, not a brighter
-   one, for the dark-lightness-band reason recorded in metrics.css. The system greys
-   step in lightness so three adjacent grey segments stay distinguishable without a
-   hue. Unknown keys hash into the six `--context-extra-N` slots. */
+/* Context window card. Narrow panes are a requirement: rows wrap, grid cells shrink (minmax(0, …)),
+   measured by context.browser.test.tsx. Palette is local (no load-order dependency), hues follow
+   /context's, orange is metrics.css's validated #d97430; unknown keys hash to --context-extra-N. */
 :root {
   --context-system-prompt: #a1a1aa;
   --context-system-tools: #71717a;

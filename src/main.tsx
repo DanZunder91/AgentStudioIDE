@@ -8,28 +8,9 @@ import { dispatchAgentCtl } from "./features/agentctl/dispatch";
 import { suppressNativeContextMenu } from "./app/nativeContextMenu";
 import { isMainWindow, startTearoffHost, startTearoffWindow } from "./app/tearoff";
 
-/**
- * The composition root: this is where the app is wired to the OS.
- *
- * `startBridge()` opens the cold plane (`agent://event` -> store) for the
- * process's lifetime. It lives HERE and not in `<App>` deliberately: putting it
- * in a component makes the component tree depend on Tauri, so every test that
- * renders <App /> then needs an event mock to exist at all. Keeping App pure is
- * what lets the layer-5 browser tier render the real thing.
- *
- * Not awaited, and that's fine: the bridge queues events that arrive before the
- * listener attaches, and the rail paints from `fleet_snapshot` regardless.
- * Nothing is torn down because there is no "after" — the process exit is the
- * teardown.
- *
- * ── Two kinds of window, one bundle (tab tear-off, docs/design/tab-tearoff.md) ──
- * Every Tauri window loads this same file into its own JS realm. The MAIN window boots the
- * whole app — and its tear-off host only once the bridge has settled, because a tab coming
- * home is a `rebuildTerminalTabs`, and one that ran before the boot restore placed the
- * persisted layout would consume it. A DETACHED window (label `tearoff-*`)
- * boots only its own tabs: no bridge (its fleet snapshot would rebuild — and steal — every
- * terminal in the app), no layout prefs, no rails.
- */
+/** Composition root. `startBridge()` stays out of `<App>` so App renders without Tauri; unawaited,
+ * it queues early events. The main window boots the tear-off host after the bridge settles; a
+ * `tearoff-*` window gets no bridge: it would steal every terminal (docs/design/tab-tearoff.md). */
 const main = isMainWindow();
 
 if (main) {
@@ -42,11 +23,8 @@ if (main) {
   void startTearoffWindow();
 }
 
-// Same shape, same home: window-level wiring for the process's lifetime. The
-// webview's default right-click menu (Back/Forward/Reload on WebKitGTK) is a
-// browser's, not this app's — suppressed everywhere except editable fields and
-// clicks on selected text, where the native menu is the editing/copy menu. See
-// `app/nativeContextMenu.ts` for the full rule.
+// The webview's own right-click menu is suppressed except on editable fields and selected text
+// (the rule: `app/nativeContextMenu.ts`).
 suppressNativeContextMenu();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

@@ -1,22 +1,5 @@
-/**
- * `fleetIpc` — the agent half of the command surface, at the wire
- * (ARCHITECTURE §2.4).
- *
- * Without this file the module would sit at 0%: until the `agent_spawn` seam
- * existed, nothing in the app invoked either of these wrappers — dead code that
- * looked alive.
- *
- * `spawnAgent`'s real exercise lives in
- * `features/terminal/agentSpawn.test.ts`, driven through `TerminalRegistry` the
- * way the app drives it. This file covers the module's own marshalling, and
- * `fleetSnapshot`, whose only other caller (`bridge.ts`) mocks it out — so
- * without this it is asserted nowhere.
- *
- * These are thin wrappers, and thin wrappers are exactly where this codebase has
- * been bitten (`toBytes` silently yielding zero bytes for an unrecognised
- * frame). The command *name* and the arg *shape* are the contract: get either
- * wrong and Rust rejects the call at runtime, with types none the wiser.
- */
+/** The wrappers' own marshalling and `fleetSnapshot` (mocked out in `bridge.ts`); `spawnAgent` is
+ * driven in `features/terminal/agentSpawn.test.ts`. Command name and arg shape are the contract. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -292,10 +275,7 @@ describe("fleetIpc", () => {
     });
 
     it("never sends presetId — Rust's arg is `prompt` and serde ignores the rest", async () => {
-      // The field name is the whole contract here. `presetId` was speculative,
-      // Rust reads `prompt`, and serde drops unknown keys without complaint — so
-      // the wrong name fails as silence, surfacing at M3 as "why does my seed
-      // prompt do nothing?". Pin the name, not just the value.
+      // Rust reads `prompt` and serde drops unknown keys silently, so pin the field name.
       ipc.handle("agent_spawn", () => ({ id: base.agentId }));
       await spawnAgent({ ...base, prompt: "seed", onOutput: {} });
 

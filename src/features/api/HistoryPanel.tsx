@@ -1,38 +1,6 @@
-/**
- * HistoryPanel — the right rail's API request History (M6 follow-on).
- *
- * A persisted, append-only log of every HTTP request the API client executed, newest
- * first. Clicking an entry OPENS it: a fresh request tab is opened, populated with the
- * entry's method/url/headers/body — but NOT sent (clicking history should SHOW the
- * request, not fire it again). The user reviews/edits and hits Send. No
- * limit, no cache (every execution is kept). Clearing the log asks for confirmation
- * first.
- *
- * **Navigable log:** the history of executed requests looked short. Entries after
- * the first 10 are grouped into expandable days, and a search finds them; search
- * results are not grouped by day, only sorted by day. Nothing was capped — the log
- * always kept everything (`recordApiHistory`, `history_store.rs`); what was missing
- * was structure. So:
- *
- * - **Default view** — the newest {@link RECENT_COUNT} entries stay flat and look
- *   exactly as they always did, and everything older collapses into per-day
- *   disclosures, all closed until the user opens one.
- * - **Search view** — one flat list of every match, newest first, with a count and
- *   no day headers at all. Hunting for a request should not require opening a
- *   disclosure first.
- *
- * All of the shaping is pure and lives in `./historyGroup`, with the clock injected;
- * this file only holds the two pieces of UI state (the query, the open day keys).
- *
- * Secret-safety: the log stores the LITERAL request (`{{VAR}}` kept), so
- * opening a request restores the placeholders — the panel never sees a resolved
- * secret. Search therefore matches templates, never resolved values.
- *
- * Hydrates the history log once on mount if not already loaded — the same one-shot
- * guard `<VaultPanel/>`/`<ApiRequestView/>` use for the durable store. The `cancelled`
- * guard drops a late resolve after unmount; the store flag (not a module latch)
- * re-arms the load between tests via `resetStore`.
- */
+/** Clicking an entry opens it in a new tab but never sends it. Entries store the LITERAL request
+ * ({{VAR}} kept), so search matches templates, never secrets. Shaping is pure in ./historyGroup;
+ * hydrates once on mount (the VaultPanel guard). */
 
 import { useEffect, useState } from "react";
 
@@ -46,14 +14,8 @@ import "./history.css";
 /** How many of the newest entries stay flat before day-grouping starts (required: 10). */
 export const RECENT_COUNT = 10;
 
-/**
- * How often the panel's "now" is refreshed. Only two things depend on it — the
- * `Today`/`Yesterday` day labels and a row's year suffix — and both change at
- * most once a day, so a minute is already far finer than needed. It exists at all
- * because the panel is long-lived: left open across midnight without it, yesterday's
- * group would keep calling itself "Today". Exported so the test advances by the
- * real cadence rather than a copy of it.
- */
+/** The panel is long-lived: without a tick, yesterday's group stays "Today" past midnight.
+ * Exported so the test advances by the real cadence. */
 export const CLOCK_TICK_MS = 60_000;
 
 export function HistoryPanel(): React.JSX.Element {
@@ -73,13 +35,7 @@ export function HistoryPanel(): React.JSX.Element {
   // Which day disclosures are open, by `dayKey`. Everything starts collapsed — the
   // point of the grouping is that an old day is out of the way until asked for.
   const [openDays, setOpenDays] = useState<ReadonlySet<string>>(new Set());
-  /**
-   * "Now", one value shared by every label so no two rows can disagree. Held in
-   * state and ticked rather than read during render: `Date.now()` in a render body
-   * is an impure read (`react-hooks/purity`, and the same call the metrics/usage
-   * panels moved out for), and the labels would otherwise only move when some
-   * unrelated state changed.
-   */
+  /** One "now" for every label, ticked in state: Date.now() in render is impure. */
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {

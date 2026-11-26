@@ -1,14 +1,6 @@
-/**
- * Structural contract check for the Agent Village's `village_weather` reply
- * (`villageTypes.ts` `WeatherWire`) — the TS half of `src-tauri/tests/contract_goldens/weather.rs`,
- * which WROTE `goldens/weather.json` from the real `weather::parse_forecast` over the recorded
- * Open-Meteo bodies in `src-tauri/tests/fixtures/weather/`.
- *
- * Both directions, the `wireShape.test.ts` way: the SHAPE table is typed
- * `Record<keyof WeatherWire, Json>` (a TS field without a row, or a row without a TS field, is a
- * compile error), and every golden object must carry EXACTLY those keys with those JSON types.
- * Every `kind` must be a spelling the TS union names. Expectations are written by hand.
- */
+/** TS half of `src-tauri/tests/contract_goldens/weather.rs`, which writes the golden. SHAPE is
+ * `Record<keyof WeatherWire, Json>`; golden objects carry exactly its keys and JSON types, and
+ * every `kind` is a TS union spelling. Expectations are written by hand. */
 
 import { describe, expect, it } from "vitest";
 

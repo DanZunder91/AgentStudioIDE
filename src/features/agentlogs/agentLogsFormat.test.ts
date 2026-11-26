@@ -1,7 +1,4 @@
-/**
- * The pure half of Agent Logs. Every expectation below is written out by hand — none is
- * computed by the function under test.
- */
+/** Pure half of Agent Logs; every expectation is written by hand, none computed by the code. */
 
 import { describe, expect, it } from "vitest";
 

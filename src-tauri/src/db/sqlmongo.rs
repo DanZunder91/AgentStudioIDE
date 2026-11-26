@@ -1,67 +1,6 @@
-//! SQL → MongoDB command document. **Client-side translation, refusal-first.**
-//!
-//! ## Why this exists
-//!
-//! Other tools accept SQL such as `select * from ARCHIVEDB.temp_playlists LIMIT 10;` in a MongoDB
-//! console and translate it client-side; so does this one. The server does not help with any of
-//! it: **MongoDB's wire protocol has no SQL at all**, so the translation happens in the client.
-//! This module is that translation.
-//!
-//! ## The subset, stated once, so nothing here can drift from it
-//!
-//! ```text
-//! SELECT * FROM [database.]collection [WHERE <condition>] [LIMIT <n>]
-//! ```
-//!
-//! and **nothing else** — narrowed to exactly this on purpose: the query is
-//! always `select * from`, with or without a WHERE clause and with or without a LIMIT, and
-//! ORDER BY is out of scope for now. The output shape is therefore only ever
-//!
-//! ```text
-//! {"find": "<collection>", "filter": {…}?, "limit": <n>?}
-//! ```
-//!
-//! plus a separate [`Translated::database`], which is how `ARCHIVEDB.temp_playlists` reaches the
-//! right database (the caller puts it on the `$db` key `mongo.rs` already honours). There is no
-//! `projection`, no `sort`, no `skip`, and no `count` command, because the narrower this is, the
-//! less there is to be silently wrong about.
-//!
-//! The `WHERE` operator set is kept whole — a `WHERE` clause without operators is not a feature:
-//! `= != <> < <= > >= AND OR NOT IN, NOT IN, IS NULL, IS NOT NULL, LIKE, NOT LIKE, BETWEEN`.
-//!
-//! ## 🔴 The rule that shapes every line below: never guess
-//!
-//! Anything outside the subset is an [`DbErrorCode::InvalidStatement`](crate::db::error::DbErrorCode::InvalidStatement)
-//! that **names the construct that was not understood**. This is not politeness. A translator that
-//! silently produces a *different* query returns wrong data **with no error** — the user reads a
-//! grid, believes it, and nothing anywhere says the question they asked was not the question that
-//! ran. A refusal costs one confused minute; an approximation costs a decision made on a lie. So:
-//! prefer refusing over approximating, every time, and where an approximation is unavoidable, put
-//! the loss in the output rather than in a comment nobody will read.
-//!
-//! ## The semantic gaps, and what is done about each
-//!
-//! | SQL | MongoDB | what this module does |
-//! |---|---|---|
-//! | `IS NULL` | `{"f": null}` matches null **and absent** | translate, and push a [`Translated::notices`] entry naming the field |
-//! | `!=`, `NOT IN`, `NOT LIKE`, `NOT` | `$ne`/`$nin`/`$nor` match **absent** fields | translate, and push one notice about negation |
-//! | `= NULL` | `{"f": null}` would *match*; SQL never does | **refused** — `IS NULL` is the thing they meant |
-//! | `LIMIT 0` | `limit: 0` means *no limit*; SQL means *no rows* | **refused** by name |
-//! | `LIKE 'a%'` | no `LIKE` | `^a.*$` with every regex metacharacter in the literal escaped |
-//!
-//! `_id` is not special-cased anywhere: a value stays the type the SQL gave it, because the
-//! `_id`s seen in practice are UUID **strings** and a translator that "helpfully" made them
-//! ObjectIds would match nothing while looking like it worked.
-//!
-//! ## Bounds, because `recursive-protection` is off on purpose
-//!
-//! `sqlparser` is pulled in with `default-features = false, features = ["std"]` — one package, no
-//! vendored C. That leaves the `recursive-protection` feature (stack-overflow guards on the deeply
-//! recursive parse functions) **off**, so pathological input has to be refused by a bound instead:
-//! [`MAX_SQL_CHARS`] caps the text, and [`MAX_PARSE_DEPTH`] caps nesting via the parser's own
-//! `RecursionCounter` — which, with `std` on, is real and returns `RecursionLimitExceeded` rather
-//! than growing the stack. That second bound is load-bearing twice: it is also what bounds *our*
-//! recursion over the AST below, since the tree cannot be deeper than the parser allowed.
+//! SQL → a MongoDB `find`, client-side: only `SELECT * FROM [db.]coll [WHERE …] [LIMIT n]`.
+//! Anything else is refused by name, never approximated; null/negation gaps get notices.
+//! `recursive-protection` is off, so [`MAX_SQL_CHARS`] and [`MAX_PARSE_DEPTH`] bound the input.
 
 use crate::db::error::DbError;
 use bson::{doc, Bson, Document};
@@ -72,18 +11,11 @@ use sqlparser::ast::{
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
 
-/// The longest statement this translator will even tokenize.
-///
-/// Generous for a console (a hand-written `IN` list of a few hundred ids fits) and far below
-/// anything that could make the parser interesting. Measured in **chars**, not bytes, so a
-/// statement full of non-ASCII is judged the same as one that is not.
+/// The longest statement this translator will tokenize, in chars (not bytes).
 pub const MAX_SQL_CHARS: usize = 8_192;
 
-/// The parser's recursion budget, shared across statement / query / table / expression nesting.
-///
-/// Set explicitly rather than left at the crate default (50) so the bound is *ours* and a
-/// dependency bump cannot quietly change it. Deep enough that no query in the supported subset can
-/// reach it — proved by [`tests::a_realistic_where_clause_is_nowhere_near_the_depth_bound`].
+/// The parser's recursion budget, explicit so a dependency bump cannot change it; the subset never
+/// reaches it ([`tests::a_realistic_where_clause_is_nowhere_near_the_depth_bound`]).
 pub const MAX_PARSE_DEPTH: usize = 32;
 
 /// A translated statement: the command to run, the database it named, and what was lost.
@@ -330,11 +262,8 @@ fn require_bare_star(select: &Select) -> Result<(), DbError> {
     }
 }
 
-/// `FROM [database.]collection` → `(database, collection)`.
-///
-/// Identifiers travel **verbatim**: `sqlparser` keeps the source text of an identifier (quoted or
-/// not) and nothing here folds case, because MongoDB collection names are case-sensitive and a
-/// database named `ARCHIVEDB` is not `archivedb`.
+/// `FROM [database.]collection` → `(database, collection)`, verbatim: Mongo names are
+/// case-sensitive.
 fn from_target(select: &Select) -> Result<(Option<String>, String), DbError> {
     let [table] = select.from.as_slice() else {
         if select.from.is_empty() {
@@ -373,10 +302,8 @@ fn from_target(select: &Select) -> Result<(Option<String>, String), DbError> {
             TableFactor::JsonTable { .. } | TableFactor::XmlTable { .. } => {
                 Err(unsupported("a JSON_TABLE / XMLTABLE source"))
             }
-            // Catch-all rather than a `TableFactor::Table` arm plus `unreachable!()`: a plain table
-            // cannot reach here (the let-else above took it), and `sqlparser` grows variants on
-            // every release — a wildcard keeps a dependency bump from turning into a build break
-            // *or*, worse, into a silently-accepted source we never meant to support.
+            // A wildcard, not `unreachable!()`: `sqlparser` adds variants each release, and a bump
+            // must neither break the build nor silently accept a new source.
             other => Err(unsupported(&format!("`{other}` as a FROM source"))),
         };
     };
@@ -471,12 +398,8 @@ fn limit_value(clause: Option<&LimitClause>) -> Result<Option<i64>, DbError> {
     if offset.is_some() {
         return Err(unsupported("OFFSET"));
     }
-    // `LIMIT ALL` means "no limit", which is exactly what an absent `limit` key is — so this is a
-    // translation, not an approximation. Measured, because the shape is surprising: `sqlparser`
-    // folds a bare `LIMIT ALL` into **no limit clause at all**, so a `None` surviving to here can
-    // only come from `LIMIT ALL` written alongside an `OFFSET` or a `BY`, both already refused
-    // above. The arm stays anyway rather than becoming an `unreachable!()`: a dependency bump that
-    // changes the folding must not turn into a panic in a console.
+    // `LIMIT ALL` = no `limit` key. `sqlparser` folds a bare `LIMIT ALL` away, so this arm is
+    // nearly unreachable; kept so a change in that folding cannot panic.
     let Some(limit) = limit else {
         return Ok(None);
     };
@@ -543,10 +466,7 @@ impl Notices {
     }
 }
 
-/// One boolean expression → one MongoDB query document.
-///
-/// Recursion is bounded by [`MAX_PARSE_DEPTH`]: the parser refused anything nested deeper, so this
-/// walk cannot outrun the stack even though `recursive-protection` is off.
+/// One boolean expression → one query document; recursion bounded by [`MAX_PARSE_DEPTH`].
 fn condition(expr: &Expr, notices: &mut Notices) -> Result<Document, DbError> {
     match peel(expr) {
         Expr::BinaryOp { left, op, right } => match op {
@@ -686,11 +606,8 @@ fn collect<'a>(expr: &'a Expr, want: &BinaryOperator, out: &mut Vec<&'a Expr>) {
     out.push(expr);
 }
 
-/// `<column> <op> <literal>` — in either order, because `5 < duration` is ordinary SQL.
-///
-/// Flipping the operator when the literal is on the left is exact arithmetic, not a guess: `<`
-/// becomes `>` and the meaning is identical. Anything with a non-literal on both sides, or a
-/// literal on both sides, is refused rather than approximated.
+/// `<column> <op> <literal>` in either order (flipping the operator is exact); anything else is
+/// refused.
 fn comparison(
     left: &Expr,
     op: &BinaryOperator,
@@ -757,11 +674,8 @@ fn flip(op: &BinaryOperator) -> Option<BinaryOperator> {
     })
 }
 
-/// A plain, unqualified column name.
-///
-/// A name is a **field path** to MongoDB, so a quoted `"a.b"` addresses a nested field — that is a
-/// feature and it is left alone. A name starting with `$` is not: MongoDB would read it as an
-/// operator, so it is refused rather than sent.
+/// A plain column name, used as a field path (`"a.b"` is nested); a leading `$` is refused since
+/// Mongo would read it as an operator.
 fn field_name(expr: &Expr) -> Result<String, DbError> {
     match peel(expr) {
         Expr::Identifier(ident) => {
@@ -784,12 +698,9 @@ fn field_name(expr: &Expr) -> Result<String, DbError> {
     }
 }
 
-/// A literal, or an error naming whatever was there instead.
-///
-/// Integers are **always** [`Bson::Int64`]. One rule rather than "int32 when it fits", because
-/// MongoDB compares Int32 / Int64 / Double inside a single numeric bracket — an Int64 filter value
-/// matches an Int32 stored value — so a width-picking branch could only ever be a source of
-/// surprise, never of correctness.
+/// A literal, or an error naming what was there. Integers are always [`Bson::Int64`]: Mongo
+/// compares all numeric widths within one bracket. Strings stay strings, `_id` included (real
+/// `_id`s are often UUID strings; an ObjectId would match nothing).
 fn literal(expr: &Expr) -> Result<Bson, DbError> {
     match peel(expr) {
         Expr::Value(value) => value_to_bson(&value.value),
@@ -863,30 +774,14 @@ fn number_to_bson(text: &str) -> Result<Bson, DbError> {
 
 /* ────────────────────────────── LIKE → $regex ────────────────────────────── */
 
-/// Every character PCRE gives a meaning to outside a character class.
-///
-/// Escaped by an explicit list rather than "escape everything non-alphanumeric": in PCRE a
-/// backslash before a *letter* is a special escape (`\d`, `\A`, `\Q`), so a blunt rule would turn
-/// a non-ASCII literal into something else entirely.
+/// Characters PCRE treats as syntax outside a class; an explicit list, since `\` before a letter
+/// is itself a special escape (`\d`, `\A`).
 const REGEX_META: &[char] = &[
     '\\', '^', '$', '.', '|', '?', '*', '+', '(', ')', '[', ']', '{', '}',
 ];
 
-/// SQL `LIKE` pattern → an anchored PCRE pattern with the same meaning.
-///
-/// * `%` → `.*`, `_` → `.`, and **every other character is a literal**, escaped when PCRE would
-///   otherwise read it as syntax. This is the half that matters: `LIKE '50%_off'` must stay a
-///   match on "50", then anything, then one character, then "off" — and `LIKE 'a.b'` must NOT
-///   become a pattern where `.` matches any character.
-/// * Anchored `^…$`, because SQL's `LIKE` matches the **whole** value while a MongoDB `$regex`
-///   searches anywhere in it. Without the anchors `LIKE 'abc'` would match `"xabcx"`.
-/// * The caller pairs this with the `s` option so `.` matches a newline, which is what SQL's `_`
-///   and `%` do.
-///
-/// **The one divergence, stated rather than hidden:** PCRE's `$` also matches immediately before a
-/// trailing newline, so `LIKE 'ab'` matches the value `"ab\n"` here and would not in SQL. Every
-/// alternative (`\z`) tracks that for a pattern most people cannot read; the case is vanishingly
-/// rare in a document store and this comment is the record of the choice.
+/// SQL `LIKE` → anchored PCRE: `%` → `.*`, `_` → `.`, all else literal (escaped); the caller adds
+/// `s`. Known divergence: `$` also matches before a trailing newline (`LIKE 'ab'` matches `ab\n`).
 fn like_to_regex(pattern: &str) -> String {
     let mut out = String::with_capacity(pattern.len() + 8);
     out.push('^');
@@ -1356,10 +1251,7 @@ mod tests {
         assert!(message.contains("whole number"), "{message}");
     }
 
-    /// `LIMIT ALL` means "no limit", and that is exactly what an absent `limit` key is — so it is
-    /// translated rather than refused. Pinned because the mechanism is surprising and nothing in
-    /// our code produces it: `sqlparser` folds a bare `LIMIT ALL` into **no limit clause at all**,
-    /// so this test is the record that the behaviour was measured rather than assumed.
+    /// `sqlparser` folds a bare `LIMIT ALL` into no limit clause; pinned as measured behaviour.
     #[test]
     fn limit_all_means_no_limit_which_is_an_absent_limit_key() {
         assert_eq!(
@@ -1370,11 +1262,7 @@ mod tests {
 
     /* ───────────────────────── the refusals ───────────────────────── */
 
-    /// 🔴 **One row per construct that is not in the subset, and the message must NAME it.**
-    ///
-    /// The needles are hand-written literals; nothing here is derived from the code that produces
-    /// the message. A refusal that does not name the construct is a wall, and a translation that
-    /// guessed instead of refusing is the failure this whole module is built to avoid.
+    /// Needles are hand-written literals, not derived from the code that builds the messages.
     #[test]
     fn every_unsupported_construct_is_refused_by_name() {
         let cases: &[(&str, &str)] = &[

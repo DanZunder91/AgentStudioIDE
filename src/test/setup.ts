@@ -1,16 +1,5 @@
-/**
- * Global test setup. Loaded via `setupFiles` in `vitest.config.ts`
- * before every test file.
- *
- * Two jobs:
- *   1. Wire up `@testing-library/jest-dom` matchers + RTL teardown.
- *   2. Shim the browser APIs jsdom does not implement. jsdom has **no layout
- *      engine**: every element measures 0x0, and `ResizeObserver` /
- *      `matchMedia` / `IntersectionObserver` simply do not exist. Our pane
- *      chrome (allotment) and the terminal registry (xterm's fit addon) both
- *      observe size, so without these shims a component test throws
- *      `ResizeObserver is not defined` at mount.
- */
+/** Global jsdom setup (`setupFiles`): jest-dom matchers, RTL teardown, and shims for APIs jsdom
+ * lacks; allotment and xterm's fit addon observe size and would throw at mount without them. */
 
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
@@ -25,12 +14,8 @@ afterEach(() => {
 
 /* ───────────────────────── jsdom shims ───────────────────────── */
 
-/**
- * jsdom ships no ResizeObserver. A no-op class is the right stub for unit
- * tests: the callback only ever fires on a real layout change, and jsdom never
- * has one. Anything that depends on an actual resize firing belongs in the
- * real-app / E2E tier, not here.
- */
+/** A no-op stub suffices: jsdom never lays out, so a resize never fires. Real resizes belong in
+ * the browser / E2E tier. */
 class ResizeObserverStub implements ResizeObserver {
   observe(): void {}
   unobserve(): void {}
@@ -61,11 +46,8 @@ if (!("IntersectionObserver" in globalThis)) {
   });
 }
 
-/**
- * `matchMedia` is missing in jsdom. allotment (VS Code's Split View) queries it
- * for pointer/coarse-input behaviour; returning a never-matching, listener-less
- * stub keeps it on its mouse path.
- */
+/** allotment queries `matchMedia` for coarse input; a never-matching stub keeps it on its mouse
+ * path. */
 if (!window.matchMedia) {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -84,12 +66,8 @@ if (!window.matchMedia) {
   });
 }
 
-/**
- * The store mints every PaneId/TabId/TerminalId with `crypto.randomUUID()`.
- * jsdom's `crypto` implements `getRandomValues` but historically not
- * `randomUUID`, and a store that cannot mint an id fails in a maximally
- * confusing way. Shim only if absent so we prefer the real implementation.
- */
+/** The store mints every id with `crypto.randomUUID()`, which jsdom may lack; shimmed only if
+ * absent so the real one wins. */
 if (typeof globalThis.crypto?.randomUUID !== "function") {
   let seq = 0;
   Object.defineProperty(globalThis.crypto, "randomUUID", {

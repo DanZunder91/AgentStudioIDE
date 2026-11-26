@@ -1,16 +1,6 @@
-//! Path spelling shared across the crate.
-//!
-//! 🔴 On Windows `std::fs::canonicalize` answers with the **verbatim** form —
-//! `\\?\C:\Users\me\app`, `\\?\UNC\srv\share` — which no person typed, the frontend never
-//! sends, Claude Code never writes, and git cannot take as an argument. Before this module the
-//! file tree listed `\\?\C:\…` children, the Git tab's root and change paths came back verbatim,
-//! and every comparison with a path from anywhere else (an editor tab, an LSP root, a project
-//! dir name) silently missed. [`canonicalize`] is `std::fs::canonicalize` with the verbatim
-//! prefix removed, so canonical paths look like every other path in the app; use it wherever a
-//! canonical path is returned, compared or shown. Comparing canonical with canonical still works
-//! exactly as before — both sides go through the same function.
-//!
-//! On macOS and Linux it is `std::fs::canonicalize`, unchanged.
+//! On Windows `std::fs::canonicalize` returns verbatim `\\?\C:\…` paths nothing else uses, so
+//! comparisons silently miss. Use [`canonicalize`] (verbatim prefix stripped) wherever a
+//! canonical path is returned, compared or shown. Unchanged on macOS and Linux.
 
 use std::path::{Path, PathBuf};
 
@@ -36,12 +26,9 @@ pub fn is_windows_spelling(s: &str) -> bool {
     (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':') || s.starts_with(r"\\")
 }
 
-/// A working directory as a **comparison key**: two spellings of one folder give one key.
-/// Unix spelling: trailing `/` trimmed (`/` itself kept) — exactly as before. Windows spelling
-/// ([`is_windows_spelling`]): verbatim prefix removed, `/` read as `\`, trailing `\` trimmed
-/// (`C:\` kept), and ASCII case folded — `c:\Repo\` and `C:\repo` are one folder there, and a
-/// cwd a person typed, the IDE's canonical one and the one Claude Code wrote in a transcript
-/// otherwise never meet. A key is for comparing only; never show it or build a path from it.
+/// A cwd as a comparison key (never shown or built on). Unix: trailing `/` trimmed. Windows
+/// spelling: verbatim prefix removed, `/` → `\`, trailing `\` trimmed (`C:\` kept), ASCII case
+/// folded, so typed, canonical and transcript cwds meet.
 pub fn cwd_key(s: &str) -> String {
     if !is_windows_spelling(s) {
         let t = s.trim_end_matches('/');

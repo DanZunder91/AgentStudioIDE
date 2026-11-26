@@ -1,17 +1,6 @@
-/**
- * SessionPicker — the "Recover session" tab surface.
- *
- * Opened from an agent row's right-click menu, one per folder (the store
- * dedupes by cwd). It lists that folder's PAST Claude sessions — deliberately
- * grayed rows: these are history, not live agents — and a double-click on a
- * resumable row relaunches it as a NEW agent via the one launch path every
- * surface uses (`useLaunchAgent`, with `resumeSessionId`). The new agent then
- * arrives in the rail through the normal spawn events; the picker stays open
- * (cheap, and closing it under the user's cursor would be a surprise).
- *
- * States: loading (calm), empty ("never ran claude here" is normal), error
- * (calm inline note — a rejection must never crash the tab), list.
- */
+/** A folder's past Claude sessions (one tab per cwd), greyed as history. Double-click relaunches
+ * as a new agent via `useLaunchAgent` + `resumeSessionId`; the picker stays open. A rejection is
+ * a calm inline note, never a crash. */
 
 import { useEffect, useRef, useState } from "react";
 
@@ -20,13 +9,8 @@ import { formatSessionDate, formatSize } from "./sessionModel";
 import { listClaudeSessions, type ClaudeSessionMeta } from "./sessionsIpc";
 import "./sessions.css";
 
-/**
- * How long a row advertises "Recovering…" after its double-click. The launch
- * itself is synchronous (the spawn is lazy, keyed to the new tab's mount), so
- * this is a UX debounce, not a completion signal: while it shows, further
- * recovers are no-ops — guarding the double-double-click that would spawn two
- * agents off one session.
- */
+/** A UX debounce, not a completion signal (the spawn is lazy): while it shows, further recovers
+ * are no-ops, so a repeated double-click cannot spawn two agents off one session. */
 export const RECOVERING_MS = 2500;
 
 type LoadState =
@@ -70,10 +54,8 @@ export function SessionPicker({ cwd }: { cwd: string }): React.JSX.Element {
     };
   }, [cwd, reloadToken]);
 
-  // "Loading" is DERIVED, never set: a result stamped for a different cwd or
-  // an older reload token is a stale answer, so the current fetch is still in
-  // flight. (No synchronous setState in the effect — the lint rule is right:
-  // resetting state imperatively on a dep change causes cascading renders.)
+  // Loading is derived, never set: an answer for another cwd or an older token is stale, so the
+  // current fetch is still in flight (no synchronous setState in the effect).
   const state: LoadState =
     result && result.cwd === cwd && result.token === reloadToken
       ? result.state

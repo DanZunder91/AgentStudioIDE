@@ -1,22 +1,6 @@
-/**
- * Cmd/Ctrl-hover "go-to-definition" underline (M5) — the standard IDE
- * affordance that ALSO fixes the flakiness.
- *
- * While the platform modifier is held and the mouse is over a symbol, we
- * debounced-query the LSP definition for the token at the MOUSE position. If a
- * definition resolves, we underline that token and show a pointer cursor; on
- * modifier release / mouse-leave / no-definition / blur we remove it. No modifier
- * held ⇒ nothing happens (no queries, no decoration).
- *
- * Because the underline only appears once rust-analyzer has actually resolved a
- * definition, it doubles as a readiness signal — you never click into the void
- * during the -32801 indexing window (a hover during indexing simply doesn't
- * underline; the explicit F12/click path still shows the "indexing…" indicator).
- *
- * Position math is the library's `LSPPlugin.toPosition` (UTF-16-aware), so
- * non-ASCII lines map correctly — the click/hover uses the mouse offset, not the
- * caret.
- */
+/** Cmd/Ctrl-hover definition underline. It appears only once the server resolves a definition, so
+ * it doubles as a readiness signal during -32801 indexing. Positions come from the mouse offset
+ * via `LSPPlugin.toPosition` (UTF-16-aware), not the caret. */
 
 import { StateEffect, StateField, type Extension } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin } from "@codemirror/view";

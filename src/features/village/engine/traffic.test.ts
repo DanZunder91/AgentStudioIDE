@@ -103,11 +103,8 @@ const front = (v: VehicleView) => (v.dir > 0 ? v.x + v.w : -v.x);
 const rear = (v: VehicleView) => front(v) - v.w;
 const inLane = (fx: TrafficFx, dir: 1 | -1) => fx.vehicles().filter((v) => v.dir === dir);
 
-/**
- * Every vehicle's life: from the frame it appears in `vehicles()` to the last one it is there. Pooled objects
- * are reused — one that leaves a lane can be born in the other in the same update — so a life also ends where
- * an object changes lane or jumps. `ended` is false for those still on the road when the run stops.
- */
+/** One vehicle's life in `vehicles()`. Pooled objects are reused across lanes, so a life also ends
+ * where an object changes lane or jumps; `ended` is false if still on the road at the end. */
 interface Life {
   kind: string;
   dir: number;
@@ -690,10 +687,9 @@ describe("the crossing — never through a person", () => {
   });
 
   it("at the crossing, someone about to step into a lane (within OBS_HORIZON) stops it short of where they will walk", () => {
-    // Beside the stripes (inside LINGER, upstream of the far lane's stop line), a slow walker steps down off
-    // the near sidewalk at 30 px/s: it reaches the far lane in ~0.27 s, by when an oncoming car 16–22 px away
-    // (~90 px/s) would be past it — and a person alongside a car's body is passed, not stopped for.
-    // Predicted, the car stops short of where it will walk.
+    // Beside the stripes (inside LINGER), a 30 px/s walker steps off the near sidewalk: it reaches
+    // the far lane in ~0.27 s, when an oncoming car 16–22 px away would be past it. A person
+    // alongside a car is passed, not stopped for; predicted, the car stops short of its path.
     const px = x0 - 30;
     const speed = 30;
     expect(OBS_HORIZON * speed).toBeGreaterThan(TILE / 2);
@@ -835,12 +831,9 @@ describe("the real commute against the traffic (engine/sim.ts) — test it hard"
     lastActivityAt: null,
   });
 
-  /**
-   * A city of three projects and `subs` commuting sub-agents, one of them flipping busy ↔ done every few
-   * seconds (far more than real agents do: every flip is a trip across the street, and a flip mid-trip
-   * turns the commuter round where it stands), for `seconds` of sim time at `dt`. Reports every frame where a
-   * vehicle is over a person in its lane, every pair of overlapping vehicles, and how busy it all was.
-   */
+  /** Three projects, `subs` commuters, one flipping busy ↔ done every few seconds (each flip is a
+   * street crossing). Reports vehicles over a person in their lane, overlapping vehicles, and how
+   * busy it all was. */
   function commute(seed: number, subs: number, seconds: number, dt: number) {
     const folders = ["gazelle", "chat-server", "Agent Studio"];
     const agents: VillageAgent[] = folders.map((f, i) => ag(`root${i}`, f, null, "typing"));

@@ -1,56 +1,6 @@
-/**
- * StreetLife — the City's PASSERS-BY (things should move to give the city
- * a little life — people walking on the street, at random and only as many as it takes to look
- * alive; in the rain some of them, not all, carry an umbrella, and on a sunny day nobody does; and
- * now and then someone goes to buy something at a vending machine).
- *
- * Anonymous people stroll the two sidewalks — the near one under the buildings (`city.street`) and the
- * far one across the road (`city.street + 3`) — left or right, at a stroll with small differences of
- * pace. They are NOT agents: they never enter the sim's character list, so they are never hit-tested,
- * hovered, labelled or counted, and the renderer draws them with no agent marker and no bubble.
- *
- *   - WHERE: a stretch of street that always holds the whole world, plus the view where it reaches past
- *     the world's ends (the street runs on there): `[min(0, view.x0) − MARGIN, max(world, view.x1) +
- *     MARGIN]`. People arrive at its two ends and leave past them, so they enter and leave OFF-SCREEN;
- *     inside the world nothing depends on the camera — zooming in on the HQ and back out shows the
- *     same people where they were. When the stretch grows (the first frame, a pan or a
- *     zoom past the world's end, a wider world), the part it grew by is filled at once at the same
- *     density — it was off-screen until this frame, so nobody pops in where you were looking — and
- *     whoever is left outside a stretch that shrank (off-screen by construction) is retired.
- *   - HOW MANY: a seeded Poisson arrival process at each end of each sidewalk, sized so the street holds
- *     one person per `SPACING` px of sidewalk by day in fair weather (a handful on screen at Fit), times
- *     `crowd` — fewer at night, fewer in rain, fewer still in a storm or snow. A change of crowd changes
- *     the arrival rate only: the street empties (or fills) as people walk off, never at a stroke.
- *   - THE SUBWAY, on the train's timetable (engine/subway.ts, a pure function of the FRAME clock — the
- *     `nowMs` the renderer draws the train with): a small burst of people (`BURST`: 2–5 on a fair day,
- *     fewer as the crowd thins) comes UP out of its entrance (`CitySubway.entrance`, the `metro` prop) a
- *     few seconds after each train stops at the station — the time to step off and climb the stairs —
- *     and walks off, one after another; nobody comes up between trains. Going DOWN: a far-sidewalk walker
- *     heading for the entrance decides `CLOSE_AHEAD` px before its stairs, more readily in the minute
- *     before a train is due (`RUSH`), closes its umbrella and sinks out of sight over `STAIRS_SEC`. The
- *     chance (`SUBWAY_SHARE`, averaged over the timetable) is sized so as many go down as come up: the
- *     subway neither drains the street nor floods it — the link that makes it feel used.
- *   - UMBRELLAS: a share of the people (`UMBRELLA_SHARE`) carry one. In rain, drizzle, storm or snow a
- *     carrier's is open; in clear, cloudy or fog weather nobody's is. A person keeps that decision for
- *     their whole walk: when the rain starts each carrier opens theirs after a short delay of their own
- *     (so the street does not open in step), and closes it the same way when it stops. Someone who
- *     arrives while it rains arrives with it open.
- *   - VENDING MACHINES (Tokyo — engine/streetTheme.ts puts `vending` props on the near sidewalk): now and
- *     then — about `BUY_PER_MIN` purchase a minute on the whole street by day, rarer at night (the
- *     chance per machine passed is sized to that, so it holds whatever the number of machines) — a
- *     walker who passes one stops BESIDE it on the side it came from, facing it (the machine stays in
- *     view, not behind the buyer), and buys a drink (`VEND`: pays, a button flashes, a can drops into
- *     the tray, the buyer takes it), then walks on with the can, sipping now and then. One buyer per
- *     machine at a time; one drink per walker; never from a spot in front of another machine.
- *
- * Stateful but deterministic, like `WeatherFx`: a fixed pool of `MAX_WALKERS`, one seeded mulberry32,
- * every decision a draw from it — the same seed and the same frames give the same street. Allocation-
- * free on the steady path: `walkers()` returns the same array each frame, its items the pool's own
- * (mutated in place — don't keep them). A world rebuild re-anchors everyone on the HQ's door (the
- * lounge's lift), so the people keep their place on the street as it widens round the HQ; the subway
- * entrance moves with it, a buyer keeps its machine when one stands at the same place (else it walks
- * on), and outside a city nothing walks.
- */
+/** Passers-by: anonymous walkers, NOT agents (never hit-tested, labelled or counted). They enter
+ * and leave off-screen, and nothing inside the world depends on the camera. Deterministic (one
+ * seeded pool); `walkers()` returns the pool's own items, mutated in place: don't keep them. */
 
 import { TILE, type Ambience, type DayPhase, type DrawItem, type WalkerDrink, type WalkerVend, type WeatherKind, type World } from "../villageTypes";
 import { PALETTE_COUNT } from "./palette";
@@ -79,22 +29,14 @@ export const UMBRELLA_SHARE = 0.65;
 export const OPEN_SEC = 0.35;
 /** A carrier opens (or closes) its umbrella this long after the weather turns: its own delay, in this range. */
 export const REACT_SEC: readonly [number, number] = [0.2, 3];
-/**
- * The share of far-sidewalk walkers heading for the subway entrance who go down it, over the timetable
- * (`RUSH` weighs it by the time to the next train): the far stream past the entrance by day is
- * 2 · STROLL / (2 · SPACING) a second, so 0.7 of it is ~3.5 people a train — one burst (`BURST`).
- */
+/** Share of far-sidewalk walkers heading for the entrance who go down (`RUSH`-weighted): ~3.5 a
+ * train, one `BURST`, so the subway neither drains nor floods the street. */
 export const SUBWAY_SHARE = 0.7;
-/**
- * Down-goers cluster before a train: in the `ms` before one is due their chance is `SUBWAY_SHARE · hi`,
- * otherwise `SUBWAY_SHARE · lo` — weights that average 1 over the trains' spacing (half a cycle), so the
- * total going down is unchanged.
- */
+/** Down-goers cluster before a train: `hi` in the `ms` before one is due, else `lo`; the weights
+ * average 1 over the trains' spacing, so the total going down is unchanged. */
 export const RUSH = { ms: 60_000, hi: 1.3, lo: 0.4 } as const;
-/**
- * A train's people coming up: `min`..`max` on a fair day (scaled by the crowd, at least one), the first
- * `delay` ms after the train stops (doors, the platform, the stairs), each next one `gap` ms later.
- */
+/** A train's people coming up: `min`..`max` on a fair day (crowd-scaled, at least one), the first
+ * `delay` ms after it stops, each next `gap` ms later. */
 export const BURST = { min: 2, max: 5, delay: 7000, gap: [600, 1400] as const } as const;
 /** The frame clock's ms between two trains at the station (one each way per cycle), and into each when one stops. */
 export const TRAIN_EVERY = SUBWAY_CYCLE_MS / 2;
@@ -120,11 +62,8 @@ const MAX_DT = 0.1;
 export const BUY_PER_MIN = 1;
 /** The chance per machine passed never goes over this (a street with one machine still sees mostly passers-by). */
 export const MAX_BUY_SHARE = 0.5;
-/**
- * A purchase, seconds from the stop: pays until `flash`; a button flashes until `drop`; the can lies in
- * the tray until `take`; the buyer takes it until `took` (the can travels from the tray to its hand);
- * holds it until `leave`, then walks on.
- */
+/** A purchase, seconds from the stop: pay → `flash` → `drop` (can in the tray) → `take` → `took`
+ * (can in hand) → `leave`. */
 export const VEND = { flash: 0.8, drop: 1.7, take: 2.3, took: 2.7, leave: 3.2 } as const;
 /** A machine's buttons (render/tokyoProps.ts: one under each of its five bottle columns). */
 export const BUTTONS = 5;
@@ -180,11 +119,8 @@ export function umbrellaWeather(amb: Ambience | null): boolean {
   return !!amb && WET.has(amb.weather);
 }
 
-/**
- * Where a passer-by is drawn in the scene: in front of everything standing on its sidewalk tile (its
- * lamps, trees, machines and kiosks — like an agent walking there), behind an agent at the same spot
- * (`characterZ` = feet + 0.5), and the nearer of two passers-by (the lower feet) in front.
- */
+/** In front of everything on its sidewalk tile, behind an agent at the same spot (`characterZ` =
+ * feet + 0.5); of two passers-by the nearer (lower feet) is in front. */
 export function walkerZ(w: WalkerItem): number {
   const ground = Math.ceil(w.y / TILE) * TILE;
   return ground + 0.5 - (ground - w.y) / 64;
@@ -311,11 +247,8 @@ export class StreetLife {
     return this.out;
   }
 
-  /**
-   * Advance the street by `dtSec` in `world` under `amb`, with the view spanning world x `viewX0..viewX1`
-   * (both ends of the view, any order of magnitude — the stretch always holds the whole world too), at
-   * `nowMs` on the FRAME clock — the one the train runs on (engine/subway.ts).
-   */
+  /** Advance by `dtSec`; the view spans world x `viewX0..viewX1` (the stretch always holds the
+   * whole world too); `nowMs` is the FRAME clock the train runs on (engine/subway.ts). */
   update(dtSec: number, world: World, amb: Ambience | null, viewX0: number, viewX1: number, nowMs: number): void {
     const dt = Math.min(Math.max(dtSec, 0), MAX_DT);
     if (world !== this.world) this.rebase(world);
@@ -425,11 +358,8 @@ export class StreetLife {
     return false;
   }
 
-  /**
-   * The umbrella: a carrier wants it open in wet weather while on the sidewalk (walking or buying) — not
-   * on the stairs, nor in the last `CLOSE_AHEAD` px before going down them, where it closes at once.
-   * Otherwise it follows the weather after the carrier's own delay.
-   */
+  /** Open in wet weather while on the sidewalk, after the carrier's own delay; closed at once on
+   * the stairs or within `CLOSE_AHEAD` px of going down them. */
   private umbrella(w: Walker, dt: number, wet: boolean, stairs: number): void {
     const closing = w.bound && w.stage === WALK && w.dir * (stairs - (w.dir * STAIRS_RUN) / 2 - w.x) < CLOSE_AHEAD;
     if (closing) {
@@ -480,10 +410,8 @@ export class StreetLife {
 
   // ───────────────────────────── arrivals ─────────────────────────────
 
-  /**
-   * A new person on `side` at `x` heading `dir`, at `stage` (WALK, or UP out of the subway); nobody when
-   * the pool is full. Its look, pace, line, umbrella and sip rhythm are all drawn here.
-   */
+  /** Spawn on `side` at `x` heading `dir` at `stage` (WALK, or UP out of the subway); nobody when
+   * the pool is full. Its look, pace, line, umbrella and sip rhythm are drawn here. */
   private spawn(side: number, x: number, dir: 1 | -1, stage: number, wet: boolean): void {
     const i = this.free.pop();
     if (i === undefined) return;
@@ -534,10 +462,8 @@ export class StreetLife {
     }
   }
 
-  /**
-   * The arrival streams: each end of each sidewalk at `share · STROLL / (2 · SPACING)` people a second
-   * (the street then holds `share / SPACING` per px of sidewalk).
-   */
+  /** Arrivals at each sidewalk end: `share · STROLL / (2 · SPACING)` per second, so the street
+   * holds `share / SPACING` people per px of sidewalk. */
   private arrive(dt: number, share: number, wet: boolean, zl: number, zr: number): void {
     const rate = (share * STROLL) / (2 * SPACING);
     for (let s = 0; s < 4; s++) {
@@ -547,14 +473,9 @@ export class StreetLife {
     }
   }
 
-  /**
-   * The trains' people coming up the stairs. A train that stopped since the last frame schedules its burst
-   * (`BURST`); its people come up, each at its time. Nothing is made up: on the first frame, or after a
-   * jump of the clock (a paused tab) past the moment a burst begins, no burst is scheduled — caught up
-   * all at once, its people would pop out of the stairs together. A clock run back schedules nothing
-   * until it passes a stop again. A burst still pending keeps its times, which are a train's — through a
-   * frame with no subway too: when the stairs are back, its people come up.
-   */
+  /** A train that stopped since the last frame schedules its `BURST`. Nothing is made up: on the
+   * first frame or after a clock jump past a burst's start, none is scheduled (all would pop out at
+   * once); a pending burst keeps its times, even through a frame with no subway. */
   private trains(nowMs: number, share: number, wet: boolean, stairs: number): void {
     const prev = this.clock;
     this.clock = nowMs;
@@ -578,10 +499,8 @@ export class StreetLife {
 
   // ───────────────────────────── a new world ─────────────────────────────
 
-  /**
-   * Swap in `world`: everyone (and the stretch) moves with the HQ's door, a buyer keeps its machine
-   * when one stands where it stood (else it walks on), and outside a city the street is emptied.
-   */
+  /** Swap in `world`: everyone moves with the HQ's door; a buyer keeps its machine if one stands
+   * where it stood (else walks on); outside a city the street empties. */
   private rebase(world: World): void {
     const prev = this.world;
     this.world = world;

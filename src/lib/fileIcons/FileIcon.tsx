@@ -1,13 +1,6 @@
-// src/lib/fileIcons/FileIcon.tsx
-//
-// The per-file colored icon (file-icons.md §6, files branch): resolves the
-// basename through the §3 ladder and references the injected sprite via
-// `<use href="#mi-<id>">` — the DOM re-uses one `<symbol>` per icon id no
-// matter how many rows show it. Requires `<IconSprite>` mounted once app-level.
-//
-// `data-icon-id` is the test hook (the repo's `data-icon` precedent in
-// src/components/icons.tsx): tests assert WHICH icon resolved without reaching
-// into sprite path data — jsdom never paints `<use>` targets anyway.
+// Per-file icon (file-icons.md §6): resolves the basename via the §3 ladder and references the
+// sprite via `<use href="#mi-<id>">`; needs `<IconSprite>` mounted once. `data-icon-id` is the
+// test hook: jsdom never paints `<use>` targets.
 
 import * as React from 'react';
 import { resolveFileIconId } from './resolveIconId';

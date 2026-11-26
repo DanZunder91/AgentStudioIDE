@@ -1,18 +1,5 @@
-/**
- * consoleFormat tests.
- *
- * ── Every expectation is written out literally, on purpose ────────────────────
- * A test whose expected value is computed from the same source as the
- * actual value can only catch plumbing, never content. `ERROR_SENTENCES` and the
- * badge labels are exactly the shape that trap likes — a loop over the record would
- * read as thorough coverage and would stay green if a sentence were rewritten to say
- * the opposite. So every sentence below is typed out by hand, and the only loops here
- * are over *inputs* whose expected outputs are computed independently (the windowing
- * invariants) or hand-listed (the kind table).
- *
- * The fixtures are inputs only (`consoleFixtures.ts`) — nothing reads an expectation
- * out of them.
- */
+/** Every sentence and label is typed out literally: a loop over the record would stay green if a
+ * sentence were rewritten. Fixtures are inputs only. */
 
 import { describe, expect, it } from "vitest";
 
@@ -253,11 +240,7 @@ describe("messageBody", () => {
 
 /* ══════════════════════════ error sentences ══════════════════════════════ */
 
-// `describeDbError` was tested here while this module owned a second copy of the sentence
-// table. That copy is gone (see `consoleFormat.ts`) and the surviving mapper is covered by
-// `../dbErrors.test.ts`, which asserts all ten sentences, their distinctness, and that a
-// hostile leaky detail never reaches the output. Re-adding tests for it here would be
-// testing another module through this one's suite.
+// describeDbError is covered by ../dbErrors.test.ts.
 
 describe("readOnlyBadge — a control never claims to be stronger than it is", () => {
   it("is a plain, unqualified badge when the SERVER enforces read-only", () => {
@@ -307,11 +290,8 @@ describe("shikiIdFor / runHint", () => {
   });
 
   it("says what Run means for each engine family", () => {
-    // 🔴 These sentences describe `statements.ts::textToRun`, and they are the only place the
-    // user is told what ⌘⏎ does. The `sql` one used to promise "Runs the statement under the
-    // cursor." while the store sent the whole buffer — a promise nothing in the product kept.
-    // Each one now names the selection first, because a
-    // selection wins on every engine.
+    // The only place the user learns what ⌘⏎ does (statements.ts::textToRun); each
+    // names the selection first, as a selection wins on every engine.
     expect(runHint("sql")).toBe("Runs the selection, or the statement under the cursor.");
     expect(runHint("json")).toBe("Runs the selection, or the whole command document.");
     expect(runHint("commandline")).toBe("Runs the selection, or the line under the cursor.");
@@ -319,11 +299,7 @@ describe("shikiIdFor / runHint", () => {
 });
 
 describe("shikiIdForText — the grammar follows the BUFFER, not only the engine", () => {
-  // 🔴 `select * from ARCHIVEDB.temp_playlists LIMIT 10;`
-  // typed into a MongoDB console used to get no keyword colour, because the engine's language is
-  // `json`. Each opener below is written out by hand rather than looped out of the source
-  // regex: an expectation derived from the table under test can only catch
-  // plumbing, and rewriting `truncate` to `truncat` would keep such a loop green.
+  // Openers are written out, not looped from the regex: "truncat" would keep a loop green.
   it("recognises every statement opener as SQL, on a JSON engine", () => {
     expect(shikiIdForText("json", "select * from t")).toBe("sql");
     expect(shikiIdForText("json", "insert into t values (1)")).toBe("sql");
@@ -591,13 +567,7 @@ describe("columnWidthsCh", () => {
   });
 });
 
-/**
- * SQL typed into a MongoDB console.
- *
- * `dbErrors.ts` fixed what happens *after* that mistake; this is what stops it being invited in the
- * first place. The example is asserted literally, because a placeholder whose JSON is wrong would
- * teach the wrong shape — and being wrong here is worse than being absent.
- */
+/** Asserted literally: a placeholder with the wrong JSON shape would teach it. */
 describe("placeholderFor — what an empty console says it expects", () => {
   it("shows Mongo a real command document whose FIRST key is the command", () => {
     const example = placeholderFor("json");

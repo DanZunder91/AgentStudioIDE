@@ -1,23 +1,6 @@
-/**
- * One row of the fleet — the recursive tree's unit, rendered flat.
- *
- * ── The 100%-CPU trap this is designed against ───────────────────────────────
- * cmux shipped a workspace sidebar where every list row subscribed to a store,
- * and it spun a core at 100% (issue #2586). We have the same shape — a list of
- * rows over a store — plus something they did not: a fleet of agents each
- * emitting telemetry. Two rules keep it cheap, and both are load-bearing:
- *
- *  1. **Subscribe to primitives, one field at a time.** Selecting the whole
- *     `AgentNode` would re-render this row on every `activity` tick, because
- *     `lastActivityAt` changes — a field this row does not even display.
- *     Selecting `agent.title` compares with Object.is and re-renders only when
- *     the title actually changes. Each subscription is a scalar; none allocate.
- *  2. **`memo` on primitive props.** `<AgentTree>` re-renders whenever any agent
- *     record changes; without this, that would cascade into every row.
- *
- * Net: one agent's status change re-renders exactly one row, and an `activity`
- * tick re-renders nothing at all.
- */
+/** One flat fleet row. Subscribes to scalar fields one at a time (selecting the whole `AgentNode`
+ * would re-render on every `activity` tick) and is `memo`'d on primitive props, so one agent's
+ * change re-renders one row and a tick re-renders none. */
 
 import { memo, useState, type DragEvent, type MouseEvent } from "react";
 
@@ -40,12 +23,8 @@ import "./fleet.css";
 /** Indent per level. Applied as padding so the row's hit target stays full-width. */
 const INDENT_PX = 14;
 
-/**
- * A thumbtack for the pin toggle. Kept local (not `components/icons`)
- * so the whole affordance lives in the fleet feature; `filled` fills the head for
- * the pinned state, `currentColor` lets `.fleet-row__pin--active`'s accent tint
- * flow through. Stroke matches the other rail glyphs' 1.25 weight.
- */
+/** Pin glyph, local so the affordance stays in the fleet feature; `currentColor` takes the active
+ * row's accent. */
 function PinIcon({ size = 12, filled = false }: { size?: number; filled?: boolean }) {
   return (
     <svg
@@ -67,28 +46,13 @@ function PinIcon({ size = 12, filled = false }: { size?: number; filled?: boolea
   );
 }
 
-/**
- * Drag payload for reordering a ROOT agent within its folder (sortable rail). The
- * VALUE is the dragged agent's id; the drop target reads it back and calls
- * `moveRootAgent(dragged, target)` (dragged lands immediately before target).
- *
- * An agent-specific MIME so an agent-row drag, a folder-header drag
- * (FOLDER_DND_MIME) and a centre-pane tab drag (TAB_DND_MIME) never accept one
- * another.
- */
+/** Drag MIME for reordering a root agent in its folder; the value is the agent id (it lands before
+ * the target). Distinct from FOLDER_DND_MIME and TAB_DND_MIME so the drags never cross. */
 export const AGENT_DND_MIME = "application/x-agentstudio-agent";
 
-/**
- * A dragover-readable marker encoding the source agent's FOLDER (cwd).
- *
- * `dataTransfer` VALUES are unreadable during `dragover` (protected mode until the
- * drop), but the TYPE list is — so the cwd is smuggled into a type name, letting a
- * `dragover` accept ONLY same-folder targets (root agents are grouped by cwd in the
- * rail, so a reorder must stay within one folder). Lowercased because the HTML5 DnD
- * spec lowercases every format string; a value-compare on drop still catches any
- * case-only collision. Cross-folder drags therefore never `preventDefault` — they
- * do nothing.
- */
+/** DnD values are unreadable during `dragover` but types are not, so the cwd rides in a type name
+ * and only same-folder targets accept. Lowercased (the spec lowercases formats); the drop's
+ * value-compare catches case-only collisions. */
 export function agentCwdType(cwd: string): string {
   return `${AGENT_DND_MIME}-cwd:${cwd}`.toLowerCase();
 }
@@ -153,10 +117,7 @@ function AgentRowImpl({
   const error = useAppStore((s) => s.agents[agentId]?.error);
   const selected = useAppStore((s) => s.selection.selectedAgentId === agentId);
 
-  // The folder whose PAST sessions "Recover session…" lists. A sub-agent
-  // has no folder of its own — its work belongs to its ROOT orchestrator's cwd
-  // (the same `rootOf` walk the selection pivot uses) — so the walk, not this
-  // row's `cwd`, names the folder. A scalar subscription like the rest.
+  // "Recover session…" lists the root's folder: a sub-agent's work belongs to its root's cwd.
   const rootCwd = useAppStore((s) => rootOf(s.agents, agentId)?.cwd ?? "");
   // For the subtitle's `~` (VISION: `trunk • ~/projects/gazelle`) — fetched once per
   // session for every row, then a plain value.
@@ -164,10 +125,7 @@ function AgentRowImpl({
 
   const selectAgent = useAppStore((s) => s.agentActions.selectAgent);
   const toggleExpanded = useAppStore((s) => s.agentActions.toggleAgentExpanded);
-  // `request*`, not the raw primitive: dismissing an agent tears down its PTY,
-  // so it has to ask first when that session is still running.
-  // `requestDismissAgent` falls straight through to `dismissAgent`
-  // when the terminal is idle, so the ordinary case is unchanged.
+  // `requestDismissAgent` asks first while the PTY's session is running, else dismisses directly.
   const requestDismissAgent = useAppStore((s) => s.agentActions.requestDismissAgent);
   const renameAgent = useAppStore((s) => s.agentActions.renameAgent);
   const resumeAgent = useResumeAgent();
@@ -191,11 +149,8 @@ function AgentRowImpl({
   // The user's custom name wins; the caret / close / aria all follow it.
   const displayName = customTitle ?? title;
 
-  // Pin is a ROOT-only affordance: sub-agents are transcript-derived,
-  // so they re-materialize for free once their root resumes — nothing to pin. We
-  // gate on BOTH depth and kind, not depth alone: an ORPHANED sub-agent (parent
-  // not yet arrived) is surfaced at depth 0 by `linkAgent`, and it must NOT sprout
-  // a pin button in that transient window.
+  // Root-only (sub-agents re-materialize from their root's transcript). Checks kind too: an
+  // orphaned sub-agent sits at depth 0 until its parent arrives.
   const isRoot = depth === 0 && kind === "orchestrator";
   const finishedRoot = isRoot && (status === "done" || status === "error");
   const restoredCopy = restored ? restoredMarkerCopy(restored, error) : null;
@@ -288,10 +243,7 @@ function AgentRowImpl({
       onContextMenu={onContextMenu}
       onClick={() => selectAgent(agentId)}
       onKeyDown={(e) => {
-        // Only when the ROW itself has focus. Without this guard the row would
-        // preventDefault Enter/Space even while a child control (the caret, the
-        // ✕) is focused — swallowing that button's own keyboard activation and
-        // selecting the row instead.
+        // Only when the row itself has focus, or child controls would lose Enter/Space to the row.
         if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -360,12 +312,8 @@ function AgentRowImpl({
             {unread}
           </span>
         )}
-        {/* Pin 📌 — root agents only. `aria-pressed` gives it toggle
-            semantics (an on/off control, unlike the one-shot ✕). Stays in the DOM
-            (never display:none) so keyboard/AT reach it even while hover-hidden;
-            a PINNED row keeps it visible + accent-tinted (see fleet.css) — the
-            at-a-glance "this comes back" signal. `stopPropagation`: pinning is not
-            selecting. */}
+        {/* Root agents only. Kept in the DOM (never display:none) so keyboard/AT reach it while
+            hover-hidden; pinned rows keep it visible. Pinning is not selecting. */}
         {isRoot && (
           <button
             type="button"
@@ -386,10 +334,7 @@ function AgentRowImpl({
             <PinIcon size={12} filled={pinned} />
           </button>
         )}
-        {/* ↻ Resume: a root whose `claude` ended —
-            crashed, killed by the OS, or exited — continues its saved conversation
-            in a new agent, same folder. Only on finished roots: a live session is
-            never resumed twice. `stopPropagation`: resuming is not selecting. */}
+        {/* Only on finished roots: a live session is never resumed twice. Not a selection. */}
         {finishedRoot && (
           <button
             type="button"
@@ -433,10 +378,7 @@ function AgentRowImpl({
           </span>
         )}
       </div>
-      {/* "trunk • ~/projects/gazelle" — the row's subtitle. Two
-          parts so a long path is clipped at ITS head and never eats the branch (one
-          right-to-left box clipped the branch: Windows showed "…tive • C:\Users\…");
-          the hover keeps the whole thing. */}
+      {/* Two parts so a long path clips at its head, never the branch; the title has it all. */}
       <div className="fleet-row__meta" title={branch ? `${branch} • ${cwd}` : cwd}>
         {branch ? (
           <>

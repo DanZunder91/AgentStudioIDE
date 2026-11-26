@@ -1,13 +1,4 @@
-/**
- * `blameGutter` — the DOM half of the annotate view, under jsdom.
- *
- * The popover controller is plain DOM + timers, so its show/hide rules are fully
- * assertable here: the ~150 ms hover delay, the leave-before-it-fires cancel,
- * the marker→popover travel grace, and the Esc/scroll dismissal. The gutter
- * extension itself is smoke-tested against a real EditorView (CM6 constructs
- * under jsdom); pixel-true gutter geometry lives in the browser tier
- * (`blameGutter.browser.test.tsx`).
- */
+/** Popover rules under jsdom; pixel-true gutter geometry is in `blameGutter.browser.test.tsx`. */
 
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,8 +1,5 @@
-/**
- * The stream model: pairing by `toolUseId` and its tolerated fallback,
- * blocks, the fixed-height row arithmetic, the window, error targets and the copy text.
- * Every expectation is written by hand.
- */
+/** Stream model: pairing (and its fallback), blocks, row arithmetic, window, error targets and
+ * copy text; every expectation written by hand. */
 
 import { describe, expect, it } from "vitest";
 

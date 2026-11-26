@@ -1,11 +1,5 @@
-/**
- * `grpcIpc` — the API client's gRPC lane, at the wire (native tonic).
- *
- * Thin wrappers, so the command *names*, arg *shapes*, and the resolve-vs-reject
- * split are the whole contract with the Rust `grpc_*` commands. Mirrors
- * `httpIpc.test.ts`/`wsIpc.test.ts`. The behavioural contract pinned here: a non-OK
- * gRPC status RESOLVES (only a transport failure rejects).
- */
+/** Command names and arg shapes are the whole contract with Rust `grpc_*`. A non-OK gRPC status
+ * RESOLVES; only a transport failure rejects. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

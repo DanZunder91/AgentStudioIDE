@@ -1,8 +1,4 @@
-/**
- * `displayPath` — how a find-usages row names its file. The request itself is browser-tier
- * (`lsp.browser.test.tsx`); the naming is a pure string question, so the Windows spelling is
- * pinned here, on every OS.
- */
+/** The request itself is covered in `lsp.browser.test.tsx`; this pins the Windows spelling. */
 import { describe, expect, it } from "vitest";
 
 import { displayPath } from "./references";

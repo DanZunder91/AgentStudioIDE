@@ -1,7 +1,4 @@
-//! The WebSocket/gRPC tools without a server: argument rules, the Vault refusal (nothing
-//! connects), bounds refused rather than clamped, the transcript and call reports, and message
-//! shapes from a hand-built descriptor pool. The live paths are in
-//! `tests/agent_stream_tools.rs`.
+//! WebSocket/gRPC tools without a server; the live paths are in `tests/agent_stream_tools.rs`.
 use super::*;
 use crate::agent_ctl::cli::{parse_args, Parsed};
 use crate::grpc::GrpcResponse;
@@ -1166,10 +1163,8 @@ fn entries(v: &Value) -> usize {
     }
 }
 
-/// A schema built to blow up a naive walk: `bomb.Node` has `width - 1` fields of its own type and
-/// a string; `bomb.L0`…`bomb.L4` each have `width` fields of the next level (distinct types, so
-/// only a budget stops a walk through them); `bomb.Svc` has `methods` unary methods from a
-/// `Node` to an `L0`.
+/// Built to blow up a naive walk: `Node` is self-referential and `L0`…`L4` are distinct types
+/// `width` wide, so only a budget stops a walk through them.
 fn bomb_pool(width: i32, methods: usize) -> DescriptorPool {
     let mut node: Vec<FieldDescriptorProto> = (1..width)
         .map(|n| {
@@ -1299,11 +1294,8 @@ fn a_service_with_many_methods_describes_a_bounded_number_on_one_budget() {
     assert!(data_bytes(&data) <= shape::DATA_BYTES);
 }
 
-/// The bound every description keeps, whatever the schema: the text and the data within their
-/// budgets, the walk within its visits, and the bytes of server-chosen names written — kept or not
-/// — within what the answer kept, plus each described method's path (its example's heading) and a
-/// few lines or entries past the budgets. Names built for lines or entries that were never going
-/// to be kept would show here.
+/// Text, data and visits stay within budget, and server-chosen name bytes within what the answer
+/// kept (plus small slack): names built for lines that were never kept would show here.
 fn assert_bounded(text: &str, data: &Value, cost: shape::Cost) {
     assert!(text.len() <= shape::TEXT_BYTES, "text {}", text.len());
     assert!(
@@ -1321,10 +1313,7 @@ fn assert_bounded(text: &str, data: &Value, cost: shape::Cost) {
     assert!(cost.name_bytes <= names, "{cost:?}, at most {names}");
 }
 
-/// Five messages of 200 fields with 200-byte names, each field of the next message's type: the
-/// text stops at its budget and the data at its own, both inside a message. Each field is
-/// admitted on its own, so the message the data budget runs out in is there with the fields that
-/// fit, and every cut is said.
+/// Fields are admitted one by one, so the message a budget runs out in keeps the fields that fit.
 #[test]
 fn long_lists_are_cut_at_the_text_and_data_budgets_field_by_field_and_the_cut_is_said() {
     let long = |n: i32| format!("f{n}_{}", "x".repeat(200));
@@ -1382,11 +1371,8 @@ fn long_lists_are_cut_at_the_text_and_data_budgets_field_by_field_and_the_cut_is
     );
 }
 
-/// A schema built so that names it declares once are repeated in every field that refers to them:
-/// an enum whose 20 values have 64 KiB names (an enum-typed field's type lists its values), a
-/// oneof with a 256 KiB name (each member's line names it), and a 64 KiB package that each
-/// relative type reference spells out in full. Described naively it writes hundreds of megabytes
-/// to answer with a few bytes.
+/// Names declared once but repeated in every referring field (64 KiB enum values, a 256 KiB oneof,
+/// a 64 KiB package): described naively, hundreds of megabytes for a few bytes of answer.
 fn amplifying_pool() -> (DescriptorPool, String) {
     let package = format!("p{}", "x".repeat(64 * 1024));
     let fields = (1..=shape::MAX_FIELDS as i32)
@@ -1445,10 +1431,6 @@ fn cut_name(name: &str) -> bool {
     name.ends_with('…') && name.len() <= shape::NAME_BYTES + '…'.len_utf8()
 }
 
-/// Every name the amplifying schema repeats is written once per use at most [`shape::NAME_BYTES`]
-/// long, and a field's enum values at about [`shape::VALUES_BYTES`]: describing the method, the
-/// message, the enum and listing the service each costs no more than the budgets, at once, and
-/// says that names were cut.
 #[test]
 fn names_a_schema_repeats_in_every_field_cost_no_more_than_the_budgets() {
     let (p, package) = amplifying_pool();

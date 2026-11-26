@@ -1,18 +1,6 @@
-/**
- * Layer 5 — the City's apartments in Tokyo's quiet stretches (render/backdropApartments.ts: buildings
- * with randomly lit windows, like occupied and vacant apartments, stand behind the empty spaces),
- * against a REAL 2D context in Chromium.
- *
- * The jsdom suite (backdropApartments.test.ts) proves the layout, the rects and the calls; only real pixels
- * can prove what the canvas makes of them: that `faceAt` is the top of what the day pass paints and the
- * face under it is opaque; that a pan and a zoom leave every home on its world pixels; that the night's
- * light rasters, filled as patterns through the real `fillLit`, land crisp in the windows, never in a
- * vacant home, never over a passer-by or a temple; and, end to end through the real frame at Fit, that
- * the apartments change nothing outside the quiet stretches, light nothing at noon, and cost
- * the frame a fraction of a millisecond.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/backdropApartments.browser.test.tsx`
- */
+/** Real pixels for the apartments layer (the jsdom suite proves layout and calls): faces, pan and
+ * zoom, night lights through the real `fillLit`, and the cost at Fit.
+ * Run with `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -65,12 +53,8 @@ const quiet = quietSpans(reference, -3000, 5000).reduce<[number, number][]>((out
   else out.push([a, b]);
   return out;
 }, []);
-/**
- * Is screen column X in the screen image of a quiet stretch, padded 2 px either side (render/backdropApartments.ts
- * `PAD`)? Mapped the way the renderer snaps a world rect (render/paint.ts `sx`, and never under a screen px): below
- * zoom 1 a world px can land on no screen px of its own, so dividing a screen column back by the zoom would blame
- * a pixel on the world px beside the one that painted it.
- */
+/** Is screen column X in a quiet stretch padded by `PAD` (2 px)? Mapped like the renderer's `sx`
+ * snap: below zoom 1 a world px may own no screen px, so dividing by zoom would misattribute. */
 const inQuietScreen = (cam: Camera, X: number) => quiet.some(([a, b]) => X >= sx(cam, a - 2) && X < Math.max(sx(cam, b + 2), sx(cam, b + 1) + 1));
 
 const sky = (phase: DayPhase, weather: Ambience["weather"] = "clear"): Ambience =>

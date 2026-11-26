@@ -1,9 +1,4 @@
-/**
- * JsonBodyEditor — the highlighted, editable request-body field. The tokenizer is
- * covered in `highlightJson.test.ts`; here we test the widget: it renders the colored
- * highlight layer, edits flow through `onChange`, keydown passes through, and the
- * scroll sync mirrors onto the highlight layer.
- */
+/** The widget only; the tokenizer is covered in highlightJson.test.ts. */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";

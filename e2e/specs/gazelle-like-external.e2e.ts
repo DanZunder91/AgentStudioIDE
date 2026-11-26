@@ -1,19 +1,5 @@
-/**
- * The gazelle-like scenario, public-internet half (docs/design/testing-strategy.md "gazelle-like
- * scenario"). The hermetic half — every loopback / agent assertion — is gazelle-like.e2e.ts and is
- * BLOCKING; this one depends on https://example.com/ (the only public host the repo's external
- * tier uses), so `npm run verify` REPORTS it without blocking. Run alone:
- *   node scripts/e2e-linux.mjs e2e/specs/gazelle-like-external.e2e.ts   (or --external)
- *
- * What it proves in the real app, with Decrypt HTTPS on:
- *   - gazelle-like (reqwest + rustls + webpki-roots ONLY — a typical Rust service's trust) calls example.com at
- *     startup and on /shipping/rates: its CONNECTs are TUNNEL rows from terminal `gazelle`,
- *     `closed`, with bytes both ways and the card that says why they were not decrypted — and the
- *     calls SUCCEED (the agent's /shipping/rates gets 200 with upstream example.com 200). TLS is
- *     never broken for a client that does not trust the IDE's CA.
- *   - the fake agent's plain `curl https://example.com/` (curl reads the IDE's CA bundle) IS
- *     decrypted: an HTTPS row, GET example.com / 200, Process curl, from the agent.
- */
+/** Gazelle-like public half (example.com; reported, not blocking): rustls clients that don't trust
+ * the IDE's CA are tunnelled and still succeed; curl, which reads the CA bundle, is decrypted. */
 
 import { $, browser, expect } from "@wdio/globals";
 import { execFile } from "node:child_process";

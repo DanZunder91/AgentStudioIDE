@@ -1,45 +1,6 @@
-//! Amazon DynamoDB — the eighth engine, and the one that shares nothing.
-//!
-//! No connection string, no socket-level authentication, no databases and no schemas. A request is
-//! one HTTPS `POST /` carrying a JSON body and an `X-Amz-Target` header, authenticated with **AWS
-//! Signature Version 4**, and the query language is **PartiQL**.
-//!
-//! ## Why the signing is ours
-//!
-//! `aws-sdk-dynamodb` adds **38 packages** including the whole Smithy
-//! runtime and a *second* `http` major beside the `http 1.x` that `reqwest`/`tonic`/tungstenite
-//! share; `aws-sigv4` alone adds 15. Signing by hand over the `reqwest` already in the tree adds
-//! **zero** — `ring` gives HMAC-SHA256 and SHA-256, and it is already this binary's only crypto
-//! provider.
-//!
-//! 🔴 **The risk that decision takes on, and the answer to it.** A wrong signature fails closed
-//! (no access — safe); mishandled credentials leak (not safe). And `amazon/dynamodb-local`
-//! **does not verify signatures at all**, so a green live test proves the request *shape* and
-//! proves nothing about the signing: a passing check is only evidence if the broken version
-//! would fail it. So [`tests`] pins the signer against
-//! **AWS's own published SigV4 test vectors**: canonical request, string to sign, and final
-//! signature, byte for byte. Those tests are what make this module defensible.
-//!
-//! ## What this engine deliberately does NOT do
-//!
-//! * **No session token**, i.e. no temporary credentials. Supporting one needs a
-//!   `secretRefs: Record<String, String>` on `DbConnection` so a second secret can live in the
-//!   Vault; that is a persisted-schema change that also touches the dialog, the Vault flow and
-//!   the config bundles. Declaring half of it would be a typed field that reads as finished but
-//!   does nothing, so temporary credentials are **refused with a message that names the
-//!   limitation**. Permanent credentials work.
-//! * **No credential discovery.** No `~/.aws/credentials` profile, no IMDS, no SSO. A console
-//!   needs one endpoint and static credentials; the SDK does all three and we do none, on purpose.
-//! * **No retries.** DynamoDB throttles with `ProvisionedThroughputExceededException`, and the
-//!   honest response in a console is to show it rather than to silently take longer.
-//!
-//! ## Read-only is a filter, and the badge says so
-//!
-//! Read-only is an **IAM** property of the credential — there is no session setting to send. So the
-//! guard here is a **statement filter** (PartiQL `SELECT` only) and `serverEnforcedReadOnly` is
-//! `false`, which is what makes the UI say "enforced by this app" rather than promising a boundary.
-//! A PartiQL `SELECT` can still be a full table scan, so the row cap and the timeout matter *more*
-//! here than elsewhere, not less.
+//! DynamoDB: one SigV4-signed HTTPS `POST /` per request, PartiQL queries. Signing is ours (no
+//! SDK) and pinned to AWS's published test vectors, since dynamodb-local skips signature checks.
+//! No session token, credential discovery or retries; read-only is a `SELECT`-only filter.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -155,10 +116,8 @@ impl DynamodbSession {
 #[async_trait]
 impl DbSession for DynamodbSession {
     async fn probe(&mut self) -> Result<ServerInfo, DbError> {
-        // 🔴 **DynamoDB reports no version, and this does not invent one.** It is a managed service
-        // with no version string to ask for; `DescribeEndpoints` returns hostnames, not a build.
-        // What a probe CAN prove is that the credentials are accepted for this region, so that is
-        // what the string says — and it names the endpoint, which is the thing a user gets wrong.
+        // DynamoDB has no version string; the probe proves the credentials work for this region and
+        // names the endpoint.
         self.call("ListTables", json!({ "Limit": 1 })).await?;
         Ok(ServerInfo {
             version: format!("DynamoDB · {}", self.endpoint.describe()),
@@ -246,10 +205,8 @@ impl DbSession for DynamodbSession {
 
     async fn children(&mut self, node: &DbNodeRef) -> Result<Vec<DbNode>, DbError> {
         match node {
-            // 🔴 **A FLAT tree.** A region contains tables — there is no database level
-            // and no schema level. The root's children are a single `Tables` group so the level
-            // structure still matches every other engine's, which is what lets one `<DbTree/>`
-            // render all nine rows without knowing anything about DynamoDB.
+            // Flat: a region holds tables. A single `Tables` group keeps the level structure every
+            // other engine's tree has, so one `<DbTree/>` renders them all.
             DbNodeRef::Root => Ok(vec![DbNode::new(
                 DbNodeRef::Group {
                     database: String::new(),
@@ -305,10 +262,8 @@ impl DbSession for DynamodbSession {
                     .collect())
             }
 
-            // A table's children are its **key schema and its indexes** — the two things you must
-            // know to write a PartiQL query that is not a full scan. Not "columns": DynamoDB items
-            // have no fixed attributes, so listing sampled attribute names as if they were a schema
-            // present an observation as a declaration.
+            // A table's children are its key schema and indexes, not "columns": items have no fixed
+            // attributes.
             DbNodeRef::Table { name, .. } => {
                 let reply = self
                     .call("DescribeTable", json!({ "TableName": name }))
@@ -329,10 +284,8 @@ impl DbSession for DynamodbSession {
 
 /* ────────────────────────────── the tree's leaves ────────────────────────────── */
 
-/// A table's key attributes and secondary indexes, as leaf nodes.
-///
-/// Pure, so the shape of a real `DescribeTable` reply can be pinned in the hermetic tier from a
-/// captured payload rather than only against a live table.
+/// A table's key attributes and secondary indexes, as leaf nodes (pure over a `DescribeTable`
+/// reply).
 pub fn key_and_index_nodes(table: &str, described: &Value) -> Vec<DbNode> {
     let mut out = Vec::new();
 
@@ -373,11 +326,7 @@ pub fn key_and_index_nodes(table: &str, described: &Value) -> Vec<DbNode> {
             .get(name)
             .map(|t| format!("{role} · {}", attribute_type_label(t)))
             .unwrap_or_else(|| role.to_string());
-        // A key attribute is a leaf: there is nothing fetchable below it. `DbNode::column`'s
-        // sub-label is the type name for every other engine; here it is the role plus the declared
-        // type. `nullable: false` is passed because it is **true** — the service rejects an item
-        // that omits a key attribute — so the "not null" the shared constructor appends is a real
-        // fact about the table and not a decoration.
+        // `nullable: false` is true here: the service rejects an item that omits a key attribute.
         out.push(DbNode::column("", None, table, name, &kind, false));
     }
 
@@ -423,24 +372,9 @@ fn attribute_type_label(t: &str) -> &str {
 
 /* ────────────────────────────── PartiQL results ────────────────────────────── */
 
-/// DynamoDB items → one [`DbResultSet`].
-///
-/// **The column union is the honest shape.** DynamoDB is schemaless: two items in one table can
-/// have entirely different attributes, so the columns are the union of every attribute seen in the
-/// rows returned, and an item missing one gets `None` for it.
-///
-/// ⚠️ **The column ORDER is alphabetical, not the order the service sent, and that is
-/// `serde_json`: without `preserve_order` a `Map` is a `BTreeMap`, so every item's keys are sorted
-/// the moment the reply is parsed.** An earlier version of this function claimed "first-seen
-/// order" and its own test caught the lie. Unlike the MongoDB case the loss is harmless here and it
-/// is worth saying why: there, key order **was semantics** (the first key is the command name); a
-/// DynamoDB item's attributes have no declared order, so nothing about the data is misrepresented.
-/// Preserving the wire order would need a feature flag on `serde_json` that changes behaviour for
-/// every other module in the binary.
-///
-/// ⚠️ That means `None` here can mean *either* "the attribute is NULL" *or* "the item does not have
-/// it" — the same two-states-for-three problem MongoDB has, and it is reported the same way:
-/// named in the notice rather than collapsed silently.
+/// DynamoDB items → one [`DbResultSet`]. Columns are the union of attributes seen, sorted
+/// (serde_json `Map` is a `BTreeMap`; attributes have no declared order). `None` means NULL or
+/// absent, and the notice says so.
 pub fn shape(
     statement: &str,
     items: &[Value],
@@ -534,12 +468,8 @@ pub fn shape(
     }
 }
 
-/// One DynamoDB attribute value → `(its type tag, the cell)`.
-///
-/// The wire format is `{"S": "text"}` / `{"N": "42"}` / `{"NULL": true}` / `{"L": [...]}`. **`N`
-/// arrives as a STRING and stays one**: DynamoDB numbers carry up to 38 significant digits, which
-/// no `f64` can hold, so parsing one to re-render it would silently change a value (the reason
-/// every engine reads values as text, and the same as ClickHouse decimals).
+/// One attribute value → `(type tag, cell)`. `N` arrives as a string and stays one: up to 38
+/// significant digits, more than an `f64` holds.
 fn attribute(value: &Value) -> (&'static str, Option<String>) {
     let Some(obj) = value.as_object() else {
         // Not an attribute-value wrapper at all. Rendered rather than dropped, so a surprise in the
@@ -588,11 +518,7 @@ fn cell_kind_for(type_name: &str) -> DbCellKind {
 
 /* ────────────────────────────── the read-only filter ────────────────────────────── */
 
-/// PartiQL statements a read-only connection may run: `SELECT` and nothing else.
-///
-/// **Default-deny on the leading keyword**, like the Mongo and Redis allowlists, because PartiQL's
-/// write verbs are few and its read verbs are one — so an unrecognised statement is refused rather
-/// than assumed safe.
+/// PartiQL a read-only connection may run: default-deny, only a leading `SELECT` passes.
 pub fn read_only_refusal(statement: &str) -> Option<DbError> {
     let first = statement
         .split_whitespace()
@@ -617,11 +543,8 @@ pub fn read_only_refusal(statement: &str) -> Option<DbError> {
 
 /* ────────────────────────────── credentials and endpoint ────────────────────────────── */
 
-/// The static credentials a signed request needs.
-///
-/// **`Debug` is implemented by hand and prints no secret.** The derived one would put the secret
-/// access key into any `unwrap`/`expect` panic and into every `{:?}` a future caller writes — the
-/// same leak `ResolvedConfig` already guards against with its own hand-written impl.
+/// Static credentials for signing. `Debug` is hand-written so the secret key never reaches a panic
+/// or `{:?}`.
 #[derive(Clone)]
 pub struct Credentials {
     pub access_key_id: String,
@@ -838,11 +761,8 @@ pub struct Signed {
     pub signature: String,
 }
 
-/// Sign one DynamoDB request, SigV4.
-///
-/// The four steps, in AWS's own order, with the headers we actually send: `content-type`, `host`,
-/// `x-amz-date`, `x-amz-target`. Signing exactly the headers sent — and sending exactly the headers
-/// signed — is the whole game.
+/// SigV4-sign one request. Exactly the headers sent are signed: `content-type`, `host`,
+/// `x-amz-date`, `x-amz-target`.
 pub fn sign(
     creds: &Credentials,
     endpoint: &Endpoint,
@@ -1015,10 +935,7 @@ fn map_service_error(status: reqwest::StatusCode, body: &str) -> DbError {
             DbErrorCode::Timeout,
             format!("DynamoDB throttled this request. {detail}"),
         ),
-        // 🔴 `blocked` carries OUR prose only, because it is the code whose detail the panel
-        // renders verbatim (`DbError::blocked`). These two were the service's bare message, which
-        // the frontend dropped anyway — and they are different problems with different answers, so
-        // they get a sentence each rather than one shared with the exception name in it.
+        // The panel renders a `blocked` detail verbatim, so each refusal gets our own sentence.
         "ItemCollectionSizeLimitExceededException" => DbError::blocked(
             "DynamoDB refused that write: the item collection for that partition key has reached \
              the size limit a local secondary index imposes. No setting here can lift it — the \
@@ -1049,20 +966,9 @@ mod tests {
 
     /* ─────────────────────── SigV4, against AWS's own vectors ─────────────────────── */
 
-    /// 🔴 **The test that makes hand-written signing defensible.**
-    ///
-    /// `amazon/dynamodb-local` accepts ANY credentials and never checks a signature, so the live
-    /// tier cannot tell a correct signer from a broken one. These are AWS's published
-    /// SigV4 example values — the ones in the "Signature Calculations for the Authorization Header"
-    /// documentation, whose fixed key/date/region/service make each step reproducible:
-    ///
-    /// ```text
-    /// key    AKIDEXAMPLE / wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY
-    /// date   20150830T123600Z, region us-east-1, service iam (AWS's example service)
-    /// ```
-    ///
-    /// The derived signing key is the part every hand-rolled implementation gets wrong, so it is
-    /// asserted on its own, byte for byte, and separately from the request we actually build.
+    /// AWS's published SigV4 example values (key AKIDEXAMPLE, 20150830T123600Z, us-east-1, iam).
+    /// The live tier cannot catch a broken signer (dynamodb-local skips signature checks), so this
+    /// does.
     #[test]
     fn the_derived_signing_key_matches_aws_published_value() {
         // AWS's documented intermediate: HMAC chain over "AWS4"+secret → date → region → service →
@@ -1500,10 +1406,7 @@ mod tests {
         let nodes = key_and_index_nodes("tracks", &described);
         let label = |i: usize| nodes[i].sub_label.clone().unwrap_or_default();
         assert_eq!(nodes[0].label, "pk");
-        // "partition key", not "HASH": the service's word tells a user nothing about which value a
-        // PartiQL WHERE has to pin.
-        // `· not null` comes from the shared column constructor and is TRUE here: DynamoDB refuses
-        // an item that omits a key attribute.
+        // "partition key", not "HASH"; `· not null` is true since key attributes are required.
         assert_eq!(label(0), "partition key · string · not null");
         assert_eq!(label(1), "sort key · number · not null");
         assert_eq!(nodes[2].label, "by-studio");
@@ -1539,14 +1442,8 @@ mod tests {
         assert_eq!(err.message, "Unexpected keyword: FROMM");
     }
 
-    /// 🔴 The two `blocked` arms, which used to be the service's bare `message`.
-    ///
-    /// `blocked` is the code whose detail the panel renders verbatim (`DbError::blocked`), so it
-    /// carries our prose only — the DSN in the body is what makes forwarding a service's text
-    /// unsafe in general, and `redacted` masks the password out of it and nothing else.
-    ///
-    /// They also get a sentence **each**: a size limit needs a data change and a transaction
-    /// conflict needs a retry, and one shared sentence could not say both.
+    /// `blocked` details render verbatim, so they carry our prose only; a size limit and a
+    /// transaction conflict need different fixes, so each gets its own sentence.
     #[test]
     fn a_refused_write_says_which_refusal_it_was_and_carries_no_service_text() {
         let leaky = "at https://catalog_ro:hunter2@dynamo.internal:8000/maestro";

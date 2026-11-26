@@ -1,19 +1,6 @@
-/**
- * `browserIpc` — the wire contract for "Open in Browser".
- *
- * Two things here are load-bearing beyond the ordinary marshalling:
- *
- *  1. **The cache is what makes the menu safe.** `ContextMenu` measures and
- *     clamps on `[x, y, anchor]` and focuses on `[activeIndex, openSub]`, so a
- *     submenu that grows after it opens is never re-measured and never gains a
- *     focus ring. The list must therefore be readable SYNCHRONOUSLY when the
- *     items are built — these tests pin that `cachedBrowsers()` is null until
- *     the prime resolves, and that a failed prime leaves it null rather than
- *     poisoning it.
- *  2. **`browserId` is sent as null, never dropped.** Serde reads the NAME; an
- *     omitted key is silently ignored, which would surface as "why does picking
- *     Firefox open Chrome?" — the same trap `fleetIpc`'s `prompt` documents.
- */
+/** `ContextMenu` never re-measures a grown submenu, so the browser list must be cached and read
+ * synchronously; a failed prime leaves it null. `browserId` is sent as null, never dropped: serde
+ * silently ignores an omitted key. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

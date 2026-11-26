@@ -1,23 +1,6 @@
-/**
- * `portabilityErrors` — the rejection → one-honest-sentence path.
- *
- * Three properties are pinned, and they are not the same property:
- *
- * 1. **Every code maps to a distinct, non-empty sentence.** A `switch` that fell through for
- *    one code would return `undefined` and render as "undefined" in a dialog; two codes
- *    sharing a sentence would make the mapper useless for the case it exists for.
- * 2. **The bundle's own text never survives.** This is the sharp one. A bundle is untrusted
- *    input that arrived by email, so a detail can quote the file — a hostile `kind` string, a
- *    path, a fake instruction. That is asserted with a hostile detail, not described.
- * 3. **`bad-passphrase` and `tampered` stay DISTINGUISHABLE.** AES-GCM cannot tell a wrong
- *    key from altered bytes, but `types.ts` splits the codes anyway — one means "try again",
- *    the other means "do not trust this file". Collapsing them into one sentence would be the
- *    single most misleading thing this file could do.
- *
- * The code list is spelled out LITERALLY below rather than imported from
- * `PORTABILITY_ERROR_CODES`: the parser reads that array, so an expectation
- * derived from it could not catch a code silently dropped from it.
- */
+/** The bundle's own text must never survive (it is untrusted), and `bad-passphrase` / `tampered`
+ * stay distinct. Codes are spelled out literally, not from `PORTABILITY_ERROR_CODES`: the parser
+ * reads that array, so an expectation derived from it could not catch a dropped code. */
 
 import { describe, expect, it } from "vitest";
 
@@ -79,10 +62,7 @@ describe("parsePortabilityError", () => {
   });
 
   it("🔴 now READS a plain object carrying a `message` — a deliberate behaviour change", () => {
-    // Was `expect(parsePortabilityError({ message: "io" })).toBe("unknown")`, which pinned the
-    // narrower of two behaviours this app had at once: three copies of this parser existed and only
-    // `usage`'s duck-typed `.message`. Unified into `lib/wireCode`, keeping the
-    // permissive reading — a cross-realm `Error` fails `instanceof` and is still perfectly readable.
+    // Permissive reading: a cross-realm `Error` fails `instanceof` but is still readable.
     expect(parsePortabilityError({ message: "io" })).toBe("io");
     expect(parsePortabilityError({ name: "Error", message: "io: no such file" })).toBe("io");
   });

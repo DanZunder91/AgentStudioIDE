@@ -1,26 +1,6 @@
-/**
- * The restart E2E's helpers (e2e/specs/restart.e2e.ts; docs/design/agent-restart-restore.md §7):
- * what the stub `claude` was launched with, a saved conversation for the resume rung, and a
- * GRACEFUL close of the app's main window.
- *
- *   - The stub (e2e/fixtures/claude-stub.sh) appends its argv, one launch per line, to
- *     `${TMPDIR:-/tmp}/agentstudio-e2e-claude-argv.log`. The session id an agent was minted with never
- *     reaches the UI (by design), so this log is how the spec learns it — and, after a restart,
- *     whether the restore asked for `--resume <id>` or a fresh `--session-id <new>`.
- *   - The restore resumes only an agent whose conversation exists on disk (the adapter's
- *     `locate_transcript`: `~/.claude/projects/<any>/<id>.jsonl`). {@link seedTranscript} writes
- *     one — 🔴 in the Docker E2E container's throwaway `$HOME` ONLY (never a real `~/.claude`):
- *     it refuses to run unless `/.dockerenv` exists, and writes only under the project directory it
- *     names itself, which {@link removeSeededTranscripts} removes.
- *   - {@link closeMainWindowGracefully} does what a window manager's close button does: it sends
- *     the main window a `WM_PROTOCOLS` / `WM_DELETE_WINDOW` client message. GTK turns that into a
- *     close request, Tauri closes the window, and the main window's `Destroyed` — the path that
- *     raises the supervisor's shutting-down flag and writes which agents were mid-turn (lib.rs;
- *     agent-restart-restore.md §2 "The shutdown order") — runs exactly as when the user closes it.
- *     xdotool 3.20160805 (the image's) has no such command (`windowkill` kills the client,
- *     `windowclose` destroys the window under GTK), so the message is sent through libX11 from
- *     python3's ctypes, both already in the image.
- */
+/** Restart E2E helpers (docs/design/agent-restart-restore.md §7). The stub's argv log is the only
+ * way to learn session ids. Transcripts are seeded only in the container (/.dockerenv), not a real
+ * ~/.claude. Close sends WM_DELETE_WINDOW via python ctypes: the image's xdotool cannot. */
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -43,11 +23,7 @@ export function argvLines(): string[] {
   return fs.readFileSync(ARGV_LOG, "utf8").split("\n").filter((l) => l.trim() !== "");
 }
 
-/**
- * The AGENT launches so far, oldest first — the lines that carry a session (`--session-id` /
- * `--resume`). The usage strip runs the same binary as `claude -p --no-session-persistence /usage`
- * (usage.rs resolves it like an agent spawn), and those lines are not agents.
- */
+/** Only launches carrying `--session-id`/`--resume`: the usage strip runs the same binary. */
 export function agentLaunches(): string[] {
   return argvLines().filter((l) => launchOf(l) !== null);
 }
@@ -66,11 +42,7 @@ function seededDir(): string {
   return path.join(os.homedir(), ".claude", "projects", SEEDED_PROJECT);
 }
 
-/**
- * A saved conversation for `session` — `$HOME/.claude/projects/agentstudio-e2e/<session>.jsonl`, one
- * user turn in `cwd` — so the restore takes the RESUME rung for the agent that owns it. Container
- * only (see the module note).
- */
+/** One user turn, so the restore takes the RESUME rung. Container only (module note). */
 export function seedTranscript(session: string, cwd: string): string {
   if (!fs.existsSync("/.dockerenv")) {
     throw new Error("seedTranscript writes under $HOME/.claude — it runs ONLY in the Docker E2E container (scripts/e2e-linux.mjs)");
@@ -94,10 +66,7 @@ export function removeSeededTranscripts(): void {
   if (fs.existsSync("/.dockerenv")) fs.rmSync(seededDir(), { recursive: true, force: true });
 }
 
-/**
- * The libX11 client message a window manager sends when its close button is pressed: WM_PROTOCOLS
- * with WM_DELETE_WINDOW, to the window `argv[1]`. Prints "sent".
- */
+/** WM_PROTOCOLS/WM_DELETE_WINDOW to window `argv[1]`, as a close button sends; prints "sent". */
 const WM_DELETE_PY = String.raw`
 import ctypes, ctypes.util, sys
 x = ctypes.cdll.LoadLibrary(ctypes.util.find_library("X11") or "libX11.so.6")
@@ -131,11 +100,7 @@ x.XCloseDisplay(d)
 print("sent")
 `;
 
-/**
- * Close the app's main window the way its title bar's ✕ does (see the module note). Returns what
- * happened, for the report; throws when there is no main window to close or the message could not
- * be sent.
- */
+/** Like the title bar's ✕ (module note); throws when there is no main window or sending fails. */
 export function closeMainWindowGracefully(): string {
   const main = osWindows().sort((a, b) => b.width * b.height - a.width * a.height)[0];
   if (!main) throw new Error("no Agent Studio window on the X display to close");
@@ -162,15 +127,9 @@ export async function waitForAppExit(timeoutMs: number): Promise<boolean> {
 /** The xvfb display (support/record.ts grabs the same one). */
 const DISPLAY = process.env.DISPLAY ?? ":99";
 
-/**
- * Text pixels in a rectangle of the X SCREEN (absolute px): how many have a luma (Rec. 709) of at
- * least `minLuma`. Read off the X server with ffmpeg's x11grab — what is really on the display, the
- * same thing a still shows — never the DOM: a WebGL terminal can hold its text in memory and still
- * show nothing (WebKitGTK puts a WebGL canvas on screen one draw late — a resumed terminal can stay
- * blank). Calibrated on recorded stills: a row holding the stub's banner "AGENTSTUDIO-E2E fake agent
- * ready" lights ~400 px at luma ≥ 150 (peak ~208); the blank pane lit 0 (its unfocused cursor is a
- * blue outline, luma ~123); a native tooltip is bright too, so never measure under one.
- */
+/** Pixels of luma ≥ `minLuma` in an X-screen rect via x11grab, not the DOM: WebKitGTK shows a
+ * WebGL canvas one draw late. Calibrated: the stub banner row lights ~400 at 150, a blank pane 0.
+ * Never measure under a native tooltip. */
 export function screenTextPixels(rect: { x: number; y: number; w: number; h: number }, minLuma = 150): number {
   const [x, y, w, h] = [rect.x, rect.y, rect.w, rect.h].map((v) => Math.max(0, Math.round(v)));
   if (w === 0 || h === 0) return 0;

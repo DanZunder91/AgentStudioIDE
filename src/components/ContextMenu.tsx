@@ -1,55 +1,6 @@
-/**
- * ContextMenu — a small, reusable right-click menu primitive.
- *
- * Headless-ish: the caller owns WHAT the items do and WHERE the menu appears
- * (screen coords from the triggering `contextmenu` event); this component owns
- * the surface, positioning, focus, and dismissal. It is generic — nothing here
- * knows about the file tree (or about git) — so any feature can render one.
- *
- * Contract:
- *   - `items`: menuitem descriptors, or `{ separator: true }` dividers. A
- *     descriptor is `{ label, onSelect, disabled?, danger? }`; a descriptor that
- *     carries `items` instead of `onSelect` is a SUBMENU parent.
- *   - `x` / `y`: where to anchor (fixed positioning), CLAMPED so the surface
- *     never overflows the viewport — it shifts back from the right/bottom edge.
- *   - `onClose`: called after a selection, and on every dismissal path.
- *   - `ariaLabel`: names the `role="menu"` for assistive tech.
- *
- * Dismissal: selecting an item (fires `onSelect` then `onClose`), Esc,
- * outside-click, a `contextmenu` elsewhere (so opening another menu closes this
- * one), and scroll/resize (the anchor would otherwise drift). A disabled item
- * does nothing (native `disabled` button — no click fires).
- *
- * Keyboard: the first enabled item is focused on open; Up/Down move between
- * enabled items (wrapping); Enter/Space activate (native button activation);
- * Esc closes. All key + pointer events are stopped from propagating, so driving
- * the menu never selects a row or starts a drag underneath it.
- *
- * ── Submenus ────────────────────────────────────────────────────────────────
- * Rendering is recursive, so nesting is not artificially capped.
- *
- *   - A parent renders as a `menuitem` with `aria-haspopup="menu"`,
- *     `aria-expanded`, and a trailing `▸`. It is never itself selectable:
- *     activating it opens the child. Choosing a LEAF inside a child fires that
- *     leaf's `onSelect` and then the **root** `onClose` — the whole tree closes,
- *     because every surface is handed the same root `onClose`.
- *   - Opens on hover, on click/Enter/Space (one native button activation), and
- *     on ArrowRight. Closes on ArrowLeft and Esc — both hand focus back to the
- *     parent item, so Esc peels one layer and a second Esc closes the whole
- *     menu — on hovering another item of the same level, and on any root
- *     dismissal. Exactly ONE submenu is open per level. A `disabled` parent
- *     never opens and is inert to hover (it cannot hold the focus ring either,
- *     so ArrowRight can never reach it).
- *   - The child surface is rendered INSIDE its parent's DOM subtree (fixed
- *     positioning frees it from the parent's box, so nesting costs no layout).
- *     That is deliberate and load-bearing: the outside-click check is
- *     `menuRef.contains(target)`, and a portalled child would read as *outside*
- *     — opening a submenu would instantly dismiss the whole menu. Only the root
- *     installs the global dismissal listeners, for the same reason.
- *   - Geometry: to the RIGHT of the parent item, top-aligned with it, flipping
- *     to its LEFT when the right side would overflow, and then through the very
- *     same viewport clamp the root uses (one copy — two would drift apart).
- */
+/** Generic right-click menu: the caller owns items and screen coords; this owns surface, clamped
+ * position, focus, dismissal (select, Esc, outside, scroll/resize) and stops key/pointer events.
+ * Submenus render INSIDE the parent DOM, so the root's outside-click `contains` covers them. */
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 
@@ -83,11 +34,8 @@ function isSubmenu(item: ContextMenuItem): item is SubmenuItem {
   return "items" in item;
 }
 
-/**
- * Shift a `w`×`h` surface back inside the viewport so it never overflows the
- * right or bottom edge, keeping `MENU_MARGIN` of air. ONE copy, shared by the
- * root menu and by every submenu — a second copy would drift out of step.
- */
+/** Shift a `w`×`h` surface inside the viewport with `MENU_MARGIN` of air. ONE copy for the root
+ * and every submenu, so they cannot drift. */
 function clampToViewport(x: number, y: number, w: number, h: number): { x: number; y: number } {
   let nx = x;
   let ny = y;
@@ -116,11 +64,8 @@ interface MenuSurfaceProps {
   /** The ROOT close — a leaf selection anywhere closes the entire tree. */
   onClose: () => void;
   ariaLabel: string;
-  /**
-   * The parent menuitem this surface hangs off, when it is a SUBMENU; `null`
-   * for the root menu. Travels with `onDismiss`, but is a separate prop because
-   * it is a stable DOM node the geometry effect can safely depend on.
-   */
+  /** The parent menuitem of a SUBMENU, `null` for the root; separate from `onDismiss` because it
+   * is a stable DOM node the geometry effect can depend on. */
   anchor: HTMLButtonElement | null;
   /** Close just THIS submenu (ArrowLeft / Esc) — `null` for the root menu. */
   onDismiss: (() => void) | null;
@@ -142,10 +87,8 @@ function MenuSurface({ items, x, y, onClose, ariaLabel, anchor, onDismiss }: Men
   // menu is somehow all-disabled/separators, so the focus effect is a no-op).
   const [activeIndex, setActiveIndex] = useState(() => (enabledIndices.length > 0 ? enabledIndices[0] : -1));
 
-  // Anchor at (x, y), then clamp back inside the viewport once the surface has a
-  // measured size. Runs before paint (useLayoutEffect) so there is no flash at
-  // the un-clamped spot. Depends only on x/y/anchor — reopening at a new anchor
-  // re-clamps, and each of the three is stable for the surface's lifetime.
+  // Clamp before paint (no flash at the unclamped spot). Depends only on x/y/anchor, each stable
+  // for the surface's lifetime.
   useLayoutEffect(() => {
     // The surface is always mounted while this runs (the menu renders it), so the
     // ref is non-null — no defensive branch to leave uncovered.
@@ -165,21 +108,16 @@ function MenuSurface({ items, x, y, onClose, ariaLabel, anchor, onDismiss }: Men
     setPos(clampToViewport(nx, ny, rect.width, rect.height));
   }, [x, y, anchor]);
 
-  // Move browser focus to the active item whenever it changes (open + arrows) —
-  // unless a submenu is open, in which case focus belongs to the child, which
-  // takes it on mount. Closing the child re-runs this and hands focus back to
-  // the parent item, so keys keep reaching a menu instead of the body.
+  // Focus the active item on change, unless a submenu is open (the child owns focus); closing it
+  // re-runs this and hands focus back to the parent item.
   useEffect(() => {
     if (openSub !== null) return;
     itemRefs.current[activeIndex]?.focus();
   }, [activeIndex, openSub]);
 
-  // Global dismissal: outside-click, a contextmenu elsewhere (opening another
-  // menu closes this one), and scroll/resize (the anchor would drift). Captured
-  // so it fires even if an underlying handler stops propagation. ROOT ONLY: a
-  // submenu lives inside the root's surface, so the root's `contains` check
-  // already covers it, and a second copy here would both fire `onClose` twice on
-  // a scroll and read a click on the PARENT menu as "outside" its own box.
+  // Global dismissal, captured so a stopped propagation can't block it. ROOT ONLY: the root's
+  // `contains` already covers submenus; a second copy would double-fire `onClose` and read a
+  // click on the parent menu as outside.
   useEffect(() => {
     if (anchor !== null) return;
     const outside = (e: Event): void => {
@@ -301,11 +239,8 @@ function MenuSurface({ items, x, y, onClose, ariaLabel, anchor, onDismiss }: Men
                 else select(onSelect);
               }}
               onMouseEnter={(e) => {
-                // No `disabled` guard here on purpose: React never delivers
-                // onMouseEnter (or onClick) to a disabled interactive element, so
-                // a disabled row is already inert to the mouse and a guard would
-                // be a branch this file could not cover. Pinned by the test
-                // "a disabled submenu never opens".
+                // No `disabled` guard: React never delivers mouse events to a disabled
+                // element (pinned by "a disabled submenu never opens").
                 setActiveIndex(i);
                 // One submenu per level: hovering anything else closes the open one.
                 setOpenSub(subItems === null ? null : { index: i, anchor: e.currentTarget });

@@ -1,15 +1,6 @@
-/* The `diff` center tab (Git ▸ Compare with HEAD).
- *
- * Unlike git.css this is NOT rail furniture — it fills a pane, so the job here
- * is the opposite one: own the full height and give the MergeView a scroll box
- * of its own. `.cm-mergeView` is not scrollable by default (the package says so
- * outright), so without an explicit height + overflow the two panes grow to
- * their content and the pane body scrolls the whole document, header included.
- * It is the content-sized scroll box problem again, in a different feature.
- *
- * Colors use the same `var(--x, #hex)` idiom the rest of the app does: the
- * tokens may not exist in a bare test document, and the surface must still read
- * as the editor's dark surface either way. */
+/* The `diff` tab fills a pane and gives the MergeView its own scroll box: `.cm-mergeView` does
+ * not scroll by default, so the panes would grow and scroll the header away. `var(--x, #hex)`
+ * keeps a bare test document dark. */
 
 .diff-view {
   display: flex;

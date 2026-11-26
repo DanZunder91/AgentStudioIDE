@@ -1,12 +1,5 @@
-/**
- * ReferencesPanel — the find-usages results panel.
- *
- * `revealInEditor` is mocked at the module boundary (opening a real editor tab
- * crosses the CM6/registry seam, tested in the browser tier). What is under test
- * here is the panel's behaviour off the `lspReferences` store seam: the closed /
- * loading / empty / grouped states, the marked span, click-to-open-and-close, and
- * the close button + Esc.
- */
+/** `revealInEditor` is mocked (real tab opening is browser-tier); this drives the panel off the
+ * `lspReferences` store seam. */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

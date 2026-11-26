@@ -1,22 +1,5 @@
-/**
- * historyGroup — the pure shaping logic behind the History panel's
- * recent/day-group split and its search.
- *
- * Two deliberate test-construction rules here, both so no expectation is derived from
- * the code under test:
- *
- * - **Timestamps are built with `new Date(y, m, d, h, min).getTime()`, never a
- *   hard-coded epoch integer.** A literal epoch pins a UTC instant, so the
- *   local calendar day it lands on — the thing under test — would change with
- *   the machine's timezone. Constructing from local parts makes "23:55 on
- *   Aug 24, wherever you are" mean exactly that everywhere.
- * - **Expected labels are written out literally** (`"Mon, Aug 24"`), never
- *   derived by calling a formatter. An expectation computed the way the code
- *   computes it proves only plumbing, never values.
- *
- * `now` is injected into every label assertion, so nothing here depends on the
- * wall clock and "Today" cannot flake at midnight.
- */
+/** Timestamps come from local parts (`new Date(y, m, d, h, min)`) so the day is timezone-proof;
+ * labels are literal, never formatter-derived; `now` is injected so "Today" can't flake. */
 
 import { describe, expect, it } from "vitest";
 

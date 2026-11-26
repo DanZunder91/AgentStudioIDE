@@ -1,17 +1,6 @@
-//! `agent-studio mcp` end to end, without the GUI: the real app binary as the MCP server Claude
-//! Code starts, over real pipes, forwarding to the real listener's `/ctl` route; and the real
-//! binary's `mcp install|status|uninstall` running a fake `claude` through the same
-//! `AGENTSTUDIO_CLAUDE_BIN` override every spawn of `claude` honours.
-//!
-//! Hermetic: every store is in a temp dir, the database is a port nothing listens on, the
-//! listener is on loopback, and the `claude` is a script that keeps its "config" next to itself
-//! (with `HOME` and `CLAUDE_CONFIG_DIR` pointed at a temp dir too, so even a `claude` found by
-//! mistake could not reach the user's config).
-//!
-//! One test runs the real `claude` and is `#[ignore]`d: `claude mcp add|get|remove` in a
-//! throwaway config, with no model call, asserting that the user's own Claude Code config comes
-//! out byte-identical. It is a blocking step of `npm run verify` on macOS and Linux. Nothing here
-//! runs the signed-in `claude` against the user's own config: even a print-mode run writes it.
+//! `agent-studio mcp` end to end: the real binary as Claude Code's MCP server over pipes to the
+//! real `/ctl` listener, and `mcp install|status|uninstall` against a fake `claude`. Hermetic;
+//! one `#[ignore]`d test runs the real `claude` in a throwaway config (a blocking verify step).
 
 #[cfg(unix)]
 use std::collections::{BTreeMap, BTreeSet};
@@ -481,21 +470,9 @@ fn install_status_and_uninstall_run_claudes_cli_with_this_binarys_absolute_path(
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// The real `claude mcp add|get|remove` behind `agent-studio mcp install|status|uninstall`, run as
-/// the user runs them (at a terminal). Checks the reading of Claude's real `get` output, and that
-/// Claude's own health check starts this binary as a server and connects. No model call; it needs
-/// only the installed `claude`, so it is a blocking local-integration step of `npm run verify`
-/// (macOS and Linux: it gives the binary a pty for a terminal, and moves `HOME`):
-///
-/// `cargo test --test agent_mcp -- --ignored --exact real_claude_adds_checks_and_removes_the_server_in_a_throwaway_config`
-///
-/// `claude` runs in a throwaway config: `CLAUDE_CONFIG_DIR`, `HOME` and the XDG dirs are temp
-/// dirs, and no `CLAUDE*` variable of a session this test may run inside reaches it. The user's
-/// own config must come out byte-identical, and that is asserted, not assumed: the length,
-/// modification time and a hash of `~/.claude.json` and of the backups Claude keeps of it, and
-/// of whatever else the run writes in its throwaway config, at the same place in the user's (see
-/// [`ClaudeTouch`]), are compared before and after. An add then a remove leaves `~/.claude.json`
-/// with the same bytes, so the modification time is what gives such a leak away.
+/// The real `claude mcp add|get|remove` in a throwaway config (no model call; a blocking
+/// `verify` step on macOS/Linux). Asserts the user's `~/.claude.json`, its backups and mirrored
+/// paths ([`ClaudeTouch`]) keep length, mtime and hash: an add+remove leaves the same bytes.
 #[cfg(unix)]
 #[test]
 #[ignore = "runs the real claude CLI (in a throwaway config dir; no model call)"]
@@ -545,11 +522,8 @@ fn real_claude_adds_checks_and_removes_the_server_in_a_throwaway_config() {
     );
 }
 
-/// Runs of the add/check/remove sequence (about 4 s each) the real-claude test may make. Every
-/// running Claude Code session rewrites `~/.claude.json` now and then (measured at every 5 to 7 s
-/// while several agents were working), so a run can see a change that is not its own. A leak
-/// from this test changes it on every run, so one byte-identical run is the proof; ten runs make
-/// a false failure unlikely even under that load (about 0.5^10).
+/// Attempts at the ~4 s sequence: live sessions rewrite `~/.claude.json` every 5–7 s, but a leak
+/// from this test changes it every run, so one byte-identical run proves it (false fail ≈ 0.5^10).
 #[cfg(unix)]
 const ATTEMPTS: usize = 10;
 
@@ -625,17 +599,13 @@ struct UserClaude {
     config: PathBuf,
 }
 
-/// Where a run of `claude` in a [`Throwaway`] config could have written, mapped onto the user's
-/// own config: what it wrote under the throwaway config dir, at the same place under the user's
-/// (its `.claude.json` also at `~/.claude.json`, where Claude Code keeps it when no config dir is
-/// set); what it wrote under the throwaway home, at the same place under the user's home.
+/// Where a [`Throwaway`] `claude` run could have written, mapped onto the user's config dir
+/// and home (its `.claude.json` also at `~/.claude.json`).
 #[cfg(unix)]
 #[derive(Debug, Default, PartialEq)]
 struct ClaudeTouch {
-    /// Paths to compare before and after: a file (length, modification time, hash), or a
-    /// folder's entries (each one's length, modification time and, for a file, hash). A file
-    /// deeper than the top is covered by its folder, so a name with a timestamp in it
-    /// (`backups/.claude.json.backup.<ms>`) is caught too.
+    /// Paths compared before and after (length, mtime, hash; folders by entry), so timestamped
+    /// names like `backups/.claude.json.backup.<ms>` are caught too.
     cover: BTreeSet<PathBuf>,
     /// Paths named after the run's own temp dir (Claude Code names its per-folder caches after the
     /// folder it runs in): they did not exist before the run, so they must not exist after it.

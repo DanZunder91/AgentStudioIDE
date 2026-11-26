@@ -1,11 +1,5 @@
-//! `git::current_branch` — resolves `AgentNode.branch` (ARCHITECTURE §2.2).
-//!
-//! Built against **real `.git` layouts on disk**, not string fixtures: the whole
-//! risk here is the file format and the walk, so faking either would test nothing.
-//! `git init` is cheap and hermetic (a temp dir, no network), which is why this is
-//! worth doing for real where spawning a real `claude` is not.
-//!
-//! The `#[cfg(unix)]`-free design is deliberate — `.git` is identical on Windows.
+//! `git::current_branch` (ARCHITECTURE §2.2) against real `.git` layouts from `git init` in
+//! temp dirs: the risk is the file format and the walk, so faking them would test nothing.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,10 +22,8 @@ impl TempDir {
     }
 }
 
-/// `p` without the `\\?\` verbatim prefix Windows' `canonicalize` puts on a drive path.
-/// Git cannot take that spelling: handed `\\?\C:\…\wt-linked`, `git worktree add` fails
-/// with "could not create leading directories of '//?/C:/…'". A no-op on every other OS,
-/// and for a UNC path (`\\?\UNC\…`).
+/// `p` without Windows' `\\?\` verbatim prefix, which `git worktree add` can't take; a
+/// no-op elsewhere and for `\\?\UNC\…`.
 fn plain(p: PathBuf) -> PathBuf {
     let s = p.to_string_lossy();
     match s.strip_prefix(r"\\?\") {
@@ -185,10 +177,7 @@ fn a_repo_with_no_commits_still_reports_its_branch() {
     assert_eq!(current_branch(d.path()), "main");
 }
 
-// ── git_root: where the ad-hoc-detection hook is installed ───────────────────
-//
-// The hook must land at the repo root, because `claude` walks UP from the
-// session's cwd to find `.claude/`. `git_root` is what resolves that root.
+// ── git_root: the hook must land at the repo root, since `claude` walks UP to `.claude/` ──
 
 /// The repo root is returned from the root itself AND from any nested subdir —
 /// the whole point, since a hook there covers every directory the user `cd`s into.

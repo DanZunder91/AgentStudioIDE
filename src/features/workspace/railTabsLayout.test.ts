@@ -1,13 +1,5 @@
-/**
- * railTabsLayout — the strip's width budget, verified by ARITHMETIC (assert the
- * numbers, not the appearance; the appearance is the browser tier's job).
- *
- * Every expectation below is a literal computed by hand in the comment beside it —
- * NOT re-derived from the exported constants (an expectation computed
- * from the code under test can only catch plumbing, never a wrong value). The
- * constants themselves are also pinned literally for the same reason: they mirror
- * App.css pixels, and a "refactor" that changed one would otherwise self-certify.
- */
+/** Expectations are hand-computed literals, never re-derived from the exported constants; the
+ * constants (App.css pixels) are pinned literally too, so a change cannot self-certify. */
 
 import { describe, expect, it } from "vitest";
 

@@ -1,10 +1,5 @@
-//! Integration tests for the hook listener — the **security
-//! boundary**. A real `TcpStream` client POSTs to the real listener; we assert the
-//! token gate lets valid requests through and drops everything else.
-//!
-//! These use raw TCP + hand-written HTTP requests (exactly what the `curl` in the
-//! hook produces), so the parser and the token check are exercised for real, not
-//! mocked.
+//! The hook listener, the security boundary: raw TCP + hand-written HTTP (what the hook's
+//! `curl` sends) against the real listener; only valid tokens get through.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -42,11 +37,8 @@ fn port_of(base_url: &str) -> u16 {
     base_url.rsplit(':').next().unwrap().parse().unwrap()
 }
 
-/// Send a raw request and return the status line.
-///
-/// The write may fail: a listener that refuses on the headers answers and closes
-/// while a large body is still uploading. The caller asserts on the answer, which
-/// names the refusal; a panic here would hide it behind "broken pipe".
+/// Send a raw request and return the status line. The write may fail (a header refusal closes
+/// mid-upload); no panic, so the answer naming the refusal is what gets asserted.
 async fn send_raw(port: u16, request: &str) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port))
         .await
@@ -174,10 +166,8 @@ async fn an_oversized_body_is_refused() {
     assert!(received.list().is_empty());
 }
 
-/// **A prompt-sized body is delivered whole.** `UserPromptSubmit` carries the user's
-/// prompt, and a prompt with a pasted query result easily makes a payload past
-/// 100 KB. The old 64 KiB cap answered 400, the hook's
-/// `curl … || true` swallowed it, and the agent stayed "idle" for its whole turn.
+/// `UserPromptSubmit` carries the whole prompt, easily past 100 KB; a 64 KiB cap was swallowed
+/// by the hook's `|| true`, leaving the agent "idle" all turn.
 #[tokio::test]
 async fn a_body_past_64_kib_is_delivered_whole() {
     let (url, token, received) = start_listener();
@@ -195,10 +185,8 @@ async fn a_body_past_64_kib_is_delivered_whole() {
     assert_eq!(got[0].1, body.as_bytes(), "body must be delivered verbatim");
 }
 
-/// **The token is checked on the headers, before any body byte is read.** A forger
-/// that declares a large body and never sends it is answered 403 at once — it does
-/// not hold a task open waiting for bytes, and the body cap only ever bounds a peer
-/// that already proved it is one of our hooks.
+/// The token is checked on headers before any body byte, so a forger declaring a large body is
+/// answered 403 at once and holds no task open.
 #[tokio::test]
 async fn a_wrong_token_is_refused_before_its_body_is_read() {
     let (url, _token, received) = start_listener();

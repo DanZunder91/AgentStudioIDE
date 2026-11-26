@@ -1,28 +1,5 @@
-/**
- * Tests for the date-STRING reader.
- *
- * Three rules this file follows, all of them load-bearing:
- *
- * 1. **Hermetic**. `nowMs` is always passed explicitly and never comes
- *    from `Date.now()`, and every expectation is in UTC. Nothing here changes answer
- *    if the machine's clock, zone or DST rules change — which matters more than usual
- *    for a date library, where "works on my laptop" is the classic failure.
- * 2. **Literal expectations**. Every epoch below is written out as a
- *    number, computed by hand from the day count since 1970 — never by running the
- *    code under test, and never read out of `dateParse.ts`'s matcher table. Rewriting a
- *    format name or an offset in the source therefore goes red here instead of quietly
- *    rewriting the expectation with it.
- * 3. **Two-sided**. The offset tests do not merely assert that
- *    `…+02:00` parses; they assert it differs from `…Z` by exactly 7_200_000 ms, so an
- *    implementation that drops the offset — or flips its sign — cannot pass.
- *
- * The reference epochs, all UTC midnight unless stated:
- *   1970-01-01 →              0     2024-01-25 → 1_706_140_800_000
- *   2010-05-05 → 1_273_017_600_000  2010-05-06 → 1_273_104_000_000
- *   2010-06-05 → 1_275_696_000_000  2024-02-29 → 1_709_164_800_000
- *   2000-02-29 →   951_782_400_000  2026-06-15 → 1_781_481_600_000
- * and 2026-06-15T07:12:34Z → 1_781_507_554_000 (07:12:34 = 25_954 s past midnight).
- */
+/** Hermetic (`nowMs` passed, UTC expectations); epochs are hand-computed literals, never from the
+ * code under test; offsets are asserted two-sided (`…+02:00` is exactly 7_200_000 ms from `…Z`). */
 
 import { describe, expect, it } from "vitest";
 
@@ -293,20 +270,14 @@ describe("compact ISO 8601", () => {
   });
 
   it("refuses a bare 8-digit number, because the caller reads it as a SECONDS epoch", () => {
-    // Deliberate: `epoch.ts` tries the numeric reader first and every 8-digit string
-    // is a valid seconds epoch (20260615 s = 1970-08-23). If this file also claimed it
-    // as YYYYMMDD, the two readers would disagree about the same input and whichever
-    // ran first would win silently. The `T` is what makes the compact form a date.
+    // `epoch.ts` tries numbers first, and every 8-digit string is a seconds epoch; YYYYMMDD
+    // here would make the readers disagree. The `T` makes the compact form a date.
     expect(parseDateString("20260615", NOW)).toBeNull();
   });
 
   it("refuses EVERY bare digit-run, not just the 8-digit one — the T is mandatory", () => {
-    // The test above is named after the guarantee, so try the bypass.
-    // Dropping the `T` from the pattern still leaves `20260615` refused (the hour group
-    // is what rejects it), and a "the T is required" claim that only ever sees an
-    // 8-digit input is not testing the T at all. These runs are all valid epochs to the
-    // numeric reader — 14 digits is milliseconds, 10 is seconds — so a date reading of
-    // any of them would put two answers on the same input.
+    // 14- and 12-digit runs are epochs to the numeric reader, so a date reading would give two
+    // answers for one input; these test the `T` itself, not just the hour group.
     expect(parseDateString("20260615071234", NOW)).toBeNull();
     expect(parseDateString("202606150712", NOW)).toBeNull();
     expect(parseDateString("2026061507", NOW)).toBeNull();

@@ -1,10 +1,5 @@
-/**
- * Layer 5 (testing-strategy §1) — agent pinning through the real <App/> in Chromium
- * over the mocked Tauri backend. Proves the wiring jsdom can't fully: a
- * quick-launched ROOT agent shows the 📌 toggle in the live rail, and clicking it
- * calls `pin_agent` + flips to the pinned state. (Restore-across-restart resumes a
- * real `claude` session — that is verified in the running app, not a headless test.)
- */
+/** Agent pinning through the real <App/> in Chromium (testing-strategy §1): a ROOT agent shows
+ * the pin toggle and clicking it calls `pin_agent`. Restore-across-restart: the real app only. */
 
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

@@ -1,11 +1,5 @@
-/**
- * Vitest browser config for the README media capture ONLY (scripts/readme-media.mjs).
- *
- * Not a test gate: its `include` matches `*.media.tsx` under scripts/readme-media/, which
- * neither vitest.config.ts (jsdom) nor vitest.browser.config.ts (src/**\/*.browser.test.*)
- * picks up. It reuses the browser tier's setup (inert Tauri event module) and renders the
- * real <App/> in Playwright Chromium against a mocked Tauri backend.
- */
+/** Browser config for README media capture only, not a test gate: `*.media.tsx` is matched by no
+ * other vitest config. Renders the real <App/> in Playwright Chromium against a mocked backend. */
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { playwright } from "@vitest/browser-playwright";

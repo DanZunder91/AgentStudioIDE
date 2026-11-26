@@ -1,27 +1,6 @@
-/**
- * Layer 5 — the "↻ Resumed" marker on a rail row is COMPLETE at the default rail width.
- *
- * An earlier, longer wording was cut off mid-word in real layout:
- * "Reopened after restart · new conversati". Two things were wrong, and only real
- * layout can see either:
- *   1. the words were longer than the room beside the status pill;
- *   2. the status line was inline flow, so the marker WRAPPED onto a line of its own and ran
- *      off the rail's edge — its `text-overflow: ellipsis` never applied (an inline box has no
- *      width of its own to overflow).
- * jsdom has no layout (every width is 0), so this is the only tier where "it fits" is a claim.
- *
- * What is asserted, per marker, for every outcome the restore can produce, beside the pill it
- * actually sits next to (Idle, Error for a dormant one, and the widest, Waiting):
- *   - at the default width: it is NOT truncated (its text is not wider than its box), it sits
- *     on the PILL'S line (the wrap that pushed it under the pill is the bug), it ends inside its
- *     row, and it carries the tab's `↻` — as generated content, so its text stays exactly the
- *     label the tab's glyph is named by;
- *   - two-sided: the same measurement on the old wording ("Reopened after restart · new
- *     conversation") finds it wrapped or cut — otherwise the room it measures proves nothing;
- *   - at the narrowest width the rail allows: the words move under the pill, still whole, and
- *     words too long even for a line of their own end in an ellipsis inside the row (with the
- *     sentence on hover) — never cut at the rail's edge.
- */
+/** The marker must fit whole beside its pill at the default rail width (not truncated, on the
+ * pill's line, `↻` as generated content), two-sided against a longer wording; at the narrowest
+ * width it wraps under the pill and ellipsizes inside the row. jsdom has no layout. */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

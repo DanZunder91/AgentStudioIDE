@@ -1,10 +1,4 @@
-/* ── Image viewer (.jpg, .png and .svg) ─────────────────────────────────────
- *
- * Theme-aware the same way the markdown preview is: every colour is bound to the
- * app tokens declared on `:root` in App.css (--text, --bg-app, --bg-elev, …),
- * funnelled through local `--iv-*` names so there is one place to change, with
- * self-contained fallbacks for a standalone/light context. No hard-coded palette.
- */
+/* Image viewer. Colours bind to App.css tokens via local `--iv-*` names, with fallbacks. */
 .image-viewer {
   --iv-fg: var(--text, #c9d1d9);
   --iv-dim: var(--text-dim, #8b949e);
@@ -13,21 +7,14 @@
   --iv-border: var(--border, #21262d);
   --iv-accent: var(--accent, #3b82f6);
   --iv-danger: var(--red, #f85149);
-  /* The transparency checkerboard, in two adjacent surface tones: a transparent
-     PNG has to read as TRANSPARENT rather than as white-on-white (or, in this
-     cockpit, black-on-black), and a loud magenta/grey checker would be the
-     loudest thing on a dark screen. Two steps of the app's own surface ramp are
-     legible against each other and belong to the theme. */
+  /* Checkerboard in two adjacent surface tones, so transparency reads without a loud checker. */
   --iv-check-base: var(--bg-elev, #1c2128);
   --iv-check-tile: var(--bg-surface, #161b22);
 
   height: 100%;
   min-height: 0;
   overflow: auto;
-  /* OUTSIDE the zoomed stage, so this costs the same device pixels at every zoom
-     level — and `onFit` subtracts it from the client box before measuring. The
-     zoom-ceiling rule is about a fixed length INSIDE the box that must scale
-     exactly; this one is not in that box. */
+  /* Outside the zoomed stage: same device px at every zoom, and `onFit` subtracts it. */
   padding: 16px;
   background: var(--iv-bg);
   color: var(--iv-fg);
@@ -63,47 +50,21 @@
   font-style: normal;
 }
 
-/* The zoom target. `zoom: <n>` is set inline — CSS `zoom`, deliberately, NOT
-   `transform: scale`: `transform` stretches a bitmap
-   painted at 1×, `zoom` re-lays-out and re-paints, so a vector stays vector and
-   a photo uses every device pixel it has. Growth becomes scrollable overflow of
-   the container above; ctrl/cmd+drag pans it.
-
-   The stage is NOT centred, on purpose: `place-content: center` on a scroll
-   container clips the start edge of content that overflows it — and content
-   that overflows is precisely the state zooming produces, so a centred picture
-   would become unreachable at the top-left exactly when panning starts to
-   matter. Top-left is also where the pan gesture's coordinates are anchored. */
+/* The zoom target (CSS `zoom` set inline). Deliberately not centred: `place-content: center`
+ * clips the start edge of overflowing content, making the top-left unreachable when zoomed. */
 .image-viewer__stage {
   position: relative; /* anchors the Fit control below */
 }
 
 .image-viewer__img {
   display: block;
-  /* 🔴 THE ceiling, and the whole reason `--img-zoom` exists.
-     `100%` is the stage's width in CSS px, which under `zoom: Z` is `W / Z`;
-     multiplying by Z gives a constant `W` CSS px — and a used width that is
-     constant in CSS px is one that grows in DEVICE px exactly with the zoom.
-     Plain `max-width: 100%` instead pins the picture to the same on-screen size
-     at every zoom level: the −/%/+ buttons would move the store value and the
-     % label, and the picture would not move a single pixel.
-     The natural width itself is set INLINE from the decoded image (see
-     `onLoad`), so this only caps a big one: an image smaller than the pane keeps
-     its natural size at 100% — a 16px favicon is 16px, not a pane-wide blur.
-     Height is uncapped: a tall photo scrolls, and Fit is one click away. A
-     height cap here would need a definite stage height and would shrink a
-     portrait screenshot to unreadable on arrival. */
+  /* Under `zoom: Z`, 100% is W/Z CSS px; multiplying by the zoom lets the cap grow with it, where
+   * plain `max-width: 100%` keeps the picture the same size on screen. Height is uncapped. */
   max-width: calc(100% * var(--img-zoom, 1));
   height: auto;
 
-  /* Transparency checkerboard, painted UNDER the image's own pixels. Two
-     45°-rotated gradients offset by half a tile is the classic construction (no
-     asset, no extra element).
-     The tile size is `12px / zoom`: a CSS px inside the stage is `zoom` device
-     px, so dividing cancels it and the squares stay the same size ON SCREEN at
-     every zoom — the same trick, and the same reason, as the Fit control's
-     `zoom: calc(1 / var(--img-zoom))` below. Without it a 400% zoom into a
-     transparent icon is checked in 48px slabs. */
+  /* Checkerboard under the image's pixels. Tile size is divided by the zoom so squares stay the
+   * same size on screen. */
   --iv-check-size: calc(12px / var(--img-zoom, 1));
   background-color: var(--iv-check-base);
   background-image:
@@ -125,25 +86,14 @@
   background-position: 0 0, calc(var(--iv-check-size) / 2) calc(var(--iv-check-size) / 2);
 }
 
-/* The fallback for an image whose engine reports NO intrinsic width at all
-   (`naturalWidth === 0`): there is no natural size to honour, so fit it to the
-   pane — the one answer that is right at every pane width — written in the same
-   zoom-movable unit as the ceiling above so it still magnifies. Without the
-   `* var(--img-zoom)` this rule would be the zoom-ceiling trap itself: a plain
-   `width: 100%` picture stays exactly the same size on screen at every zoom.
-   (Chromium answers the CSS default-sizing box rather than 0, so this branch is
-   for the engines that answer honestly — WebKit, which is what the app runs on.) */
+/* For `naturalWidth === 0` (WebKit may report it): fit to the pane, in the zoom-movable unit so
+ * it still magnifies. */
 .image-viewer__img--scalable {
   width: calc(100% * var(--img-zoom, 1));
 }
 
-/* The Fit control — pinned to the picture's top-left corner and, crucially, the
-   SAME SIZE ON SCREEN at every zoom level. Nested `zoom` MULTIPLIES, so
-   `1 / --img-zoom` cancels the stage's exactly; without it the button is 4× its
-   design size at 400%, sitting on top of the picture the user zoomed in to see.
-   `top`/`left: 0` rather than a small inset, because a length here would be
-   divided by the zoom along with everything else; the breathing room is the
-   control's own margin, which lives in its own (unzoomed) coordinate space. */
+/* Nested `zoom` multiplies, so `1 / --img-zoom` keeps the Fit control the same size on screen;
+ * `top`/`left: 0` because any inset would be divided by the zoom too. */
 .image-viewer__fit {
   position: absolute;
   top: 0;

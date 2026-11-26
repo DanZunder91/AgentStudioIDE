@@ -1,12 +1,5 @@
-/**
- * highlightJson — a tiny, LENIENT JSON tokenizer for the request-body editor (the
- * request body should look like JSON). It colors what it can and leaves the
- * rest plain, so it never throws on partial/invalid JSON the user is mid-typing.
- *
- * Not a validator and not `JSON.parse` — a forgiving scanner that emits contiguous
- * `{text, cls}` runs which `JsonBodyEditor` renders as spans over a transparent
- * textarea. `cls` reuses the JsonView palette classes (empty string = plain text).
- */
+/** A lenient scanner, not a validator: never throws on partial JSON the user is mid-typing.
+ * `cls` reuses the JsonView palette classes ("" = plain text). */
 
 export interface HlToken {
   text: string;
@@ -70,10 +63,7 @@ export function highlightJson(src: string): HlToken[] {
       continue;
     }
 
-    // Anything else (whitespace, stray chars) → a plain run up to the next
-    // interesting character, so we emit few tokens. `src[i]` is, by definition of
-    // this branch, not an interesting char, so the loop advances at least once
-    // (j > i always) — no separate progress guard needed.
+    // src[i] is not an interesting char here, so j > i always and the loop always advances.
     let j = i + 1;
     while (
       j < n &&

@@ -1,13 +1,4 @@
-/**
- * Layer 5 — the City's subway against a REAL 2D context in Chromium (render/subway.ts): the tunnel runs
- * on past the world's ends, the train stands in the station with nothing of the world over it (it is
- * underground: the ground layer and the scene leave its rows open), the station's plate reads over a
- * standing train's roof, the stairwell goes down beside the lounge, the entrance stands on the far
- * sidewalk — and at night the train's windows shine over the grade. Plus the frame cost, measured for
- * the reference city at Fit and zoomed, by day and at night.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/subway.browser.test.tsx`
- */
+/** Browser tier: `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 

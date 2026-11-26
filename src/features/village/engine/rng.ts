@@ -1,10 +1,5 @@
-/**
- * Deterministic randomness for the village engine.
- *
- * Every random decision the simulation makes (wander targets, pauses, hue
- * shifts) goes through one of these, so a seeded `VillageSim` replays exactly —
- * the tests depend on it. Never call `Math.random` in the engine.
- */
+/** Every engine random decision goes through here so a seeded `VillageSim` replays exactly (tests
+ * depend on it). Never call `Math.random` in the engine. */
 
 /** A PRNG returning a float in [0, 1). */
 export type Rng = () => number;

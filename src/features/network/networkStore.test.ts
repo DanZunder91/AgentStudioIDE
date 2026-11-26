@@ -1,7 +1,3 @@
-/**
- * The network store over a mocked IPC seam: snapshot + upsert ordering, pending→done in
- * place, the ring cap, pause/resume, clear (and its watermark), toggles, detail fetch.
- */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

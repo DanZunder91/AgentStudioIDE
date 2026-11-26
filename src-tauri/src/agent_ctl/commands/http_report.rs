@@ -1,21 +1,6 @@
-//! What an agent reads back from the HTTP tools: bounded, and with the user's secrets out.
-//!
-//! * Bounded: a response body is cut at [`BODY_CAP`] bytes of text, headers at [`HEADER_CAP`]
-//!   rows of at most [`VALUE_CAP`] characters, a compare at [`DIFF_CAP`] differences — and every
-//!   cut is said in the output, never silent.
-//! * Secret-free: [`Redactor`] puts `{{NAME}}` back wherever a value Agent Studio substituted into
-//!   a saved request comes back (an echo endpoint, a redirect, an error naming the URL), and
-//!   `***` wherever a credential typed literally into a saved request does
-//!   ([`Redactor::masking`]); [`redact_url`] hides the userinfo of a `user:password@` URL, the
-//!   value of a query or fragment parameter whose name says it is a credential, and the
-//!   credential in the path of a well-known webhook or bot URL; [`redact_urls_in`] does that to
-//!   every URL inside free text; [`scrub`] is both passes.
-//!
-//! 🔴 Value-based redaction ([`Redactor`]) runs only over what answers a **user-saved** request,
-//! with that request's own substituted values: text an agent wrote (its own request, its echo,
-//! its error, its history entry) is never matched against Vault values, or the match would tell
-//! the agent that a value it guessed is one. Everything else is structural: [`redact_url`] works
-//! on the shape of a URL, [`failure_kind`] on the fixed words an engine error starts with.
+//! What an agent reads back from the HTTP tools: bounded (every cut said) and secret-free.
+//! Value-based redaction ([`Redactor`]) runs only on answers to user-saved requests: matching agent
+//! text against Vault values would confirm guesses. The rest is structural ([`redact_url`]).
 
 use serde_json::{json, Value};
 
@@ -157,11 +142,8 @@ pub fn pretty_json(text: &str) -> Option<String> {
     Some(out)
 }
 
-/// Replaces values with what may be shown instead: a value Agent Studio substituted with the
-/// `{{NAME}}` it came from, a literal credential with [`MASK`].
-///
-/// 🔴 Only for what answers a request the **user** saved, built from that request's own values.
-/// Run over text an agent wrote, a replacement would confirm a value the agent guessed.
+/// Only for answers to a user-saved request, built from its own values: over agent-written text,
+/// a replacement would confirm a guessed value.
 #[derive(Debug, Clone, Default)]
 pub struct Redactor {
     /// `(spelling, replacement)`, longest spelling first so a value containing another is
@@ -209,12 +191,8 @@ impl Redactor {
         self
     }
 
-    /// The spellings a value can come back in: as sent; read back from a form (`+` as a space);
-    /// percent-encoded the way the URL parser encodes a path or a query (a server or an error
-    /// message echoing the request URL), as a server building a link would
-    /// (`encodeURIComponent`, RFC 3986 unreserved, everything, `application/x-www-form-urlencoded`)
-    /// and with lowercase hex; and every one of those inside a JSON string, also from an encoder
-    /// that escapes `/` as `\/`.
+    /// Every spelling a value can come back in: as sent, form-decoded, percent-encoded by URL
+    /// parsers and common encoders (either hex case), and each inside a JSON string (also `\/`).
     fn forms(value: &str) -> Vec<String> {
         use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
         /// `encodeURIComponent` leaves `A–Z a–z 0–9 - _ . ! ~ * ' ( )`.
@@ -346,13 +324,8 @@ fn lowercase_hex(text: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| text.to_string())
 }
 
-/// An engine error for a send, safe to hand an agent: every value `redactor` knows is replaced,
-/// and every URL in it (`scheme://…`) is passed through [`redact_url`]. For an agent's own
-/// request `redactor` is empty, and only the URLs are masked (by shape, never by value).
-///
-/// A URL is found on the text as given, before the redactor runs: a substituted value can be
-/// the URL's whole base (`BASE=https://api.internal:8443`), and once that reads `{{BASE}}` the
-/// scheme that marks the URL is gone — while a credential typed into its query is still there.
+/// URLs are found before the redactor runs: a substituted value can be a URL's whole base, and
+/// once it reads `{{BASE}}` the scheme is gone while a credential in its query remains.
 pub fn scrub(text: &str, redactor: &Redactor) -> String {
     let mut out = String::with_capacity(text.len());
     for (is_url, piece) in split_urls(text) {
@@ -411,10 +384,8 @@ fn hidden(value: &str) -> bool {
     !value.is_empty() && !is_ref(value)
 }
 
-/// The schemes the URL parser (WHATWG's, which reqwest uses) calls special: after `scheme:`, any
-/// run of `/` and `\` leads to the authority — `https:/key@h`, `https:///key@h` and
-/// `https:\\key@h` all send the userinfo `key` — and a `\` ends the authority as a `/` does.
-/// (`file` is special too, but has no userinfo.)
+/// WHATWG (reqwest's parser) special schemes: any run of `/` and `\` after `scheme:` leads to the
+/// authority, and `\` ends it like `/`. (`file` is special too, but has no userinfo.)
 const SPECIAL_SCHEMES: [&str; 5] = ["http", "https", "ws", "wss", "ftp"];
 
 /// Where the scheme of `text` ends: the index of the `:` after a letter and then letters,
@@ -506,10 +477,8 @@ fn url_parts(url: &str) -> UrlParts<'_> {
     }
 }
 
-/// The credentials in the path of a well-known URL, as byte ranges of `path`. The webhook URLs
-/// Slack and Discord hand out are their own credential (`hooks.slack.com/services/T…/B…/<secret>`,
-/// `discord.com/api/webhooks/<id>/<token>`), and a Telegram bot call carries the bot's token
-/// (`api.telegram.org/bot<token>/getMe`, `…/file/bot<token>/…`). A `{{NAME}}` piece stays.
+/// Slack/Discord webhook URLs are their own credential and Telegram bot paths carry the token; a
+/// `{{NAME}}` piece stays.
 fn path_secrets(host: &str, path: &str) -> Vec<std::ops::Range<usize>> {
     let host = percent_encoding::percent_decode_str(host)
         .decode_utf8_lossy()
@@ -575,10 +544,8 @@ fn params(text: &str) -> Vec<(&str, Option<char>)> {
     out
 }
 
-/// The credentials in `url`: the user and the password of its userinfo, the value of every
-/// credential-named query or fragment parameter, and the credential in a well-known webhook or
-/// bot URL's path — each as written and percent-decoded, and skipping `{{NAME}}` references
-/// (they name, they do not reveal).
+/// Userinfo, credential-named query/fragment values and well-known path credentials, as written
+/// and percent-decoded; `{{NAME}}` references are skipped (they name, they do not reveal).
 pub fn url_secrets(url: &str) -> Vec<String> {
     let url = parser_view(url);
     let p = url_parts(&url);
@@ -618,13 +585,8 @@ pub fn url_secrets(url: &str) -> Vec<String> {
     out
 }
 
-/// A URL as written, safe to show an agent: every piece of its userinfo (`user:password@`,
-/// `token@`, `token:@`, also in the spellings the URL parser accepts: `https:/key@h`,
-/// `https:///key@h`, `https:\\key@h`), the value of every credential-named query or fragment
-/// parameter (`?api_key=…`, `#access_token=…`, `;sid=…`) and the credential in a well-known
-/// webhook or bot URL's path ([`path_secrets`]) become `***`, unless they are a `{{NAME}}`
-/// reference. Works on text, so a URL built from `{{HOST}}` (not parseable) is handled the
-/// same. Tabs and newlines are dropped and the ends trimmed, as the URL parser does.
+/// Works on text, so an unparseable `{{HOST}}` URL is masked too; tabs and newlines are dropped and
+/// ends trimmed, as the URL parser does. `{{NAME}}` references stay.
 pub fn redact_url(url: &str) -> String {
     let url = parser_view(url);
     let p = url_parts(&url);
@@ -685,10 +647,8 @@ pub fn redact_urls_in(text: &str) -> String {
     scrub(text, &Redactor::default())
 }
 
-/// What kind of failure a recorded error is, read from the fixed words the engines start their
-/// sentences with (the HTTP engine's checks and `map_send_error`, the gRPC engine's call
-/// errors) — never from the rest, which can quote the request as sent (`{{VAR}}`s substituted),
-/// a host, or a server's message. `api history` shows an agent this, never the error's text.
+/// Read only from the engines' fixed leading words: the rest can quote the substituted request, a
+/// host or a server message. `api history` shows an agent this, never the error's text.
 pub fn failure_kind(error: &str) -> &'static str {
     const KINDS: [(&str, &str); 9] = [
         ("request timed out", "timeout"),
@@ -713,10 +673,7 @@ pub fn failure_kind(error: &str) -> &'static str {
         .map_or("request failed", |(_, kind)| kind)
 }
 
-/// The reason phrase for a recorded status, from the number alone: HTTP's canonical phrase
-/// (`404` → `Not Found`), or the gRPC code's name (`16` → `Unauthenticated`). A recorded status
-/// text can carry a server's message (a gRPC entry's is `<name>: <grpc-message>`), so it is
-/// never handed back as recorded.
+/// From the number alone: a recorded status text can carry a server's message.
 pub fn status_reason(grpc: bool, status: u16) -> Option<&'static str> {
     if grpc {
         Some(crate::grpc::status_name_for(u32::from(status)))
@@ -727,10 +684,8 @@ pub fn status_reason(grpc: bool, status: u16) -> Option<&'static str> {
     }
 }
 
-/// `text` cut into pieces, each `(is_url, piece)`, in order. A URL is `scheme://` and what
-/// follows up to whitespace or a quote, less trailing punctuation that closes the sentence
-/// around it (`for url (https://…)`): one character of a credential that ends in `)` is all
-/// that can stay outside.
+/// A URL runs to whitespace or a quote, less sentence-closing punctuation (`for url (https://…)`):
+/// at most one `)` of a credential can stay outside.
 fn split_urls(text: &str) -> Vec<(bool, &str)> {
     let mut out = Vec::new();
     let mut rest = text;

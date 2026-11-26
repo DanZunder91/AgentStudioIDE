@@ -1,9 +1,5 @@
-/**
- * The City's clouds (render/clouds.ts) — a cloudy day used to show only two clouds.
- * The weather sets how much of the sky is covered (a cloudy sky follows the live cloud cover), the
- * clouds fill the whole sky in view — past the world's ends and above its top — world-locked, drifting
- * row by row with the wind, and the work is bounded by the view, never by the world.
- */
+/** Cloud cover follows the weather; clouds fill the whole sky in view, world-locked, and the work
+ * is bounded by the view, never by the world. */
 
 import { describe, expect, it } from "vitest";
 

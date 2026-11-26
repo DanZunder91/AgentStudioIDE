@@ -1,7 +1,4 @@
-/**
- * agentLogsFind — the pure half of ⌘F in the Logs view. Expectations are
- * hand-written positions and counts, never computed from the functions under test.
- */
+/** Pure ⌘F half; positions and counts are hand-written, never computed by the code under test. */
 
 import { describe, expect, it } from "vitest";
 

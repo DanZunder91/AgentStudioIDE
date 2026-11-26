@@ -1,38 +1,13 @@
-//! IntelliJ-style git blame for the editor.
-//!
-//! One command, [`git_blame`]: given an absolute file path, return per-line
-//! authorship — a **deduped** commit table plus a `lines` vector mapping each line
-//! to an index into that table. The frontend renders it as a blame gutter and only
-//! needs each commit's metadata once, however many lines it owns.
-//!
-//! **Security scope.** Blame is a read on a user-supplied path, so it
-//! goes through the exact same server-authoritative guard as every other fs
-//! command: [`crate::fs_tree::resolve_in_scope`] against
-//! [`crate::fs_tree::allowed_roots`] (recents ∪ workspace). The scope is checked
-//! *before* anything git-related happens, so an out-of-scope path never even
-//! reveals whether it is in a repository.
-//!
-//! **Why `git2` and not the hand-rolled reader or a subprocess.** `git.rs` reads
-//! `.git/HEAD` directly because branch resolution is trivial and stable; blame is
-//! full history traversal + diff, which only a real libgit2 does correctly. And we
-//! never shell out to `git` — a GUI-launched app has a minimal `PATH` (see
-//! `git.rs`'s doc header), so the binary may not even be findable. The crate is
-//! built with `default-features = false` (no ssh/https network stack — blame is
-//! local-only) plus `vendored-libgit2` (self-contained build; zero-install).
-//!
-//! The logic ([`blame_scoped`]) takes the allowed roots explicitly so integration
-//! tests drive it against real temp repos with no `AppHandle` — the same
-//! `*_scoped` pattern as `fs_tree`. The `#[tauri::command]` is thin glue.
+//! Per-line git blame for the editor gutter: a deduped commit table plus a line → index vector.
+//! Scope-checked via [`crate::fs_tree::resolve_in_scope`] before any git access. Uses `git2`
+//! (vendored, network-free): blame needs real history traversal, and GUI apps may lack `git`.
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-/// One commit in the blame result, deduped — referenced by index from
-/// [`FileBlame::lines`].
-///
-/// Frontend contract (camelCase on the wire): `{ id, author, email, timeMs,
-/// summary, message }`.
+/// One deduped commit, referenced by index from [`FileBlame::lines`]. Wire (camelCase):
+/// `{ id, author, email, timeMs, summary, message }`.
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BlameCommitWire {
@@ -42,10 +17,7 @@ pub struct BlameCommitWire {
     pub author: String,
     /// Author email (lossy UTF-8).
     pub email: String,
-    /// Author time as milliseconds since the Unix epoch, UTC. Git stores the
-    /// author time as UTC epoch seconds plus a display-only timezone offset; the
-    /// epoch instant is the seconds alone, so this is `seconds * 1000` — the
-    /// offset would only matter for rendering the author's local wall clock.
+    /// Author time in ms since the Unix epoch (UTC); git's timezone offset is display-only.
     pub time_ms: i64,
     /// First line of the commit message.
     pub summary: String,
@@ -61,35 +33,15 @@ pub struct FileBlame {
     pub rel_path: String,
     /// Every distinct commit that owns at least one line, in first-seen order.
     pub commits: Vec<BlameCommitWire>,
-    /// `lines[i]` = index into `commits` for line `i + 1` (1-based lines).
-    /// `None` = the line is not attributable to any commit — libgit2 marks such
-    /// lines with the zero OID. Measured (and pinned by the integration tests):
-    /// with the v1 default options `blame_file` blames HEAD's content only, so
-    /// unstaged *and* staged local edits are simply absent from this vector
-    /// rather than `None`; the `None` mapping is kept as the contract for any
-    /// input libgit2 does mark unattributable — measured for the dirty-buffer
-    /// `blame_buffer` overlay in
-    /// `tests/git_blame.rs::blame_buffer_signatures_are_null_checked_options`: that
-    /// path *does* emit zero-OID hunks for unsaved lines, so `None` is the shape
-    /// that overlay will use. Such a hunk also has **no signatures**
-    /// (`final_signature()`/`orig_signature()` are `None`), which is why the crate
-    /// floor is `git2 >= 0.21` — see the `git2` note in `Cargo.toml`.
+    /// `lines[i]` = index into `commits` for line `i + 1`; `None` = unattributable (zero OID).
+    /// HEAD blame omits local edits rather than mapping them to `None`; the dirty-buffer overlay
+    /// does emit `None` hunks, which lack signatures (hence `git2 >= 0.21`, see `Cargo.toml`).
     pub lines: Vec<Option<u32>>,
 }
 
-/// Blame `requested`, confined to `allowed_roots`.
-///
-/// Steps, in order: scope-check the path (the single [`resolve_in_scope`] guard —
-/// out-of-scope fails before any git access), require a regular file, discover the
-/// containing repository from the file's parent, blame the repo-relative path, and
-/// fold the hunks into the deduped wire shape. Each unique commit is looked up
-/// exactly once for its metadata.
-///
-/// `blame_file` operates on the file's committed/on-disk state; an unsaved editor
-/// buffer is the frontend's concern. Blame options are the v1 defaults: no copy
-/// tracking, first-parent history as libgit2 defines it.
-///
-/// [`resolve_in_scope`]: crate::fs_tree::resolve_in_scope
+/// Blame `requested` within `allowed_roots`: scope check first, require a regular file, discover
+/// the repo from its parent, fold hunks into the deduped wire shape. Blames the committed state
+/// (unsaved buffers are the frontend's concern) with default options.
 pub fn blame_scoped(requested: &Path, allowed_roots: &[PathBuf]) -> Result<FileBlame, String> {
     let real = crate::fs_tree::resolve_in_scope(requested, allowed_roots)?;
     if !real.is_file() {
@@ -195,12 +147,8 @@ fn commit_wire(commit: &git2::Commit) -> BlameCommitWire {
     }
 }
 
-/// Per-line git blame for the editor gutter.
-///
-/// Frontend contract: `invoke<FileBlame>('git_blame', { path })`. `path` is an
-/// absolute file path (e.g. the open editor's file). Out-of-scope / nonexistent /
-/// not-a-file / not-in-a-repo / untracked → `Err(<short message>)`, which the UI
-/// shows inline rather than as a crash.
+/// Frontend: `invoke<FileBlame>('git_blame', { path })`, `path` absolute. Out-of-scope, missing,
+/// not a file, not in a repo or untracked → `Err(<short message>)`, shown inline.
 #[tauri::command]
 pub fn git_blame(app: tauri::AppHandle, path: String) -> Result<FileBlame, String> {
     blame_scoped(Path::new(&path), &crate::fs_tree::allowed_roots(&app))

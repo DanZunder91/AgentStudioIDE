@@ -1,19 +1,5 @@
-/**
- * R2 — the real service's OUTBOUND HTTPS, with Decrypt HTTPS on ("never break a client").
- *
- * The one public host this suite ever touches is https://example.com/ (IANA's reserved example
- * domain). Because it depends on a third party, `npm run verify` REPORTS this spec but does not
- * block on it; the local half is real-service.e2e.ts. Run alone:
- *   node scripts/e2e-linux.mjs --external
- *
- * What it proves in the real app:
- *   - `curl` (on the allowlist; it reads CURL_CA_BUNDLE) is decrypted: a `GET example.com / 200`
- *     row with Process curl and the page's body in the Response tab.
- *   - `wget` (NOT on the allowlist) is tunnelled and still WORKS — the command prints the page —
- *     and its row says why it was not decrypted and what is known, never an empty pane.
- *   - the fixture service's own `/upstream` (a child curl in a terminal opened after Decrypt)
- *     succeeds, logs `INFO svc: upstream example.com 200`, and its call is a decrypted row too.
- */
+/** R2, Decrypt HTTPS on ("never break a client"), against example.com only; reported, not blocking.
+ * Allowlisted curl is decrypted; wget is tunnelled, still works, and its row says why. */
 
 import { $, browser, expect } from "@wdio/globals";
 

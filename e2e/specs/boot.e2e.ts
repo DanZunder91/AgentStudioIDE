@@ -1,12 +1,5 @@
-/**
- * B1 — the app boots to the 3-pane shell.
- *
- * The CI-only "real shipped webview + real Rust core are wired" smoke (half 1 of
- * 2). It proves the production artifact launches, React mounts against the real
- * frontendDist, and the shell paints: the app root, both rails, and a center
- * pane. Deeper UI behaviour is owned by the browser tier (Playwright, mocked
- * backend) — this tier's sole remit is "the real thing came up".
- */
+/** B1: the shipped webview and real Rust core boot to the 3-pane shell. This tier only proves the
+ * real thing came up; UI behaviour belongs to the browser tier (Playwright, mocked backend). */
 
 import { $, expect } from "@wdio/globals";
 

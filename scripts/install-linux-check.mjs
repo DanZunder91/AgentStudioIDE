@@ -1,24 +1,6 @@
 #!/usr/bin/env node
-/**
- * The one-command Linux installer (scripts/install-linux.sh), run for real in Docker.
- *
- * Why: the installer is only ever run as `curl … | bash` on someone else's machine, so a mistake
- * in it is found by a user. Each case pipes the script into bash exactly that way (stdin IS the
- * script, so a command that reads stdin would swallow the rest of it), installs the LATEST
- * published release and checks the result. Each case runs the installer twice, because a second
- * run must reinstall the same-version build rather than stop at "already the newest version".
- *
- *   node scripts/install-linux-check.mjs
- *
- * Cases (all linux/amd64, the only Linux arch that is published):
- *   - shellcheck on both installers
- *   - Ubuntu 24.04, a user with sudo      -> the .deb through apt-get
- *   - Fedora 41, root (dnf5)              -> the .rpm through dnf
- *   - Ubuntu 24.04, a user without sudo   -> the AppImage into ~/.local/bin, with a menu entry
- *
- * Nothing is launched: there is no display in a container, and the installer says so instead.
- * Needs Docker and the network (GitHub and the distributions' mirrors).
- */
+/** Run install-linux.sh in Docker exactly as `curl … | bash` (stdin is the script), twice per case:
+ * a rerun must reinstall the same version. Needs Docker and the network; nothing is launched. */
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";

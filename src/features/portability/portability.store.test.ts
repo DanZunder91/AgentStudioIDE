@@ -1,22 +1,6 @@
-/**
- * The `portability` store slice — export, inspect-then-apply, and the choices in between.
- *
- * `portabilityIpc` is mocked at the module boundary the way `db.store.test.ts` mocks `dbIpc`:
- * every one of these actions IS an IPC call plus a reduction, and the point of the tests is
- * the pairing — that the effect happens in the WRAPPER and only the result lands in state.
- * The real `importChoices` builder is kept in the path (only the three commands
- * and the two pickers are stubbed), because what reaches `portability_import` is half of what
- * these tests are about.
- *
- * The two invariants worth more than any single assertion here:
- *
- * 1. 🔴 **No passphrase is ever in the store.** Asserted by serialising the WHOLE store and
- *    searching it, after both a sealed export and an unseal — not by inspecting the two fields
- *    known to be written. A field added later is caught by the same test.
- * 2. **A failed inspect latches nothing.** A wrong passphrase must be retryable without
- *    reopening the file, so the file, the plan and the user's per-item choices all
- *    have to survive a failure — and the error has to disappear the moment the retry starts.
- */
+/** `portabilityIpc` is mocked at the module boundary; the real `importChoices` builder stays in
+ * the path. Invariants: no passphrase is ever in the store (the whole store is serialised and
+ * searched), and a failed inspect latches nothing. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -168,10 +152,8 @@ describe("the slice's boot state", () => {
   });
 
   it("defaults `overwriteExistingSecrets` to FALSE — a security default, not a preference", () => {
-    // `ImportChoices`: taking someone else's value for a variable you already
-    // use is how a working setup breaks in a way nobody traces back to an import. Asserted
-    // both on the boot state and on what actually reaches the wire, because a default that is
-    // right in state and re-derived wrongly at the call site protects nobody.
+    // Asserted on the boot state and on the wire: a default right in state but re-derived
+    // wrongly at the call site protects nobody.
     expect(importState().overwriteExistingSecrets).toBe(false);
   });
 });

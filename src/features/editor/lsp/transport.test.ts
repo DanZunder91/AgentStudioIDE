@@ -1,9 +1,3 @@
-/**
- * The Tauri-backed LSP Transport (M5). Outgoing → `lsp_send`; incoming ← the
- * channel, fanned out to subscribers. The client owns the JSON-RPC content; this
- * just moves message bodies.
- */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installTauriMock, type TauriMock } from "../../../test/tauri-mock";

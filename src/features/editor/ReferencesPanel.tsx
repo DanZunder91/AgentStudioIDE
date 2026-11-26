@@ -1,17 +1,5 @@
-/**
- * ReferencesPanel — the find-usages results (M5).
- *
- * A bottom-docked tool window (the classic IntelliJ/VS Code "Find Usages"
- * placement, distinct from the top-docked Find-in-Files overlay) listing every
- * usage of a symbol. Opened by Cmd/Ctrl+Click on a symbol's DECLARATION or
- * Shift+F12 at the cursor (see `lsp/references.ts` + `lsp/definition.ts`); it
- * reads the sole store seam `lspReferences` and closes via `clearReferences`.
- *
- * Rows mirror Find-in-Files: grouped by file (collapsible), each hit a line
- * number + the source line with the reference span marked. Clicking a hit reveals
- * it in the editor AND closes the panel (so the file is visible) — the same
- * click-to-open-and-close that Find does.
- */
+/** Bottom-docked find-usages results, read from the store's `lspReferences` and closed via
+ * `clearReferences`. Rows mirror Find-in-Files; clicking a hit reveals it and closes the panel. */
 
 import { useCallback, useEffect, useState } from "react";
 

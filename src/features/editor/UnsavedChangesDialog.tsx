@@ -1,9 +1,5 @@
-/**
- * UnsavedChangesDialog — the confirm shown when a DIRTY editor tab is closed
- * (M4). Mounted once at the app root; it reads `confirmCloseTab` from the
- * store and offers Save / Discard / Cancel so a user never loses edits by
- * accident. Nothing renders while no dirty close is pending.
- */
+/** Save / Discard / Cancel when a dirty editor tab closes; mounted once at the root, driven by
+ * the store's `confirmCloseTab`. */
 
 import { useAppStore } from "../../app/store";
 import { save } from "./EditorRegistry";

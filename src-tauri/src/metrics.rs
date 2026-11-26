@@ -1,101 +1,6 @@
-//! Claude metrics: a usage & efficiency dashboard computed entirely from local
-//! transcripts. Wire contract mirrored in `src/features/metrics/metricsTypes.ts`.
-//!
-//! It answers exactly one question — **what did the last 24 h cost me, in what, and
-//! which turns dominated** — for one machine, honestly.
-//!
-//! ## 🔴 The scope: total usage, not one project
-//!
-//! The metrics are not about one project: they are about the user's total usage on the machine
-//! or account, with everything that can be read. So [`MetricsScopeKind::All`] — **every project
-//! directory under the root** — is the default and the normal case, and `Project` is the
-//! narrowing an interested user opts into.
-//!
-//! The consequence that matters most: **a missing `cwd` is no longer an error.** The first
-//! version returned `Err("scan-failed: project scope requires a cwd")` when nothing was
-//! selected, so the dashboard said "the session scan could not be run" when the honest
-//! answer was "here is everything". A `Project`
-//! request carrying no cwd now resolves to `All` and records it in
-//! [`MetricsCoverage::scope_fell_back_to_all`]. There is no code path left that refuses
-//! to answer because a cwd was absent.
-//!
-//! **Explicitly out of scope** (Claude is not synced between machines in the target
-//! setup): additional user-supplied transcript roots. There is one root, `local`, and no
-//! roots store. The multi-root bookkeeping fields an earlier version reserved for it are
-//! gone from the wire rather than shipping as permanently-empty lists, by the same rule
-//! that keeps a placeholder zero off a turn: a field appears when it becomes true.
-//!
-//! ## 🔴 The four rules this module exists to obey
-//!
-//! **1. Dedupe by `requestId` before touching any token counter.** One API request
-//! writes MANY assistant lines and *every line of the group carries the same `usage`
-//! object*. A typical session writes roughly two assistant lines per distinct
-//! `requestId`, and the lines of one request never disagree about `usage` — so a
-//! per-line sum reports about twice the truth. [`Dedupe::requests`] is that gate, and
-//! `naive_per_line_sum_overcounts_because_one_request_writes_many_lines` in
-//! `tests/metrics.rs` is the test whose *name* states why it exists.
-//!
-//! ⚠️ **…but the dedupe must be per-COUNTER, not per-line.** "Count `tool_use` blocks
-//! on *deduped* lines" reads as "throw the duplicate lines away", and that is wrong:
-//! the lines of one request carry **disjoint** content blocks (`thinking` on one line,
-//! `text` on the next, `tool_use` on the next), and every `tool_use` block has its own
-//! distinct `tool_use.id` — none repeated. Only `usage` is repeated. So dropping the
-//! later lines of a request loses most tool calls and edited files. The rule
-//! implemented here: **`usage` and the request count are deduped by `requestId`;
-//! content blocks are counted on every line, deduped by `tool_use.id`** — which
-//! stays correct either way if a future CLI ever does repeat a block.
-//! `tool_use_blocks_are_counted_on_every_line_of_a_request` pins it.
-//!
-//! **2. [`TokenClasses`] has four counters and no fifth.** There is deliberately no
-//! `total` field — not "we don't display it": it does not exist on the wire, so no
-//! future UI can render it by accident. In a typical 24 h window the vast majority of
-//! tokens are cache reads, which cost ~0.1× fresh input, so one summed number is a wrong
-//! answer rather than a simplification. The honest headline that replaces it is
-//! [`MetricsTotals::avg_context_per_request`].
-//!
-//! **3. Never slurp a file, and always scan FORWARD.** `mtime < window.from ⇒ skip
-//! the file entirely` is the whole performance bound (one transcript can reach tens of MB,
-//! and a whole root hundreds). Reads are line-by-line with [`PER_FILE_BYTES`] /
-//! [`TOTAL_BYTES`] ceilings — the `session_index::scan_head` shape, deliberately
-//! **not** `agent::claude::scan_transcript_edges`'s `read_to_string`. Backward
-//! scanning with a timestamp early-exit is forbidden: timestamps are **not**
-//! monotonic (a few lines of a long session are routinely out of order), so it
-//! would silently truncate. Hitting a ceiling sets [`MetricsCoverage::partial`] and
-//! increments `files_truncated` — we never report a smaller number as if it were
-//! the answer.
-//!
-//! **4. `~/.claude` is opened READ-ONLY, always** — the app must never write to the
-//! CLI's own config. This module writes nothing at all — no cache (a cold 24 h scan is
-//! fast, so it buys nothing yet).
-//! `tests/metrics_no_home_writes.rs` asserts the real `~/.claude` is byte-identical
-//! (mtime **and** content hash) across a full aggregation.
-//!
-//! ## Paths are compared, never constructed
-//!
-//! Like `session_index`, the caller's `cwd` is only ever *compared* against a
-//! transcript's own `cwd` field and against names `read_dir` returned — no path is
-//! ever built from caller input, so `resolve_in_scope` has nothing to
-//! guard here and a crafted `cwd` cannot escape `~/.claude/projects`.
-//!
-//! ## Privacy — the rules that earn [`MetricsScopeKind::All`]
-//!
-//! `All` was withheld from the first version precisely because these were unimplemented.
-//! They are the price of the wider scope, not decoration:
-//!
-//! 1. **No prompt text reaches the wire in `All` scope.** [`TurnRow::label`] is `None`
-//!    by rule, and the text is never even *extracted* — [`ResolvedScope::keep_labels`]
-//!    gates it at the point of reading, so a prompt from another repo never exists in
-//!    this process's memory as a report field. A user may run agents on many private
-//!    repos in one app; rendering one client's prompt beside another's numbers is a
-//!    cross-workspace leak. A turn is identified instead by [`TurnRow::project_label`]
-//!    plus its time.
-//! 2. **No absolute path outside the workspace root, in any scope — basenames only.**
-//!    `project_label` is the basename of the transcript's own `cwd`, never the mangled
-//!    project directory name (which embeds the username → PII), and in `All` scope
-//!    [`MetricsScope::cwd`] is `None` even when the caller passed one.
-//! 3. **`toolUseResult` is counted, never quoted, in every scope** — tool stdout/stderr
-//!    routinely carries tokens, keys and connection strings. [`user_text`] cannot reach
-//!    one; `tests/metrics.rs` asserts the serialized JSON.
+//! 24 h usage from local transcripts (wire: `metricsTypes.ts`); `~/.claude` is READ-ONLY. Usage
+//! dedupes by `requestId`, tool blocks by `tool_use.id` (per line); no token total; forward scan,
+//! capped. All scope (default): no prompt text, basenames only; `toolUseResult` never quoted.
 
 use std::collections::{BTreeSet, HashSet};
 use std::io::{BufRead, Read};
@@ -108,10 +13,8 @@ use serde::{Deserialize, Serialize};
 // Bounds and caps
 // ---------------------------------------------------------------------------
 
-/// Most bytes we will read from ONE transcript, 32 MiB. A single long session can grow
-/// past this, so it is deliberately below the largest files seen in practice: a
-/// file that big is a single enormous session whose tail we would rather report as
-/// `partial` than spend 40 MB of parsing on.
+/// Max bytes read from ONE transcript (32 MiB): below the largest real files, whose tail is
+/// reported as `partial` rather than parsed.
 pub const PER_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Most bytes one whole scan will read, across every root, 512 MiB. The unbounded
@@ -124,26 +27,15 @@ pub const TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 /// UI can say "top 25 of 137" rather than implying the list is complete.
 pub const TOP_TURNS_CAP: usize = 25;
 
-/// Turn-label cap, in characters — the same rule and the same number as
-/// `session_index::single_line_label`. Re-declared locally rather than shared: that
-/// function is private to its module and a feature reaching into another feature's
-/// internals to save nine lines is a coupling we avoid. Duplicating
-/// one constant with a pointer at its origin is the cheaper correctness.
+/// Turn-label cap in chars; same rule as `session_index::single_line_label` (private there).
 const LABEL_MAX_CHARS: usize = 120;
 
 const HOUR_MS: i64 = 3_600_000;
 const DAY_MS: i64 = 24 * HOUR_MS;
 const WEEK_MS: i64 = 7 * DAY_MS;
 
-/// The complete error vocabulary, mirroring `MetricsErrorCode` in
-/// `metricsTypes.ts` — the shared error shape: every `Err` is `"<code>"` or
-/// `"<code>: <detail>"`, and a detail never carries file contents.
-///
-/// `no-transcripts` is listed but **deliberately never returned**: a machine (or a
-/// project) with no Claude sessions in the window is a *normal case* that returns an
-/// empty report. The code stays in the vocabulary because the frontend union must
-/// tolerate it if a later version ever needs it, and because naming it here is how we
-/// record that the decision was made rather than overlooked.
+/// Error vocabulary mirroring `MetricsErrorCode` in `metricsTypes.ts` (`code[: detail]`, never
+/// file contents). `no-transcripts` is never returned (no sessions = empty report) but stays.
 pub const ERROR_CODES: [&str; 5] = [
     "home-unresolved",
     "no-transcripts",
@@ -179,11 +71,7 @@ impl MetricsWindowKind {
     }
 }
 
-/// Which sessions the report covers.
-///
-/// The first version shipped this with one variant so nobody could request a scope whose
-/// privacy rules were unimplemented. They are implemented now — see rule 1 in the module
-/// docblock — so the variant is earned, and it is the **default**.
+/// Which sessions the report covers; `All` is the default (privacy rules in the module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricsScopeKind {
@@ -210,15 +98,8 @@ pub enum DurationSource {
     Derived,
 }
 
-/// Tokens, in the four classes the API reports — **and no fifth**.
-///
-/// See rule 2 in the module docblock. If you are here to add a `total`, consider first
-/// that the classes span several orders of magnitude and price differently by
-/// ~10×, so their sum is not a summary of anything.
-///
-/// **Recorded simplification:** `cache_creation.ephemeral_5m` and `ephemeral_1h` are
-/// folded into one `cache_write`. The split only matters for pricing (1.25× vs 2×),
-/// and we do not price. If pricing is ever added, un-fold it first.
+/// Tokens in the four API classes, and no fifth: they span orders of magnitude and price ~10×
+/// apart, so a sum means nothing. `ephemeral_5m`/`1h` fold into `cache_write` (unfold to price).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenClasses {
@@ -262,23 +143,19 @@ pub struct TurnRow {
     pub root_id: String,
     /// The **basename** of the transcript's own `cwd`, and in `All` scope the only thing
     /// identifying a turn's origin. Never the mangled project directory name — that
-    /// embeds the username, and never a path (privacy rule 2).
+    /// embeds the username, and never a path (privacy).
     pub project_label: String,
-    /// The turn's first line, collapsed and capped — **`None` always in `All` scope**
-    /// (privacy rule 1), and `None` in `Project` scope for a turn with no user text at
-    /// all (an assistant-first fallback turn). The UI composes `project_label` + the
-    /// turn's time when this is absent.
+    /// The turn's first line, collapsed and capped. Always `None` in `All` scope (privacy) and for
+    /// a turn with no user text; the UI then shows `project_label` + time.
     pub label: Option<String>,
     pub started_at_ms: i64,
     /// Last activity seen in the turn. `None` for a turn with no activity line.
     pub ended_at_ms: Option<i64>,
-    /// `None` — **never 0** — when the turn has no terminal assistant message
-    /// (interrupted, or still running). A zero standing in for an unknown would report a
-    /// state that never happened, so such turns are excluded from
-    /// `totals.time_in_turns_ms` rather than contributing nothing-shaped-as-something.
+    /// `None`, never 0, for a turn with no terminal assistant message (interrupted or running);
+    /// such turns are excluded from `totals.time_in_turns_ms`.
     pub duration_ms: Option<i64>,
     pub duration_source: Option<DurationSource>,
-    /// Distinct `requestId`s — deduped (rule 1).
+    /// Distinct `requestId`s (deduped).
     pub requests: u64,
     pub tokens: TokenClasses,
     pub tool_calls: u64,
@@ -347,10 +224,8 @@ pub struct MetricsTotals {
     pub high_context_request_share: Option<f64>,
     pub tool_calls: u64,
     pub tool_errors: u64,
-    /// **Distinct** paths edited across the window — a union, NOT the sum of the
-    /// per-turn counts (a file edited in three turns is one file changed). So
-    /// `files_changed <= Σ topTurns[].filesChanged`, deliberately, and that
-    /// inequality is pinned by a test.
+    /// DISTINCT paths edited in the window (a union), so `files_changed <= Σ
+    /// topTurns[].filesChanged`; pinned by a test.
     pub files_changed: u64,
     /// Σ of the turns whose duration is KNOWN. Not wall-clock: concurrent agents
     /// make turns overlap, so this can exceed elapsed time — which is why the UI
@@ -384,13 +259,8 @@ pub struct MetricsCoverage {
     pub lines_unparseable: u64,
     pub turns_without_cli_duration: u64,
     pub turns_without_prompt_id: u64,
-    /// `Project` scope was requested with no cwd, so the report covers **`All`** instead.
-    ///
-    /// This is the field that replaced the first version's `Err("scan-failed: project scope
-    /// requires a cwd")`. Reported rather than silent because the report's scope then
-    /// differs from what the caller asked for, and a dashboard that quietly answers a
-    /// different question than the one it was asked is the same class of dishonesty as a
-    /// summed token total. **Not** `partial`: nothing was missed — more was seen.
+    /// `Project` was requested with no cwd, so the report covers `All`; reported because the scope
+    /// differs from the request. Not `partial`: nothing was missed.
     pub scope_fell_back_to_all: bool,
     /// True when any ceiling was hit or any root was unavailable — i.e. when the
     /// numbers below are a floor, not the answer.
@@ -412,10 +282,8 @@ pub struct MetricsWindow {
 #[serde(rename_all = "camelCase")]
 pub struct MetricsScope {
     pub kind: MetricsScopeKind,
-    /// The project the report was narrowed to. `Some` only in `Project` scope — the app
-    /// already renders that path, so echoing it leaks nothing new. **`None` in `All`
-    /// scope even when the caller passed a cwd**, because it narrowed nothing and
-    /// echoing it would imply it had (privacy rule 2).
+    /// The narrowed project, `Some` only in `Project` scope. `None` in `All` even when the caller
+    /// passed a cwd: it narrowed nothing (privacy: no absolute paths).
     pub cwd: Option<String>,
 }
 
@@ -445,17 +313,9 @@ pub const HIGH_CONTEXT_TOKENS: u64 = 150_000;
 // The command
 // ---------------------------------------------------------------------------
 
-/// Compute the metrics report for a window and scope.
-///
-/// The scan runs on `spawn_blocking`, so the supervisor loop and the PTY hot path
-/// never see a filesystem sweep.
-///
-/// `Err` is one of [`ERROR_CODES`], optionally `": <detail>"`. **Neither "no transcripts"
-/// nor "no cwd" is an error** — the first returns an empty report, because "you have not
-/// used Claude today" is an answer; the second widens to [`MetricsScopeKind::All`],
-/// because "here is everything" is a better answer than a refusal. The only failure left
-/// is an unresolvable home directory (nowhere to read from at all) and a scan task that
-/// did not finish.
+/// Compute the report on `spawn_blocking` (no fs sweep on the supervisor or PTY path). `Err` is
+/// an [`ERROR_CODES`] entry; no transcripts → empty report, no cwd → `All`. Only an unresolvable
+/// home or an unfinished scan task fails.
 #[tauri::command]
 pub async fn claude_metrics(
     window: MetricsWindowKind,
@@ -475,11 +335,8 @@ pub async fn claude_metrics(
 // Roots
 // ---------------------------------------------------------------------------
 
-/// One transcript root: a directory shaped like `~/.claude/projects`.
-///
-/// **Injected, never derived inside the scanner** — that is what lets every test
-/// drive the real aggregation against a tempdir and never consult `home_dir()`
-/// (paths are injected so no test can reach a real user dotfile).
+/// One transcript root shaped like `~/.claude/projects`. Injected, never derived in the scanner,
+/// so tests run against a tempdir and never touch a real home.
 #[derive(Debug, Clone)]
 pub struct ScanRoot {
     pub id: String,
@@ -503,11 +360,8 @@ impl ScanRoot {
 // The scan
 // ---------------------------------------------------------------------------
 
-/// Aggregate every root into one report.
-///
-/// `now_ms` is **injected** — the whole aggregation is deterministic given the roots
-/// and the clock, which is what makes the hand-computed goldens in `tests/metrics.rs`
-/// possible (the `parse_usage_output_with_offset` discipline).
+/// Aggregate every root into one report. `now_ms` is injected so the result is deterministic
+/// (the hand-computed goldens in `tests/metrics.rs`).
 pub fn scan(
     roots: &[ScanRoot],
     window_kind: MetricsWindowKind,
@@ -582,14 +436,7 @@ pub fn scan_with_limits(
     finish(window, scope, turns, per_root, coverage, started)
 }
 
-/// The two byte ceilings, **injected** so a test can prove truncation is reported
-/// with a 200-byte fixture instead of writing 32 MiB to a tempdir.
-///
-/// Same reasoning as `usage::parse_usage_output_with_offset`'s injected UTC offset:
-/// a bound nobody can exercise cheaply is a bound nobody exercises, and "we set
-/// `partial` when a ceiling is hit" is exactly the claim that must not go untested —
-/// reporting a smaller number as if it were the answer is the failure mode this
-/// feature exists to prevent.
+/// The two byte ceilings, injected so a tiny fixture can prove a hit ceiling sets `partial`.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     pub per_file_bytes: u64,
@@ -612,40 +459,31 @@ struct Budget {
     per_file: u64,
 }
 
-/// The two identity sets that make the arithmetic right, both **scan-global**.
-///
-/// Scan-global rather than per-file because these ids are unique per API call and per
-/// tool invocation, so counting one twice — whatever file it turns up in — is the one
-/// arithmetic error this feature cannot survive. In practice a `requestId` almost never
-/// appears in more than one transcript, so the sets cost nothing today and are the
-/// correct guard the day a forked or resumed session copies history into a second file.
+/// Scan-global identity sets: counting one request or tool use twice, in any file, is the error
+/// this feature can't survive (a forked/resumed session may copy history into another file).
 #[derive(Default)]
 struct Dedupe {
-    /// `<session>:<requestId>` — gates `usage` and the request count (rule 1).
+    /// `<session>:<requestId>` — gates `usage` and the request count.
     requests: HashSet<String>,
     /// `<session>:<tool_use.id>` — gates tool calls and edited files. A *different*
     /// set on purpose: content blocks are spread across the lines of one request, so
-    /// they must survive the request dedupe (see the module docblock's ⚠️).
+    /// they must survive the request dedupe.
     tool_uses: HashSet<String>,
 }
 
-/// What a scope MEANS to the scanner — resolved exactly once, in
-/// [`ResolvedScope::resolve`], so no later code has to re-derive "is this `All`?" and no
-/// two places can disagree about it.
-///
-/// This type is where the two behaviours that differ by scope live: which transcripts
-/// qualify ([`Self::targets`]) and whether prompt text may be read at all
+/// What a scope means to the scanner, resolved once in [`ResolvedScope::resolve`]: which
+/// transcripts qualify ([`Self::targets`]) and whether prompt text may be read
 /// ([`Self::keep_labels`]).
 struct ResolvedScope {
     /// The scope actually computed — never the raw request. See [`Self::fell_back`].
     kind: MetricsScopeKind,
-    /// The cwd echoed back on the wire. `Some` only in `Project` scope (privacy rule 2).
+    /// The cwd echoed back on the wire. `Some` only in `Project` scope (privacy).
     cwd: Option<String>,
     /// The cwd spellings a transcript's own `cwd` must equal. Empty ⇒ everything, which
     /// is what [`in_scope`] reads as "no filter".
     targets: HashSet<String>,
     /// 🔴 May a turn's prompt text be extracted and put on the wire? **False in `All`
-    /// scope** (privacy rule 1), and the gate sits at the point of *reading* rather than
+    /// scope** (privacy), and the gate sits at the point of *reading* rather than
     /// at serialization so another repo's prompt never becomes a value this process holds.
     keep_labels: bool,
     /// `Project` was requested with no cwd, so [`Self::kind`] is `All` instead. Surfaced
@@ -654,11 +492,7 @@ struct ResolvedScope {
 }
 
 impl ResolvedScope {
-    /// The one rule: `Project` needs a cwd; everything else is `All`.
-    ///
-    /// A `Project` request with no cwd is the common case when nothing is selected — the
-    /// first version made it an `Err`. It is now the widening, recorded. Note the fallback
-    /// is *only* possible in that direction: `All` never silently narrows.
+    /// `Project` needs a cwd; anything else is `All` (recorded). It only widens, never narrows.
     fn resolve(kind: MetricsScopeKind, cwd: Option<&str>) -> Self {
         match (kind, cwd) {
             (MetricsScopeKind::Project, Some(cwd)) => ResolvedScope {
@@ -679,9 +513,9 @@ impl ResolvedScope {
     }
 }
 
-/// The cwd spellings a transcript's `cwd` field may equal: as given, and
-/// symlink-resolved (`claude` canonicalizes — `/tmp/x` runs as `/private/tmp/x` on
-/// macOS). Same reasoning as `session_index::sessions_for_cwd`.
+/// The cwd spellings a transcript's `cwd` may equal: as given and symlink-resolved (`claude`
+/// canonicalizes). The caller's cwd is only ever compared, never used to build a path, so it
+/// cannot escape `~/.claude/projects`.
 fn scope_targets(cwd: &str) -> HashSet<String> {
     let mut targets = HashSet::new();
     targets.insert(crate::paths::cwd_key(cwd));
@@ -693,14 +527,8 @@ fn scope_targets(cwd: &str) -> HashSet<String> {
     targets
 }
 
-/// Does this transcript belong to the requested project?
-///
-/// An empty target set — i.e. `All` scope — means no filter. Note a transcript with
-/// **no** `cwd` field is out of scope in `Project` scope by this rule — deliberately:
-/// such files are empty or summary-only (no user/assistant lines), so they carry no
-/// metrics to lose, and attributing them by the mangled directory name would be guessing.
-/// In `All` scope they are admitted (nothing is being attributed) and simply carry an
-/// empty `project_label`.
+/// Empty targets (`All`) = no filter. A transcript with no `cwd` (empty or summary-only) is out
+/// of `Project` scope rather than guessed from the directory name; in `All` it is in.
 fn in_scope(targets: &HashSet<String>, file_cwd: Option<&str>) -> bool {
     if targets.is_empty() {
         return true;
@@ -708,19 +536,9 @@ fn in_scope(targets: &HashSet<String>, file_cwd: Option<&str>) -> bool {
     file_cwd.is_some_and(|c| targets.contains(&crate::paths::cwd_key(c)))
 }
 
-/// Walk one root's project directories. Returns `false` when the root itself could
-/// not be read (unmounted volume, paused sync, never-used machine) — which is
-/// `roots_unavailable`, not an error.
-///
-/// Only `from_ms` is passed, never the whole window: a file's mtime is its **last**
-/// line, so filtering files by `to_ms` would be wrong — a file touched after the
-/// window can still hold lines inside it.
-///
-/// 🔴 **`All` scope does not change this loop's structure, and must not.** The
-/// `mtime < from_ms ⇒ skip` pre-filter below is the whole performance bound, and it is
-/// decided per FILE, before any scope test — so widening the scope widens what is
-/// *parsed* among the files already inside the window, and never what is *stat'ed*.
-/// Typically a 24 h `All` scan opens only a small fraction of the files it considers.
+/// Walk one root's project dirs; `false` if the root is unreadable (`roots_unavailable`, not an
+/// error). Only `from_ms` filters (mtime is the LAST line). The per-file mtime skip runs before
+/// any scope test and is the whole performance bound; `All` must not change that.
 #[allow(clippy::too_many_arguments)]
 fn scan_root(
     root: &ScanRoot,
@@ -751,17 +569,13 @@ fn scan_root(
                 continue; // unstatable — skip the file entirely
             };
             if !meta.is_file() {
-                // A `<session-id>/` directory holds sub-agent sidecars, not a
-                // session. Only root transcripts are counted; fan-out
-                // attribution is not implemented, and depth-1-files-only is what keeps a
-                // sidecar's tokens from being silently merged into a parent total.
+                // `<session-id>/` holds sub-agent sidecars; counting only depth-1 files
+                // keeps their tokens out of parent totals.
                 continue;
             }
             coverage.files_considered += 1;
-            // 🔴 THE WHOLE PERFORMANCE BOUND. Sound because transcripts are
-            // append-only — even compaction appends a `compact_boundary` in place
-            // rather than rewriting — so a file untouched since
-            // before the window cannot hold a line inside it.
+            // THE WHOLE PERFORMANCE BOUND. Sound because transcripts are append-only
+            // (even compaction appends), so an older file has no line in the window.
             if mtime_ms(&meta) < from_ms {
                 continue;
             }
@@ -792,11 +606,8 @@ pub(crate) fn session_id_of(path: &Path) -> Option<String> {
 // Per-file streaming
 // ---------------------------------------------------------------------------
 
-/// Stream one transcript FORWARD, line by line, and append its turns.
-///
-/// Never `read_to_string`. `read_until` (not `read_line`) so a non-UTF-8 garbage
-/// line cannot abort the scan, and `take` caps total bytes even if one line is
-/// gigantic — the `session_index::scan_head` shape.
+/// Stream one transcript FORWARD, never `read_to_string`: `read_until` so non-UTF-8 can't
+/// abort the scan, `take` to cap bytes even for one gigantic line.
 #[allow(clippy::too_many_arguments)]
 fn scan_transcript(
     path: &Path,
@@ -840,11 +651,8 @@ fn scan_transcript(
             Ok(n) => n as u64,
         };
         consumed += n;
-        // A line cut off by the byte cap (no terminator, more file beyond) is
-        // incomplete JSON — drop it rather than misparse it. A file whose genuine
-        // final line has no newline (still being written) hits the same guard only
-        // when truncated; otherwise it falls through and fails the parse below,
-        // which is counted, not fatal.
+        // A line cut by the byte cap is incomplete JSON: drop it. An unterminated genuine
+        // final line falls through and its parse failure is counted, not fatal.
         if truncated && !buf.ends_with(b"\n") {
             break;
         }
@@ -955,11 +763,8 @@ impl Acc {
             "user" => self.absorb_user(v, ts),
             "assistant" => self.absorb_assistant(v, ts, seen),
             "system" => self.absorb_system(v, ts),
-            // Everything else (`mode`, `attachment`, `ai-title`, `file-history-*`,
-            // `queue-operation`, `summary`, `rate_limit_event`, …) carries no metric
-            // this report uses. A `rate_limit_event` has no `timestamp` at all
-            // and must be ignored without a panic
-            // and without inventing a turn — which falling through here achieves.
+            // Other types carry no metric used here; `rate_limit_event` has no `timestamp`
+            // and must be ignored without panicking or inventing a turn.
             _ => {}
         }
     }
@@ -967,24 +772,15 @@ impl Acc {
     fn absorb_user(&mut self, v: &serde_json::Value, ts: Option<i64>) {
         let prompt_id = nonblank_str(v.get("promptId"));
 
-        // A turn boundary: a `promptId` we have not got open. NOTE every user line
-        // of a turn carries the same `promptId` (one distinct `promptId` and one
-        // `promptSource:"typed"` line per turn) — so this fires once
-        // per turn, on the human prompt, and tool_result lines fold into it.
+        // Turn boundary: a new `promptId`. Every user line of a turn shares it, so this
+        // fires once per turn and tool_result lines fold in.
         if let Some(pid) = prompt_id {
             if self.open.as_ref().map(|t| t.turn_id.as_str()) != Some(pid.as_str()) {
                 self.start_turn(pid, true, v, ts);
             }
         } else if is_human_prompt(v) && self.open.as_ref().is_none_or(|t| !t.had_prompt_id) {
-            // Fallback for the transcripts written before `promptId` existed:
-            // a qualifying user line starts a turn, running to the next. Degraded,
-            // and counted in `coverage.turns_without_prompt_id`.
-            //
-            // The `!had_prompt_id` guard is what keeps the two regimes from
-            // interfering: a `promptId`-less line can start a new turn only when the
-            // OPEN turn was itself inferred. In a modern transcript every user line
-            // carries a `promptId`, so this branch never
-            // fires there and a stray field-less line can never split a real turn.
+            // Fallback for pre-`promptId` transcripts (counted in `turns_without_prompt_id`).
+            // `!had_prompt_id`: a stray field-less line can never split a real turn.
             let id = format!("{}#{}", self.session_id, self.fallback_seq);
             self.fallback_seq += 1;
             self.start_turn(id, false, v, ts);
@@ -998,7 +794,7 @@ impl Acc {
             turn.interrupted = true;
         }
         // Tool RESULTS: counted, never quoted. `toolUseResult` may be an object or a
-        // bare string, and either way its content is off limits (privacy rule 3) — we read
+        // bare string, and either way its content is off limits — we read
         // only `is_error` off the content block, which lives on the message.
         if let Some(blocks) = v.get("message").and_then(|m| m.get("content")) {
             if let Some(blocks) = blocks.as_array() {
@@ -1041,9 +837,9 @@ impl Acc {
             turn.models.insert(normalize_model(&model));
         }
 
-        // Content blocks are counted on EVERY line — see the ⚠️ correction in the
-        // module docblock. Deduped by `tool_use.id` so this stays correct if a
-        // future CLI ever does repeat a block across the lines of one request.
+        // Content blocks are counted on EVERY line: one request spreads them across its
+        // lines. Deduped by `tool_use.id` so this stays correct if a future CLI ever
+        // repeats a block across the lines of one request.
         if let Some(blocks) = message
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_array())
@@ -1069,12 +865,8 @@ impl Acc {
             }
         }
 
-        // 🔴 RULE 1, and it applies to `usage` ONLY. `requestId` is the unit of an
-        // API call; `message.id` is the fallback (it maps 1:1 with `requestId`,
-        // neither mapping many-to-one). A
-        // line we cannot key at all contributes no tokens: an uncountable line must
-        // not become a request, because the alternative is one usage object added an
-        // unknown number of times.
+        // Dedupe `usage` ONLY, by `requestId`, else `message.id` (1:1 with it). An unkeyable
+        // line adds no tokens rather than one usage counted an unknown number of times.
         let key = nonblank_str(v.get("requestId"))
             .or_else(|| nonblank_str(message.and_then(|m| m.get("id"))))
             .map(|k| format!("{session_id}:{k}"));
@@ -1091,13 +883,8 @@ impl Acc {
         if tokens.context() >= HIGH_CONTEXT_TOKENS {
             turn.high_context_requests += 1;
         }
-        // Bucketed by the line's own timestamp, falling back to the turn's latest
-        // known activity. The fallback is what makes `Σ hourly[].requests ==
-        // totals.requests` hold for EVERY input rather than most: an assistant line
-        // with no `timestamp` field exists (fixture 4) and its tokens are real, so
-        // dropping it from the chart while counting it in the totals would leave the
-        // two disagreeing — and a chart that does not add up to its own headline is
-        // the kind of thing that destroys trust in every other number.
+        // Bucket by the line's timestamp, else the turn's latest activity, so
+        // `Σ hourly[].requests == totals.requests` holds even for timestamp-less lines.
         let bucket_ts = ts.or(turn.ended_at_ms).unwrap_or(turn.started_at_ms);
         turn.hourly.push((bucket_ts, 1, tokens.output));
     }
@@ -1106,12 +893,8 @@ impl Acc {
         let Some(turn) = self.open.as_mut() else {
             return;
         };
-        // The CLI's own measurement. It lands AFTER the turn's last content and
-        // BEFORE the next turn's first prompt (the duration line closes the turn
-        // that started that many minutes earlier), so "the currently open turn" is
-        // the correct owner — and a turn
-        // that got no such line simply keeps `None` rather than borrowing a later
-        // turn's number.
+        // The CLI's own measurement lands after the turn's last content and before the
+        // next prompt, so the open turn owns it; a turn without one keeps `None`.
         if v.get("subtype").and_then(|s| s.as_str()) == Some("turn_duration") {
             if let Some(ms) = v.get("durationMs").and_then(|d| d.as_i64()) {
                 if ms >= 0 {
@@ -1134,11 +917,8 @@ impl Acc {
         let mut turn = self.blank_turn(turn_id, ts);
         turn.had_prompt_id = had_prompt_id;
         turn.human_prompt = is_human_prompt(v);
-        // 🔴 PRIVACY RULE 1. In `All` scope the text is not extracted at all — not
-        // extracted-then-dropped, so there is no later edit that can "helpfully" put it
-        // back on the wire, and no window in which another repo's prompt is a value this
-        // process holds. `is_human_prompt` above may still *look* at the text on an old
-        // CLI, but it returns a bool and keeps nothing.
+        // Privacy: in `All` scope the text is never extracted (not extracted-then-dropped).
+        // `is_human_prompt` may look at it but keeps only a bool.
         if self.keep_labels {
             turn.label = user_text(v).map(|t| single_line_label(&t));
         }
@@ -1207,11 +987,8 @@ fn touch(turn: &mut ScannedTurn, ts: Option<i64>) {
     }
 }
 
-/// Did a person type this turn?
-///
-/// `promptSource` is authoritative when present (values seen: `typed`, `system`,
-/// `queued`, `sdk`). It only exists on newer CLIs, so the fallback is a structural
-/// test: real text content, not a local-command echo, not a machine marker.
+/// Did a person type this turn? `promptSource` decides when present (newer CLIs); otherwise
+/// real text that is not a local-command echo or machine marker.
 fn is_human_prompt(v: &serde_json::Value) -> bool {
     if let Some(source) = v.get("promptSource").and_then(|s| s.as_str()) {
         return matches!(source, "typed" | "queued");
@@ -1240,11 +1017,8 @@ fn starts_with_machine_marker(text: &str) -> bool {
     MACHINE_MARKERS.iter().any(|m| t.starts_with(m))
 }
 
-/// The text of a user line: a bare string content, or its first `text` block.
-///
-/// This is the **only** text this module extracts, and the only text that reaches
-/// the wire (privacy rule 1). Notably absent: `toolUseResult` in any form — object or string —
-/// because tool stdout/stderr routinely carries tokens, keys and connection strings.
+/// A user line's text (string content or first `text` block): the ONLY text extracted. Never
+/// `toolUseResult`, which routinely carries tokens, keys and connection strings.
 fn user_text(v: &serde_json::Value) -> Option<String> {
     match v.get("message")?.get("content")? {
         serde_json::Value::String(s) => nonblank(s),
@@ -1292,21 +1066,9 @@ fn normalize_model(model: &str) -> String {
 // Finishing: window filter, totals, ranking
 // ---------------------------------------------------------------------------
 
-/// Turn the scanned turns into the report.
-///
-/// **Window rule: a turn belongs to the window of its END, and the filter is
-/// per-TURN, not per-line.** A turn that ended inside the window contributes *all*
-/// of its work, including the part that happened before `from_ms`. That is deliberate
-/// and it is the honest choice: a turn is the unit of work the dashboard is about
-/// (which tasks were prompted in the last 24 hours), and real turns can run for half
-/// an hour — slicing one in half would make every number depend on where the window
-/// boundary happened to fall inside it, and no two consecutive refreshes would agree.
-/// The UI prints the rule, because it is what a suspicious reader asks about first.
-///
-/// Together with the clamping in [`bucket_index`] this makes the three conservation
-/// properties exact: `Σ topTurns[].output == totals.output` (while the turn count is
-/// within [`TOP_TURNS_CAP`]), `Σ hourly[].requests == totals.requests`, and
-/// `Σ perRoot[].requests == totals.requests`.
+/// Build the report. A turn belongs to the window of its END and contributes all its work, so
+/// refreshes agree. With [`bucket_index`]'s clamping, Σ topTurns output (within
+/// [`TOP_TURNS_CAP`]), Σ hourly and Σ perRoot requests equal the totals exactly.
 fn finish(
     window: MetricsWindow,
     scope: ResolvedScope,
@@ -1436,10 +1198,8 @@ fn bucket_count(window: MetricsWindow) -> usize {
     (((window.to_ms - window.from_ms) / HOUR_MS).max(1)) as usize
 }
 
-/// Which bucket a timestamp lands in. Clamped at both ends so a line exactly on
-/// `to_ms` cannot fall off the end — clamping is what makes
-/// `Σ hourly[].requests == totals.requests` hold for every input rather than for
-/// most.
+/// Bucket for a timestamp, clamped at both ends so a line on `to_ms` can't fall off and
+/// `Σ hourly[].requests == totals.requests` always holds.
 fn bucket_index(ts: i64, window: MetricsWindow, buckets: usize) -> usize {
     let offset = (ts - window.from_ms).max(0) / HOUR_MS;
     (offset as usize).min(buckets - 1)
@@ -1453,14 +1213,8 @@ fn in_window(turn: &ScannedTurn, window: MetricsWindow) -> bool {
     at >= window.from_ms && at <= window.to_ms
 }
 
-/// A turn's duration and where it came from.
-///
-/// Preference order and the reason for each rung:
-/// 1. The CLI's own `turn_duration.durationMs` — a measurement, not a subtraction.
-/// 2. Derived, but ONLY for a turn that actually finished (`stop_reason:"end_turn"`)
-///    and was not interrupted. Subtracting timestamps on an unfinished turn measures
-///    "how long ago it started", which is not its duration.
-/// 3. `None`. **Never 0** — see [`TurnRow::duration_ms`].
+/// Duration and source: the CLI's `turn_duration`, else derived only for a finished
+/// (`end_turn`), uninterrupted turn, else `None`, never 0.
 fn duration_of(turn: &ScannedTurn) -> (Option<i64>, Option<DurationSource>) {
     if let Some(ms) = turn.cli_duration_ms {
         return (Some(ms), Some(DurationSource::Cli));
@@ -1508,10 +1262,7 @@ fn root_totals(
 // Small helpers
 // ---------------------------------------------------------------------------
 
-/// Collapse whitespace runs to single spaces and cap at [`LABEL_MAX_CHARS`] chars,
-/// appending `…` if cut. Char-based, so a multibyte char is never split. This is
-/// `session_index::single_line_label`'s rule, re-implemented locally — see the note
-/// on [`LABEL_MAX_CHARS`].
+/// Collapse whitespace and cap at [`LABEL_MAX_CHARS`] chars (char-based), appending `…` if cut.
 fn single_line_label(s: &str) -> String {
     let collapsed = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.chars().count() <= LABEL_MAX_CHARS {
@@ -1558,10 +1309,7 @@ fn nonblank_str(v: Option<&serde_json::Value>) -> Option<String> {
     v.and_then(|v| v.as_str()).and_then(nonblank)
 }
 
-/// File mtime as ms epoch; anything unusual (pre-epoch, unsupported) yields 0 —
-/// which is *before* any window, so such a file is skipped. That is the safe
-/// direction: a file we cannot date is not silently included with garbage
-/// timestamps.
+/// mtime as ms epoch; anything odd yields 0, before any window, so an undatable file is skipped.
 pub(crate) fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
     meta.modified()
         .ok()
@@ -1578,13 +1326,8 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Parse a transcript timestamp — `2026-01-01T12:30:15.250Z` — to unix ms.
-///
-/// Hand-rolled rather than pulling in a date crate: this module adds **zero**
-/// dependencies, `chrono`/`time` are only transitive here, and the input
-/// is one fixed shape the CLI emits. A trailing `Z` or a `±HH:MM` offset is
-/// accepted; anything else returns `None`, which means "this line has no usable
-/// timestamp" and is handled everywhere rather than guessed at.
+/// Parse `2026-01-01T12:30:15.250Z` (or a `±HH:MM` offset) to unix ms, else `None` (no usable
+/// timestamp). Hand-rolled: this module adds no date-crate dependency.
 fn parse_ts(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || (b[10] != b'T' && b[10] != b' ') {
@@ -1657,20 +1400,9 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    /// The live scan, against the developer's REAL `~/.claude`, in **All** scope.
-    ///
-    /// `#[ignore]`d so `cargo test` stays hermetic (no Docker, network or signed-in CLI)
-    /// — this one reads a real user directory. Run it deliberately:
-    ///
-    ///     cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored live_metrics
-    ///
-    /// It exists because hermetic tests cannot see the live path: a `null` cwd can make the
-    /// dashboard show "Could not read your sessions" while every fixture test passes.
-    /// Fixture tests prove the arithmetic; only this proves the command answers on
-    /// real data in the shape the UI actually asks for. It asserts INVARIANTS rather than
-    /// values — the numbers change every session, and a test that pinned them would be
-    /// noise — plus the two guarantees that matter: a null cwd must not error, and All
-    /// scope must carry no prompt text.
+    /// Live All-scope scan of the real `~/.claude`, `#[ignore]`d; asserts invariants, that a null
+    /// cwd doesn't error, and no prompt text. Run:
+    /// `cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored live_metrics`.
     #[test]
     #[ignore = "reads the real ~/.claude — run with --ignored"]
     fn live_metrics_scans_all_projects_with_no_cwd() {
@@ -1821,12 +1553,6 @@ mod tests {
         assert_eq!(normalize_cwd("/"), "/", "root must survive");
     }
 
-    /// 🔴 The no-cwd failure, at the level where the decision is made.
-    ///
-    /// The first version of `claude_metrics` turned "no cwd" into
-    /// `Err("scan-failed: project scope requires a cwd")`, and the packaged app rendered
-    /// *"Could not read your sessions"* over a machine full of them. There is now exactly
-    /// one function that can decide this, and it never refuses.
     #[test]
     fn a_project_request_with_no_cwd_resolves_to_all_and_records_the_fallback() {
         let fell_back = ResolvedScope::resolve(MetricsScopeKind::Project, None);
@@ -1918,7 +1644,7 @@ mod tests {
 
     #[test]
     fn token_classes_have_exactly_four_fields_and_no_total() {
-        // The trap, encoded: a `total` on the wire is what rule 2 forbids, so the
+        // The trap, encoded: a `total` on the wire is forbidden, so the
         // serialized shape is asserted key-by-key. Adding a fifth counter fails here
         // before it can reach a UI.
         let json = serde_json::to_value(TokenClasses {
@@ -1983,7 +1709,7 @@ mod tests {
 
     #[test]
     fn user_text_never_reaches_for_a_tool_result() {
-        // Privacy rule 3: a `toolUseResult` is counted, never quoted — in either of the two
+        // Privacy: a `toolUseResult` is counted, never quoted — in either of the two
         // shapes it takes (object here, string in fixture 4).
         let v = serde_json::json!({
             "toolUseResult": { "stdout": "AWS_SECRET=hunter2" },

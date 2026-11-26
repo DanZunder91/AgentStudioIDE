@@ -1,23 +1,6 @@
-//! Docker containers as dev apps (runtime `docker`).
-//!
-//! **Zero install, passive detection** (a probe of a vendor tool must never install
-//! anything): the feature exists
-//! only when a `docker` CLI is already at one of [`UNIX_CANDIDATES`] — absolute paths,
-//! because a GUI app's `PATH` is `/usr/bin:/bin:/usr/sbin:/sbin`. Its presence is checked
-//! with a `stat`; the CLI itself runs only from `procs_list` (the user opened the view),
-//! never at startup and never in a test (tests feed [`parse_ps`] captured text).
-//!
-//! **Windows** ([`candidates`]): a GUI app there DOES inherit the user's `PATH` (Explorer
-//! passes it on), and Docker Desktop's installer adds its CLI folder to it — so first each
-//! absolute `PATH` entry's `docker.exe` (what `docker` means in the user's own terminals; a
-//! relative entry is never resolved against the IDE's cwd), then the install folders
-//! ([`WINDOWS_DOCKER_DIRS`], `%ProgramFiles%`-relative, for an install whose PATH entry is
-//! gone), then Docker Desktop's default folder spelled out. **Live Docker on Windows is
-//! unverified**: only the candidate order and the error text are tested.
-//!
-//! **Never fails when Docker is down.** A missing CLI, a daemon that is not running, or a
-//! `docker ps` that hangs ([`PS_TIMEOUT`]) all end as `containers: []` plus a one-line
-//! `reason`, never as an error.
+//! Docker containers as dev apps, passively: only if a `docker` CLI already exists at an
+//! absolute candidate path (GUI `PATH` is minimal); run only from `procs_list`, never at startup
+//! or in tests. Docker down or hanging → `containers: []` plus a `reason`, never an error.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -34,11 +17,8 @@ pub const UNIX_CANDIDATES: &[&str] = &[
     "/Applications/Docker.app/Contents/Resources/bin/docker",
 ];
 
-// **Never one list for every OS** (the per-OS lookup list): on Windows `/usr/local/bin/docker`
-// has no drive, so it means `<current drive>:\usr\local\bin\docker` — a folder any standard
-// user can create, and a program we would then run as whoever opened the IDE. The unix list
-// is used only off Windows ([`candidates`]`(false, …)`), and only its `/`-rooted entries; the
-// Windows list accepts only drive-letter or UNC paths ([`windows_absolute`]).
+// Never one list for every OS: on Windows `/usr/local/bin/docker` is drive-relative, a folder
+// any user can create. Unix list only off Windows; Windows accepts only drive or UNC paths.
 
 /// `docker ps` gets this long before we say it did not answer.
 pub const PS_TIMEOUT: Duration = Duration::from_secs(3);
@@ -86,9 +66,9 @@ fn windows_absolute(p: &str) -> bool {
             && matches!(b[2], b'\\' | b'/'))
 }
 
-/// Where a `docker` CLI may be, in order (module doc). `windows` picks the OS's list (a
-/// parameter so every OS tests both); `home` expands `~` (unix); `var` reads an environment
-/// variable. Windows paths are built as strings, so the answer is spelled the same on every OS.
+/// Where a `docker` CLI may be, in order (Windows: absolute `PATH` entries, then
+/// [`WINDOWS_DOCKER_DIRS`], then Docker Desktop's default). `windows` picks the list (both tested
+/// everywhere); `home` expands `~`; `var` reads an env var. Paths are built as strings.
 pub fn candidates(
     windows: bool,
     home: Option<&Path>,
@@ -373,10 +353,8 @@ mod tests {
             .all(|c| c.starts_with('/') || c.starts_with("~/")));
     }
 
-    /// The planted-binary hole the per-OS lookup list closes: `/usr/local/bin/docker` on
-    /// Windows is `<current drive>:\usr\local\bin\docker`, which any standard user can create.
-    /// On Windows no candidate is drive-less — not the unix list, not a rooted `\usr\…` PATH
-    /// entry, not a relative install variable.
+    /// On Windows no candidate is drive-less (not the unix list, a rooted `\usr\…` PATH entry or a
+    /// relative install variable): such folders can be created by any standard user.
     #[test]
     fn every_windows_candidate_has_a_drive_or_is_unc() {
         let env = |k: &str| -> Option<String> {

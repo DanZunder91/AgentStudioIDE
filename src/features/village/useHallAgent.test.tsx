@@ -1,13 +1,5 @@
-/**
- * useHallAgent — whose context window the Village's Seats hall seats (the rail's selection), and
- * when it is read: on selection and when the Village comes back on screen, and again when that
- * agent's turn ends (the idle EDGE) — never while the hall is off screen, never for a sub-agent or
- * for nothing, never on a timer.
- *
- * Only the IPC call is mocked (`contextUsage`, a `vi.fn()`): the app store's selection, the context
- * store (its single-flight and its idle-edge detector `noteAgentStatus`) are the real code, so "a
- * read" below is one `claude … /context` process the real app would spawn.
- */
+/** Only `contextUsage` is mocked; the selection and the context store (single-flight,
+ * `noteAgentStatus`) are real, so "a read" here is one `claude … /context` process. */
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,7 +1,5 @@
-//! `netcap/prefs.json` in the app config dir — the live toggles, the proxy port the last
-//! launch bound and the per-app decrypt opt-ins. Every field is
-//! `#[serde(default)]`: a file written by an older build, or hand-edited to `{}`,
-//! loads with the defaults instead of dropping the whole struct.
+//! `netcap/prefs.json` in the app config dir: live toggles, last bound port, per-app decrypt
+//! opt-ins. Every field is `#[serde(default)]` so older or hand-edited files load with defaults.
 
 use std::path::Path;
 
@@ -22,10 +20,8 @@ pub struct Prefs {
     /// Terminate TLS with our CA. Default off: `CONNECT` is a transparent tunnel.
     #[serde(default)]
     pub decrypt: bool,
-    /// The port the proxy bound last time — reused so an app configured by hand
-    /// (Postman → proxy `127.0.0.1:<port>`) keeps working across restarts. `None` = never
-    /// started with this file (first launch prefers [`super::PREFERRED_PORT`]).
-    /// PERMANENT `#[serde(default)]`: an older file has no `port`.
+    /// Last bound port, reused so hand-configured apps (Postman → `127.0.0.1:<port>`) keep working.
+    /// `None` = never started. PERMANENT `#[serde(default)]`: older files lack it.
     #[serde(default)]
     pub port: Option<u16>,
     /// Apps the user says trust the IDE's CA: an `.app` bundle name (`Postman`) or an
@@ -33,11 +29,9 @@ pub struct Prefs {
     /// PERMANENT `#[serde(default)]` (an older file has no such key).
     #[serde(default)]
     pub decrypt_apps: Vec<String>,
-    /// Strict agent capture: the `curl` shim on every IDE terminal's `PATH`
-    /// drops `--noproxy` / `-x ''` / `NO_PROXY=*` so an agent cannot bypass Network
-    /// ([`super::shim`]). Default ON; NEW terminals get `AGENTSTUDIO_PROXY_STRICT=0|1`.
-    /// PERMANENT `#[serde(default = "yes")]`: an older file has no such key and
-    /// must load as ON, not `bool::default`.
+    /// Strict agent capture: the `curl` shim drops `--noproxy`/`-x ''`/`NO_PROXY=*`
+    /// ([`super::shim`]); new terminals get `AGENTSTUDIO_PROXY_STRICT`. PERMANENT default ON:
+    /// older files lack the key.
     #[serde(default = "yes")]
     pub strict_agent_capture: bool,
 }

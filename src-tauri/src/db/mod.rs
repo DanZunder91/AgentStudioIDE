@@ -1,49 +1,6 @@
-//! The built-in database client — module root and the `#[tauri::command]` surface.
-//!
-//! Wire contract: `src/features/db/types.ts`, which is the
-//! **authority**; every type here mirrors it with `#[serde(rename_all = "camelCase")]`.
-//!
-//! ## What this file is, and what it is deliberately not
-//!
-//! Thin glue. Every command below resolves a path or an id, calls into a pure
-//! module, and maps a [`error::DbError`] onto the shared wire error string. There is no business
-//! logic here, for the ordinary reason: a `#[tauri::command]` is the one function in the module
-//! a unit test cannot call without an `AppHandle`, so anything interesting must live where a
-//! test can reach it.
-//!
-//! ```text
-//! engines.rs  descriptor registry + validation          ── PURE
-//! url.rs      build / parse / credential splitting      ── PURE
-//! secret.rs   {{VAR}} resolution, minting, redaction     ── PURE
-//! guard.rs    statement splitting + row-returning test  ── PURE
-//! result.rs   result-set wire types + cell kinds        ── PURE
-//! model.rs    the wire mirror of types.ts               ── PURE
-//! error.rs    codes, prose, driver mapping, redaction   ── PURE
-//! store.rs    db-connections.json (atomic, 0600)        ── PURE(+fs, injected path)
-//! engine.rs   the DbEngine/DbSession seam + PostgreSQL  ── I/O
-//! session.rs  the live-session registry                 ── state
-//! ```
-//!
-//! ## The three properties the command layer is responsible for
-//!
-//! 1. **No secret is ever persisted.** `db_connection_upsert` is the only writer, and it splits
-//!    credentials out of a raw URL **server-side** before anything reaches
-//!    [`store::save`]. The frontend cannot save a URL with an inline password even by mistake,
-//!    because the split does not depend on the frontend having tried.
-//! 2. **No resolved secret crosses the IPC boundary.** `db_open` takes a *connection id* and
-//!    returns a *session id*; the password is read from the Vault inside Rust and stays here
-//!    The two stated exceptions are the `password` argument to `db_connection_upsert`
-//!    and `db_test_connection`, which exist because the user just typed it into a draft that is
-//!    not saved anywhere yet.
-//! 3. **No driver string reaches the UI unredacted.** `sqlx` and libpq echo connection strings —
-//!    and therefore passwords — into their error text. Every fallible path here maps
-//!    through `error.rs` and redacts with the secrets that were in play.
-//!
-//! ## Scope
-//!
-//! The descriptor registry, the store, URL build/parse, Test Connection, open/query, the
-//! connection tree (`db_children`), saved queries, the hand-arranged table order and
-//! `db_cancel`. [`engine::engine_for`] maps every engine id to its implementation.
+//! Database client root and its thin `#[tauri::command]` glue (contract: `features/db/types.ts`).
+//! No secret is persisted (upsert splits URL credentials server-side), no resolved secret crosses
+//! IPC (only the typed `password` of upsert/test goes in), and every driver error is redacted.
 
 pub mod clickhouse;
 pub mod dynamodb;
@@ -76,14 +33,8 @@ use crate::db::result::DbResultSet;
 
 /* ────────────────────────── the two files this feature touches ────────────────────────── */
 
-/// The two paths every stateful command needs: the connection store and the Vault.
-///
-/// Bundled and **injected** rather than resolved inside each function, so that no
-/// test-exercised code path can write to a real config location. Only [`Paths::of`] knows the
-/// real locations, it needs an `AppHandle`, and it is therefore unreachable from `cargo test`.
-/// Everything below it takes whatever paths it is given — which is also what lets
-/// `tests/db_live.rs` drive the **whole** command path against a temp directory and a real
-/// server, instead of only the halves either side of the glue.
+/// The connection store and Vault paths, injected so no tested path touches a real config location;
+/// only [`Paths::of`] (needs an `AppHandle`) knows the real ones.
 #[derive(Debug, Clone)]
 pub struct Paths {
     /// `db-connections.json`.
@@ -130,12 +81,8 @@ impl Paths {
 
 /* ─────────────────────────────── the registry ─────────────────────────────── */
 
-/// Every engine descriptor, in the order the dialog's driver picker shows them.
-///
-/// Served over IPC rather than duplicated in TypeScript **on purpose**: the frontend needs the
-/// whole form spec (labels, kinds, defaults, requiredness, hints), and any duplicate of that
-/// would drift from the validator that has to agree with it. `src/features/db/engines.ts` keeps
-/// only what Rust has no business knowing — the icon and the editor language.
+/// Every engine descriptor, in the driver-picker order. Served over IPC so the form spec cannot
+/// drift from the validator; `src/features/db/engines.ts` keeps only the icon and editor language.
 #[tauri::command]
 pub fn db_engines() -> Vec<EngineSpec> {
     engines::ENGINES.to_vec()
@@ -149,15 +96,9 @@ pub fn db_connections_load(app: tauri::AppHandle) -> DbConnectionStore {
     store::load(&Paths::of(&app).store)
 }
 
-/// Validate, split credentials, mint/write the Vault variable, and persist — atomically.
-///
-/// `password` is the plaintext the user typed into the dialog (one of the two IPC exceptions).
-/// It is written to the **Vault** and nowhere else, and only when `savePassword` is `forever`;
-/// `session` and `never` deliberately persist nothing, so the record on disk is identical whether
-/// or not a password was typed.
-/// `async` because of the session invalidation below. (A sync `#[tauri::command]`
-/// also runs inline on the event-loop thread, so this is the right execution context for a
-/// command that writes two files.)
+/// Validate, split credentials, write the Vault variable and persist. The typed `password` goes to
+/// the Vault only for `savePassword: forever`; `session`/`never` persist nothing. `async` for the
+/// session invalidation below.
 #[tauri::command]
 pub async fn db_connection_upsert(
     app: tauri::AppHandle,
@@ -165,33 +106,15 @@ pub async fn db_connection_upsert(
     password: Option<String>,
 ) -> Result<DbConnection, String> {
     let record = upsert(&Paths::of(&app), input, password.as_deref()).map_err(|e| e.to_wire())?;
-    // 🔴 **An edit must not leave the OLD connection live** (otherwise, after the database URL
-    // is edited, a reopened query console keeps using the old URL).
-    //
-    // `open()` re-reads the store on every call, so a FRESH dial always uses the edited record —
-    // the staleness was entirely in the session that already existed. `db_connection_delete` has
-    // cascaded over live sessions since it was written; upsert never did, so the socket opened
-    // from the previous host/port/database stayed in the registry and the console kept using it.
-    //
-    // Unconditional, not gated on "did anything actually change": a new connection has no
-    // sessions, so the loop is simply empty for it (no branch that only ever takes
-    // one path). Deliberately AFTER the save, so a rejected edit never costs a working session.
-    //
-    // ⚠️ This also covers `Limits`: `session::insert` copies `row_limit` / `timeout_ms` /
-    // `allow_multi_statement` into the live session at open time, so without this, turning
-    // read-only ON would leave a session that is still writable — the worst outcome this
-    // subsystem has.
+    // Drop the old connection's live sessions so an edit (URL, read-only, limits copied at open)
+    // takes effect; a new connection has none. After the save, so a rejected edit keeps a working
+    // session.
     invalidate_sessions(&record.id).await;
     Ok(record)
 }
 
-/// Every level of the tree this connection has a hand-arranged order for (tables must be
-/// movable, so that the user can put them in whatever order they like).
-///
-/// Takes a connection id and **no session**, like `db_saved_queries` and for the same reason: the
-/// arrangement is the user's, not the server's, so it is readable while the database is
-/// unreachable. Never fails — a missing or corrupt file reads as "no custom order", which renders
-/// as the engines' own alphabetical order.
+/// Every tree level this connection has a hand-arranged order for. Needs no session (the order is
+/// the user's); a missing or corrupt file reads as no custom order.
 #[tauri::command]
 pub async fn db_tree_order(
     app: tauri::AppHandle,
@@ -227,16 +150,8 @@ pub async fn db_tree_order_set(
     })
 }
 
-/// The path-injected core of [`db_tree_order_set`].
-///
-/// Read-modify-write: Rust re-reads the file at the moment of the change, so a
-/// drag in one level can never clobber a drag in another. The webview holds no wholesale blob
-/// of this file, which is what keeps it single-writer-safe.
-///
-/// **Under the file's lock from the read to the write.** The UI fires this
-/// without waiting, and each call is its own task on tokio's multi-threaded pool, so two quick
-/// drags in two levels really do run at once. With only the save locked, both loaded the same
-/// file and the second save wrote the first drag away.
+/// The path-injected core of [`db_tree_order_set`]: read-modify-write under the file's lock, since
+/// concurrent drags in two levels run at once and would otherwise overwrite each other.
 pub fn set_tree_order(
     path: &std::path::Path,
     connection_id: &str,
@@ -249,11 +164,8 @@ pub fn set_tree_order(
     tree_order::save(path, &store)
 }
 
-/// Drop every live session opened from `connection_id`: out of the registry first — so a stale
-/// session id cannot be used the instant this returns — and then the socket, gracefully.
-///
-/// Shared by delete (the record is going away) and upsert (the record still exists but no longer
-/// describes what the socket is connected to).
+/// Drop every live session of `connection_id`: out of the registry first (so a stale id is unusable
+/// at once), then close the socket. Shared by delete and upsert.
 pub async fn invalidate_sessions(connection_id: &str) {
     for live in session::take_for_connection(connection_id) {
         session::close(&live).await;
@@ -272,18 +184,13 @@ pub fn upsert(
 
     let mut password_ref = input.password_ref.trim().to_string();
     let mut url = input.url.clone().filter(|u| !u.trim().is_empty());
-    // A password can arrive from three places: the password field, the userinfo of a pasted URL,
-    // or a credential parameter in that URL's query string (`?password=…`, which libpq, sqlx and
-    // ClickHouse all honour). Both of the URL's positions lose to the field, because the field is
-    // what the user last touched; a URL carrying a password in two positions at once is refused
-    // by `parse_parts` rather than resolved by a coin toss.
+    // Password sources: the field, the URL's userinfo, or a `?password=` parameter. The field wins
+    // (last touched); a URL with a password in two positions is refused by `parse_parts`.
     let mut secret_value = typed_password
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty());
-    // Kept so the Vault write below can re-render **from the parts** rather than by re-parsing
-    // the stripped string. Re-parsing would work for a userinfo credential and silently move a
-    // query-borne one: the stripped string no longer has the `?password=` parameter to put the
-    // `{{VAR}}` back into, so the reference would land in the userinfo instead.
+    // Kept so the Vault write re-renders from the parts: re-parsing the stripped string would move
+    // a query-borne credential's `{{VAR}}` into the userinfo.
     let mut url_parts: Option<url::UrlParts> = None;
 
     if let Some(raw) = &url {
@@ -299,11 +206,8 @@ pub fn upsert(
         // The credential-free rendering is what gets persisted, whatever the client sent.
         url = Some(split.url);
         let mut parts = split.parts;
-        // A stripped paste has no parameter left to read the placement off, so the client's
-        // hint is the only surviving evidence of where the user put the credential. The
-        // STRING wins when it still says: `parts.password_param` is read off the URL in
-        // hand, and a field alongside it is a claim about a URL that may have been edited
-        // since. Only fills a gap, never overrides.
+        // A stripped paste has no parameter left, so the client's hint fills the gap; a parameter
+        // still in the URL wins over it.
         if parts.password_param.is_none() {
             if let Some(name) = input
                 .password_param
@@ -346,10 +250,8 @@ pub fn upsert(
                     },
                 )?;
                 password_ref = secret::wrap_ref(&name);
-                // A URL that carried the credential gets the reference put back **in its place** —
-                // the userinfo, or the very query parameter the value came out of, under the name
-                // it came out of. That is what keeps the string describing the connection it came
-                // from instead of a nearby one.
+                // Put the reference back where the credential came from (userinfo, or the same
+                // named parameter).
                 if let Some(parts) = &url_parts {
                     url = Some(url::render_with_ref(parts, &name)?);
                 }
@@ -358,10 +260,8 @@ pub fn upsert(
         SavePassword::Session | SavePassword::Never => password_ref = String::new(),
     }
 
-    // The connection list's lock, from this read to the save below. Without it an
-    // import, a delete or a second save could land between the two, and this save would put the
-    // list back the way it was when it was read: imported connections gone, a deleted one back.
-    // The Vault's lock above is already released, so the two are never held at once.
+    // The connection list's lock from this read to the save, so an import/delete/save cannot be
+    // overwritten. The Vault's lock is already released, so the two are never held at once.
     let _guard = crate::store_file::lock(&paths.store);
     let mut current = store::load(&paths.store);
     let now = now_ms();
@@ -427,14 +327,9 @@ pub async fn db_connection_delete(
     delete_connection(&Paths::of(&app), &id).map_err(|e| e.to_wire())
 }
 
-/// The path-injected core of [`db_connection_delete`], after its sessions are closed.
-///
-/// **Locked.** The connection list's lock is held from its read to the end of the
-/// cascade, and each cascaded file's lock from its read to its write. Before, only the saves
-/// took a lock: a concurrent save loaded the list before this delete wrote it and put the
-/// deleted connection back, and a query saved meanwhile could land after the cascade, as an
-/// orphan. The order (connections, then queries or table order) is the import's and
-/// [`upsert_saved_query`]'s, so no two of them can deadlock.
+/// The path-injected core of [`db_connection_delete`], after its sessions are closed. Holds each
+/// file's lock from read to write, in the import's and [`upsert_saved_query`]'s order (connections
+/// first) so none can deadlock or resurrect a record.
 pub fn delete_connection(paths: &Paths, id: &str) -> Result<DeleteReport, DbError> {
     let _connections = crate::store_file::lock(&paths.store);
     let mut current = store::load(&paths.store);
@@ -455,18 +350,13 @@ pub fn delete_connection(paths: &Paths, id: &str) -> Result<DeleteReport, DbErro
         let mut saved = queries::load(&paths.queries);
         let n = queries::remove_for_connection(&mut saved, id);
         if n > 0 {
-            // Best-effort by design: the connection is already gone, and failing the whole delete
-            // because the query file could not be rewritten would leave the UI unable to make
-            // progress. The orphans are invisible (nothing lists a deleted connection's queries)
-            // and the next successful save drops them.
+            // Best-effort: the connection is already gone; orphans are invisible and the next save
+            // drops them.
             let _ = queries::save(&paths.queries, &saved);
         }
         n
     };
-    // Third cascade, for the hand-arranged table order: a cascade on one path is a checklist
-    // for every other path that stores per-connection data. Best-effort for the same reason as the
-    // queries above it — the connection is already gone, and the orphans are invisible because
-    // nothing reads a deleted connection's order.
+    // Third cascade, for the table order; best-effort like the queries above.
     {
         let _order = crate::store_file::lock(&paths.tree_order);
         let mut orders = tree_order::load(&paths.tree_order);
@@ -483,17 +373,9 @@ pub fn delete_connection(paths: &Paths, id: &str) -> Result<DeleteReport, DbErro
 
 /* ───────────────────────── the tree and saved queries ───────────────────────── */
 
-/// One level of the connection tree.
-///
-/// The two saved-query refs are answered **here**, from the store, and never reach an engine.
-///
-/// ⚠️ **This arm still needs an OPEN SESSION.** The connection id is taken from the session
-/// precisely so a webview cannot read another connection's queries by passing an id, and that is
-/// worth more than making one tree arm sessionless.
-///
-/// The saved-query list being there after the app is closed and reopened is served by
-/// [`db_saved_queries`], which takes a connection id and needs no session. That is the command the
-/// panel actually calls.
+/// One level of the connection tree. Saved-query refs are answered here from the store, but still
+/// need an open session so a webview cannot read another connection's queries by id; the panel
+/// uses [`db_saved_queries`] for sessionless lists.
 #[tauri::command]
 pub async fn db_children(
     app: tauri::AppHandle,
@@ -527,11 +409,7 @@ pub async fn children(
     let sess = guard.as_mut().ok_or_else(|| {
         DbError::not_found(format!("Session `{session_id}` has already been closed."))
     })?;
-    // The tree browses over the SAME cached connection the console runs on, so it has exactly the
-    // same defect and gets exactly the same guard: expanding a node after a laptop wakes up must not
-    // report a dead socket as a broken database. A catalog read is idempotent, so the retry warning
-    // on `query` is less sharp here — but the rule is kept identical rather than special-cased,
-    // because two call sites with two rules is how one of them ends up wrong.
+    // Same cached connection as the console, so the same liveness guard and the same no-retry rule.
     sess.ensure_live(&live.limits).await?;
     sess.children(node).await
 }
@@ -596,15 +474,8 @@ pub fn upsert_saved_query(
     paths: &Paths,
     input: queries::SavedQueryInput,
 ) -> Result<queries::SavedQuery, DbError> {
-    // 🔴 **The connection must exist.** Without this check a query could be
-    // saved against any id at all — an orphan that no tree node can ever show, in a file whose
-    // delete cascade is keyed on connection id, so it would never be cleaned up either. Storage
-    // that silently accepts unreachable records is how a file grows garbage nobody can explain.
-    //
-    // Both locks, connections first (the order of `delete_connection` and the import), from the
-    // check to the write: a delete can no longer land between "it exists" and the
-    // save and leave this query behind as an orphan, and a second save can no longer write a
-    // query list loaded before this one landed.
+    // The connection must exist (else an orphan no cascade removes). Both locks, connections first
+    // (the order of `delete_connection` and import), held from the check to the write.
     let _connections = crate::store_file::lock(&paths.store);
     let _queries = crate::store_file::lock(&paths.queries);
     let connections = store::load(&paths.store);
@@ -677,12 +548,8 @@ pub fn db_url_parse(text: String) -> Result<ParsedUrl, String> {
 
 /* ─────────────────────────────── connecting ─────────────────────────────── */
 
-/// Test an **unsaved draft**. Resolves on failure — an unreachable server is a result, not an
-/// exception (the `http_send` contract).
-///
-/// `password` is the typed plaintext (one of the two IPC exceptions). When it is absent and the
-/// draft carries a `{{VAR}}`, the reference is resolved against the Vault, so testing a saved
-/// connection behaves the same as opening it.
+/// Test an unsaved draft; resolves on failure. `password` is the typed plaintext; without it a
+/// `{{VAR}}` is resolved from the Vault, as `db_open` does.
 #[tauri::command]
 pub async fn db_test_connection(
     app: tauri::AppHandle,
@@ -726,11 +593,8 @@ pub async fn test_connection(
     })
 }
 
-/// Open a session on a **saved** connection, by id.
-///
-/// The webview names a connection and gets back a session id; the password is read from the
-/// Vault inside Rust and never crosses IPC. `password` is only for `savePassword:
-/// "never"`/`"session"`, where by construction there is nothing in the Vault to read.
+/// Open a session on a saved connection by id; the password is read from the Vault in Rust.
+/// `password` is only for `savePassword` `never`/`session`, which store nothing.
 #[tauri::command]
 pub async fn db_open(
     app: tauri::AppHandle,
@@ -766,18 +630,7 @@ pub async fn open(
         allow_multi_statement: conn.allow_multi_statement,
     };
     let mut sess = engine.open(&resolved).await?;
-    // 🔴 **The version comes from THIS connection, not from a second one.**
-    //
-    // The store used to call `db_test_connection` and then `db_open` — **two complete dials**: two
-    // DNS lookups, two TLS handshakes, two authentications, the first thrown away. Against a local
-    // Postgres that is invisible; against a remote MongoDB Atlas cluster it roughly doubles the
-    // time to open. Halving that is the whole point of returning the server info from here.
-    //
-    // `probe()` on the session we just opened is a *query on an established connection*, not a dial
-    // — and for MongoDB, ClickHouse and DynamoDB it is a second cheap round trip whose first one
-    // their own `open` already made to prove reachability ("open really dials"). Restructuring the
-    // trait so `open` returned `ServerInfo` would remove even that, and it would touch all eight
-    // engines to save a round trip that is not the cost being fixed here.
+    // Probe this session for the server info instead of a second full dial (DNS, TLS, auth).
     let info = sess.probe().await?;
     let latency_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
     Ok(DbOpened {
@@ -789,13 +642,8 @@ pub async fn open(
     })
 }
 
-/// What a successful [`open`] knows: the session, and what answered.
-///
-/// Returned instead of a bare session id, so opening a connection costs **one**
-/// dial instead of two — see the note in `open`. Shaped like [`DbTestResult`]'s success half on
-/// purpose; the difference is that this one carries a live session, so it **rejects** on failure
-/// rather than resolving with an `error` string (a caller cannot be handed "no session, but here is
-/// why" and be expected to notice).
+/// What a successful [`open`] knows: the session and what answered, so opening costs one dial.
+/// Rejects on failure, unlike [`DbTestResult`].
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbOpened {
@@ -815,25 +663,8 @@ pub async fn db_close(session_id: String) {
     }
 }
 
-/// Ask the server to stop the statement this session is running.
-///
-/// 🔴 **The cancel handle lives outside the session's mutex.** `db_query` holds
-/// `LiveSession::session`'s mutex for the whole of `run`, so anything behind that lock is
-/// unreachable precisely while a query is running. The cancel handle is therefore lifted out of
-/// the session and stored beside the mutex (see [`session::LiveSession::cancel`]), which is what
-/// lets this command reach it.
-///
-/// **What `Ok` means, exactly:** the cancel request was *delivered*. Every engine's cancel is
-/// advisory — PostgreSQL's `pg_cancel_backend` sends SIGINT and the backend stops at its next
-/// interruptible point; ClickHouse's `KILL … SYNC` waits but can report `finished` for a query that
-/// had already completed. So the caller must not claim the query stopped, only that it was asked
-/// to. The console keeps saying "the server may still be running it" for that reason.
-///
-/// **`Err` for an engine that has none.** MongoDB, Redis and DynamoDB return `None` from
-/// `cancel_handle`, so this refuses *structurally*, without a round trip, and names the bound that
-/// does still apply. Reported as an error rather than a silent `Ok` because a Stop button that
-/// quietly did nothing would be the control-that-lies this codebase keeps refusing.
-///
+/// Ask the server to stop this session's statement, via the cancel handle kept outside the session
+/// mutex. `Ok` = delivered, not stopped (cancel is advisory). Engines without one get an `Err`.
 /// Frontend contract: `invoke('db_cancel', { sessionId })`.
 #[tauri::command]
 pub async fn db_cancel(session_id: String) -> Result<(), String> {
@@ -849,11 +680,8 @@ pub async fn db_cancel(session_id: String) -> Result<(), String> {
     cancel.cancel().await.map_err(|e| e.to_wire())
 }
 
-/// Run SQL on an open session.
-///
-/// A **database** error resolves as a `message` result next to whatever succeeded — a syntax
-/// error is a normal outcome of a console, not an exception (the `http_send` contract).
-/// Only a stale session id, a blocked script or a transport failure rejects.
+/// Run SQL on an open session. A database error resolves as a `message` result; only a stale
+/// session, a blocked script or a transport failure rejects.
 #[tauri::command]
 pub async fn db_query(
     session_id: String,
@@ -876,10 +704,8 @@ pub async fn query(
     run_on_session(session_id, sql, mode, row_limit, false).await
 }
 
-/// [`query`], with read-only as a boundary rather than a default: on a read-only PostgreSQL or
-/// MySQL session the run is held in a `READ ONLY` transaction that is always rolled back, because
-/// the session's read-only setting alone does not stand against a hostile statement. The agent
-/// tools' path. See [`engine::DbSession::run_strict`]; every other session runs as [`query`] does.
+/// [`query`] for the agent tools: read-only PostgreSQL/MySQL runs are held in rolled-back
+/// `READ ONLY` transactions. See [`engine::DbSession::run_strict`].
 pub async fn query_strict(
     session_id: &str,
     sql: String,
@@ -910,12 +736,8 @@ async fn run_on_session(
     let sess = guard.as_mut().ok_or_else(|| {
         DbError::not_found(format!("Session `{session_id}` has already been closed."))
     })?;
-    // 🔴 **Ping, then run — and this must NEVER become a retry.** `ensure_live` proves the socket is
-    // alive (re-dialling if it is not) *before* the statement goes out, which is what makes it safe:
-    // nothing is ever re-sent. If the connection dies in the sliver between this line and the next,
-    // that error is surfaced as-is. Do not "improve" this into a retry-on-failure loop — an `INSERT`
-    // that died mid-flight may already have committed on the server, and re-sending it would apply
-    // the user's write twice. See `DbSession::ensure_live`.
+    // Ping, then run; never a retry: an `INSERT` that died mid-flight may have committed, and a
+    // re-send would apply it twice. See `DbSession::ensure_live`.
     sess.ensure_live(&limits).await?;
     let script = Script { text: sql, mode };
     if strict {
@@ -989,12 +811,8 @@ fn resolve_from_input(
     })
 }
 
-/// The password to dial with.
-///
-/// A typed value always wins — it is the one the user just entered. Otherwise a `{{VAR}}` is
-/// resolved against the Vault, which is the only place a secret lives. `session`/`never`
-/// connections have nothing stored by construction, so an absent typed value there is an empty
-/// password rather than a Vault lookup that would always miss.
+/// The password to dial with: a typed value wins; else a `{{VAR}}` is resolved from the Vault.
+/// `session`/`never` connections store nothing, so they get an empty password, not a lookup.
 fn resolve_password(
     vault_path: &std::path::Path,
     password_ref: &str,
@@ -1011,19 +829,9 @@ fn resolve_password(
     secret::resolve(password_ref, &vault)
 }
 
-/// Put the resolved secret back into a stored URL's `{{VAR}}` slot, **percent-encoded**.
-///
-/// Encoded, not raw: the reference was written verbatim (`{`/`}` are not RFC 3986 characters and
-/// escaping them would be unreadable), but the *value* replacing it sits in a position where an
-/// `@` or a `:` would silently change which host and port the string names. That is the classic
-/// "works until someone's password has a slash in it" bug.
-///
-/// One replacement covers both positions the reference can occupy. `encode_userinfo` is not a
-/// mistake in the query-parameter case: its set is *stricter* than the query set — it also
-/// encodes `&`, `=` and `,` — so the spliced value cannot terminate its own parameter, and every
-/// reader that percent-decodes a query value (libpq, sqlx, and [`url::parse_parts`]) gets the
-/// bytes back exactly. `&` and `=` inside a value are precisely where naive splicing breaks, and
-/// `+` is encoded too because a form-urlencoded reader would otherwise read it as a space.
+/// Put the resolved secret into a stored URL's `{{VAR}}` slot, percent-encoded so `@`, `:` etc.
+/// cannot change the host. `encode_userinfo` is also right in a query value: it is stricter and
+/// encodes `&`, `=`, `,` and `+`.
 fn substitute_url(url: Option<&str>, password_ref: &str, password: &str) -> Option<String> {
     let raw = url?;
     if password_ref.is_empty() || password.is_empty() || !raw.contains(password_ref) {
@@ -1045,17 +853,6 @@ mod tests {
 
     /* ─────────────── saved queries as tree nodes (they survive a restart) ─────────────── */
 
-    /// 🔴 Saved queries surviving a restart, through the TREE, which is the surface the user
-    /// sees: double-clicking the database must show its list of saved queries.
-    ///
-    /// `queries.rs` proves the file survives a reload; this proves the reloaded file becomes the
-    /// nodes the panel draws — the seam between the two, which is where a working backend can
-    /// still sit behind a blank screen.
-    /// 🔴 **A saved query cannot be written against a connection that does not exist.**
-    ///
-    /// An orphan is a record no tree node can ever show, in a file whose delete cascade is
-    /// keyed on connection id — so it would never be cleaned up either. Storage that silently
-    /// accepts unreachable records is how a file grows garbage nobody can explain.
     #[test]
     fn a_saved_query_needs_a_connection_that_exists() {
         let f = Fixture::new("orphan-query");
@@ -1086,6 +883,8 @@ mod tests {
         assert_eq!(saved.name, "Daily");
     }
 
+    /// `queries.rs` proves the file survives a reload; this proves the reloaded file becomes the
+    /// tree nodes the panel draws.
     #[test]
     fn saved_queries_become_tree_nodes_newest_first_with_a_readable_preview() {
         let dir =
@@ -1189,10 +988,7 @@ mod tests {
     }
     use super::*;
 
-    /// A password chosen to break a careless implementation: characters that percent-encode, that
-    /// are meaningful in a URL's userinfo (`@`, `:`, `/`), and non-ASCII. The whole point of the
-    /// credential split is that none of it ever reaches a file, so the test password has to be
-    /// able to prove that.
+    /// Percent-encodes, is meaningful in userinfo (`@`, `:`, `/`), and is non-ASCII.
     const HOSTILE: &str = "p@ss:w/o?rd#\\ünïcode ✓";
 
     /// The query-string counterpart of [`HOSTILE`]. `&` and `=` inside a query-parameter value are
@@ -1243,13 +1039,8 @@ mod tests {
         }
     }
 
-    /// Assert `secret` is absent from `text` in **all three spellings it could take**.
-    ///
-    /// A single `contains` is not enough, and this is the trap that makes such a check pass for
-    /// the wrong reason: the hostile password contains a backslash, and JSON encodes
-    /// that as `\\`, so the raw bytes are simply not in the file even when the secret **is**. A
-    /// leak check that only looks for the raw form is the classic false pass — the same reason
-    /// `secret::redact` scrubs the percent-encoded form too.
+    /// Assert `secret` is absent from `text` raw, JSON-escaped and percent-encoded: the backslash
+    /// in HOSTILE is `\\` in JSON, so a raw-only check would pass on a leak.
     fn assert_no_spelling_of(secret: &str, text: &str, what: &str) {
         let json_escaped = serde_json::to_string(secret).expect("a string serialises");
         for (spelling, form) in [
@@ -1270,11 +1061,8 @@ mod tests {
         }
     }
 
-    /// A draft with `overrides` merged over the base, so each test states only what it varies.
-    ///
-    /// Merged as a `serde_json::Value` rather than concatenated as text: string concatenation
-    /// produced *duplicate keys*, which serde rejects outright — so a test that meant to override
-    /// `name` did not run at all.
+    /// A draft with `overrides` merged over the base as JSON values (text concatenation produced
+    /// duplicate keys, which serde rejects).
     fn draft(overrides: serde_json::Value) -> DbConnectionInput {
         let mut base = serde_json::json!({
             "name": "Prod Postgres",
@@ -1314,10 +1102,7 @@ mod tests {
         assert!(!saved.id.is_empty() && saved.created_at > 0 && saved.updated_at > 0);
     }
 
-    /// The likeliest place this feature could leak a production credential: a pasted URL with
-    /// an inline password. The split is **server-side**, so it happens whether or not the frontend
-    /// tried — and the reference is put back into the URL, so the string still describes its
-    /// connection instead of quietly losing its credentials.
+    /// The split is server-side, so it happens whether or not the frontend tried.
     #[test]
     fn a_url_password_is_split_out_server_side_and_replaced_by_the_reference() {
         let f = Fixture::new("url");
@@ -1358,18 +1143,8 @@ mod tests {
         assert!(!saved.url.unwrap().contains("from-the-url"));
     }
 
-    /// **A credential in the query string is saved, not refused** (`?password=` stays part of
-    /// the string, because every database system accepts a credential there).
-    ///
-    /// It is treated exactly like one in the userinfo: the value goes to the Vault, and the
-    /// persisted string keeps `?<name>={{VAR}}` in the **same parameter**. Against the Docker
-    /// fixture,
-    /// `psql "postgresql://agentstudio@postgres:5432/maestro?password=agentstudio-test-pw"` connects and
-    /// the wrong value fails authentication — so this parameter is load-bearing, not decoration.
-    /// The earlier refusal's premise ("a place we cannot put a `{{VAR}}` back into without
-    /// changing what the string means") was simply wrong: `?password={{PG_PASSWORD}}` is a
-    /// well-formed query string, and this module already writes a reference verbatim into a URL's
-    /// userinfo for exactly the same reason.
+    /// Treated like a userinfo credential: the value goes to the Vault and `?<name>={{VAR}}` stays
+    /// in the same parameter (drivers do authenticate from it).
     #[test]
     fn a_query_string_credential_goes_to_the_vault_and_leaves_a_reference_in_its_parameter() {
         let f = Fixture::new("qs");
@@ -1408,16 +1183,8 @@ mod tests {
         assert_eq!(reparsed.password_param.as_deref(), Some("password"));
     }
 
-    /// **The whole save-then-dial cycle, for both positions, over the passwords that break naive
-    /// implementations.** One test because the two halves are only worth anything together: a save
-    /// that hides the secret but dials with the wrong bytes is a feature that does not work, and a
-    /// dial that works while the file holds the password is the leak this feature exists to
-    /// prevent. Asserted for each password:
-    ///
-    /// * the store holds it in **no spelling** (raw, JSON-escaped, percent-encoded),
-    /// * the Vault holds it **byte-for-byte**,
-    /// * the string we dial with decodes back to exactly it, in the position it came from,
-    /// * and no extra parameter appeared — which is what `&`/`=` in a value would have caused.
+    /// For each password: no spelling of it in the store, byte-exact in the Vault, the dialled
+    /// string decodes to it in its original position, and no extra parameter appeared.
     #[test]
     fn a_hostile_password_survives_the_save_and_dial_cycle_in_either_position() {
         for secret in [HOSTILE, HOSTILE_QUERY, HOSTILE_UNICODE] {
@@ -1472,11 +1239,8 @@ mod tests {
         }
     }
 
-    /// **Saving the same connection a second time.** The record we wrote last time comes straight
-    /// back in as `input.url`, `?password={{VAR}}` and all, so the reference has to be recognised
-    /// where it now lives: reuse the same Vault row, keep the same parameter, and do not mint a
-    /// `_2`. Before this change this shape could not be re-saved at all — the reference sat in a
-    /// denylisted parameter and the old code refused every string that had one, `{{VAR}}` or not.
+    /// The saved record comes back as `input.url` with `?password={{VAR}}`: reuse the same Vault
+    /// row and parameter, minting no `_2`.
     #[test]
     fn re_saving_a_url_that_already_holds_a_reference_in_its_parameter_reuses_the_vault_row() {
         let f = Fixture::new("qs-again");
@@ -1520,16 +1284,8 @@ mod tests {
         assert_eq!(store::load(&f.paths.store).connections.len(), 1);
     }
 
-    /// **The fresh-paste path — the `?password=` rule, end to end.**
-    ///
-    /// `?password=` stays part of the string, because every
-    /// database system accepts it there. The URL-carried case was already covered above, but
-    /// the case a user actually performs was not: paste a string with `?password=hunter2`, and
-    /// the dialog's `db_url_parse` strips the credential out **and discards the value** before
-    /// Save. So the string arriving at upsert no longer has the parameter to read the placement
-    /// off, and the `{{VAR}}` used to land in the userinfo — a saved connection that described
-    /// itself differently from how the user wrote it. `DbConnectionInput::password_param` is the
-    /// surviving evidence, and this is the test that it is honoured.
+    /// `db_url_parse` strips and discards a pasted `?password=` before Save, so
+    /// `DbConnectionInput::password_param` is the only evidence of the placement.
     #[test]
     fn a_stripped_paste_still_saves_its_reference_into_the_parameter_the_user_pasted() {
         let f = Fixture::new("qs-fresh");
@@ -1573,10 +1329,8 @@ mod tests {
         assert_eq!(parts.password_param.as_deref(), Some("password"));
     }
 
-    /// A non-canonical spelling survives the same path: we do not rename `pwd` to `password`,
-    /// because renaming it changes what the string says (and `?pwd=` is what some MySQL tooling
-    /// emits). The **driver** caveat — only exact lowercase `password` authenticates for most
-    /// drivers — is surfaced in the dialog, not silently repaired here.
+    /// `pwd` is not renamed: that changes what the string says. The driver caveat (most accept only
+    /// `password`) is surfaced in the dialog.
     #[test]
     fn a_stripped_pastes_parameter_name_is_kept_verbatim_not_normalised() {
         let f = Fixture::new("qs-fresh-pwd");
@@ -1600,13 +1354,8 @@ mod tests {
         );
     }
 
-    /// The hint only ever FILLS A GAP. A URL that still carries its own `?pwd=` is better
-    /// evidence than a field beside it — the field could be describing a string the user has
-    /// since edited — so the string wins and the credential does not move parameters.
-    ///
-    /// ⚠️ Honest label: this is a **regression guard, not a proof**. It passes with the
-    /// gap-filling code removed too, because the string's own parameter is what the old code
-    /// read anyway. Its job is to go red if someone later makes the hint override the URL.
+    /// A regression guard, not a proof: it also passes without the gap-filling code. It goes red if
+    /// the hint ever overrides the URL.
     #[test]
     fn the_urls_own_parameter_wins_over_a_disagreeing_hint() {
         let f = Fixture::new("qs-conflict");
@@ -1727,10 +1476,8 @@ mod tests {
         }
     }
 
-    /// A string carrying a password in **two** places is refused, naming every one of them — the
-    /// decision recorded in `url.rs`'s module doc: this record has one password field and one
-    /// Vault reference, so keeping one of two and dropping the other silently is the outcome that
-    /// must not be possible. Nothing is written when it is refused.
+    /// One password field and one Vault reference per record, so neither credential may be dropped
+    /// silently (decision in `url.rs`'s module doc).
     #[test]
     fn a_url_with_two_credentials_is_refused_and_writes_nothing() {
         let f = Fixture::new("qs-two");
@@ -1754,10 +1501,8 @@ mod tests {
         );
     }
 
-    /// `build`'s refusal is **unchanged**: the string behind *Copy connection string* still cannot
-    /// contain a literal password, whatever position it would go in. Only `upsert`'s refusal went
-    /// away — that output goes to a file we control, this one goes to a clipboard, a ticket or a
-    /// screenshot.
+    /// The copied connection string goes to clipboards and tickets, so it still refuses a literal
+    /// password; only upsert's output (a file we control) accepts one.
     #[test]
     fn build_still_refuses_a_literal_password_after_the_upsert_refusal_was_lifted() {
         let err = db_url_build(draft(serde_json::json!({"passwordRef": HOSTILE})))
@@ -1828,10 +1573,6 @@ mod tests {
 
     /* ────────── the port / srv pair through the real save path ────────── */
 
-    /// 🔴 **A connection saved with no port keeps no port.** The dialog used to pre-fill the
-    /// descriptor's default, `DbConnectionInput::port` was a mandatory `u16`, and so every record
-    /// carried a port whether or not the user typed one — which is how a connection ended up
-    /// showing `mongodb://…:27017/` for a host pasted without one.
     #[test]
     fn a_draft_with_no_port_is_saved_with_no_port_and_the_file_says_null() {
         let f = Fixture::new("no-port");
@@ -2132,11 +1873,8 @@ mod tests {
 
     #[test]
     fn a_query_save_checks_its_connection_under_the_connection_lists_lock() {
-        // The check ("the connection exists") and the write used to be separate, unlocked steps:
-        // a delete between them left a query no tree node can show and no cascade will remove.
-        // A free-running race almost never hits that window (100 rounds stayed green with the
-        // locks removed), so the delete is staged: it holds the list's lock while the save
-        // starts, and only then removes the connection.
+        // A free race almost never hits the check-to-write window, so the delete is staged: it
+        // holds the list's lock while the save starts, then removes the connection.
         let f = Fixture::new("orphan-lock");
         let conn = save_named(&f, "Doomed".to_string());
         let input: queries::SavedQueryInput = serde_json::from_value(serde_json::json!({

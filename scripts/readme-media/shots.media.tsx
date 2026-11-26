@@ -1,10 +1,5 @@
-/**
- * README screenshots — the real <App/> in Playwright Chromium with a MOCKED Tauri backend.
- *
- * Not a test gate (see vitest.media.config.ts). Run via `node scripts/readme-media.mjs`.
- * Each `it` seeds one fictional scenario (fixtures.ts) and writes a raw PNG to
- * scripts/readme-media/.out/; the runner then optimizes them into docs/media/.
- */
+/** README screenshots: the real <App/> against a mocked Tauri backend; not a test gate. Each `it`
+ * writes a raw PNG to .out/; `node scripts/readme-media.mjs` optimizes them into docs/media/. */
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { page } from "vitest/browser";
@@ -336,11 +331,7 @@ it("metrics — token usage and turns", async () => {
   await shot("07-metrics");
 });
 
-/**
- * GIF frames for the Context window card: pick an agent → its /context bar
- * loads → Grid view → a busier agent (red chip) → Bar view → back.
- * Frames land in .out/ctxgif/; readme-media.mjs encodes docs/media/context-window.gif.
- */
+/** Context-window GIF frames land in .out/ctxgif/; readme-media.mjs encodes the GIF. */
 it("gif — context window", async () => {
   let n = 0;
   const frame = async (holds = 1) => {

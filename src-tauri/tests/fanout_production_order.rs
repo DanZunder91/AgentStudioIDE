@@ -1,18 +1,6 @@
-//! **Production-order** regression for the fan-out tailer (the headline bug).
-//!
-//! Production order is: spawn the agent → the tailer starts → the runtime's
-//! `<session>.jsonl` appears **seconds later**. The bug: `start_fanout_tailer`
-//! selected the adapter by `locate_transcript(...).is_some() || id ==
-//! ADHOC_RUNTIME_ID`, so for any runtime whose id wasn't the hardcoded Claude
-//! constant, **no tailer started at all** when the transcript didn't yet exist —
-//! and it never would, because the loop that waits for the transcript was never
-//! reached. Claude worked only by the accident that `ADHOC_RUNTIME_ID ==
-//! "claude-code"`. The fix selects by the runtime we actually spawned.
-//!
-//! The existing `fanout_tailer_live` test placed the transcript FIRST — the reverse
-//! of production — which is why the whole suite was green while the headline was broken.
-//! This test uses the `StubAdapter` (id `"stub-runtime"`, ≠ the Claude constant),
-//! so it **fails against the old selection and passes against the fix**.
+//! Production order: spawn → tailer starts → `<session>.jsonl` appears seconds later. The
+//! tailer must be selected by the spawned runtime, not by the transcript existing; the
+//! `StubAdapter` (id ≠ the Claude constant) fails against selection by existence.
 
 mod common;
 

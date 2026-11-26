@@ -1,26 +1,10 @@
-//! The default workspace directory + cwd hygiene.
-//!
-//! **The bug this fixes:** agents were opened with `cwd = "."`, which resolves to
-//! the app *binary's* working directory. In dev that is `…/AgentStudioIDE/src-tauri`
-//! (where `cargo run` launches the binary) — a folder with **zero persisted claude
-//! history**, so ↑ history-recall had nothing to recall, while the project folder
-//! (`…/AgentStudioIDE`) has plenty. claude history is per-project and persisted; the
-//! agent was simply in the wrong project.
-//!
-//! So a cwd must ALWAYS be an absolute, real directory — never `"."`, never empty,
-//! never the raw binary dir. `default_workspace` provides the sensible default and
-//! [`resolve_cwd`] is the defense at the terminal-open path.
+//! The default workspace and cwd hygiene: a cwd is ALWAYS an absolute, real directory, never
+//! `"."` or empty, which would resolve to the binary's dir (wrong project, no claude history).
 
 use std::path::PathBuf;
 
-/// A sensible absolute default workspace for a new terminal/agent.
-///
-/// If the app's launch dir is inside a git repo, the **repo working root** (in dev:
-/// `…/AgentStudioIDE`, where claude history lives and ↑-recall works). Otherwise the
-/// user's **home dir** (the prod fallback, since a double-clicked `.app` launches
-/// with cwd `/`). Never `"."`, never the binary dir if it is inside a repo.
-///
-/// Always absolute and, in every branch, a directory that exists.
+/// An absolute, existing default workspace: the launch dir's git repo root, else home (a
+/// double-clicked `.app` launches with cwd `/`). Never `"."`, never the binary dir.
 pub fn default_workspace_dir() -> PathBuf {
     // The process working directory = where the app was launched from.
     let launch = std::env::current_dir().ok();
@@ -38,21 +22,15 @@ pub fn default_workspace_dir() -> PathBuf {
     launch.unwrap_or_else(|| PathBuf::from(std::path::MAIN_SEPARATOR_STR))
 }
 
-/// Resolve a UI-supplied cwd, substituting [`default_workspace_dir`] for a stray
-/// `"."` or an empty string. Any other path is returned unchanged (the user chose
-/// it deliberately — e.g. via the directory picker).
-///
-/// This is the defense that stops a `"."` from ever reaching a PTY again: `"."`
-/// would resolve, at spawn time, to the binary's cwd (the wrong-project bug).
+/// Substitute [`default_workspace_dir`] for a `"."` or empty cwd (it would resolve to the
+/// binary's dir); any other path is kept as chosen.
 pub fn resolve_cwd(cwd: &str) -> String {
     resolve_cwd_on(cwd, cfg!(windows))
 }
 
-/// [`resolve_cwd`] for a named OS. **Windows only** (macOS keeps the path exactly
-/// as chosen, so `/tmp/x` never silently becomes `/private/tmp/x`): an existing directory is
-/// replaced by its canonical spelling ([`crate::paths::canonicalize`] — the folder's real
-/// case, no verbatim `\\?\`). Windows paths are case-insensitive, so `c:\repo` and `C:\Repo`
-/// would otherwise be two agents' cwds, two roots, two tabs, two project-dir names.
+/// [`resolve_cwd`] for a named OS. Windows only: an existing dir gets its canonical spelling
+/// ([`crate::paths::canonicalize`]) so `c:\repo` and `C:\Repo` are one cwd; macOS keeps the
+/// path as chosen (`/tmp/x` never becomes `/private/tmp/x`).
 fn resolve_cwd_on(cwd: &str, windows: bool) -> String {
     let trimmed = cwd.trim();
     if trimmed.is_empty() || trimmed == "." {
@@ -66,10 +44,8 @@ fn resolve_cwd_on(cwd: &str, windows: bool) -> String {
     cwd.to_string()
 }
 
-/// `default_workspace()` command: the default workspace as an absolute path.
-///
-/// Contract for the frontend: `invoke<string>('default_workspace')` returns an
-/// absolute directory to seed a new terminal/agent's cwd (or the directory picker).
+/// Frontend contract: `invoke<string>('default_workspace')` → an absolute dir to seed a new
+/// terminal/agent's cwd or the directory picker.
 #[tauri::command]
 pub fn default_workspace() -> String {
     default_workspace_dir().to_string_lossy().into_owned()

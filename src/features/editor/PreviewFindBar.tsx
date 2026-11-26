@@ -1,23 +1,6 @@
-/**
- * PreviewFindBar — the find bar over the RENDERED Markdown preview (search must
- * work inside the rendered .md file, not only in its source).
- *
- * Deliberately shaped like `features/api/ResponseBody`'s bar — input, count,
- * ↑ ↓ ✕, in that order, with the same `formatCount` label — so the app's find
- * bars look and read like each other wherever the user opens one. It is a
- * PRESENTATIONAL component: it owns no query, no cursor and no matches. All of
- * that lives in `MarkdownPreview`, which is where the DOM being searched lives.
- *
- * The one piece of imperative behaviour it does own is focus. `focusSignal` is a
- * counter the parent bumps on every Cmd/Ctrl+F, so pressing the shortcut again
- * while the bar is already open re-focuses and re-selects the query instead of
- * doing nothing (the same trick `TerminalView` plays on its overlay:
- * a shortcut over an editable element needs a focus-local answer).
- *
- * Escape is NOT handled here. It is handled once, on the preview container, so
- * closing the bar works identically whether the caret is in the query box or the
- * user is scrolling the document.
- */
+/** Presentational find bar for the rendered preview, shaped like `ResponseBody`'s; the state lives
+ * in `MarkdownPreview`. `focusSignal` is bumped per Cmd/Ctrl+F to re-focus an open bar. Escape is
+ * handled once, on the preview container. */
 
 import { useEffect, useRef } from "react";
 

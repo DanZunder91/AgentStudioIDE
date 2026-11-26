@@ -1,15 +1,6 @@
-//! `db_test`, `db_schema` and `db_search`: what is on the other end of a saved connection.
-//!
-//! The tree is the DB panel's own (`DbSession::children`, one level per call, every engine's
-//! hierarchy as that engine describes it), read through [`crate::db::children`] on a session the
-//! tool opened for itself. Nothing here knows an engine's levels: a path is the labels the tree
-//! shows, separated by `/` — a `/` or `\` inside a label written `\/` or `\\` ([`escape_label`]),
-//! so a Redis key like `user/1` is one level, and every path a reply prints can be passed back as
-//! `--path` as it is. Labels have the connection's secrets masked ([`SessionTree`]).
-//!
-//! Everything returned is bounded: a level lists at most [`MAX_ITEMS`] items, and a search stops
-//! after [`MAX_LOOKUPS`] levels read, [`SEARCH_TIME`] or [`MAX_MATCHES`] matches — and says
-//! which, because a search that quietly gave up reads exactly like one that found nothing.
+//! `db_test`, `db_schema`, `db_search` over the DB panel's own tree. A path is `/`-joined labels
+//! ([`escape_label`] escapes `/` and `\`), reusable as `--path`. Results are bounded, and a search
+//! says which bound stopped it: one that gave up reads like one that found nothing.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -94,10 +85,8 @@ pub fn stated_count(node: &DbNode) -> Option<usize> {
         .ok()
 }
 
-/// How much of a level the tree left out, when the engine says so: a folder that states a count
-/// and lists fewer (Redis lists one page of keys), or items marked as a first page (DynamoDB's
-/// "first 100 tables"). The tree reads one page of a huge level by design; an agent must hear
-/// that it did, or a search that missed a name reads like a name that does not exist.
+/// What a level left out, when the engine says so (a stated count, a first page): otherwise a
+/// search that missed a name reads like a name that does not exist.
 pub fn shortfall(stated: Option<usize>, kids: &[DbNode]) -> Option<String> {
     if let Some(n) = stated.filter(|n| kids.len() < *n) {
         return Some(format!("{} of {n}", kids.len()));
@@ -154,13 +143,8 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// The node at `path` (labels separated by `/`), its canonical path, and the count its label
-/// states (see [`stated_count`]).
-///
-/// Each segment matches a child's label exactly, else ignoring case. A segment that matches
-/// nothing at a level that has folders ("Tables", "Views", …) is looked for inside them, so
-/// `maestro/public/tracks` finds `maestro/public/Tables/tracks`. A leaf (a column, a key) has
-/// nothing below it, and saying so beats an empty listing.
+/// Segments match exactly, else case-insensitively; a miss is also looked for inside folder levels
+/// ("Tables", …), so `maestro/public/tracks` finds `.../Tables/tracks`.
 pub async fn walk_to(
     tree: &mut dyn TreeSource,
     path: &str,

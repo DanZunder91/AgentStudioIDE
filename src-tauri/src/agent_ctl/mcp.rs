@@ -1,37 +1,6 @@
-//! `agent-studio mcp`: the agent tools as an MCP server, and its install into Claude Code.
-//!
-//! # The server
-//!
-//! `agent-studio mcp` speaks MCP over stdio: JSON-RPC 2.0, one message per line. Its tool list is
-//! [`registry::all`] — names, descriptions and input schemas generated from the same `ToolSpec`s
-//! the command line is generated from — and a `tools/call` is forwarded, unvalidated, to the
-//! running app with [`cli::send`], exactly as `agent-studio <group> <verb>` does. The app
-//! validates and runs it, so an MCP client gets every tool the CLI has, with the same rules and
-//! the same refusals, and a tool another module adds appears here without a line changing.
-//!
-//! The calls only work for an agent inside an Agent Studio terminal: the address and token of the
-//! app's listener travel in that terminal's environment, and Claude Code passes its environment
-//! to the stdio servers it starts. Elsewhere the server still answers `initialize` and
-//! `tools/list`, so an installed server never shows as broken, and every call says where to run
-//! it.
-//!
-//! stdout carries protocol messages and nothing else; anything for a human goes to stderr.
-//!
-//! # The install
-//!
-//! `agent-studio mcp install|uninstall|status`, and the Settings menu item, run Claude Code's own
-//! `claude mcp add|remove|get`: Claude writes its own config, and only when the user asks. The
-//! app never writes `~/.claude` or `~/.claude.json` itself (LESSONS §1), never installs on its
-//! own, and gives launched agents no `--mcp-config` (one mechanism, explicit). The entry points
-//! at this binary by absolute path, so the server also starts for a `claude` running outside
-//! Agent Studio — where its tools then explain themselves.
-//!
-//! Only the user adds or removes it. The help every agent is pointed at (`agent-studio help`)
-//! does not list `install`/`uninstall`, and on the command line both refuse to run for an agent:
-//! when Claude Code started them (`CLAUDECODE` is set) or nobody could have typed them (stdin is
-//! not a terminal). `status` stays open to anyone; where it says how to change Claude Code's
-//! config, it says it to the user (the Settings item, or a command they run themselves), never as
-//! a next step for whoever ran it.
+//! `agent-studio mcp`: registry tools as a stdio MCP server, forwarded to the app like the CLI;
+//! stdout is protocol only. Install runs Claude's own `claude mcp add|remove`, for the user only
+//! (refused under CLAUDECODE or without a tty); the app never writes ~/.claude (LESSONS §1).
 
 use std::io::{self, BufRead, IsTerminal as _, Read, Write};
 use std::path::{Path, PathBuf};
@@ -748,10 +717,8 @@ fn shadowed_message(scope: &str, runs: &str) -> String {
     )
 }
 
-/// Add Agent Studio to Claude Code's user config. An entry that already runs this binary is left
-/// alone; one that runs another copy of the app is pointed here. An entry in a scope that takes
-/// precedence (local, project) is reported and never reported as success: Claude Code would go on
-/// running it.
+/// An entry already running this binary is left alone; another copy's is repointed. One in a
+/// higher-precedence scope (local, project) is reported, never as success: Claude still runs it.
 pub fn install(claude: &Claude, exe: &Path) -> McpReport {
     if let Err(message) = installable(exe) {
         return McpReport::failed(exe, message);

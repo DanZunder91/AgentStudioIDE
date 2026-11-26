@@ -1,14 +1,6 @@
-/**
- * Layer 5 — the shop signs' pixel kana in a REAL canvas (neon signs for
- * ramen and soba in katakana, sushi in hiragana).
- *
- * The jsdom suite (kana.test.ts) proves the runs paint the art; only a real 2D context can prove
- * the art reaches the screen intact once the engine's snapping `rect` (render/paint.ts) scales it:
- * every world pixel a crisp, uniform block — no anti-aliased edge, no stroke lost or doubled — at
- * a typical Fit (@2x a world px is one device px) and zoomed in on the street.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/kana.browser.test.tsx`
- */
+/** Only a real 2D context proves the kana survive the snapping `rect`: every world pixel a crisp,
+ * uniform block, no stroke lost or doubled. Run with
+ * `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -52,10 +44,7 @@ function raster(runs: readonly Run[], w: number, h: number): string[] {
   return cells.map((r) => r.join(""));
 }
 
-/**
- * Read the screen back as world pixels: each world pixel's snapped screen block must be ONE colour
- * — all ink or all night — or it is reported as `?`.
- */
+/** Each world pixel's snapped screen block must be ONE colour (all ink or all night), else `?`. */
 function readBack({ t, cam, img }: ReturnType<typeof paintSign>): string[] {
   const px = (x: number, y: number) => Array.from(img.data.slice((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
   const rows: string[] = [];

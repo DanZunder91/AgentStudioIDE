@@ -1,21 +1,6 @@
-/**
- * Layer 5 — the City's far skyline, grown with the city (next to a building of seven tall floors, the
- * buildings behind must look somewhat bigger) and locked to the world (a zoom must never move the
- * backdrop against the street), against a REAL 2D context in Chromium.
- *
- * The jsdom suite (city.test.ts) proves the walk, the rects and a raster of them; only real pixels can
- * prove what the canvas does with them: that the skyline is its blocks painted the plain way (a rect
- * per block, a 1×2 rect per pane) although the renderer lays its panes a window column at a time; that
- * a low city's never rises over 3 tiles and a tall city's reaches `skylineMax`; that a pan moves it by
- * exactly the pan and a zoom keeps every block on the same world x; that every lit window lands on a
- * block's pane; and that no star shines in front of a block.
- *
- * The backdrop alone, foggy noon, no time zone: nothing stands in the skyline's band but the sky's
- * bands and the skyline (no clouds in fog, no landmarks without a zone, the sun far above, and no
- * grade — it comes later in the frame), so every pixel there is one of their exact colours.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/skyline.browser.test.tsx`
- */
+/** The backdrop alone at foggy noon with no time zone, so every pixel in the skyline's band is a
+ * sky band's or the skyline's exact colour. Browser tier:
+ * `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -97,10 +82,8 @@ function isHaze(d: number[], i: number): boolean {
   return [look.skyline.block, look.skyline.edge, look.skyline.pane].map(rgbOf).some(([r, g, b]) => d[i] === r && d[i + 1] === g && d[i + 2] === b);
 }
 
-/**
- * The sky's bands and `blocks` painted the plain way — a rect per block and per edge, a 1×2 rect per
- * pane (zoomed out: a band per floor at half alpha) — with the sky colours of `amb`.
- */
+/** Reference: the sky bands and `blocks` painted the plain way (a rect per block and edge, 1×2 per
+ * pane; zoomed out, a band per floor at half alpha) in `amb`'s sky colours. */
 function reference(blocks: { x: number; w: number; h: number }[], horizon: number, cam: Camera, amb: Ambience): CanvasRenderingContext2D {
   const ctx = canvas();
   const look = citySky(amb);

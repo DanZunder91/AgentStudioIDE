@@ -1,16 +1,6 @@
-//! The capture proxy itself: an HTTP/1.1 forward proxy on 127.0.0.1, hand-rolled on hyper.
-//!
-//! * absolute-form `http://` → forwarded on a pooled client (the client IS the
-//!   pool, built once), fully captured.
-//! * `Upgrade: websocket` (plain or decrypted) → forwarded on a dedicated upstream
-//!   connection, then the two upgraded sockets are relayed and data messages counted.
-//! * `CONNECT` → a transparent **tunnel** (one `tunnel` flow: bytes + duration), or, in
-//!   decrypt mode, TLS terminated with a per-host leaf from our CA. ALPN is **mirrored**: we
-//!   read the client's offer, offer the same (h2 / http/1.1) upstream, and hand the client
-//!   exactly what upstream chose — so both halves always speak the same protocol and an h2
-//!   gRPC stream is forwarded frame for frame, trailers included.
-//! * anything else (origin-form — a web page poking the port) → **400**; this is not an open
-//!   relay.
+//! The capture proxy: an HTTP/1.1 forward proxy on 127.0.0.1 (hyper). `http://` → pooled client,
+//! captured; websocket upgrades relayed; `CONNECT` tunnelled or, in decrypt mode, TLS-terminated
+//! with ALPN mirrored (h2 gRPC passes frame for frame). Anything else → 400: not an open relay.
 
 use std::io;
 use std::pin::Pin;
@@ -47,11 +37,8 @@ pub type PlainClient = hyper_util::client::legacy::Client<HttpConnector, PBody>;
 /// `SSL_CERT_FILE`). Part of the wire contract; the UI may match on it.
 pub const TLS_REJECTED: &str = "tls rejected → passthrough";
 
-/// How long a client may take to send a complete request head. hyper only enforces its
-/// header-read timeout when the connection has a [`TokioTimer`]; without one a client that
-/// trickles a head forever (slowloris — or just a leaky client) held a task and a file
-/// descriptor of the IDE process for good (found by `tests/netcap_robustness.rs`). It also
-/// bounds an idle keep-alive connection, which a client simply re-opens.
+/// Max time to send a request head. hyper enforces it only with a [`TokioTimer`]; without one a
+/// slowloris client held a task and fd forever. Also bounds idle keep-alive connections.
 pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The one pooled client for plain-HTTP forwarding.
@@ -65,17 +52,9 @@ fn empty() -> PBody {
         .boxed_unsync()
 }
 
-/// A forwarded request whose upstream failed at the transport level (refused, unreachable, reset,
-/// timed out). The service returns it as its ERROR, so hyper ends the client's connection (h1) or
-/// resets the client's stream (h2) WITHOUT writing an HTTP response — the client sees the same
-/// transport failure it would have seen without the proxy. A synthetic
-/// `502 "Agent Studio capture proxy: upstream: Connection refused"` would turn a refused
-/// connection into an HTTP response, so every test asserting "unreachable host → transport
-/// error" (a typical Rust service's `http://127.0.0.1:1` cases) would fail inside an IDE
-/// terminal. The flow is
-/// still recorded (an Error row with the cause) so the Network view shows the refusal. CONNECT is
-/// different and unchanged: a 502 to a CONNECT is the standard way to fail a tunnel, and every
-/// client already reports it as a connect error.
+/// Upstream transport failure: hyper drops the client's connection/stream with no HTTP response,
+/// so the client sees what it would without the proxy (a 502 breaks "unreachable → transport
+/// error" tests). Still recorded. CONNECT keeps its standard 502.
 #[derive(Debug)]
 pub(crate) struct UpstreamFailed(pub(crate) String);
 
@@ -308,10 +287,8 @@ fn host_port(uri: &Uri, default_port: u16) -> Option<(String, u16)> {
     if host.is_empty() {
         return None;
     }
-    // `http::Authority` accepts any characters after the port colon and `port_u16()` is
-    // `None` both for "no port" and for an unparsable one (`:99999`, `:abc`). Only the
-    // first may default: the second used to be silently re-routed to 443 / 80 (found by
-    // `tests/netcap_robustness.rs`). An empty port (`host:`) is RFC 3986's "default".
+    // `port_u16()` is `None` both for no port and an unparsable one (`:99999`, `:abc`);
+    // only the first may default. An empty port (`host:`) is RFC 3986's default.
     let after_host = auth.as_str().rsplit('@').next().unwrap_or("");
     let after_host = after_host.rsplit(']').next().unwrap_or("");
     let port = match after_host.rsplit_once(':') {
@@ -321,13 +298,8 @@ fn host_port(uri: &Uri, default_port: u16) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-/// The terminal of a request that carried no `Proxy-Authorization`, read from its client
-/// process's own environment ([`super::env::terminal_from_env`]). **Windows only**: Windows
-/// PowerShell 5.1's web cmdlets (pointed at this proxy by the terminal's startup command,
-/// `pty::POWERSHELL_WEB_PROXY`) send the URL's credentials only after a `407`, which this
-/// proxy never sends — so without this an IDE terminal's own `Invoke-WebRequest` would read
-/// `external · powershell`. macOS and Linux clients send the credentials; nothing changes
-/// there. Bounded, and never an error (an unreadable process is simply unattributed).
+/// Windows only: a request without `Proxy-Authorization` is attributed via the client's env.
+/// PS 5.1 web cmdlets send credentials only after a `407`, which we never send. Never errors.
 async fn terminal_of_client(inner: &Arc<Inner>, client: Option<&ClientProcess>) -> Option<String> {
     #[cfg(windows)]
     {

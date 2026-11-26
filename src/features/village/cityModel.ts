@@ -1,29 +1,6 @@
-/**
- * City view — the IDE's plain CONSOLES as village agents (every console
- * or agent takes one floor, so more consoles mean more floors).
- *
- * An agent terminal is already its agent's floor, so only PLAIN terminal tabs (`ref.kind ===
- * "terminal"`, in every view) become floors of their own here, the console's user at the
- * leader's desk. Its building is the folder its PTY was opened in — `TerminalMeta.cwd`, read
- * from the terminal registry like the find overlays' context scope does, since the store keeps
- * no cwd for a terminal; before the PTY has opened (a background tab nobody showed yet) the
- * workspace root, where "+ New terminal" opens. A console that has exited is not running, and
- * gets no floor.
- *
- * Whether it has exited is asked of the SUPERVISOR (`fleet_snapshot`), not the registry: the
- * registry's `TerminalMeta` is written once, when the PTY opens or is reattached, and the
- * frontend gets no event when a shell exits mid-session — so a console where the user typed
- * `exit` would keep its floor ("At the prompt") for as long as its tab stayed open. The
- * snapshot's metadata is updated on child exit. Where the snapshot does not answer (it failed,
- * or that PTY is not in it yet) the registry's metadata stands in.
- *
- * What the user is doing comes from `terminalsBusy` — the same backend question the close
- * gate asks ("is something running in this terminal?"). Both questions are local, read-only,
- * and asked every few seconds only while the city is on screen: a running command → typing, a
- * hand-typed `claude` → thinking, else idle.
- *
- * Reads only; never writes the store.
- */
+/** Each live PLAIN terminal tab is a floor, in the folder its PTY opened in (`TerminalMeta.cwd`;
+ * the store keeps none). Exit comes from the supervisor snapshot (the registry never learns a
+ * shell exited); activity from `terminalsBusy`. Read-only. */
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -45,11 +22,8 @@ export type ConsoleMetaLookup = (terminalId: TerminalId) => { cwd: string; statu
 
 const ACTIVITY: Record<BusyReason, VillageActivity> = { command: "typing", agent: "thinking" };
 
-/**
- * Every live plain console as a root `VillageAgent`, in tab order. `fallbackCwd` (the
- * workspace root) places a console whose PTY has not opened yet; a cwd that names no folder
- * (empty, ".") lands in {@link CONSOLE_FOLDER}.
- */
+/** Live plain consoles as root agents, in tab order. `fallbackCwd` (the workspace root) places one
+ * whose PTY has not opened; a cwd naming no folder (empty, ".") lands in {@link CONSOLE_FOLDER}. */
 export function consoleAgents(
   tabs: Record<TabId, Tab>,
   metaOf: ConsoleMetaLookup,
@@ -108,12 +82,8 @@ export interface UseCityConsolesOptions {
   pollMs?: number;
 }
 
-/**
- * The live consoles while `enabled` (the city is on screen); `[]` otherwise. A tab opened,
- * renamed or closed shows at once (the store is reactive); a PTY's state is not, so the
- * supervisor is asked (and the registry re-read) on every poll. A failed busy check already
- * resolves to "nothing is busy"; a failed snapshot leaves the registry's metadata in charge.
- */
+/** Live consoles while `enabled` (city on screen), else `[]`. PTY state is not reactive, so each
+ * poll re-asks the supervisor and re-reads the registry; a failed snapshot leaves the registry. */
 export function useCityConsoles({ enabled, pollMs = 3000 }: UseCityConsolesOptions): VillageAgent[] {
   const tabs = useAppStore((s) => s.tabs);
   const root = useAppStore((s) => s.workspaceRoot);

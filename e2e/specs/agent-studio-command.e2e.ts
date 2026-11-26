@@ -1,14 +1,5 @@
-/**
- * `agent-studio db connect` from a real terminal in the real app — the command an agent runs
- * when the user says "connect me to this database".
- *
- * Typed into a real PTY exactly as an agent's shell would run it: the script on the terminal's
- * PATH execs the app binary in command mode, which posts to the running app's listener with the
- * terminal's token; the app saves the connection and the DB panel comes into view with a notice.
- * No database runs in this container, so the URL points at a port nothing listens on and
- * `--force` saves it anyway — the path under test is the command → app → panel round trip, not
- * the driver (the live tier, `db_live_agent_ctl`, covers a real server).
- */
+/** `agent-studio db connect` typed into a real PTY: command → app → DB panel with a notice. No DB
+ * runs here, so the URL is a dead port saved with `--force`; `db_live_agent_ctl` covers servers. */
 import { $, browser, expect } from "@wdio/globals";
 import { openTerminalFromEmptyPane, typeInTerminal } from "../support/terminal";
 

@@ -1,39 +1,5 @@
-/**
- * The Shiki → CodeMirror 6 decoration bridge.
- *
- * ## Why this file exists
- *
- * `highlight.ts` was a **TRUE gap**: the module was only ever *transitively executed* by
- * `CodeEditor.browser.test.tsx` (which mounts an editor) with **zero assertions on decorations or
- * colors**.
- * What is unpinned there is a byte-position walk:
- *
- *     pos += token.content.length     // per token
- *     pos += 1                        // per line, for the newline Shiki drops
- *
- * An off-by-one anywhere in that walk mis-colors the buffer from the first
- * affected token onward — and it fails *silently and cosmetically*, which is
- * exactly the class of drift nobody reports. There is no way to notice it
- * without asserting concrete offsets, so that is what this file does.
- *
- * ## The seam: a fake tokenizer, real CodeMirror
- *
- * `./shiki` is mocked; `@codemirror/*` is NOT. That split is deliberate:
- *
- *   - Shiki is third-party. We do not test its tokenizer — we test **our
- *     translation of a token stream into positions**, and for that a *fake*
- *     stream is strictly better than a real one: it lets us feed the awkward
- *     shapes a real grammar emits only rarely (an uncolored token, a
- *     zero-length token, a multi-line file) at exact, hand-checkable offsets.
- *   - CodeMirror is the thing whose contract we must satisfy, so the real
- *     `EditorView`/`StateField`/`RangeSetBuilder` are used. `RangeSetBuilder`
- *     genuinely throws on an empty or out-of-order range, so a broken walk
- *     fails loudly here rather than being absorbed by a mock.
- *
- * jsdom cannot lay CM6 out, but nothing here needs geometry — decoration
- * *ranges* are state, not pixels. `cmTestKit` supplies the geometry stubs CM6's
- * measure cycle calls (see its header).
- */
+/** `./shiki` is faked so token shapes land at hand-checkable offsets; CodeMirror is real because
+ * `RangeSetBuilder` throws on a broken position walk. An off-by-one there mis-colors silently. */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { StateEffect } from "@codemirror/state";
@@ -185,10 +151,8 @@ describe("applyShikiHighlight — the byte-position walk", () => {
   });
 
   it("survives a ZERO-LENGTH colored token — CM6 rejects empty marks", async () => {
-    // The `end > pos` guard is load-bearing, not defensive politeness: a mark
-    // decoration with from === to makes CodeMirror throw ("Decorations that
-    // replace content may not be empty"), which would escape into the editor.
-    // An empty token is exactly what a grammar emits for a zero-width match.
+    // `end > pos` is load-bearing: an empty mark (from === to) makes CodeMirror throw, and grammars
+    // emit empty tokens for zero-width matches.
     const { view, destroy } = mount("ab");
     tokenize([
       [
@@ -264,13 +228,8 @@ describe("applyShikiHighlight — the forgiving degrade paths", () => {
   });
 
   it("a FAILED re-highlight leaves the colors already on screen alone", async () => {
-    // The `catch { return }` returns *without dispatching*, which is what makes
-    // a transient tokenizer failure a no-op rather than a visible regression:
-    // the buffer keeps the colors it already had. Clearing them instead (an
-    // empty dispatch) would flash a coloured file back to plain text on a
-    // theme switch that happened to hit a bad grammar — a mutant that survives
-    // every other assertion in this file, because they all start from an
-    // un-highlighted buffer.
+    // The catch returns without dispatching, so a transient failure keeps the existing colors; an
+    // empty dispatch would flash the file to plain text. Other tests start uncolored and miss it.
     const { view, destroy } = mount("abcd");
 
     tokenize([[{ content: "abcd", color: "#111111" }]]);
@@ -352,12 +311,8 @@ describe("shikiField — decorations survive doc changes", () => {
   });
 
   it("ignores effects that belong to someone else", async () => {
-    // The editor stacks several extensions that dispatch their own effects (the
-    // find panel, the blame gutter, the LSP layer). `effect.is(setHighlight)`
-    // must reject those: a field that took the value of any passing effect would
-    // wipe the colours the moment an unrelated feature dispatched — the kind of
-    // cross-extension bug that shows up only once two features are used
-    // together, which is why it needs pinning here and not in either feature.
+    // Other extensions dispatch their own effects (find, blame, LSP); a field that took any
+    // effect's value would wipe the colors whenever an unrelated feature dispatched.
     const someoneElsesEffect = StateEffect.define<string>();
     const { view, destroy } = mount("abcd");
 

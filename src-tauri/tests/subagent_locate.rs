@@ -1,8 +1,5 @@
-//! `locate_subagent_transcript` + the `subagent_activity` command end-to-end:
-//! find `agent-<id>.jsonl` under `~/.claude/projects/*/*/subagents/` by
-//! agent id, and return an empty feed for an unknown id.
-//!
-//! Own binary (sets `HOME`, process-global) to redirect the search at a temp tree.
+//! `locate_subagent_transcript` and `subagent_activity` end to end: find `agent-<id>.jsonl` under
+//! `~/.claude/projects/*/*/subagents/`, empty feed for an unknown id. Own binary: it sets `HOME`.
 
 mod common;
 
@@ -52,13 +49,8 @@ fn locates_a_subagent_by_its_agent_id() {
     assert_eq!(feed[0].text, "go");
 }
 
-/// **A workflow sub-agent's transcript is one level deeper, and must be found too.**
-///
-/// `subagents/` is not flat: a `Workflow` run writes its sub-agents into
-/// `subagents/workflows/wf_<runId>/` (on a machine that uses workflows, a large share
-/// of all sidecars). The fan-out tree now shows those agents, so a lookup that searched
-/// only the flat dir would put a row in the rail that opens to nothing — the same
-/// bug one layer up.
+/// A `Workflow` run writes its sub-agents under `subagents/workflows/wf_<runId>/`; the fan-out tree
+/// shows them, so a flat-only lookup would give a rail row that opens to nothing.
 #[test]
 fn locates_a_workflow_subagent_nested_under_its_run_dir() {
     let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());

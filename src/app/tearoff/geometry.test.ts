@@ -1,12 +1,6 @@
-/**
- * "Released outside the window?" — the decision that turns a drag into a new window.
- *
- * A false "outside" opens a window nobody asked for; a false "inside" costs nothing (the
- * menu command still works). So every doubtful input must answer false, and the platform
- * quirks measured (see docs/design/tab-tearoff.md §5) each get a case: Wayland's hard-coded
- * `(0, 0)`, monitors at negative coordinates, and macOS scaling the cursor by the PRIMARY
- * monitor while it scales a window by its own.
- */
+/** "Released outside?": every doubtful input must answer false (a false "outside" opens an
+ * unwanted window). Each measured quirk (tab-tearoff.md §5) gets a case: Wayland's `(0, 0)`,
+ * negative-coordinate monitors, macOS scaling the cursor by the PRIMARY monitor. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

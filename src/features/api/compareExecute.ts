@@ -1,33 +1,14 @@
-/**
- * compareExecute — the A/B dual-send path for the built-in HTTP client. One Send
- * in compare mode fires TWO wire requests: side A is
- * the request's own method+url, side B is `compare.method`+`compare.url` carrying
- * A's headers and body — the comparison varies ONLY method+url by design, so any
- * response difference is attributable to that one change.
- *
- * Like `execute.ts` (its sibling and pattern), this is imperative plumbing: it
- * reads and mutates via `useAppStore.getState()` and runs the network EFFECT —
- * never inside a store producer. Each side settles INDEPENDENTLY as
- * it arrives, so the faster response renders while the slower is still in flight;
- * `compare.sending` flips false only once BOTH have settled (success or failure).
- *
- * Secret-safety: `{{VAR}}` is resolved from the active environment
- * ONLY to build the two wire requests; BOTH history entries keep the LITERAL,
- * pre-substitution request — one entry per side, because both really executed.
- */
+/** A/B dual send: A is the request's own method+url, B is `compare.*` with A's headers and body,
+ * so only method+url vary. Imperative like `execute.ts`; each side settles independently and
+ * `compare.sending` clears once BOTH settle. History keeps both LITERAL `{{VAR}}` requests. */
 
 import { useAppStore } from "../../app/store";
 import { activeVars, substituteVars } from "./substitute";
 import { errorMessage } from "./execute";
 import { sendHttp, type HttpHeader, type HttpRequest } from "./httpIpc";
 
-/**
- * Send request A (the request's own method/url/headers/body) and request B
- * (compare.method/url with A's headers/body) SIMULTANEOUSLY, recording BOTH in
- * history. A silent no-op (mirroring `executeHttpRequest`) when the request is
- * unknown, compare mode is off, either url is empty, or a compare send is
- * already in flight.
- */
+/** Send A and B simultaneously, recording BOTH in history. A silent no-op (like
+ * `executeHttpRequest`) for an unknown request, compare off, an empty url, or a send in flight. */
 export function executeCompareRequest(requestId: string): void {
   const s = useAppStore.getState();
   const req = s.apiRequests[requestId];

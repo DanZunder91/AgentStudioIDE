@@ -1,19 +1,6 @@
-/**
- * ComparePanel / CompareBar — the jsdom tier (A/B compare).
- *
- * What's under test: every render state of the two components and every store
- * write they make. State is seeded through the REAL store actions (the same
- * writes compareExecute makes) — no IPC is mocked because nothing here sends;
- * the executor has its own suite, and the Send routing is ApiRequestView's seam
- * tests' job. Layout claims (side-by-side, equal halves, internal scroll,
- * visible highlight) live in `compare.browser.test.tsx` — jsdom has no layout
- * engine, so they would be vacuously green here.
- *
- * The auto-scroll test defines `Element.prototype.scrollIntoView` itself:
- * jsdom does not implement it, which is exactly why the component calls it
- * optional-chained — and why the spy must be REMOVED again after each test, so
- * the other tests keep exercising the undefined-in-jsdom branch.
- */
+/** jsdom tier: every render state and store write, seeded via the REAL store actions; layout
+ * claims live in `compare.browser.test.tsx`. The `scrollIntoView` spy is REMOVED after each
+ * test so others keep exercising jsdom's undefined branch. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -267,12 +254,7 @@ describe("ComparePanel", () => {
   });
 });
 
-/**
- * These requirements hold on BOTH panes or they do not hold at all:
- * Copy must not be limited to the Raw view, and search must work in the tree
- * view as well. Before this, a compare pane holding JSON — which is
- * most of them — had no Find and no Copy at all.
- */
+/** Find and Copy hold on BOTH panes, in Raw and in the tree view. */
 describe("ComparePanel — Raw/Formatted, Find and Copy on both sides", () => {
   const bothSides = ["a", "b"] as const;
 
@@ -425,15 +407,8 @@ afterEach(() => {
   delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
 });
 
-/**
- * The bug: the find bar still disappeared when moving
- * between tabs — and the compare panel is one of the two surfaces that render
- * `ResponseBody`. Each SIDE keeps its own bar under
- * `findBars["compare:<requestId>:<side>"]`: `side` is the pane's stable
- * identity (A = the request's own wire, B = `compare.*` — fixed positions of
- * one compare surface), so the two bars survive a tab switch without ever
- * sharing state. Unmount + remount of the panel IS the tab switch here.
- */
+/** Each SIDE keeps its own bar at `findBars["compare:<requestId>:<side>"]`, surviving a tab
+ * switch without sharing state; unmount + remount IS the tab switch. */
 describe("ComparePanel — the find bar survives a tab switch", () => {
   const inA = () => within(body("a"));
   const inB = () => within(body("b"));
@@ -523,16 +498,8 @@ describe("ComparePanel — the find bar survives a tab switch", () => {
 
 /* ═══════════════ Cmd/Ctrl+F seeds from the selection, per SIDE ═══════════════ */
 
-/**
- * Pressing Command+F with something selected should search for that selection —
- * across a split that renders the SAME component twice.
- *
- * This is the seam the containment check in `domSelectionSeed` exists for: the
- * document has one selection, and two response bodies are on screen. Selecting
- * in A and pressing Cmd+F over B must open B's own bar unchanged — not fill it
- * with A's text. A store-level test cannot see this: both sides
- * call the same `patchFindBar`, so only the rendered pair tells them apart.
- */
+/** One document selection, two bodies: Cmd+F over B must not seed from A's selection
+ * (`domSelectionSeed` containment). Store tests can't see it; both sides share `patchFindBar`. */
 describe("ComparePanel — Cmd/Ctrl+F seeds from the selection, per side", () => {
   const inA = () => within(body("a"));
   const inB = () => within(body("b"));

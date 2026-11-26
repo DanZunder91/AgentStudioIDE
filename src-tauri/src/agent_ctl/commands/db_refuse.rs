@@ -1,27 +1,6 @@
-//! What an agent's SQL may not reach on any connection, read-only or not: the database server's
-//! files and programs, connections of its own, other sessions, and the server's own settings.
-//!
-//! # Why read-only does not cover it
-//!
-//! A read-only transaction stops **data writes**. It does not stop a statement that acts on the
-//! server rather than on its data, and a privileged account (a PostgreSQL superuser or a member of
-//! `pg_read_server_files` / `pg_execute_server_program`, a MySQL account with `FILE`) can run them
-//! inside one. Measured against the fixture, whose account is a superuser as local accounts often
-//! are: `COPY (SELECT 1) TO PROGRAM 'psql … -c "INSERT …"'` wrote a row through a read-only
-//! connection, and `pg_read_binary_file('/proc/1/environ')` read the very password Agent Studio
-//! dialled with, which a `reverse()` carried past the reply's password mask. So these are refused
-//! for an agent on every PostgreSQL and MySQL connection before a session is opened.
-//!
-//! # A text check, so a speed bump — and the help says so
-//!
-//! Read with [`crate::db::sql_words`], which does not trust the splitter: every word of the text
-//! (strings and comments included) is checked against the function lists, and every place a
-//! statement can start — the text's start and after every `;` — against the statement lists. So a
-//! refusal can be a false alarm (`SELECT 'copy the program'`), and a way out these lists do not
-//! name is not caught: a function the database already has that does the same under another name,
-//! or SQL a function the database already has builds at run time. Those run with the database
-//! account's privileges, and the only boundary for them is the account. `db_query`'s help says to
-//! use a least-privileged account for agent work.
+//! SQL an agent may not run on any connection: server files, programs, connections, sessions and
+//! settings. Read-only only stops data writes; a privileged account can do these inside it. A text
+//! check, so a speed bump: the real boundary is a least-privileged account (`db_query`'s help).
 
 use crate::db::model::DbFamily;
 use crate::db::sql_words::{self, Dialect};

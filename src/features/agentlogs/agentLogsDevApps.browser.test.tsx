@@ -1,12 +1,5 @@
-/**
- * Dev apps in the Logs view — real layout in Chromium. jsdom has no layout, so only this tier can
- * say that the app card, mounted between the stream header and the list, leaves the list a real
- * scroll box (the panel is a
- * definite-height flex column and the list is its one `flex: 1 1 0` child) — and that a dev
- * app's streams read as rows UNDER their app.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/agentlogs`
- */
+/** Dev apps in Logs, real Chromium layout: the app card between header and list leaves the list a
+ * real scroll box (its one `flex: 1 1 0` child), and an app's streams read as rows UNDER it. */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

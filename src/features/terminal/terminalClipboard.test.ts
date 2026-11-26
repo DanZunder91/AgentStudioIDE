@@ -1,10 +1,5 @@
-/**
- * terminalClipboard — Windows Terminal's copy/paste keys on Windows and Linux, macOS
- * untouched. The decision is a pure function of platform × key × selection; the wiring
- * is pinned through a fake terminal (the xterm custom-key-handler contract: `false` =
- * not xterm's, `true` = xterm handles it), and the registry test at the bottom proves
- * every real terminal gets it.
- */
+/** The decision is pure; the wiring is pinned through a fake terminal (xterm's custom-key-handler
+ * contract: `false` = not xterm's, `true` = xterm handles it). */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 

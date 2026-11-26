@@ -1,11 +1,5 @@
-/**
- * Resizable + hideable columns, shared by the Logs and Network tables (columns must be
- * resizable, and hideable too).
- *
- * One store for every table, keyed by a view key (`"network.ide"`, `"logs"`, …), so a tab
- * switch or remount keeps the user's widths and hidden set. Not persisted to disk yet —
- * that needs a `layout-prefs.json` field and its single writer.
- */
+/** Resizable + hideable columns for the Logs and Network tables: one store keyed by view key
+ * (`"network.ide"`, `"logs"`), surviving remounts. Not persisted yet (needs a layout-prefs key). */
 
 import { create } from "zustand";
 
@@ -25,10 +19,8 @@ export interface ColumnDef {
 export interface ColumnLayout {
   widths: Record<string, number>;
   hidden: string[];
-  /**
-   * Columns the user explicitly ticked on in Columns ▾. A table that hides low-priority columns
-   * to fit a narrow pane (Network, `networkColumns.fitColumns`) never auto-hides these.
-   */
+  /** Columns ticked on in Columns ▾; a fit-to-pane table (`networkColumns.fitColumns`) never
+   * auto-hides them. */
   shown?: string[];
 }
 

@@ -1,46 +1,6 @@
-/**
- * Agent Village — a tiny pixel KANA font for the City's shop signs.
- *
- * The backdrop behind the street has neon signs for ramen and soba in katakana, and for sushi in
- * hiragana. The signs spell a fixed list of words (`SIGN_WORDS`,
- * render/backdrop.ts: ラーメン ソバ すし カレー コーヒー カラオケ バー ゲーム ホテル), and this
- * module draws exactly the kana those words need — nothing else, so a character the font lacks is
- * contract drift and throws rather than drawing a silent gap.
- *
- * Our own glyphs, drawn from each kana's stroke structure (no pixel font's bitmaps were
- * copied — the art carries no licence). The neon font's idiom (render/neon.ts): rows of `X`, each
- * glyph pre-merged into as few rectangles as it takes, so a sign costs a few dozen `fillRect`s.
- *
- * The cell is 8×8. The first cut (same day) was 7×7, and 7×7 cannot carry the dakuten: the two
- * marks of ゛ need three columns and two rows of their own in the top-right corner plus a clear
- * pixel between them and the body, and in seven rows ゲ's crossbar had to run straight into them.
- * At 8×8 every glyph is drawn on one set of rules:
- *
- *   - every stroke is 1 px — no 2×2 block of lit pixels anywhere, not even where strokes meet
- *     (オ's ノ leaves the crossbar beside its stem, not out of the crossing), so no glyph looks
- *     bolder than its neighbour;
- *   - a glyph fills the cell (8×8) unless the real kana is smaller than its em: コ sits in the middle
- *     6×6, and ー / ｜ are 6 px long, centred;
- *   - ゛ is two 2-px ticks at columns 5 and 7, rows 0–1, and the body keeps a pixel clear of them
- *     (バ's right stroke starts at row 3; ゲ is ケ moved one row down, its tail folded into the
- *     bottom row, so its crossbar runs under the marks with a clear row between);
- *   - stroke DIRECTION tells the look-alikes apart: ソ's dot stands upright and its long stroke
- *     falls from the very top; ン's dot lies flat and its long stroke rises from the bottom-left to
- *     the right edge a quarter of the way down; し's stem rounds off into a short rise, レ's turns a
- *     sharp corner into a long one;
- *   - す keeps its loop (3 rows, left of the stem) and its tail; ホ, テ, す and ｜ share one stem
- *     column (4), so a vertical sign's strokes line up.
- *
- * Each glyph was checked by eye on a contact sheet beside the system font (×10, and every word both
- * ways); kana.test.ts pins the art and these rules, kana.browser.test.tsx the real pixels.
- *
- * SIZE: at a typical Fit (1280×800 @2x the City's zoom is 1) a world px is one device px, so a
- * glyph is 8 device px — about the smallest a kana stays legible. A sign meant to be read from Fit
- * scales the runs (every run × k), never the art.
- *
- * Vertical signs (tategaki) read top to bottom, and the long-vowel mark turns with the line: `ー`
- * becomes `｜`, as on every Japanese blade sign.
- */
+/** Pixel kana for the City's signs: only the kana `SIGN_WORDS` (render/backdrop.ts) needs; a
+ * missing one throws, never a silent gap. 8×8 cells, 1-px strokes (no 2×2 lit block); kana.test.ts
+ * pins the art and rules. Vertical signs turn `ー` into `｜`; scale the runs, never the art. */
 
 /** A glyph cell, world px: what one character takes along a line (plus the line's `gap`). */
 export const KANA_W = 8;
@@ -79,10 +39,7 @@ const FONT: Readonly<Record<string, readonly string[]>> = {
   し: [".X......", ".X......", ".X......", ".X......", ".X......", ".X.....X", ".X....X.", "..XXXX.."],
 };
 
-/**
- * A glyph as few rectangles as it takes: each row's runs of `X`, each merged down into the run
- * right above it when that one has the same columns (a stem is one tall rect, not eight).
- */
+/** A glyph's `X` runs, each merged into the run above when columns match (a stem is one rect). */
 function glyphRuns(rows: readonly string[]): Run[] {
   const out: [number, number, number, number][] = [];
   let above: [number, number, number, number][] = [];
@@ -106,11 +63,8 @@ const GLYPHS: ReadonlyMap<string, Run[]> = new Map(Object.entries(FONT).map(([ch
 /** Every character the font draws (the vertical long-vowel stroke included). */
 export const KANA_CHARS = [...GLYPHS.keys()].join("");
 
-/**
- * `text` laid out as one line of glyphs — top to bottom when `vertical` (its `ー` turned upright),
- * else left to right — `gap` world px apart: the runs from the text's top-left, and its size. Throws
- * on a character the font lacks (the signs are a fixed list: a gap would be a silent typo).
- */
+/** `text` as one line of glyph runs from its top-left, `gap` world px apart (top to bottom with an
+ * upright `ー` when `vertical`), plus its size. Throws on a character the font lacks. */
 export function kanaText(text: string, vertical: boolean, gap = 1): { runs: Run[]; w: number; h: number } {
   const chars = [...text];
   const runs: Run[] = [];

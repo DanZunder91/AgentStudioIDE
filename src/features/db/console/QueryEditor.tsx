@@ -1,50 +1,6 @@
-/**
- * QueryEditor — the CodeMirror 6 half of the DB console.
- *
- * ── Highlighting: real SQL colour, zero new dependencies ─────────────────────
- * Colour comes from the **Shiki → CM6 decoration** path the file editor already
- * ships: `shikiField` + `applyShikiHighlight`, re-run on a 50 ms
- * debounce after the last keystroke. So the console's SQL is *the same palette* as a
- * `.sql` file in the editor — which matters more than it sounds, because two
- * different SQL palettes in one app reads as a bug — and nothing was added to
- * `package.json`.
- *
- * `@codemirror/lang-sql` is **not** used and is not needed for colour. What it would
- * buy is a syntax *tree*: bracket/quote auto-close, smart indent, and schema-aware
- * completion from the connection tree. That is a real want, but it is a
- * dependency decision and not this component's to make unilaterally — see the
- * recommendation in the handover report. Note also that statement-under-cursor does
- * **not** need a parser: the lexical splitter in `guard.rs`, mirrored in
- * `statements.ts`, computes statement boundaries lexically.
- *
- * ── ⌘⏎ sends TEXT, not just a mode (🔴 a fixed bug) ─────────────────────────
- * This binding used to call `onRun("statement")` — a mode and nothing else — and the
- * store then sent the **whole buffer**, which Rust refused as multi-statement. The
- * mode said "one statement" and the payload said "all of them", and the console's own
- * tooltip had been promising "runs the statement under the cursor" the whole time with
- * nothing anywhere computing that. So the editor now decides what to run, because it
- * is the only place that knows the caret and the selection, and passes the text up:
- * a selection wins verbatim; otherwise `textToRun` picks the statement / the line /
- * the whole buffer by engine family. `⇧⌘⏎` still sends the whole buffer.
- *
- * `ref` exposes the same computation to `DbConsole`'s toolbar, so the **Run button**
- * and ⌘⏎ cannot disagree about what "Run" means — a button whose own tooltip
- * describes a different action than the button performs is the bug above, again.
- *
- * ── Why the keymap lives in CM6 and not on a container ───────────────────────
- * A focused `contenteditable` swallows macOS key equivalents, so a binding
- * that must work while the editor has focus has to be a CM6 keymap at
- * `Prec.highest`, not a React `onKeyDown` further up. `DbConsole` keeps a container
- * handler as well, for when focus is on the toolbar — it defers to this one by
- * checking `defaultPrevented`, so ⌘⏎ can never run a statement twice.
- *
- * ── Controlled, but not re-created ───────────────────────────────────────────
- * `text`/`onTextChange` make this look like a controlled input, and it behaves like
- * one, but the view is built **once**: an external `text` change is diffed against
- * the live document and dispatched as an edit, so the caret, undo history and scroll
- * survive. Rebuilding the view per render would throw all three away on every
- * keystroke.
- */
+/** CM6 half of the DB console. Colour comes from the editor's Shiki decoration path (same palette,
+ * no lang-sql). ⌘⏎ sends the TEXT textToRun picks; ref gives the Run button the same answer. Keymap
+ * at Prec.highest (contenteditable swallows key equivalents). Built once; later text is diffed. */
 
 import { Prec, type Extension } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, placeholder } from "@codemirror/view";
@@ -59,34 +15,16 @@ import type { DbRunMode } from "../types";
 import { textToRun } from "./statements";
 import "./console.css";
 
-/**
- * Re-tokenise this long after the last keystroke. Mirrors `EditorRegistry`'s
- * `REHIGHLIGHT_MS` deliberately — the same number, for the same reason (typing must
- * not run Shiki per character) — rather than importing a private constant from a
- * module this component does not otherwise depend on.
- */
+/** Same as EditorRegistry's REHIGHLIGHT_MS: typing must not run Shiki per character. */
 const REHIGHLIGHT_MS = 50;
 
-/**
- * What ⌘⏎ would run for this view right now.
- *
- * Both the document and the selection are read off the SAME `EditorState`, on purpose: taking
- * the text from the `text` prop and the range from the view would slice one snapshot with the
- * other's offsets, and the two are momentarily out of step on every keystroke.
- */
+/** Text and selection from the SAME EditorState: the prop and the view are briefly out of step. */
 function runTextOf(view: EditorView, queryLanguage: "sql" | "json" | "commandline"): string {
   const range = view.state.selection.main;
   return textToRun(queryLanguage, view.state.doc.toString(), range.from, range.to);
 }
 
-/**
- * What a caller outside the editor can ask it, imperatively.
- *
- * Exactly one question, and it exists because the answer is only knowable *here*: the caret and
- * the selection live in the CM6 state, and `DbConsole`'s Run button has to send the same text
- * ⌘⏎ would. Reporting every selection change upward as a prop instead would re-render the whole
- * console on each arrow key to answer a question asked only on click.
- */
+/** Asked on click, so selection changes need not re-render the console through props. */
 export interface QueryEditorHandle {
   /** The text ⌘⏎ would run right now, given the caret/selection and the engine family. */
   runText: () => string;
@@ -99,10 +37,8 @@ export interface QueryEditorProps {
   shikiId: string | null;
   /** `EngineSpec.queryLanguage` — decides what ⌘⏎ runs when nothing is selected. */
   queryLanguage: "sql" | "json" | "commandline";
-  /**
-   * Run `text` in `mode`. **The text is the payload, the mode is the permission** — Rust still
-   * needs the mode for `multi_statement_refusal`, and it still splits what it is given.
-   */
+  /** The text is the payload, the mode the permission: Rust needs the mode for
+   * multi_statement_refusal and still splits the text. */
   onRun: (mode: DbRunMode, text: string) => void;
   /** Lets `DbConsole`'s toolbar ask what ⌘⏎ would run. See {@link QueryEditorHandle}. */
   ref?: React.Ref<QueryEditorHandle>;
@@ -110,36 +46,18 @@ export interface QueryEditorProps {
   allowScript: boolean;
   /** The accessible name of the editable surface. */
   ariaLabel: string;
-  /**
-   * Ghost text shown while the buffer is empty — **what this engine expects, by example**.
-   *
-   * 🔴 Without it, nothing on screen says a MongoDB console wants a JSON command document,
-   * and an empty editor in a tab labelled with a database invites SQL.
-   *
-   * A placeholder rather than **seeding the buffer**, and the difference matters: seeded text is
-   * real text, so ⌘⏎ would run a statement the user never typed — against a database, possibly a
-   * production one. Ghost text teaches the shape and cannot be executed.
-   */
+  /** Ghost text showing what this engine expects. Never seeded into the buffer: ⌘⏎ would then
+   * run a statement the user never typed. */
   placeholderText?: string;
 }
 
-/**
- * `ref` is destructured OUT of `props`, and that is not a style choice: `react-hooks/refs`
- * treats a props object holding a ref as ref-tainted, and then rejects the two existing
- * `useEffect` deps arrays below (`[props.text]`, `[shikiId, props.text]`) as "cannot access
- * refs during render". Separating it at the parameter keeps the rule at `error`, where it
- * belongs — it caught a real defect in `useTerminal.ts`.
- */
+/** ref is destructured out of props: react-hooks/refs taints a props object holding a ref and
+ * would reject the effect deps below. */
 export function QueryEditor({ ref, ...props }: QueryEditorProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  /**
-   * The latest props, for the CM6 extensions — which are built once, so a handler
-   * that closed over the first render's `onRun` would call a stale callback forever.
-   * Seeded with `useRef(props)` and refreshed in an effect rather than during
-   * render: a render-phase ref write is impure and `react-hooks/refs` rejects it
-   * (that rule caught a real defect in `useTerminal.ts` and stays at error).
-   */
+  /** Latest props for the once-built CM6 extensions (else a stale onRun). Refreshed in an
+   * effect: a render-phase ref write is impure and react-hooks/refs rejects it. */
   const latest = useRef(props);
   useEffect(() => {
     latest.current = props;

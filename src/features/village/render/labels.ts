@@ -1,34 +1,13 @@
-/**
- * Agent Village — text labels. Drawn at SCREEN scale (a real font at its own
- * size, never a zoomed-up bitmap), so they stay sharp at every zoom; the
- * position comes from the world anchor. A backing box keeps them legible over
- * any tile.
- *
- * Five tones:
- *   - `agent` — a compact dark tag hanging from its anchor (just below the feet);
- *   - `house` — a wooden name board CENTRED on its anchor (the back wall's face; a city
- *     building's sign over its roof);
- *   - `floor` — a city floor's name plate, its box STARTING at the anchor (the floor's left
- *     wall) and centred on it vertically (the slab above the floor);
- *   - `civic` — a capacity building's board / HQ floor plate with its figure, centred;
- *   - `gauge` — a usage gauge's small caption, centred under it.
- * There is no "+N" overflow tone: every agent gets a desk, rooms and floors grow instead.
- *
- * Labels never pile up: `placeLabels` lays them out greedily in rank order (the
- * engine ranks hovered > waiting > root agents > sub-agents; house boards and the
- * hovered tag are forced). A label that would overlap one already placed is nudged
- * one line down, and dropped when that overlaps too.
- */
+/** Labels drawn at SCREEN scale (a real font, sharp at any zoom) on a backing box, anchored in the
+ * world. `placeLabels` lays them out greedily in rank order: an overlapping label moves one line
+ * down, then is dropped. */
 
 import type { DrawItem } from "../villageTypes";
 import type { Camera } from "./camera";
 import { sx, sy } from "./paint";
 import type { DrawTarget } from "./renderTypes";
 
-/**
- * The label DrawItem's own tone union — derived, never restated, so the engine's tones and
- * this file's styles cannot drift apart (`STYLE` below must then name every one, and no more).
- */
+/** Derived from DrawItem, never restated, so `STYLE` must name exactly the engine's tones. */
 export type LabelTone = Extract<DrawItem, { t: "label" }>["tone"];
 
 interface ToneStyle {
@@ -95,10 +74,8 @@ const FONT_FAMILY = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 /** Screen px kept clear between two placed labels. */
 export const LABEL_GAP = 2;
 
-/**
- * `measureText` widths by font + text. Labels repeat every frame with the same few
- * strings, so each is measured once, not 60×/s. Bounded: past the cap it starts over.
- */
+/** `measureText` widths by font + text: the same few strings repeat every frame. Bounded: past
+ * the cap it starts over. */
 const WIDTHS = new Map<string, number>();
 const WIDTHS_CAP = 512;
 
@@ -135,12 +112,9 @@ export interface LabelLayout {
   box: Box;
 }
 
-/**
- * Measure a label anchored at world (wx, wy) — top-centre for an agent, centre for a
- * house, civic board or gauge caption, left-middle for a floor plate. `pixelRatio` (device px per CSS px) scales the font so it reads the same size on
- * a Retina canvas. null for blank text — and for text that cannot fit `maxW` (world px; see the
- * label DrawItem), which otherwise clips it to fit.
- */
+/** Measures a label at world (wx, wy): top-centre (agent), centre (house, civic, gauge) or
+ * left-middle (floor). `pixelRatio` scales the font for Retina. null for blank text or text that
+ * cannot fit `maxW` (world px). */
 export function layoutLabel(
   ctx: DrawTarget,
   cam: Camera,
@@ -193,11 +167,8 @@ export interface PlaceRequest {
   force: boolean;
 }
 
-/**
- * Greedy collision avoidance, in the given (rank) order. A forced label is placed as is.
- * Any other is tried where it is, then one line lower; the first spot clear of every
- * label placed so far wins, else it is dropped (null).
- */
+/** Greedy, in rank order: a forced label is placed as is; any other where it is, then one line
+ * lower, whichever is clear first, else dropped (null). */
 export function placeLabels(requests: readonly PlaceRequest[]): (Box | null)[] {
   const placed: Box[] = [];
   return requests.map(({ box, force }) => {

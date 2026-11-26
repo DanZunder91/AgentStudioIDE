@@ -1,12 +1,6 @@
-//! The Rust↔TS wire contract (ARCHITECTURE §2.5), tested from *outside* the crate
-//! — the same vantage point the frontend has.
-//!
-//! `model.rs` already has three unit tests pinning the happy-path serialization.
-//! These go after what those cannot: **round-tripping**, the exact set of keys,
-//! and the deserialize direction (the shapes `src/app/types.ts` must produce).
-//!
-//! Every literal here is duplicated from `types.ts` on purpose. If a rename makes
-//! this file fail, the frontend was already broken — that is the whole job.
+//! The Rust↔TS wire contract (ARCHITECTURE §2.5), from outside the crate: round-trips, exact key
+//! sets, and the deserialize direction (shapes `src/app/types.ts` must produce). Literals duplicate
+//! `types.ts` on purpose: if a rename fails here, the frontend was already broken.
 
 use agent_studio_scaffold_lib::model::{
     AgentEvent, AgentKind, AgentNode, AgentStatus, FleetSnapshot, TerminalKind, TerminalMeta,
@@ -253,11 +247,8 @@ fn node() -> AgentNode {
     }
 }
 
-/// The exact key set. **The UI-only fields must never appear**: `types.ts` marks
-/// `childIds`/`sessionId`/`expanded`/`unread` as store-maintained, and the store
-/// derives them. Sending them would make the wire the source of truth for state
-/// the UI owns — and `sessionId` there means the *UI layout Session*, which the
-/// Rust side knows nothing about.
+/// `childIds`/`sessionId`/`expanded`/`unread` are store-maintained in `types.ts` and must never be
+/// sent: the UI owns that state, and its `sessionId` is the UI layout Session, unknown to Rust.
 #[test]
 fn agent_node_sends_the_wire_fields_and_no_ui_fields() {
     let v: Value = serde_json::to_value(node()).unwrap();

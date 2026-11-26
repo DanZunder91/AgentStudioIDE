@@ -1,13 +1,5 @@
-/**
- * `splitWireCode` — the unified reader for the `"<code>[: detail]"` rejection shape.
- *
- * Written when three per-feature copies were collapsed into one. The three had already
- * diverged, so the tests that matter most here are the ones pinning **which** behaviour survived:
- * duck-typed `.message` (from `usage`) rather than `instanceof Error` (from `db` and `portability`).
- *
- * Every expectation is literal, and the code lists are written out rather than imported from the
- * features — a shared parser tested through one caller's constant proves nothing about the others.
- */
+/** Pinned: duck-typed `.message`, not `instanceof Error`. Code lists are written out, not imported:
+ * a parser tested through one caller's constant proves nothing about the others. */
 
 import { describe, expect, it } from "vitest";
 

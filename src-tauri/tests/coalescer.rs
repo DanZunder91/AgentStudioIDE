@@ -1,21 +1,6 @@
-//! Tests for the 8ms/32KB coalescer — `stream/coalesce.rs`.
-//!
-//! ARCHITECTURE §9 calls this "the one thing to get exactly right": it is all
-//! that stands between a chatty child and a janked webview.
-//!
-//! **These drive tokio's virtual clock** (`#[tokio::test(start_paused = true)]` +
-//! `tokio::time::advance`), never real sleeps. That buys two things a sleeping
-//! test cannot have:
-//! - *Stability and speed* — no wall-clock race to lose on a loaded runner.
-//! - *A real assertion about time.* Time only moves when we move it, so we can
-//!   step to 7ms and assert **nothing** flushed, then to 8ms and assert it did.
-//!   And at `elapsed == 0` a flush can only have come from the size trigger,
-//!   because the timer provably has not run. A real-time test cannot tell those
-//!   triggers apart.
-//!
-//! The 8ms / 32KB literals are restated here on purpose: the consts in
-//! `coalesce.rs` are private, and a test that reads the value it is checking
-//! cannot fail. These are the numbers ARCHITECTURE §3 specifies.
+//! The 8ms/32KB coalescer (`stream/coalesce.rs`) on tokio's paused clock, never real sleeps:
+//! time moves only when we move it, so the time and size triggers are told apart. The literals
+//! are restated on purpose (the consts are private; ARCHITECTURE §3).
 
 mod common;
 
@@ -31,14 +16,8 @@ use tokio::time::{advance, Instant};
 const MAX_BATCH: usize = 32 * 1024;
 const FLUSH_INTERVAL: Duration = Duration::from_millis(8);
 
-/// Let every ready task run to its next await point, **without letting the clock
-/// move**: `yield_now` keeps a task ready, and the paused clock only
-/// auto-advances when the runtime has nothing at all to do.
-///
-/// Called right after `pump()` for a second reason: `interval()` yields its first
-/// tick immediately, so the pump's first loop iteration flushes an empty buffer
-/// and re-arms for +8ms. Letting it get there first stops a chunk from racing
-/// that tick into a batch of its own.
+/// Run every ready task to its next await without moving the paused clock. Also after `pump()`:
+/// `interval()` ticks at once, and settling first keeps a chunk from racing that tick.
 async fn settle() {
     for _ in 0..8 {
         tokio::task::yield_now().await;
@@ -80,12 +59,7 @@ async fn small_writes_are_batched_into_one_flush() {
     assert_eq!(sink.text(), "hello coalesced world");
 }
 
-/// **The time bound flushes a partial batch.** A trickle must not sit in the
-/// buffer waiting for a 32KB that will never come; latency stays bounded at 8ms.
-///
-/// Stepping to 7ms and then to 8ms pins the bound from *both* sides — a test that
-/// only checks "it flushed eventually" would pass with the interval set to a
-/// second.
+/// A trickle flushes within 8ms; stepping to 7ms then 8ms pins the bound from both sides.
 #[tokio::test(start_paused = true)]
 async fn a_partial_batch_is_flushed_by_the_time_bound() {
     let (tx, _ctrl, sink) = pump();
@@ -114,11 +88,7 @@ async fn a_partial_batch_is_flushed_by_the_time_bound() {
     assert_eq!(sink.text(), "trickle");
 }
 
-/// **A >32KB burst flushes early.** The size trigger must pre-empt the timer, or
-/// a firehose would buffer unboundedly between ticks.
-///
-/// `elapsed == 0` is the proof that it was the *size* trigger: the clock is
-/// paused and we never advanced it, so the timer cannot have fired.
+/// The size trigger pre-empts the timer; `elapsed == 0` proves it (the paused timer can't fire).
 #[tokio::test(start_paused = true)]
 async fn a_burst_over_32kb_flushes_early_on_the_size_trigger() {
     let (tx, _ctrl, sink) = pump();
@@ -209,10 +179,7 @@ async fn bytes_are_never_reordered_or_dropped_across_many_flushes() {
     );
 }
 
-/// The last bytes before the PTY closes must not be lost: when the reader's
-/// channel closes, the coalescer does a **final flush** before returning.
-/// Without it a terminal would never show its child's last line — and `echo x;
-/// exit` puts those bytes in the pending buffer at exactly the moment it closes.
+/// When the reader's channel closes, a final flush keeps the child's last bytes (`echo x; exit`).
 #[tokio::test(start_paused = true)]
 async fn closing_the_reader_channel_triggers_a_final_flush() {
     let (tx, _ctrl, sink) = pump();
@@ -255,10 +222,8 @@ async fn idle_ticks_do_not_send_empty_batches() {
     );
 }
 
-/// **Re-attach: a dead webview Channel must NOT end the pump.**
-/// The webview reloads and its Channel dies *before* `terminal_reattach` arrives;
-/// if the pump ended on the failed send, there'd be nothing to re-bind. Instead it
-/// keeps draining and filling the ring, and ends only when the PTY closes.
+/// A dead webview Channel must not end the pump (nothing left to re-bind); it keeps filling the
+/// ring and ends only when the PTY closes.
 #[tokio::test(start_paused = true)]
 async fn the_pump_survives_a_dead_channel_and_ends_only_on_pty_close() {
     let (tx, rx) = mpsc::channel::<Bytes>(256);

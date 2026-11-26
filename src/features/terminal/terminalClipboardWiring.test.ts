@@ -1,8 +1,4 @@
-/**
- * Every real terminal the registry creates gets the Windows/Linux copy/paste keys
- * (`terminalClipboard.ts`), driven through the real xterm `Terminal` API. jsdom, like
- * `reattach.test.ts`: `ensureTerminal` builds the xterm instance without `term.open()`.
- */
+/** jsdom works: `ensureTerminal` builds the xterm instance without `term.open()`. */
 
 import { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

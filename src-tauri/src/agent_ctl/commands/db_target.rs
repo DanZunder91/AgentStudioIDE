@@ -1,17 +1,6 @@
-//! What every database tool after `db_connect` starts with: which saved connection the agent
-//! means, a session of its own on it, and a deadline.
-//!
-//! * **Which connection.** An agent names a saved connection by id or by name, in any case,
-//!   because that is how a person says it ("query my Orders db"). A name two connections share
-//!   is refused with both listed, never guessed: running a query on the wrong database is the
-//!   one mistake this cannot afford.
-//! * **A session of its own, per call.** Opened with [`crate::db::open`] (the console's own
-//!   door: the password is read from the Vault inside Rust, read-only is applied at connect) and
-//!   closed when the call ends. Never the user's console session: an agent's statement must not
-//!   run inside a transaction the user has open, and a transaction an agent leaves open must not
-//!   hold locks after its call. Closing on drop covers a call abandoned half-way (a timeout).
-//! * **A deadline.** Every call answers before the CLI stops waiting
-//!   ([`super::super::cli`]'s reply timeout), whatever the connection's own timeout says.
+//! Shared start of the DB tools: resolve the saved connection (id or name, any case; a shared name
+//! is refused, never guessed), open a per-call session (never the user's: no shared transaction or
+//! held locks; closed on drop), and answer before the CLI's reply timeout.
 
 use std::time::{Duration, Instant};
 
@@ -23,10 +12,8 @@ use super::{target_label, TOOL_DEADLINE};
 /// How many saved names an error lists before it says how many more there are.
 const NAMES_LISTED: usize = 30;
 
-/// The saved connection `arg` names: its id, or its name ignoring case and surrounding spaces.
-///
-/// `Err` is the sentence the agent reads: no connections saved, none by that name (with the
-/// saved names), or more than one by that name (with each one's id).
+/// `arg` is an id, or a name ignoring case and surrounding spaces; `Err` is the sentence the agent
+/// reads.
 pub fn resolve(connections: &[DbConnection], arg: &str) -> Result<DbConnection, String> {
     let wanted = arg.trim();
     if connections.is_empty() {
@@ -98,11 +85,8 @@ pub fn describe(c: &DbConnection) -> String {
     )
 }
 
-/// A session a tool opened for itself, on the connection the agent named.
-///
-/// Closed by [`ToolSession::close`] when the call ends, and — if the call is abandoned before
-/// that (a deadline dropped the future, a panic) — taken out of the registry and closed in the
-/// background on drop, so no agent session outlives its call.
+/// Closed by [`ToolSession::close`], or on drop if the call is abandoned (deadline, panic), so no
+/// agent session outlives its call.
 pub struct ToolSession {
     id: Option<String>,
     /// The server's version string from the open.
@@ -136,10 +120,8 @@ impl ToolSession {
         }
     }
 
-    /// Ask the server to stop whatever this session is running (an engine without a
-    /// server-side cancel has nothing to ask), then close it. Used when the deadline passed:
-    /// without the cancel, a slow statement would keep running on the server after the agent
-    /// was told it had stopped waiting.
+    /// Without the server-side cancel, a slow statement would keep running after the agent was told
+    /// it had stopped waiting.
     pub async fn cancel_and_close(self) {
         if let Some(cancel) = self
             .id
@@ -175,15 +157,8 @@ pub fn connect_failure(c: &DbConnection, reason: &str) -> String {
     text
 }
 
-/// The values no reply or event of a database tool may carry: the connection's password as the
-/// Vault resolves it, a Vault reference its URL names, and a password written into its URL.
-///
-/// The backstop behind every refusal: where what a server returns (a `CONFIG GET requirepass`, a
-/// table the user keeps a password in, an error that echoes a DSN) holds one of these as written
-/// or percent-encoded, it is replaced by [`crate::db::error::MASK`] before an agent or the UI sees
-/// it ([`crate::db::secret::redact`]). Only those forms: a server that can read the password (its
-/// own environment, a file) can return it reversed or encoded, and that is caught only by the
-/// refusals in front of this, or by an account that cannot read it.
+/// Values no DB tool reply or event may carry, masked as written or percent-encoded. A backstop
+/// only: a server that can read the password can return it reversed or encoded.
 pub fn secrets_of(paths: &Paths, c: &DbConnection) -> Vec<String> {
     let vault = crate::api_store::load(&paths.vault);
     let mut refs = vec![c.password_ref.clone()];

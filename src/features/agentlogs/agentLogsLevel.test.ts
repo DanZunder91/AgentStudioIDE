@@ -1,11 +1,5 @@
-/**
- * `classifyLine` — the level table. Every expectation is written out by
- * hand, never derived from the regexes under test. The rows are Rust's own
- * tables in `logstream/level.rs` (`the_level_table`, `the_structured_level_column_table`),
- * copied line for line so the two cannot quietly drift, plus the cases where the regex
- * DIALECTS differ (Unicode `\b` / `\d` / `\s`) — the ones a naive port gets wrong. The
- * golden agreement over Rust's generated case list is `src/test/contract/level.contract.test.ts`.
- */
+/** `classifyLine` level table, written out by hand: Rust's `logstream/level.rs` tables copied
+ * line for line, plus Unicode `\b`/`\d`/`\s` dialect cases. Golden: `level.contract.test.ts`. */
 
 import { describe, expect, it } from "vitest";
 

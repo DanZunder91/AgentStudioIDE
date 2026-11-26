@@ -1,27 +1,6 @@
-//! Persisted API-client store: saved requests (collections)
-//! + environment variables.
-//!
-//! Backs the built-in API client's "save this request" and "reusable environment
-//! variables" features, so it must survive app restarts. Stored as a single pretty
-//! JSON blob: an [`ApiStore`] holding the whole collection list, the environment
-//! list, and which environment is active.
-//!
-//! **WHERE it lives — the secret-safety guarantee:** this store is
-//! written to the OS **app config dir** (`~/.config/agent-studio/api-store.json` on
-//! the fallback path), the SAME place `recent_projects.rs` uses — and NEVER inside a
-//! workspace/repo. Environment variables hold **live tokens** (a screenshot or a
-//! commit that shows one leaks it), so keeping this file outside any git working
-//! tree is exactly what stops a secret from ever being committed.
-//! No git operation can reach it. That is not an implementation detail; it is a standing rule.
-//!
-//! **Robustness over correctness of the file:** a missing, unreadable, or corrupt
-//! store is treated as an empty [`ApiStore`], never an error — loading the API store
-//! must not be able to break UI startup. (Same contract as `recent_projects.rs`.)
-//!
-//! The store logic ([`load`], [`save`]) operates on an explicit file path so it is
-//! unit-testable against a temp dir, with no dependency on the real app config dir.
-//! The `#[tauri::command]`s are the thin glue that resolves that path from the
-//! `AppHandle`.
+//! Persisted API-client store (collections, environments; also the DB client's Vault). Lives in
+//! the OS app config dir, NEVER a workspace, so live tokens can't be committed (a standing rule).
+//! A missing or corrupt file loads as empty, never an error, so startup cannot break.
 
 use std::path::{Path, PathBuf};
 
@@ -39,19 +18,8 @@ pub struct HttpHeader {
     pub value: String,
 }
 
-/// A saved request in a collection. `id` is a stable client-generated key; the rest
-/// is everything needed to replay the request.
-///
-/// **Protocol-aware:** a collection holds HTTP, WebSocket, AND gRPC
-/// requests, so the shared fields carry each protocol's core and the optional tail
-/// carries what only one protocol needs. The tail is `#[serde(default,
-/// skip_serializing_if = "Option::is_none")]` so pre-existing HTTP-only store files
-/// (written before this field set) still load, and an HTTP save stays byte-identical
-/// on the wire (no `null` noise). Field reuse mirrors the live `ApiRequestState`:
-///   • HTTP — `method`/`url`/`headers`/`body`.
-///   • WS   — `url` is the socket URL, `headers` the connect headers; `protocol="ws"`.
-///   • gRPC — `url` is the endpoint, `body` the request message, `headers` the
-///     metadata, plus `grpc_service`/`grpc_method`/`plaintext`; `protocol="grpc"`.
+/// Protocol-aware (HTTP, WS, gRPC): shared fields mirror `ApiRequestState`, and the optional
+/// protocol tail is skipped when `None`, so old files load and HTTP saves stay byte-identical.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedRequest {
@@ -74,30 +42,15 @@ pub struct SavedRequest {
     /// gRPC: h2c (no TLS) when `Some(true)`. Absent for HTTP/WS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plaintext: Option<bool>,
-    /// The [`Folder`] this request is filed under, or `None` for **the root**.
-    ///
-    /// `None`-means-root is what makes folders a zero-migration change: every request
-    /// written before folders existed has no `folderId` key, loads as `None`, and shows
-    /// up at the root — which is exactly the rule that requests saved before
-    /// folders existed stay at the root. `skip_serializing_if` keeps a root request's
-    /// JSON byte-identical to what it was before this field existed, so an unused
-    /// feature costs the file nothing.
+    /// `None` = the root: requests saved before folders load there with no migration, and skipping
+    /// `None` keeps their JSON byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder_id: Option<String>,
 }
 
-/// A folder grouping saved requests.
-///
-/// Deliberately **flat**: a folder holds requests, never other folders. Nesting is not
-/// required, and a tree would bring cycle checks, a move-into-descendant rule and a
-/// recursive delete — three ways to lose someone's saved work in exchange for depth
-/// the feature does not need.
-///
-/// `order` is the display rank, stamped by this module. The invariant every mutator
-/// upholds — and [`folders_are_ranked_in_vec_order`] asserts — is that
-/// [`ApiStore::folders`] is **stored in display order** and `order` equals the index.
-/// One ordering, in one place: the frontend renders the vec as it comes and never
-/// re-sorts, so there is no second sort to disagree with this one.
+/// Flat on purpose: nesting would add cycle checks, descendant moves and recursive deletes, each a
+/// way to lose saved work. Stored in display order with `order` == index
+/// ([`folders_are_ranked_in_vec_order`]); the frontend never re-sorts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Folder {
@@ -125,21 +78,9 @@ pub struct Environment {
     pub variables: Vec<EnvVar>,
 }
 
-/// The whole persisted blob: every saved request, every environment, and which
-/// environment (if any) is active. Persisted as one file — the store is small and
-/// the UI saves it wholesale.
-///
-/// [`Default`] is an **empty** store: no collections, no environments, no active id.
-/// That is exactly what a missing/corrupt file loads as.
-///
-/// 🔴 **Every field here MUST carry `#[serde(default)]`, forever.** [`load`] falls back
-/// to `ApiStore::default()` on *any* parse failure, and a missing field IS a parse
-/// failure — so one field added without a default would make every store file on every
-/// existing install fail to parse, load as empty, and then be **overwritten with that
-/// emptiness** by the next save. That is not a lost feature, it is the user's saved
-/// requests *and* their live API tokens (and the DB client's Vault, which is this same
-/// file) deleted without a word. `folders_field_is_optional_so_a_pre_folders_file_survives`
-/// is the regression test; it loads a file written before folders existed.
+/// Every field MUST carry `#[serde(default)]`, forever: [`load`] treats any parse failure as an
+/// empty store, and the next save would overwrite the user's requests, tokens and Vault.
+/// Regression test: `folders_field_is_optional_so_a_pre_folders_file_survives`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiStore {
@@ -182,10 +123,7 @@ fn restamp(store: &mut ApiStore) {
     }
 }
 
-/// Append a folder named `name` with the client-opaque `id`, and return it.
-///
-/// New folders land at the END, which is the only placement that cannot reorder
-/// anything the user already arranged.
+/// New folders go at the END: the only placement that cannot reorder what the user arranged.
 pub fn create_folder(store: &mut ApiStore, id: String, name: &str) -> Result<Folder, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -216,16 +154,8 @@ pub fn rename_folder(store: &mut ApiStore, id: &str, name: &str) -> Result<(), S
     Ok(())
 }
 
-/// Delete a folder and **return its requests to the root** — they are NOT deleted.
-/// Returns how many requests moved.
-///
-/// 🔴 The destructive alternative (cascade-delete the contents) was rejected: the
-/// dangerous case is a user who filed thirty saved requests into a folder and then
-/// tidies up the folder. A cascade there is unrecoverable — this store has no undo and
-/// no trash — while "the requests come back to the root" is at worst a moment of
-/// untidiness the user can fix by dragging. Same reasoning as `db_connection_delete`'s
-/// cascade being *explicit* rather than incidental: destruction is opt-in, never the
-/// default of an unrelated gesture.
+/// Returns its requests to the root, never deletes them (no undo, no trash): destruction is
+/// opt-in, never the default of an unrelated gesture. Returns how many moved.
 pub fn delete_folder(store: &mut ApiStore, id: &str) -> Result<usize, String> {
     if !store.folders.iter().any(|f| f.id == id) {
         return Err(no_such_folder(id));
@@ -242,10 +172,7 @@ pub fn delete_folder(store: &mut ApiStore, id: &str) -> Result<usize, String> {
     Ok(orphaned)
 }
 
-/// File `request_id` under `folder_id`, or at the root when `folder_id` is `None`.
-///
-/// Both ids are checked: a drop onto a folder another window just deleted must say so
-/// rather than quietly filing the request somewhere it is not visible.
+/// Both ids are checked: a drop onto a folder another window just deleted must say so.
 pub fn move_request(
     store: &mut ApiStore,
     request_id: &str,
@@ -265,13 +192,8 @@ pub fn move_request(
     Ok(())
 }
 
-/// Reorder the folders to exactly the sequence `ids`, re-stamping `order`.
-///
-/// `ids` must be a **permutation** of the stored folder ids — same length, no
-/// duplicates, every id known. Anything else is an `Err`, not a best-effort merge: a
-/// short list would silently drop folders from the file, which is the whole class of
-/// bug this module is being careful about. The frontend produces `ids` with the shared,
-/// property-tested `moveBefore`, so this end never re-implements the move.
+/// `ids` must be a permutation of the stored ids, else `Err`: a short list would silently drop
+/// folders. The frontend builds it with the shared, property-tested `moveBefore`.
 pub fn reorder_folders(store: &mut ApiStore, ids: &[String]) -> Result<(), String> {
     let mut seen = std::collections::HashSet::new();
     for id in ids {
@@ -302,10 +224,8 @@ pub fn reorder_folders(store: &mut ApiStore, ids: &[String]) -> Result<(), Strin
     Ok(())
 }
 
-/// Load the store from `path`. **Any** failure — missing file, unreadable, corrupt
-/// JSON, or a JSON value that isn't a well-shaped [`ApiStore`] — yields
-/// [`ApiStore::default()`] (an empty store), so startup can never break on a bad
-/// file. (Exactly `recent_projects::load`'s robustness contract.)
+/// Any failure (missing, unreadable, corrupt, ill-shaped) yields an empty store, so startup can
+/// never break on a bad file (as `recent_projects::load`).
 pub fn load(path: &Path) -> ApiStore {
     let Ok(text) = std::fs::read_to_string(path) else {
         return ApiStore::default();
@@ -313,24 +233,9 @@ pub fn load(path: &Path) -> ApiStore {
     serde_json::from_str::<ApiStore>(&text).unwrap_or_default()
 }
 
-/// Write `store` to `path` as pretty JSON, creating the parent dir if needed.
-///
-/// **CRASH-SAFE and owner-only.** This file is the app's one secret store — the DB client reuses
-/// it as its Vault rather than inventing a second one — so:
-///
-/// * the writer is `pinned_agents::save`'s: sibling temp → `write_all` → `sync_all` → atomic
-///   `rename`. A crash leaves either the old file or the new one, never a half-written blob. The
-///   previous plain `std::fs::write` could truncate this file and lose every stored secret;
-/// * the mode is `0600`, which stops other *users* on a shared machine reading it. This is
-///   not encryption and must not be described as such.
-///
-/// `pub(crate)` rather than private because `db::` writes the Vault when a connection's password
-/// is saved `forever`. One writer, one file.
-///
-/// **Locked, with a unique temp** ([`crate::store_file`]): the file has four
-/// writers (the blob save, the folder commands, `db::upsert`, the portability import) and they
-/// used to share one fixed temp name with no lock — one could delete or rename another's
-/// half-written temp. A save now queues behind any in-flight [`edit_store`] / [`update`].
+/// The app's one secret store, so: locked with a unique temp ([`crate::store_file`]; four
+/// writers), atomic temp → fsync → rename, and mode `0600` (not encryption). `pub(crate)` for
+/// `db::`, which writes the Vault.
 pub(crate) fn save(path: &Path, store: &ApiStore) -> std::io::Result<()> {
     let _guard = crate::store_file::lock(path);
     let json = serde_json::to_string_pretty(store).unwrap_or_else(|_| "{}".to_string());
@@ -369,10 +274,8 @@ fn store_path(app: &tauri::AppHandle) -> PathBuf {
     fallback_store_path()
 }
 
-/// [`store_path`] for the rest of the crate. `db::` needs it because the DB client's Vault **is**
-/// this file (one secret store, not two), and it resolves the path at the same gesture it
-/// writes it. Deliberately a thin alias rather than making `store_path` public, so the name at
-/// the call site says whose file it is.
+/// The DB client's Vault is this file; an alias rather than a public `store_path` so the call
+/// site says whose file it is.
 pub(crate) fn store_path_for(app: &tauri::AppHandle) -> PathBuf {
     store_path(app)
 }
@@ -395,10 +298,7 @@ pub fn api_store_load(app: tauri::AppHandle) -> ApiStore {
     load(&store_path(&app))
 }
 
-/// Persist the whole `store` blob, replacing whatever was there.
-///
-/// Frontend contract: `invoke('api_store_save', { store })`. A write failure surfaces
-/// as an `Err(String)` so the UI can note it — but this never panics.
+/// `invoke('api_store_save', { store })`; a write failure is an `Err` the UI can note.
 #[tauri::command]
 pub fn api_store_save(app: tauri::AppHandle, store: ApiStore) -> Result<(), String> {
     save(&store_path(&app), &store).map_err(|e| e.to_string())
@@ -406,20 +306,9 @@ pub fn api_store_save(app: tauri::AppHandle, store: ApiStore) -> Result<(), Stri
 
 /* ───────────────────────────── folders: the commands ───────────────────────────── */
 
-/// Load → mutate → save → hand the WHOLE store back. The path-injected core of every
-/// folder command, so all five share one transaction shape and one test seam.
-///
-/// 🔴 **Read-modify-write, deliberately** — and the reason folders are commands
-/// rather than more fields on the frontend's `api_store_save` blob. The webview holds an
-/// in-memory mirror of this file hydrated ONCE per app run, while Rust also writes the
-/// file (`db_connection_upsert` puts a DB password in the Vault). A blob save from a
-/// stale mirror overwrites whatever Rust wrote in between. These commands re-read the
-/// file at the moment of the change, so a folder gesture can never lose a password —
-/// and because they return the fresh store, the frontend re-hydrates its mirror on
-/// every one of them, which shrinks that window for the blob path too.
-///
-/// The write is [`save`]'s atomic temp→fsync→rename, so a crash mid-gesture leaves the
-/// old file, never a half-written one.
+/// Load → mutate → save → return the whole store. The webview's mirror is hydrated once while Rust
+/// also writes the file (DB passwords), so re-reading here means a folder gesture never loses a
+/// password, and the returned store re-hydrates the mirror.
 fn edit_store<F>(path: &Path, edit: F) -> Result<ApiStore, String>
 where
     F: FnOnce(&mut ApiStore) -> Result<(), String>,
@@ -432,13 +321,8 @@ where
     .map(|(s, ())| s)
 }
 
-/// Create a folder named `name`; returns the whole updated store.
-///
-/// The id is minted HERE rather than by the client, for the same reason `order` is: the
-/// file's shape is this module's invariant, and a duplicate id arriving from a webview
-/// would put two folders in the rail that delete and rename as one.
-///
-/// Frontend contract: `invoke<ApiStore>('api_folder_create', { name })`.
+/// The id is minted here, not by the client: a duplicate id from a webview would make two folders
+/// that delete and rename as one.
 #[tauri::command]
 pub fn api_folder_create(app: tauri::AppHandle, name: String) -> Result<ApiStore, String> {
     edit_store(&store_path(&app), |store| {
@@ -646,10 +530,7 @@ mod tests {
         );
     }
 
-    /// The Vault's four writers, concurrently: folder gestures (`edit_store`) and
-    /// Vault puts (`update`, the `db::upsert` path) racing on one file. Every one must land —
-    /// without the lock, a save from a store loaded before another
-    /// writer's save dropped that writer's change. Falsify: drop the lock in `update`.
+    /// Without the lock, a save from a store loaded before another writer's save lost that change.
     #[test]
     fn concurrent_vault_writers_lose_no_update() {
         let f = Fixture::new("concurrent");
@@ -809,20 +690,8 @@ mod tests {
 
     /* ─────────────────────────────────── folders ──────────────────────────────────── */
 
-    /// 🔴 THE test that protects real user data, and the reason every `ApiStore` field
-    /// carries `#[serde(default)]`.
-    ///
-    /// The JSON below is written **by hand** to be exactly what an install from before
-    /// folders existed has on disk: three keys, no `folders`, no `folderId`. It is not
-    /// produced by serializing today's struct — that would round-trip the current shape
-    /// and prove nothing about the old one (an expectation derived from the
-    /// code under test can only catch plumbing).
-    ///
-    /// Without `#[serde(default)] folders`, `load` fails to parse → `unwrap_or_default()`
-    /// → an EMPTY store → the next save writes that emptiness over the file. The user
-    /// loses every saved request **and** every environment variable, which in this file
-    /// means live API tokens and the DB client's Vault. Falsified before being trusted:
-    /// removing the attribute turns this red on the very first assertion.
+    /// Hand-written pre-folders JSON (serializing today's struct would prove nothing about the old
+    /// shape). Without `#[serde(default)]` it loads empty; the next save wipes requests and Vault.
     #[test]
     fn folders_field_is_optional_so_a_pre_folders_file_survives() {
         let f = Fixture::new("pre-folders");
@@ -905,10 +774,7 @@ mod tests {
         );
     }
 
-    /// The same guarantee taken to its limit: `{}` — a file with NO keys at all — is a
-    /// valid empty store rather than a parse failure. Cheap, and it is the assertion
-    /// that would still fail if someone added a defaulted field but removed one of the
-    /// existing three's attributes.
+    /// `{}` loads too: fails if a field is added defaulted but an existing one loses its attribute.
     #[test]
     fn an_empty_json_object_loads_as_an_empty_store() {
         let f = Fixture::new("empty-object");
@@ -976,10 +842,7 @@ mod tests {
         );
     }
 
-    /// 🔴 The delete decision, asserted rather than described: deleting a folder does
-    /// NOT delete the requests filed in it — they return to the root. If this ever
-    /// becomes a cascade it must be a deliberate ADR, not a quiet change under a green
-    /// suite.
+    /// Making this a cascade would need a deliberate ADR, not a quiet change under a green suite.
     #[test]
     fn deleting_a_folder_returns_its_requests_to_the_root_and_never_deletes_them() {
         let f = Fixture::new("delete-folder");
@@ -1138,10 +1001,8 @@ mod tests {
         );
     }
 
-    /// `reorder_folders` takes a permutation or nothing. Each rejection is asserted
-    /// separately because each is a different way to silently lose a folder from the
-    /// file: a short list drops the ones it omits, a duplicate id clones one over
-    /// another, an unknown id is a stale rail.
+    /// Each rejection is a different way to silently lose a folder: a short list drops, a duplicate
+    /// clones over another, an unknown id is a stale rail.
     #[test]
     fn reorder_rejects_anything_that_is_not_a_permutation() {
         let mut store = ApiStore::default();
@@ -1167,13 +1028,8 @@ mod tests {
         );
     }
 
-    /// 🔴 The lost-update guard: `edit_store` RE-READS the file, so a folder gesture
-    /// cannot overwrite something written to the same file in between — which is exactly
-    /// what `db_connection_upsert` does when it puts a DB password in the Vault.
-    ///
-    /// The scenario is played out literally: a folder command runs, then Rust writes a
-    /// Vault variable behind it (as the DB client does), then a SECOND folder command runs
-    /// from the same "session". The password is still there afterwards.
+    /// `edit_store` re-reads the file, so a folder command cannot overwrite a Vault write made in
+    /// between (as `db_connection_upsert` does).
     #[test]
     fn a_folder_command_never_clobbers_a_vault_write_it_did_not_see() {
         let f = Fixture::new("no-clobber");

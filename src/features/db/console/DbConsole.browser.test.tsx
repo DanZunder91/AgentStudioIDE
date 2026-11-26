@@ -1,58 +1,6 @@
-/**
- * DbConsole — layer 5, the real-browser tier.
- *
- * Two claims live here and **cannot** live in the jsdom suite, because jsdom has no
- * layout engine: every `getBoundingClientRect()` there is 0×0, so a height or a
- * scrollWidth assertion under jsdom is not merely weak, it is *vacuously green*.
- *
- *   1. **The internal divider really resizes the two panes.** The unit tier stubs the
- *      container height and therefore proves the fraction arithmetic only.
- *   2. **A 200-column result scrolls inside its own box** rather than widening the
- *      console, the tab, or the window.
- *   3. **The grid fills its pane** — a content-sized scroll box let
- *      the horizontal scrollbar eat the only row of a 1-row result and, less visibly,
- *      disabled row windowing. Both are pixel facts.
- *   4. **A column can be dragged wider or narrower**.
- *
- * ── Falsified before being trusted, and two claims were WEAKER than they looked ──
- * A green assertion that cannot go red is worse than no assertion, so
- * every claim here was mutated and the run observed. The record, verbatim:
- *
- *   ✅ pin the panes to `flexGrow: 0.5`, ignoring the dragged fraction
- *      → "AssertionError: expected 280.5 to be greater than 280.5". Caught.
- *   ✅ drop `box-sizing: border-box` from the grid's cells
- *      → "AssertionError: expected 23 to be 22". Caught — and this is the bug this
- *        tier found in the first place: a cell's border sat OUTSIDE its 22px height,
- *        so every row was 23px while `visibleWindow` did its spacer maths in 22.
- *        One px per row is 500px of drift over 500 rows: a scrollbar that lies, and
- *        completely invisible under jsdom.
- *   ✅ change the grid's `overflow: auto` to `overflow: visible`
- *      → "AssertionError: expected 0 to be greater than 0". Caught ONLY after the
- *        assertion was strengthened: the original `scrollWidth > clientWidth` check
- *        stayed green under that mutation (it is true of an overflowing
- *        `overflow: visible` box too), so the test now actually scrolls the box.
- *   ✅ put `.db-result[data-kind="rows"]` back to `flex: 0 0 auto`
- *      → three reds, and they name the original bug in numbers: "expected 56 to
- *        be greater than 220.5" (the 56px table in a 280px pane), "expected 0 to be
- *        greater than 24" (zero clearance between the last row and the scrollbar), and
- *        "expected 12032 to be less than 12000" (windowing off — the 500-row table's
- *        full height became the viewport it was supposed to window against).
- *   ✅ put the table back to `width: max-content`
- *      → "expected 502.0625 to be less than 502.0625": a 120px drag moving the column
- *        0px, because a content-sized table treats its `<col>` widths as ratios.
- *   ✅ drop `min-height: 0` from `.db-grid`
- *      → "expected 12032 to be less than 12000". A scroll container's min-content height
- *        is its full content height in Chromium, so the minimum climbed the whole chain.
- *   ❌ remove `overflow: hidden` from `.db-console` → all 5 still passed. The
- *      "the console is not widened" assertions do NOT distinguish that mutation,
- *      because the 900px wrapper already constrains the console's width. They are
- *      kept as regression guards, not as proof, and this line says so rather than
- *      letting them look stronger than they are.
- *
- * Also worth recording: the drag test first passed for the wrong reason. A bare
- * `window.dispatchEvent` leaves React's state update unflushed, so the measurement
- * read the PRE-drag layout — hence `fireEvent(window, …)`, which wraps in `act()`.
- */
+/** Pixel claims jsdom can't make (rects are 0x0): the divider resizes the panes, a wide result
+ * scrolls in its own box, the grid fills its pane, columns resize. Each was mutated and seen red,
+ * except "console not widened": a regression guard only, as the 900px wrapper constrains it. */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -107,10 +55,7 @@ describe("DbConsole — the internal split, with a real layout engine", () => {
     const divider = screen.getByTestId("db-console-divider");
     const start = divider.getBoundingClientRect().top;
     fireEvent.pointerDown(divider, { clientY: start });
-    // `fireEvent`, not a bare `dispatchEvent`: it wraps the dispatch in `act()`, so
-    // React's state update is flushed before the next `getBoundingClientRect()`.
-    // Without it the measurement below reads the PRE-drag layout and the test passes
-    // for the wrong reason — the first thing this file caught about itself.
+    // fireEvent wraps the dispatch in act(), so the measurement sees the post-drag layout.
     fireEvent(window, new MouseEvent("pointermove", { clientY: start + 120, bubbles: true }));
     fireEvent(window, new MouseEvent("pointerup", { bubbles: true }));
 
@@ -168,28 +113,14 @@ describe("ResultsGrid — a 200-column result scrolls inside its own box", () =>
   });
 });
 
-/**
- * 🔴 The original bug: `SELECT * FROM widgets` returned 1 row and the
- * grid drew a 56px table in a ~280px output pane — a void beneath it, and the horizontal
- * scrollbar lying across the only row, slicing it in half.
- *
- * Every assertion here is a pixel claim, so this tier is the only place they can live;
- * under jsdom all four are vacuously green. They are three separate consequences of one
- * cause — a scroll box that was exactly as tall as its content:
- *   1. the scrollbar is subtracted from the CONTENT box, so the last row pays for it;
- *   2. `clientHeight === scrollHeight`, which is the number `visibleWindow` windows on,
- *      so virtualisation silently stopped windowing;
- *   3. and the pane's remaining height went unused.
- */
+/** A content-sized scroll box let the scrollbar eat the only row, stopped windowing
+ * (clientHeight === scrollHeight) and left the pane's height unused. Pixel claims only. */
 describe("ResultsGrid — the grid fills its pane instead of shrink-wrapping", () => {
   /** The bottom of the scroll box's *client* area — i.e. above any horizontal bar. */
   const clientBottom = (box: HTMLElement) => box.getBoundingClientRect().top + box.clientHeight;
 
   it("🔴 keeps the only row of a 1-row result clear of the horizontal scrollbar", () => {
-    // A 420px pane, so the three columns cannot fit and a horizontal scrollbar is
-    // guaranteed — there has to be a bar for the bug to be about. (At 900px this
-    // fixture now fits outright, which is the other half of the same fix: the table is
-    // sized by its `<col>` widths instead of by its content.)
+    // 420px, so the three columns can't fit: the bug needs a horizontal scrollbar.
     renderSized({ results: [WIDGETS_RESULT] }, "420px");
     const scroll = screen.getByTestId("db-grid-scroll");
     const row = document.querySelector("tr[data-row='0']") as HTMLElement;

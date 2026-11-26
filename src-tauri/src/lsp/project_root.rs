@@ -1,31 +1,11 @@
-//! Per-file language-server root resolution.
-//!
-//! `attachLsp` used to hand every server the app's single PRIMARY workspace
-//! root. rust-analyzer then looked for a `Cargo.toml` at that directory's top
-//! level and, for any repo that keeps its crates in subfolders (`src-tauri/`,
-//! `crates/api/`), failed discovery and
-//! spammed "Failed to discover workspace" dialogs. With several projects open
-//! the same wiring also rooted a file from project B at project A.
-//!
-//! `project_root_scoped` fixes both: starting from the FILE, it walks up to the
-//! file's own containing workspace root and returns the **outermost** ancestor
-//! directory holding one of the language's project markers — outermost, so a
-//! Cargo *workspace* root wins over the member crate the file happens to sit
-//! in. No marker on the path → the containing workspace root (which is also
-//! the answer for languages with no marker table yet: that alone repairs the
-//! multi-root wrong-project case for every server).
-//!
-//! **Security scope.** The path is a client-supplied string, so it
-//! goes through [`crate::fs_tree::resolve_in_scope`] FIRST, and the walk is
-//! bounded by the containing allowed root — the resolver can neither read nor
-//! reveal anything above it.
+//! Per-file language-server root: from the FILE up, the OUTERMOST ancestor in its workspace
+//! root holding a project marker (a Cargo workspace beats its member crate), else that root.
+//! The client path goes through [`crate::fs_tree::resolve_in_scope`] first; the walk stays in.
 
 use std::path::{Path, PathBuf};
 
-/// Project markers per language id, most-specific table this app needs today.
-/// A language absent from this table resolves to the containing workspace
-/// root — correct for servers that treat the root as a search scope rather
-/// than a manifest location.
+/// Project markers per language id. An unlisted language resolves to the containing workspace
+/// root, right for servers that treat the root as a search scope.
 fn markers_for(language_id: &str) -> &'static [&'static str] {
     match language_id {
         "rust" => &["Cargo.toml"],

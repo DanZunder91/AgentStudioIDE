@@ -1,7 +1,4 @@
-/**
- * Pure cell formatters for the Network table — Proxelar's look, in functions a test can
- * pin one value at a time.
- */
+/** Pure cell formatters for the Network table, so a test can pin one value at a time. */
 
 import type { FlowProto, FlowSummary } from "./networkTypes";
 
@@ -24,10 +21,8 @@ export function formatDuration(ms: number): string {
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
 
-/**
- * At most 5 glyphs — `999B`, `9.9K`, `1023K`, `9.9M`, `123M` — so a tunnel's two directions fit
- * one narrow Size cell (`↑1023K ↓1023K`). The exact counts are in the Path cell and the detail.
- */
+/** At most 5 glyphs, so a tunnel's two directions fit one narrow Size cell (`↑1023K ↓1023K`).
+ * The exact counts are in the Path cell and the detail. */
 export function formatSizeShort(bytes: number): string {
   if (bytes < KB) return `${bytes}B`;
   if (bytes < 10 * KB) return `${(bytes / KB).toFixed(1)}K`;
@@ -62,13 +57,9 @@ export type StatusBucket = "pending" | "none" | "1xx" | "2xx" | "3xx" | "4xx" | 
 type WithProto = { proto?: FlowProto };
 type WithBypass = Partial<Pick<FlowSummary, "bypass">>;
 
-/**
- * The colour bucket of a row's status cell. A finished flow with no HTTP status (an error
- * before any response) is `none`, which is not the same as still waiting. A TUNNEL has no
- * HTTP status by nature — the proxy never reads it — so its cell is its connection state
- * (a `—` on a live tunnel read as an unfinished call): `open` (live,
- * pulsing), `closed`, or `none` when it failed. A bypassed command is `bypass`.
- */
+/** A finished flow with no HTTP status (error before any response) is `none`, not waiting. A tunnel
+ * has no HTTP status (the proxy never reads it), so its bucket is its connection state: `open`
+ * (live, pulsing), `closed`, or `none` when it failed. A bypassed command is `bypass`. */
 export function statusBucket(f: Pick<FlowSummary, "status" | "state"> & WithProto & WithBypass): StatusBucket {
   if (f.proto === "bypass") return f.bypass?.neutralized === true ? "none" : "bypass";
   if (f.proto === "tunnel") return f.state === "pending" ? "open" : f.state === "done" ? "closed" : "none";
@@ -110,11 +101,9 @@ export function tunnelBytes(f: Pick<FlowSummary, "reqBytes" | "resBytes">): stri
   return `${formatSize(f.reqBytes)} ↑ ${formatSize(f.resBytes)} ↓`;
 }
 
-/**
- * The Path cell. A tunnel never saw a path, so it says what it DID see — `encrypted · n ↑ m ↓`
- * (a tunnel that failed to connect carried nothing: `—`, its error is in Type); a bypassed
- * command shows its parsed path, else the command itself; `—` for an empty path.
- */
+/** A tunnel never saw a path, so it shows what it did see: `encrypted · n ↑ m ↓` (`—` if it failed
+ * to connect; the error is in Type). A bypassed command shows its parsed path, else the command;
+ * `—` for an empty path. */
 export function pathCell(
   f: Pick<FlowSummary, "proto" | "path"> & Partial<Pick<FlowSummary, "reqBytes" | "resBytes" | "bypass" | "state">>,
 ): string {
@@ -145,11 +134,8 @@ export type TypeCell =
   | { kind: "dim"; text: string }
   | { kind: "note"; text: string };
 
-/**
- * The Type column: the error (red) on an error row; else the proxy's note, dimmed (e.g.
- * "not decrypted: gazelle doesn't read the IDE's CA"); else the media type
- * without params.
- */
+/** The error (red) on an error row; else the proxy's note, dimmed; else the media type without
+ * params. */
 export function typeCell(f: Pick<FlowSummary, "state" | "error" | "contentType" | "proto" | "note">): TypeCell {
   if (f.error !== null) return { kind: "error", text: f.error };
   if (f.note !== null && f.note !== "") return { kind: "note", text: f.note };
@@ -164,11 +150,8 @@ export function typeCell(f: Pick<FlowSummary, "state" | "error" | "contentType" 
   return { kind: "dim", text: "[no content]" };
 }
 
-/**
- * The Size column: the response; for a tunnel, each direction (`↑1.2K ↓45K` — a tunnel is one
- * byte stream each way, and "how much went up vs came back" is most of what it can tell); `—`
- * for a bypassed command (nothing went through the proxy).
- */
+/** The response size; for a tunnel each direction (`↑1.2K ↓45K`: up vs back is most of what a
+ * tunnel can tell); `—` for a bypassed command (nothing went through the proxy). */
 export function sizeCell(f: Pick<FlowSummary, "proto" | "reqBytes" | "resBytes">): string {
   if (f.proto === "bypass") return "—";
   if (f.proto === "tunnel") return `↑${formatSizeShort(f.reqBytes)} ↓${formatSizeShort(f.resBytes)}`;

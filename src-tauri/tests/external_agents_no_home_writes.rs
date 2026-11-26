@@ -1,32 +1,6 @@
-//! 🔴 **`~/.claude` is READ-ONLY for us** — the rule, applied to the Agent
-//! Village's external-agent scan (`external_agents.rs`), the `tests/metrics_no_home_writes.rs`
-//! pattern.
-//!
-//! `list_external_agents` walks every project directory under `~/.claude/projects`,
-//! every session in the window and every sub-agent sidecar beside it, and the village
-//! polls it every few seconds. So "it never writes there" has to be a re-runnable
-//! claim, not a doc comment.
-//!
-//! 1. [`the_full_command_path_writes_nothing_under_a_replica_home`] — the strong one. A
-//!    replica `~/.claude` (the checked-in `tests/fixtures/external_agents` tree, plus the
-//!    global `settings.json` a stray write would corrupt) under a tempdir `HOME`, fingerprinted
-//!    (path + size + mtime + content hash), the **real** path driven end to end
-//!    (`home_dir()`, `spawn_blocking`, the host-cache refresh; the process table is
-//!    injected, since the replica's sessions have no live `claude`) — and with the exclusion
-//!    set taken from a **real supervisor** that spawned an agent, so the IDE-owned
-//!    session written into the replica must not come back. The fingerprint must be
-//!    identical afterwards, with no entry added or removed.
-//! 2. [`the_scan_succeeds_against_a_read_only_transcript_root`] — the replica chmod'ed
-//!    read-only; a latent write would FAIL here, not merely go unseen.
-//! 3. [`the_real_home_is_not_disturbed_by_a_real_scan`] — the developer's actual
-//!    `~/.claude`, with the comparison scoped exactly as the metrics test explains (a
-//!    running `claude` appends to `projects/**` legitimately): `settings.json` is
-//!    byte-identical and nothing that existed is gone.
-//!
-//! `HOME` is process-global, so the test that sets it holds [`HOME_LOCK`] and restores
-//! it ([`HomeRestore`], panic included) before releasing the lock; the real-home test
-//! takes the same lock, so it can never resolve the replica (or a deleted one) and
-//! pass without having looked at the real `~/.claude`. This is its own test binary.
+//! `~/.claude` is READ-ONLY for us, checked on the Agent Village's external scan (the
+//! `metrics_no_home_writes.rs` pattern): replica byte-identity, a read-only root, the real home.
+//! Setting the process-global `HOME` holds [`HOME_LOCK`] and restores it ([`HomeRestore`]).
 
 #![cfg(unix)]
 
@@ -387,9 +361,7 @@ fn set_mode(path: &Path, mode: u32) {
 // 3. The developer's real ~/.claude
 // ===========================================================================
 
-/// Scan the real `~/.claude` and prove we left it alone — scoped as
-/// `metrics_no_home_writes.rs` explains: a running `claude` legitimately rewrites
-/// `projects/**`, `history.jsonl` and friends, so what holds unconditionally is that
+/// Scoped as in `metrics_no_home_writes.rs` (a running `claude` rewrites `projects/**`):
 /// `settings.json` is byte-identical and nothing that existed is gone.
 #[test]
 fn the_real_home_is_not_disturbed_by_a_real_scan() {

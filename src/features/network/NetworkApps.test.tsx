@@ -1,18 +1,5 @@
-/**
- * The capture guard in Network (an agent ran `gazelle` with every proxy variable stripped, so
- * none of its calls reached this view, silently):
- *
- * - the IDE-traffic Apps sidebar: the Logs sidebar's by-language list, apps picked one by one
- *   (checkbox = add/remove, row click = Only, All apps = no filter), flows filtered by the app's
- *   pid (else its executable name), an exited pick kept, and each row's capture state —
- *   ✓ / ⚠ + Restart with capture / external → the Whole Mac guide;
- * - the banner naming every IDE app that is not captured (Restart with capture / Show app);
- * - Whole Mac's guide for an IDE app: no manual steps — why, Restart with capture, its live
- *   connections; once captured, "✓ Receiving …", Show them and exactly where they appear.
- *
- * Only the IPC modules are mocked; every store, formatter and component is the real one.
- * Expected strings are written by hand, never derived from the code under test.
- */
+/** Only the IPC modules are mocked; every store, formatter and component is the real one.
+ * Expected strings are written by hand, never derived from the code under test. */
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -451,12 +438,8 @@ describe("IdeAppCapture's remaining states", () => {
   });
 });
 
-/**
- * Terminals / Agents / Other under the Apps (the gazelle terminal must be pickable again, as it
- * was before). T1 is a plain terminal titled `gazelle`, T2 an agent's
- * terminal; flow 4 has no terminal and a resolved client (`external · gateway`). The rows ARE the
- * toolbar Source picker's state.
- */
+/** T1 is a plain terminal titled `gazelle`, T2 an agent's; flow 4 has no terminal and a resolved
+ * client (`external · gateway`). The rows are the toolbar Source picker's state. */
 describe("the sidebar's Terminals / Agents / Other groups", () => {
   beforeEach(() => {
     useAppStore.setState((s) => {

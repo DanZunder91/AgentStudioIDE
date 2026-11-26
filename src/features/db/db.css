@@ -1,11 +1,5 @@
-/* ── database client: the connection dialog ──────────────────────
-   Theme variables come from App.css, with the same fallbacks the editor's dialog
-   chrome uses so this renders sanely even if it is mounted before the theme.
-
-   Deliberately its OWN overlay rather than `.dialog` from editor.css: that class is
-   a 420px-max confirm box, and this is a full form with five sections. Reusing it
-   would mean widening a shared class for one caller — a change every other dialog
-   silently inherits. */
+/* Connection dialog. Its own overlay, not editor.css's .dialog (a 420px confirm box): widening
+   that shared class would leak into every dialog. Theme vars from App.css, with fallbacks. */
 
 .db-dialog-overlay {
   position: fixed;
@@ -295,10 +289,7 @@ input.db-dialog__input[type="checkbox"] {
   color: var(--red, #f85149);
 }
 
-/* ── database client: the rail panel ────────────────────────
-   Shares `.db-dialog__btn` / `.db-dialog__error` with the dialog above rather than
-   duplicating them: one feature, one button. The list is its own block, because a rail
-   row is a different thing from a form row — it is dense, one line, and truncates. */
+/* Rail panel: shares .db-dialog__btn / __error with the dialog; rows are dense and truncate. */
 
 .db-panel {
   display: flex;
@@ -345,11 +336,8 @@ input.db-dialog__input[type="checkbox"] {
   align-items: center;
   gap: 6px;
   padding: 5px 6px;
-  /* The rail is `overflow-x: hidden`, so over-wide content is CLIPPED, not scrolled
-     (a known failure mode). `min-width: 0` on the flex children is what lets the
-     truncating cells actually shrink instead of pushing the buttons out of the rail.
-     It wraps: when the text cells and `.db-panel__actions` do not fit on one line, the
-     actions move to a second one, right-aligned, and the name keeps its room. */
+  /* The rail clips overflow-x, so min-width: 0 lets the cells shrink; the actions wrap
+     to a second line, right-aligned, when they don't fit. */
   min-width: 0;
   flex-wrap: wrap;
   row-gap: 4px;
@@ -453,13 +441,8 @@ input.db-dialog__input[type="checkbox"] {
   color: var(--red, #f85149);
 }
 
-/* ─────────────────────────── the object tree ───────────────────────────
-   Same geometry and the same tokens as `.workspace-node` in `workspace.css`: the two
-   rails sit one above the other in the same window, and a row that is 2px taller or a
-   caret that rotates the other way reads as a bug in one of them. Indentation is
-   applied inline (`paddingLeft: depth * INDENT + 8`) rather than by nested selectors,
-   which is what lets the depth come from the data instead of from the stylesheet — the
-   levels differ per engine and this file must not encode a shape. */
+/* Object tree: same geometry and tokens as workspace.css's .workspace-node (stacked rails must
+   match). Indent is inline (depth * INDENT + 8), so depth comes from data, not CSS. */
 .db-tree {
   width: 100%;
 }
@@ -488,12 +471,7 @@ input.db-dialog__input[type="checkbox"] {
   background: var(--hover, #1f242c);
 }
 
-/* ── drag-to-reorder a table row ───────────────────────────────────────────────
-   The fleet rail's insertion-line idiom, copied on purpose (`fleet.css`'s
-   `.fleet-row--drop-target`): a dragged row fades, and the target wears a calm accent
-   bar on its TOP edge because the dragged row lands immediately ABOVE it — the bar IS
-   where the row will go, which no colour change alone can say. Only `--accent` /
-   `--accent-soft`, so it tracks the theme like the rest of the rail. */
+/* Drag-to-reorder, fleet.css's idiom: the target's top-edge bar is where the row lands. */
 .db-tree__row--dragging {
   opacity: 0.45;
 }
@@ -502,11 +480,7 @@ input.db-dialog__input[type="checkbox"] {
   box-shadow: inset 0 2px 0 var(--accent, #3b82f6);
 }
 
-/* "Reset order" on a hand-arranged group row. Sized and bordered like `.db-tree__retry`
-   — the rail's other inline, low-stakes action — and pushed to the right edge like
-   `.db-tree__del`. Unlike that ✕ it is NOT hover-gated: it renders only when a custom
-   order exists, so it is also the one visible sign that this level is no longer in the
-   server's order, and a sign that appears only under the pointer is not a sign. */
+/* Not hover-gated: it renders only when a custom order exists, the one visible sign of it. */
 .db-tree__reset {
   flex: 0 0 auto;
   margin-left: auto;
@@ -613,16 +587,9 @@ input.db-dialog__input[type="checkbox"] {
   background: var(--hover, #1f242c);
 }
 
-/* The console tab's own wrapper: it exists to host the ⌘S keydown handler and the two
-   notes above the console, so it must not itself become a layout — the notes take only
-   what they need and the console fills the rest.
-
-   No `height: 100%` here on purpose: `panes.css`'s `.pane__body > *` already sets
-   `flex: 1 1 auto; min-height: 0` on whatever the active tab renders, so this element is
-   sized by the pane. And `.db-console` declares `height: 100%`, which inside a column
-   flex container would resolve against the wrapper and fight the flex basis — hence the
-   `height: auto` override. This is layout, so it is NOT provable under jsdom (no layout
-   engine); it is the one part of this feature that needs a real look in the running app. */
+/* Hosts the ⌘S handler and two notes; not a layout itself. No height: 100% (.pane__body > *
+   sizes it); height: auto overrides .db-console's 100%, which would fight the flex basis.
+   jsdom can't test layout: check it in the running app. */
 .db-console-tab {
   display: flex;
   flex-direction: column;

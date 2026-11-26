@@ -1,9 +1,3 @@
-/**
- * A project room's Wi-Fi router (render/router.ts): a white box with a dark outline hung at the top of
- * its tile, two antennas rising a few px over the tile's top edge, a power LED that is always lit and
- * three activity LEDs that are dim with no traffic and blink — one flashing per frame — with it.
- */
-
 import { describe, expect, it } from "vitest";
 
 import { drawRouter, ROUTER, ROUTER_LEDS, ROUTER_RISE } from "./router";

@@ -1,11 +1,5 @@
-//! Integration tests for ad-hoc agent detection — the binding table
-//! and the promotion of a typed `claude` into a rail node.
-//!
-//! **No real `claude`.** The binding pipeline is driven by delivering hook payloads
-//! (the exact JSON a `claude` `SessionStart`/`SessionEnd` hook POSTs) straight to
-//! the supervisor via `deliver_hook`, and the stub adapter parses that shape. The
-//! real payload schema and the real settings/token mechanism were verified against
-//! `claude` 2.1.212 separately; here we pin the *logic*.
+//! Ad-hoc agent detection (binding table, promotion of a typed `claude`), driven by delivering
+//! the exact hook JSON via `deliver_hook`; no real `claude` (its schema was verified separately).
 
 mod common;
 
@@ -125,10 +119,8 @@ async fn every_pty_gets_the_detection_env_injected() {
     );
 }
 
-/// **The ad-hoc hook settings are installed into `<cwd>/.claude/settings.local.json`
-/// before the shell starts**, so a bare `claude` in that cwd picks them up. The real
-/// end-to-end (a real `claude` firing the hook) was verified against `claude`
-/// 2.1.212 separately; here we pin that the file is written.
+/// Hook settings land in `<cwd>/.claude/settings.local.json` before the shell starts, so a
+/// bare `claude` there picks them up.
 #[cfg(unix)]
 #[tokio::test]
 async fn opening_a_terminal_installs_the_ad_hoc_hook_file() {
@@ -168,10 +160,7 @@ async fn opening_a_terminal_installs_the_ad_hoc_hook_file() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// **The hook is installed at the git ROOT, not the terminal's subdir.**
-/// `claude` walks up from the session's cwd to find `.claude/`, so a hook at the
-/// repo root covers every subdirectory the user might `cd` into before running
-/// `claude`. Opening a terminal in a nested subdir must land the hook at the root.
+/// Installed at the git ROOT, not the subdir: `claude` walks up to find `.claude/`.
 #[cfg(unix)]
 #[tokio::test]
 async fn the_ad_hoc_hook_lands_at_the_git_root_not_the_subdir() {
@@ -222,10 +211,7 @@ async fn the_ad_hoc_hook_lands_at_the_git_root_not_the_subdir() {
     std::fs::remove_dir_all(&base).ok();
 }
 
-/// **`ensure_agent_hooks` installs the hook for a folder OPENED without a
-/// terminal.** The multi-root Files "Open a folder" spawns no PTY, so this
-/// command is the only place the hook is installed for it — and it is git-root-aware,
-/// so opening a subdir of a repo still lands the hook at the repo root.
+/// A folder opened without a terminal gets the hook only via this command, at its git root.
 #[tokio::test]
 async fn ensure_agent_hooks_installs_at_the_git_root_for_an_opened_folder() {
     let base = std::env::temp_dir().join(format!("agentstudio-ensure-{}", ulid::Ulid::new()));
@@ -279,10 +265,7 @@ async fn ensure_agent_hooks_is_a_noop_but_ok_without_a_listener() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// **The home directory is never written to** — `<home>/.claude/` is the user's
-/// global config, and the app never touches it without consent. Opening a
-/// terminal whose cwd is home must not create `~/.claude/settings.local.json` (nor
-/// modify an existing one).
+/// Never write `<home>/.claude/` (the user's global config), not even for a terminal in home.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_terminal_in_the_home_dir_does_not_write_global_config() {
@@ -316,10 +299,7 @@ async fn a_terminal_in_the_home_dir_does_not_write_global_config() {
     );
 }
 
-/// **The requirement: type `claude` in a plain terminal → it appears in the rail.**
-///
-/// A plain terminal, then a `SessionStart` on it → an ad-hoc root agent, with
-/// `AgentId == TerminalId` (the terminal is *promoted*, its id is the identity).
+/// A `SessionStart` on a plain terminal promotes it to an ad-hoc root, `AgentId == TerminalId`.
 #[tokio::test]
 async fn a_session_start_on_a_plain_terminal_creates_an_adhoc_root() {
     let (sup, sink) =
@@ -347,10 +327,7 @@ async fn a_session_start_on_a_plain_terminal_creates_an_adhoc_root() {
     let node = snapshot_agent(&sup, &id).await.unwrap();
     assert_eq!(node.id, id, "AgentId must equal the promoted terminal's id");
     assert_eq!(node.parent_id, None, "an ad-hoc claude is a root");
-    // Born IDLE: `SessionStart` means `claude` just opened and is parked at its
-    // prompt — it has not processed a turn. `UserPromptSubmit` is what flips it to
-    // Running (turn hooks); defaulting to Running latched an idle welcome screen as
-    // "Running" forever.
+    // Born Idle: `SessionStart` is parked at the prompt; `UserPromptSubmit` flips it to Running.
     assert_eq!(node.status, AgentStatus::Idle);
     // The runtime is the adapter that RECOGNISED the hook — the stub here, the real
     // ClaudeAdapter ("claude-code") in production. (Was hardcoded "claude-code"
@@ -387,11 +364,8 @@ async fn a_session_start_on_a_plain_terminal_creates_an_adhoc_root() {
     );
 }
 
-/// **An ad-hoc root anchors to the payload `cwd`, not the terminal's spawn
-/// cwd.** The user opens a terminal in dir A, `cd`s into a different repo B,
-/// then types `claude`. The `SessionStart` payload reports B, and the rail node —
-/// and the promoted terminal's meta — must both use B, or the rail shows the wrong
-/// folder and the git branch is computed from the wrong tree.
+/// The user may `cd` into another repo before typing `claude`: the rail node and terminal meta
+/// must use the payload's cwd, or the folder and branch are wrong.
 #[tokio::test]
 async fn an_adhoc_root_anchors_to_the_payload_cwd_not_the_spawn_cwd() {
     let (sup, _sink) =
@@ -451,11 +425,8 @@ async fn an_adhoc_root_without_a_payload_cwd_falls_back_to_the_spawn_cwd() {
     );
 }
 
-/// **The phantom-root trap (FM-3): a nested `claude -p` must NOT forge a root.**
-///
-/// The terminal is already bound (here, to a spawned agent). A `SessionStart` with
-/// a *different* session id — exactly what a nested `claude` reports, carrying our
-/// injected terminal id — is suppressed.
+/// Phantom-root trap (FM-3): a `SessionStart` with a different session id on a bound terminal
+/// (a nested `claude`) is suppressed.
 #[tokio::test]
 async fn a_nested_session_on_a_bound_terminal_is_suppressed() {
     let (sup, _sink) =
@@ -745,16 +716,9 @@ async fn post_to_listener(base_url: &str, token: &str, terminal: &str, body: &[u
         .to_string()
 }
 
-/// **A prompt past 64 KiB still turns the agent "running"** — end to end through
-/// the production wiring: the REAL listener (as `lib.rs` wires it), the REAL
-/// `ClaudeAdapter` parsing, and the supervisor's turn tracking.
-///
-/// A pasted query result of about 100 KB in the prompt: `UserPromptSubmit` carries
-/// the whole prompt, so the hook POSTs a body past 100 KB. A 64 KiB listener cap
-/// answered 400, the hook's `curl … || true` swallowed it, and the root stayed
-/// `Idle` while it worked for minutes — the Village drew it idle
-/// with "0 active". Every other turn-status test hands the payload to `deliver_hook`
-/// directly, which is exactly why the listener's cap was never in their path.
+/// Through the REAL listener and `ClaudeAdapter`: `UserPromptSubmit` carries the whole prompt,
+/// so a pasted ~100 KB result exceeded a 64 KiB cap that the hook's `|| true` swallowed. Other
+/// turn tests call `deliver_hook` directly, bypassing the listener's cap.
 #[tokio::test]
 async fn a_prompt_past_64_kib_still_marks_the_root_running() {
     use agent_studio_scaffold_lib::agent::claude::ClaudeAdapter;

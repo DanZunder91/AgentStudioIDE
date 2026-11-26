@@ -1,40 +1,6 @@
-/**
- * ViewBar — the TOP-LEVEL strip of views.
- *
- * A **view** is one whole arrangement of terminals: the iTerm2 / tmux-window
- * model — a window-style view that holds, say, four terminals, with a switch to
- * another view that holds two more. Switching a view swaps the entire pane tree;
- * today's per-pane tab strips (`<TabBar>`) read as the sub-level under it, which
- * is the simplest model and looks better.
- *
- * ── Why nothing here keeps an inactive view alive ────────────────────────────
- * `TerminalRegistry` owns the xterm instance and the PTY OUTSIDE React: React
- * only mounts and unmounts a DOM host, and only `dispose()` tears anything down
- * (`useTerminal` detaches on unmount; `detach()` parks the DOM in an offscreen
- * holder). So only the ACTIVE view's tree is ever rendered; inactive views are
- * pure data and their terminals keep running with scrollback intact. There is
- * deliberately no keep-alive / hidden-mount scheme — it would be complexity for
- * a problem the registry already solved. The one real consequence is geometry:
- * a tree that comes back may come back at a different size, which is why
- * `PaneTreeRoot` keys the tree on the active view (see PaneTree.tsx) so every
- * terminal re-`attach`es and `applyFit` re-measures against the NEW pane.
- *
- * ── Visual language ──────────────────────────────────────────────────────────
- * Deliberately the same idiom as `<TabBar>`, one level up: the `+` is literally
- * `pane-icon-button` and `PlusIcon`, the close affordance is `CloseIcon`, rename
- * is `InlineEditInput` (double-click or F2), reorder reuses `insertionIndexAt`
- * and the same inset-shadow insertion line, and the confirmation is the shared
- * `ContextMenu` primitive. The only thing that differs is the accent edge — a
- * view chip carries it on TOP and the active chip takes the pane header's own
- * surface colour, so the active view visually "holds up" the strip beneath it.
- *
- * ── The counts are not decoration ────────────────────────────────────────────
- * Each chip shows how many tabs its view holds, read through the store's
- * `viewTabIds` so the badge and the close confirmation can never disagree.
- * `closeView` **rescues** those tabs into the view you are left looking at
- * rather than killing them, so the confirmation says exactly that — quoting
- * "3 tabs will be closed" would be a scarier lie than saying nothing.
- */
+/** Top-level strip of views (tmux-window model: a view is a whole pane tree; `<TabBar>` is the
+ * sub-level). Only the active tree renders; `TerminalRegistry` keeps inactive terminals alive.
+ * Counts read `viewTabIds`; `closeView` MOVES tabs, and the confirmation says so. */
 
 import { useMemo, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 
@@ -55,10 +21,7 @@ import "./viewBar.css";
 /** Drag payload for reordering the strip itself (tabs use `TAB_DND_MIME`). */
 export const VIEW_DND_MIME = "application/x-agentstudio-view";
 
-/**
- * The strip's class — also the hit-test handle for its own drop logic. Exported
- * so the coupling is explicit and greppable, exactly as `TABBAR_CLASS` is.
- */
+/** The strip's class and its own drop hit-test handle; exported like `TABBAR_CLASS`. */
 export const VIEWBAR_CLASS = "view-bar";
 
 /** What the strip draws per view: identity plus what is inside it. */
@@ -68,14 +31,8 @@ export interface ViewChip {
   tabCount: number;
 }
 
-/**
- * Where `closeView` would rescue this view's tabs to, by name — `null` when the
- * close is refused (last view / unknown id).
- *
- * Mirrors `closeView`'s survivor rule exactly: closing the ACTIVE view hands
- * over to the next view, else the previous one; closing an inactive view leaves
- * the active one untouched and lands the tabs there.
- */
+/** Name of the view `closeView` would rescue tabs into, `null` when the close is refused. Mirrors
+ * its survivor rule: active view → next (else previous); inactive → the active one. */
 export function rescueTargetName(
   views: readonly ViewSnapshot[],
   activeViewId: ViewId,
@@ -93,10 +50,7 @@ export function rescueTargetName(
   return (views[i + 1] ?? views[i - 1]).name;
 }
 
-/**
- * The confirmation's wording. The count is the whole point of asking — but so
- * is the verb: these tabs MOVE, they are not destroyed.
- */
+/** Confirmation wording: count and verb both matter (the tabs MOVE, they are not destroyed). */
 export function closeLabel(name: string, tabCount: number, into: string): string {
   if (tabCount === 0) return `Close “${name}” — it is empty`;
   const tabs = tabCount === 1 ? "1 tab" : `${tabCount} tabs`;
@@ -149,14 +103,8 @@ function ViewChipItem({
     e.dataTransfer.effectAllowed = "move";
   };
 
-  /**
-   * Moving a tab into another view: drop it on that view's chip.
-   *
-   * A tab is already a drag source (`<TabItem>` publishes `TAB_DND_MIME`), so
-   * this is the whole gesture — no change to the pane tree's drag session,
-   * which stays single-tree and therefore keeps telling the truth about its own
-   * drop preview. `stopPropagation` keeps the strip's reorder handler out of it.
-   */
+  /** Drop a tab (`TAB_DND_MIME`) on a view's chip to move it there, without touching the pane
+   * tree's single-tree drag session; `stopPropagation` keeps the strip's reorder out of it. */
   const onDragOver = (e: DragEvent) => {
     if (!acceptsTab(e)) return;
     e.preventDefault();
@@ -262,19 +210,12 @@ export interface ViewBarViewProps {
   /** Drop-onto-B: move `id` before `beforeId`, or to the end when null. */
   onReorder(id: ViewId, beforeId: ViewId | null): void;
   onMoveTabToView(tabId: TabId, viewId: ViewId): void;
-  /**
-   * Where a close would rescue that view's tabs to. Asked only for a view the
-   * strip is willing to close, and "closable" means another view exists to
-   * rescue into — so this is total here, and the label needs no fallback string.
-   */
+  /** Rescue target for a closable view ("closable" means another view exists), so it is total. */
   rescueTargetOf(id: ViewId): string;
 }
 
-/**
- * The strip, as pure presentation. Split out from the store-bound `<ViewBar>`
- * so every gesture — rename, the counted close confirmation, reorder, moving a
- * tab into another view — is testable without standing up a whole store.
- */
+/** The strip as pure presentation, split from the store-bound `<ViewBar>` so gestures are
+ * testable without a store. */
 export function ViewBarView({
   views,
   activeViewId,
@@ -301,10 +242,8 @@ export function ViewBarView({
 
   const acceptsView = (e: DragEvent) => e.dataTransfer.types.includes(VIEW_DND_MIME);
 
-  // The same measurement the tab strip uses (each chip claims the drop up to
-  // its own midpoint; past the last midpoint it appends). Under jsdom every
-  // rect is 0×0, so this returns "append" — deterministic, and why the tests
-  // stub rects rather than trusting the default.
+  // Same measurement as the tab strip. Under jsdom every rect is 0×0 (returns "append"), which
+  // is why tests stub rects.
   const indexAt = (e: DragEvent): number =>
     insertionIndexAt([...e.currentTarget.querySelectorAll<HTMLElement>(".view-tab")], e.clientX);
 
@@ -408,12 +347,8 @@ export function ViewBar() {
   const views = useAppStore((s) => s.views);
   const activeViewId = useAppStore((s) => s.activeViewId);
   const actions = useAppStore((s) => s.layoutActions);
-  // The ACTIVE view's live tree. Its snapshot in `views` is stale by contract,
-  // and `viewTabIds` is the store's own encoding of that rule — a confirmation
-  // quoting a count from whenever the view was last left is not one. Selected
-  // field by field (never `(s) => s`) so the bar re-renders on the layout slice
-  // only, per ARCHITECTURE §4 — and only on the two fields the counts read, which
-  // is exactly what `ViewTreeSource` names.
+  // The ACTIVE view's live tree (its `views` snapshot is stale by contract). Selected per field,
+  // never `(s) => s`, so the bar re-renders only on what `ViewTreeSource` names (ARCHITECTURE §4).
   const liveLayout = useAppStore((s) => s.layout);
 
   const chips = useMemo<ViewChip[]>(() => {
@@ -436,11 +371,8 @@ export function ViewBar() {
       onClose={actions.closeView}
       onReorder={actions.reorderViews}
       onMoveTabToView={actions.moveTabToView}
-      // `rescueTargetName` is null only where a close is REFUSED (the last view,
-      // or an id that is not in the bar), and the strip disables the × in exactly
-      // that case — so no confirmation can ever ask for a target that is missing.
-      // Narrowed here rather than coalesced at the label: `move to “”` would be a
-      // wrong sentence shipped to cover an impossible state.
+      // Null only where a close is refused, and the × is disabled exactly then; narrowed rather
+      // than coalesced so an impossible state never ships a wrong sentence.
       rescueTargetOf={(id) => rescueTargetName(views, activeViewId, id) as string}
     />
   );

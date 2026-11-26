@@ -1,29 +1,6 @@
-//! Database tools: everything the DB panel and its console do, for an agent.
-//!
-//! Rules on top of the module-wide ones ([`crate::agent_ctl`]):
-//! * A new connection is read-only (the §G.2 default); making it writable is the user's click.
-//!   No tool makes a connection writable, edits or deletes one, or reads a secret back.
-//! * A connection that is already saved (same engine, host, port, database and user) is reported
-//!   and opened, never changed.
-//! * A connection that fails its test is not saved unless the agent passes `force`.
-//! * No tool hands an agent a password, a Vault reference or a connection URL. Commands that read
-//!   credentials (Redis `CONFIG`, `ACL`, `AUTH`, …) and statements that read the server's files
-//!   (PostgreSQL `pg_read_file`, MySQL `LOAD_FILE`, …) are refused, and every reply and event of a
-//!   tool that names a saved connection has that connection's password masked where it appears
-//!   as written or URL-encoded ([`db_target::secrets_of`]). The mask is a backstop, not a
-//!   boundary: a privileged database account can read secrets the server holds and return them in
-//!   another form. The boundary is a least-privileged account, and `db_query`'s help says so.
-//! * Every other tool names a **saved** connection (id or name, any case — [`db_target`]); its
-//!   password is resolved from the Vault inside Rust, and the agent cannot change where it dials.
-//! * Queries run through the console's own path and guardrails ([`db_run`]); on a read-only
-//!   PostgreSQL or MySQL connection each statement runs in a `READ ONLY` transaction of its own,
-//!   ended with a rollback before the next one starts (the session setting alone can be turned
-//!   off by a hostile statement).
-//!   That stops data writes. What acts on the server itself rather than its data — `COPY …
-//!   PROGRAM`, file and large-object functions, `dblink`, `SET GLOBAL` — is refused on every
-//!   connection by [`db_refuse`], a text check. Each run, refused ones included, is shown to the
-//!   user (`dbQueryRun`).
-//! * Everything returned is bounded — rows, bytes, items, time — and every cut is said.
+//! DB tools for an agent. New connections are read-only and only the user makes one writable; no
+//! tool edits or deletes one or returns a secret, and passwords are masked in replies (a backstop:
+//! the boundary is a least-privileged account). See [`db_run`], [`db_refuse`]; output is bounded.
 
 use std::time::Duration;
 

@@ -1,9 +1,4 @@
-/**
- * Where a backdrop layer's light may land (render/backdropLights.ts): a rect of light less the boxes in
- * front (split, never skipped whole), cut at a face column by column, and cut pixel by pixel only where
- * a landmark's box overlaps it. Proved on the pixels a recording leaves, at zoom 1 with no offset, so a
- * world pixel is a canvas pixel.
- */
+/** Proved on recorded pixels at zoom 1 with no offset, so a world pixel is a canvas pixel. */
 
 import { describe, expect, it, vi } from "vitest";
 

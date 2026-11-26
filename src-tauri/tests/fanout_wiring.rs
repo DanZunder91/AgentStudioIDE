@@ -1,11 +1,6 @@
-//! Supervisor ↔ fan-out wiring (M3): a `FanoutDelta` from the tailer becomes an
-//! `AgentEvent` and a forest node, sub-agents cascade-remove with their root, and a
-//! child's status change never touches its parent (the trap).
-//!
-//! Deltas are injected via `deliver_fanout_delta`, so the wiring is tested without
-//! the real transcript-polling loop (which needs `~/.claude` + timing). The parse
-//! that *produces* deltas is fixture-tested in `fanout_parser.rs`; the diff that
-//! decides them is unit-tested in `agent::fanout`.
+//! Supervisor ↔ fan-out wiring: a `FanoutDelta` becomes an event and a node, sub-agents
+//! cascade-remove with their root, a child's status never touches its parent. Deltas come via
+//! `deliver_fanout_delta`; parsing is in `fanout_parser.rs`, diffing in `agent::fanout`.
 
 mod common;
 

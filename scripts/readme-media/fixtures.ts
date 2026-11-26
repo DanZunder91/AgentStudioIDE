@@ -1,10 +1,4 @@
-/**
- * Fictional example projects for the README screenshots (scripts/readme-media.mjs).
- *
- * Everything here is made up: a "todo-api" TypeScript service and a "payments-service"
- * Rust crate, generic agent task names, documentation-range IPs and example.com hosts.
- * No real paths, people, or secrets.
- */
+/** Fictional projects for the README screenshots: no real paths, people, hosts or secrets. */
 import type { FsEntry } from "../../src/app/types";
 
 export const HOME = "/home/dev/projects";

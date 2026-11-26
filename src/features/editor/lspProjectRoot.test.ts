@@ -1,10 +1,5 @@
-/**
- * `containingWorkspaceRoot` — the multi-root half of the LSP root fix:
- * a file's server must be rooted inside the file's
- * OWN project, never the app's primary root. The Rust `lsp_project_root`
- * command owns the marker walk (tested in src-tauri); this pure helper owns
- * the fallback choice when that command is unavailable.
- */
+/** A file's server roots in its own project, never the primary root. The Rust `lsp_project_root`
+ * command owns the marker walk; this helper is the fallback when that command is unavailable. */
 import { describe, expect, it } from "vitest";
 
 import { containingWorkspaceRoot } from "./EditorRegistry";

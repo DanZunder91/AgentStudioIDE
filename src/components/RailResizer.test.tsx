@@ -1,12 +1,5 @@
-/**
- * RailResizer — the draggable rail dividers (the side panels must be resizable).
- * The drag math + listener lifecycle are what matter; the store
- * clamp is tested separately (`store.test.ts`). We drive real pointerdown +
- * window pointermove/up and read the resulting width back off the store.
- *
- * (Pixel geometry is not asserted here — jsdom has no layout; the width feeds a
- * CSS grid var, proven end-to-end in `src/e2e/railChrome.browser.test.tsx`.)
- */
+/** Drag math and listener lifecycle via real pointerdown + window pointermove/up, read back from
+ * the store (clamp: `store.test.ts`; pixels: `src/e2e/railChrome.browser.test.tsx`). */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

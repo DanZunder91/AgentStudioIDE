@@ -30,11 +30,8 @@ const JSON_ESCAPES: Readonly<Record<string, string>> = {
   t: "\t",
 };
 
-/**
- * `text` with JSON string escapes decoded (`\u007b` → `{`), leniently: anything that is not an
- * escape stays as written. Over the whole text this reads every string and key of a JSON body in
- * place — what the request tab's Format button (`JSON.parse` then `JSON.stringify`) would write.
- */
+/** Decode JSON string escapes (`\u007b` → `{`) leniently, leaving non-escapes as written: what
+ * the tab's Format button (`JSON.parse` + `JSON.stringify`) would write. */
 function jsonUnescape(text: string): string {
   return text.replace(
     /\\(?:u([0-9a-fA-F]{4})|(.))/gs,
@@ -50,11 +47,8 @@ function percentDecode(text: string): string {
   );
 }
 
-/**
- * Does `text` spell `{{` — as written, or once JSON escapes or percent-escapes are decoded, in
- * either order, a few layers deep (`\u007b\u007b`, `%7B%7B`, `%7b{`, `%257B%257B`)? The same rule
- * as Rust's `spells_vault_ref`.
- */
+/** Does `text` spell `{{` as written or after a few layers of JSON/percent decoding, in either
+ * order (`\u007b\u007b`, `%7B%7B`, `%257B%257B`)? Same rule as Rust's `spells_vault_ref`. */
 export function spellsVaultRef(text: string): boolean {
   let frontier = [text];
   for (let layer = 0; layer <= 3 && frontier.length > 0; layer++) {
@@ -68,13 +62,8 @@ export function spellsVaultRef(text: string): boolean {
   return false;
 }
 
-/**
- * Does any text the tab would hold name a Vault variable? Rust refuses such a request before it
- * gets here; this is the second lock on the same door, because the tab this event opens
- * substitutes `{{VAR}}`s from the user's environment the moment the user presses Send — which
- * would hand a saved secret to a host the agent chose. Encoded spellings count: Format turns
- * `"\u007b\u007bKEY}}"` into `"{{KEY}}"`.
- */
+/** Does any tab text name a Vault variable? A second lock after Rust's: Send would substitute
+ * the user's `{{VAR}}`s, handing a secret to a host the agent chose. Encoded spellings count. */
 function namesVaultVariable(e: AgentCtlEvent): boolean {
   const rows = headerRows(e.headers).flatMap((h) => [h.name, h.value]);
   const texts = [e.method, e.url, e.body, ...rows];
@@ -99,11 +88,8 @@ export const HTTP_HANDLERS: Readonly<Record<string, AgentCtlHandler>> = {
     }
   },
 
-  /**
-   * `http_send` / `api_run` / `api_compare`: Rust appended the exchange to the history file.
-   * Bring the History rail into view and re-read the file, so the mirror the webview saves from
-   * holds the agent's entries too (a later save from a stale mirror would drop them).
-   */
+  /** `http_send` / `api_run` / `api_compare`: Rust appended to the history file; show History and
+   * re-read it, so a save from a stale mirror cannot drop the agent's entries. */
   apiHistory: () => {
     const s = useAppStore.getState();
     if (s.rightRailCollapsed) s.uiActions.toggleRightRail();

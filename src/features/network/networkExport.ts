@@ -1,11 +1,6 @@
-/**
- * From a captured flow to something you can re-run: a cURL command (reusing the API
- * client's `buildCurl`) or a new API-client request.
- *
- * Nothing is redacted (by design, capture hides nothing): headers
- * arrive exactly as captured, credentials included, so both exports replay the request as
- * it was sent. Only connection-level headers are left for curl to compute.
- */
+/** A captured flow as a cURL command (the API client's `buildCurl`) or a new API-client request.
+ * Nothing is redacted by design: headers export as captured, credentials included, so the replay
+ * is the request that was sent. Only connection-level headers are left for curl to compute. */
 
 import { useAppStore } from "../../app/store";
 import { buildCurl, type CurlableRequest } from "../api/curlExport";
@@ -14,10 +9,8 @@ import { appOfClient, caStepHint } from "./captureSteps";
 import { isExternal } from "./networkSource";
 import type { FlowDetail, FlowProto, FlowSummary } from "./networkTypes";
 
-/**
- * Headers that describe THIS connection rather than the request — replaying them is wrong
- * (curl computes its own length, host and connection; HTTP/2 pseudo-headers are not headers).
- */
+/** Headers of this connection, not the request: curl computes its own length, host and
+ * connection, and HTTP/2 pseudo-headers are not headers. */
 const CONNECTION_HEADERS = new Set([
   "host",
   "content-length",
@@ -58,10 +51,7 @@ export type Exportable =
   | { ok: true; request: CurlableRequest }
   | { ok: false; reason: string };
 
-/**
- * Can this flow be replayed, and as what? The reason on a `false` is what the disabled
- * button says — a disabled control must say what it is waiting for.
- */
+/** The reason on `false` is the disabled button's text: it must say what it is waiting for. */
 export function exportable(summary: FlowSummary, detail: FlowDetail | null): Exportable {
   if (summary.proto === "bypass") {
     return {
@@ -127,21 +117,15 @@ export function exportable(summary: FlowSummary, detail: FlowDetail | null): Exp
   };
 }
 
-/**
- * The literal cURL command. No `{{VAR}}` resolution: a captured request has none. Written for
- * the shell it will be pasted into: bash on macOS and Linux, PowerShell on Windows — the IDE's
- * own terminal shell there, where bash's `'\''` and cmd's lack of single quotes both break
- * (the API client's Copy as cURL makes the same choice, with a picker; this button has one
- * click, so it takes the default).
- */
+/** The literal cURL command (a captured request has no `{{VAR}}`). Quoted for the paste target:
+ * bash on macOS/Linux, PowerShell on Windows (the IDE's terminal shell there; bash's `'\''` and
+ * cmd's lack of single quotes both break). One click, so no picker: the API client's default. */
 export function flowCurl(request: CurlableRequest): string {
   return buildCurl(request, (t) => t, isWindows() ? "powershell" : "bash");
 }
 
-/**
- * Seed a NEW API-client request from the flow and open its tab — History's "open, do not
- * send" gesture (HistoryPanel.openRequest), composed from the public api actions.
- */
+/** Seed a new API-client request from the flow and open its tab, unsent, as History's
+ * `HistoryPanel.openRequest` does, composed from the public api actions. */
 export function openInApiClient(request: CurlableRequest): string {
   const { apiActions, layoutActions } = useAppStore.getState();
   const id = apiActions.createApiRequest();
@@ -181,12 +165,9 @@ function message(head: string[], body: string | null): string {
   return body === null ? head.join("\n") : `${head.join("\n")}\n\n${body}`;
 }
 
-/**
- * "Copy request": the request as raw HTTP — request line, headers as captured, blank line,
- * body. HTTP/2 pseudo-headers are folded into the request line and a `Host:` stands in for
- * `:authority` when the client sent no `host` header. The proxy's own `proxy-authorization`
- * is left out — the origin never saw it (see CONNECTION_HEADERS). Nothing else is redacted.
- */
+/** Raw HTTP: request line, headers as captured, blank line, body. HTTP/2 pseudo-headers fold into
+ * the request line (`Host:` stands in for `:authority` if absent). The proxy's own
+ * `proxy-authorization` is left out (the origin never saw it); nothing else is redacted. */
 export function rawRequest(summary: FlowSummary, detail: FlowDetail): string {
   const headers = detail.requestHeaders.filter(
     ([n]) => !n.startsWith(":") && n.toLowerCase() !== "proxy-authorization",
@@ -221,11 +202,8 @@ export function responseBodyText(detail: FlowDetail): string | null {
 
 export type Copyable = { ok: true } | { ok: false; reason: string };
 
-/**
- * Can this flow's captured request/response be copied as raw HTTP? Every flow the proxy
- * READ can (http, decrypted https, localhost, ws upgrades, gRPC headers); a tunnel or a
- * handshake that never became a request cannot, and says why.
- */
+/** Every flow the proxy read can be copied (http, decrypted https, localhost, ws upgrades, gRPC
+ * headers); a tunnel or a handshake that never became a request cannot, and says why. */
 export function rawCopyable(summary: FlowSummary, detail: FlowDetail | null): Copyable {
   if (summary.proto === "tunnel" || summary.proto === "bypass" || summary.method === "CONNECT") {
     const exp = exportable(summary, detail);

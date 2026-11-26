@@ -1,22 +1,5 @@
-/**
- * ImageViewer tests — layer 3, jsdom + @testing-library/react.
- *
- * This tier owns the *wiring and the arithmetic*: which sink the bytes land in,
- * how the `data:` URL is built, which IPC is (and is not) called, how a rejected
- * read is surfaced, how a stale read is dropped, and what each gesture reports
- * through `onZoomChange`. It owns NONE of the geometry — jsdom has no layout
- * engine, so every `getBoundingClientRect()` is 0×0, every `clientWidth` is 0,
- * scroll boxes are inert and no image is ever decoded. Everything measured is
- * therefore stubbed and says so; the pixels are asserted in
- * `imageViewer.browser.test.tsx` under real Chromium.
- *
- * `../workspace/workspaceIpc` is mocked at the module boundary so the raster
- * path can be driven through success, rejection, path-change and unmount races
- * without touching Tauri. The factory is a frozen copy of that module's surface
- * (a `vi.mock` factory does not grow new exports): if this component grows a second import from it,
- * this factory has to grow the export in the SAME change or the break arrives as
- * an "Unhandled Error" beside a green run.
- */
+/** jsdom has no layout, so geometry is stubbed; pixels are in `imageViewer.browser.test.tsx`. The
+ * `workspaceIpc` mock must gain any new export the component imports, in the same change. */
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,37 +32,21 @@ function view(props: {
 const container = (): HTMLElement => screen.getByTestId("image-viewer");
 const img = (): HTMLImageElement => screen.getByTestId("image-img") as HTMLImageElement;
 
-/**
- * Dispatch a NATIVE wheel event and return it. `fireEvent.wheel` does not set
- * `cancelable`, and `defaultPrevented` is only observable on a cancelable event
- * — which several assertions below are entirely about (the component eats the
- * webview's own pinch-zoom).
- */
+/** `fireEvent.wheel` isn't cancelable, and `defaultPrevented` is only observable on one. */
 function wheel(el: HTMLElement, init: WheelEventInit): WheelEvent {
   const evt = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
   el.dispatchEvent(evt);
   return evt;
 }
 
-/**
- * jsdom's scrollLeft/scrollTop are inert (no layout → no scrolling box), so
- * replace them with plain writable values. Stubbed, and honest about it: this
- * pins the component's scroll ARITHMETIC; real clamping against real bounds is
- * the browser tier's claim.
- */
+/** jsdom scroll offsets are inert; plain writable values pin the arithmetic, not real clamping. */
 function stubScroll(el: HTMLElement): void {
   Object.defineProperty(el, "scrollLeft", { value: 0, writable: true, configurable: true });
   Object.defineProperty(el, "scrollTop", { value: 0, writable: true, configurable: true });
 }
 
-/**
- * Feed `onFit` the two measurements it takes at click time. Everything jsdom
- * would report is 0, so an unstubbed Fit click measures a collapsed pane and
- * (correctly) does nothing — which would make the assertion vacuous.
- *
- * The padding is applied as a REAL inline style, so the handler reads it back
- * through `getComputedStyle` exactly as it would in the app.
- */
+/** jsdom reports 0 for everything, which would make Fit a vacuous no-op. The padding is a real
+ * inline style so the handler reads it through `getComputedStyle`. */
 function stubFitGeometry(opts: {
   client: { width: number; height: number };
   padding: number;
@@ -153,11 +120,8 @@ describe("ImageViewer — SVG (drawn from the live buffer, no IPC)", () => {
   });
 
   it("routes the bytes through <img> ONLY — no inline <svg>, <object>, <embed> or <iframe>", () => {
-    // 🔴 Load-bearing security, not style (see the component header). An SVG in
-    // IMAGE context runs in the secure processing mode — no scripts, no event
-    // handlers, no external fetches. The same bytes inlined into the document
-    // execute with Tauri IPC in scope, which reaches `terminal_write` and
-    // therefore the user's shell. This test is the tripwire on that sink.
+    // Tripwire on the `<img>` sink: inlined, this SVG would run with Tauri IPC in scope (see the
+    // component header).
     const hostile =
       '<svg xmlns="http://www.w3.org/2000/svg" onload="globalThis.__pwned = true">' +
       '<script>globalThis.__pwned = true;</script><rect width="9" height="9"/></svg>';
@@ -267,11 +231,8 @@ describe("ImageViewer — raster (scope-guarded IPC read)", () => {
   });
 
   it("a slow read for a file you have already left cannot blank the picture you are on", async () => {
-    // The `stale` guard, and the one ordering where it is load-bearing: the read
-    // for `a.png` is still in flight when the tab moves to `b.png` and `b.png`
-    // finishes first. Without the guard the late result overwrites the settled
-    // state with a record tagged `a.png`, the path tag then rejects it, and the
-    // picture the user is looking at is replaced by "Loading…" out of nowhere.
+    // The ordering where the `stale` guard matters: `b.png` settles before the slower `a.png`,
+    // whose late result would otherwise replace the shown picture with "Loading…".
     const slowA = deferred();
     workspaceIpc.readImageDataUrl.mockReturnValue(slowA.promise);
     const { rerender } = render(view({ path: "/w/a.png", svgText: null }));
@@ -280,10 +241,8 @@ describe("ImageViewer — raster (scope-guarded IPC read)", () => {
     rerender(view({ path: "/w/b.png", svgText: null }));
     await waitFor(() => expect(img()).toHaveAttribute("src", "data:image/png;base64,BBB"));
 
-    // `act` is load-bearing, not decoration: a bare `await Promise.resolve()`
-    // lets the promise settle but does NOT flush the re-render React would
-    // schedule if the guard were missing — which made the first draft of this
-    // test pass against the mutant. Verified by mutation.
+    // `act` is load-bearing: a bare `await Promise.resolve()` does not flush the re-render, and
+    // without it this test passed against the mutant.
     await act(async () => {
       slowA.resolve("data:image/png;base64,AAA");
     });
@@ -312,10 +271,8 @@ describe("ImageViewer — raster (scope-guarded IPC read)", () => {
   });
 
   it("a read that lands after unmount touches nothing", async () => {
-    // Weaker than the case above ON PURPOSE, and honest about why: React 19
-    // silently ignores a setState on an unmounted component, so the only claim
-    // available here is that the late settlement is inert — no throw, no
-    // resurrection. The falsifiable half of the guard is the test above.
+    // Weaker on purpose: React 19 ignores setState after unmount, so only inertness can be
+    // claimed; the falsifiable half is the test above.
     const slow = deferred();
     workspaceIpc.readImageDataUrl.mockReturnValue(slow.promise);
     const { unmount } = render(view({ path: "/w/a.png", svgText: null }));
@@ -343,11 +300,8 @@ describe("ImageViewer — natural size (the second half of the zoom contract)", 
   });
 
   it("falls back to fit-to-the-pane when the image reports NO intrinsic size", () => {
-    // An `<img>` whose source has no intrinsic size is stretched to its
-    // containing block by the engine — a percentage-shaped width, and therefore
-    // inert under `zoom`. `0` must never be pinned either, or the
-    // picture collapses to nothing; the fallback is the `--scalable` rule, whose
-    // width is `calc(100% * var(--img-zoom))` and does magnify.
+    // No intrinsic size: a pinned 0 would collapse the picture and a stretched width ignores
+    // `zoom`, so the `--scalable` rule applies.
     render(view({ svgText: "<svg/>" }));
     fireLoad(0);
 

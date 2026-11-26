@@ -1,38 +1,6 @@
-/**
- * ContextBar — the Metrics panel's "Context window" card: the SELECTED agent's Claude
- * context window, broken down the way Claude Code's `/context` breaks it down (a dark
- * card and a stacked bar).
- *
- * ── Layout, top to bottom ────────────────────────────────────────────────────
- *   header  `◆ context` · `290.7k of 1m · compacts at 967k` · a tone chip · Bar | Grid
- *   drawing a full-width stacked bar (one segment per category, printed order, widths ∝
- *           tokens / window; free space is the dark track; the autocompact buffer is a
- *           hatched segment at the right end with a thin marker where compaction will
- *           happen) — or the `/context`-style 20×10 grid, each cell 0.5% of the window
- *   legend  swatch · label · tokens · percent (dimmed); wraps, never scrolls sideways
- *   footer  model · "measured 3 min ago" · ↻ · the one-line "this is an estimate" caveat
- *
- * Both drawings are plain DOM + CSS. Their proportions are computed in
- * `contextFormat.ts` (pure, pinned by jsdom tests); this file only paints them.
- *
- * ── Which agent ──────────────────────────────────────────────────────────────
- * The card follows `selection.selectedAgentId` in the app store, NOT the cwd the Metrics
- * tab was opened with: the dashboard below it answers "my usage on this machine", this
- * card answers "how full is THIS agent", and that question moves with the selection.
- *   - nothing selected → a calm prompt to select one;
- *   - a sub-agent      → a calm note: context is per root session (a sub-agent's turns
- *                        live inside its root's window, and it has no session to resume);
- *   - a root agent     → measured by its agent id. The card never sees a session id:
- *                        Rust resolves the root's minted session and cwd itself, because
- *                        the session id never crosses the wire. A root that is
- *                        not live (its process gone) comes back as `bad-session`.
- *
- * ── Honesty rules ────────────────────────────────────────────────────────────
- * Never a number we do not have: no reading → "Measuring context…" or the error's one
- * sentence; a failed refresh over a good reading → the reading, dimmed, with the reason.
- * And the caveat is always on screen beside the numbers, because they ARE an estimate:
- * the CLI says so itself ("Estimated usage by category").
- */
+/** The SELECTED agent's context window, as /context breaks it down; proportions come from
+ * contextFormat.ts. Follows the selection, not the tab's cwd; a sub-agent gets a note (its turns
+ * live in the root's window). Never a number we don't have; the estimate caveat stays visible. */
 
 import { useEffect } from "react";
 
@@ -81,21 +49,14 @@ function RefreshIcon(): React.JSX.Element {
   );
 }
 
-/**
- * `base`, plus `base--free` / `base--buffer` for the two special categories — the one
- * place the bar, the grid and the legend decide how a key is drawn, so the three can
- * never disagree about which cell is "free".
- */
+/** The one place bar, grid and legend decide how a key is drawn, so they agree on "free". */
 function kindClass(base: string, key: string): string {
   if (key === FREE_KEY) return `${base} ${base}--free`;
   if (key === BUFFER_KEY) return `${base} ${base}--buffer`;
   return base;
 }
 
-/**
- * The inline colour for a key, as a `--seg-colour` custom property the CSS paints with
- * (so the hatch/cross patterns can reuse it). Free space carries none: it IS the track.
- */
+/** As --seg-colour so hatch/cross patterns can reuse it. Free space has none: it IS the track. */
 function colourStyle(key: string): React.CSSProperties {
   return key === FREE_KEY ? {} : ({ "--seg-colour": contextColour(key) } as React.CSSProperties);
 }
@@ -112,10 +73,7 @@ function targetOf(agent: AgentNode | null): Target {
   return { kind: "ready", agentId: agent.id, status: agent.status };
 }
 
-/**
- * The card. `nowMs` is the host panel's clock tick (see `MetricsPanel`'s "two clocks"
- * note), so "measured 3 min ago" moves in step with the dashboard's own "Scanned …".
- */
+/** nowMs is the host panel's tick (MetricsPanel), so "measured … ago" moves with the dashboard. */
 export function ContextCard({ nowMs }: { nowMs: number }): React.JSX.Element {
   // The agent OBJECT, not a derived target: a selector that builds a new object on
   // every call would re-render forever. The store hands back the same reference until

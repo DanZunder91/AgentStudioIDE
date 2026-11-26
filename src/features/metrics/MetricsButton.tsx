@@ -1,27 +1,6 @@
-/**
- * MetricsButton — the titlebar affordance that opens the metrics dashboard.
- *
- * Mirrors `<ApiRequestButton/>` exactly: a small icon button whose only job is one
- * store action. The dashboard is a **tab**, not an overlay — you keep it
- * open beside a running agent, split it next to a terminal, and drill total → turn →
- * child, none of which an `aria-modal` overlay can do.
- *
- * The bar-chart glyph is defined here rather than in `src/components/icons.tsx` for the
- * same reason `UsageLimits.tsx` keeps its own refresh glyph: the feature owns its mark,
- * and it keeps this addition from touching a shared file.
- *
- * 🔴 **What the cwd is for, and what it is NOT for.** It names the project the dashboard
- * *can* narrow to — it enables the "This project" toggle — and nothing more. The dashboard
- * opens in **All projects** scope regardless, because that is the question it answers
- * (it is about total usage on the machine, not about one project).
- *
- * Passing `null` when nothing is selected is correct and is the common case. It used to be
- * a *fatal* case: an earlier store paired that `null` with a hard-coded `scope: "project"`,
- * which `claude_metrics` rejected with `scan-failed`, so opening the tab showed
- * "Could not read your sessions". Nothing about this component was wrong — the seam
- * between it and the command was never tested. `metricsNoSelectionSeam.test.tsx` is that
- * missing test, and it drives the real path from this button's click.
- */
+/** Titlebar button opening the metrics tab (like `<ApiRequestButton/>`). The cwd only enables
+ * "This project"; the tab opens in All projects regardless, and `null` (nothing selected) is the
+ * common case, pinned end to end by `metricsNoSelectionSeam.test.tsx`. */
 
 import { useAppStore } from "../../app/store";
 import { rootOf } from "../../app/store";

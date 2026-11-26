@@ -1,29 +1,6 @@
-//! Background children must never open a console window (on Windows a stray `claude`
-//! console window was appearing every few seconds).
-//!
-//! **Why it happened.** The packaged app is a GUI-subsystem process, so it has no console. When
-//! such a process starts a console program (`claude.exe`, `gh.exe`, `docker.exe`, `reg.exe`, a
-//! language server…) Windows gives the child a **new, visible** console window unless the
-//! creation flags say otherwise. The usage strip runs `claude -p /usage` every 5 s, so a black
-//! window titled `claude` flashed up every 5 s; a language server's window stayed open for as
-//! long as the server lived. macOS and Linux have no such thing, which is why no test on those
-//! ever saw it.
-//!
-//! **The fix.** [`NoWindow::no_window`] on every `Command` the app builds for a background child.
-//! It sets `CREATE_NO_WINDOW`: the child still has a console (so console programs, and the
-//! console programs *they* start, work and inherit it), but the console has no window.
-//! `DETACHED_PROCESS` would be wrong — a detached child has no console at all, so every console
-//! program it starts would pop its own window. A GUI child (a browser) ignores the flag.
-//!
-//! Elsewhere it does nothing, so call sites need no `cfg`.
-//!
-//! **Not for terminals.** The IDE's own terminals are ConPTY sessions made by `portable-pty`
-//! (`crate::pty`), never by `Command` — their console is the pseudo-console the user is looking
-//! at. This module is only for children nobody is meant to see.
-//!
-//! **The guard.** [`tests::every_background_spawn_hides_its_console`] reads this crate's own
-//! sources and fails when a `Command::new(` outside a test module has no `.no_window()` next to
-//! it. It runs on every OS, so the next spawn written on a Mac cannot bring the bug back.
+//! Every background `Command` calls [`NoWindow::no_window`]: on Windows a GUI app's console child
+//! otherwise gets a visible window. `CREATE_NO_WINDOW`, not `DETACHED_PROCESS` (its children pop
+//! their own); no-op elsewhere; not for PTY terminals. Guarded by a source-scanning test.
 
 /// `CREATE_NO_WINDOW` (winbase.h). Spelled out so no Windows API crate is needed for one flag.
 #[cfg(windows)]

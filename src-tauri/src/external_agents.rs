@@ -1,84 +1,6 @@
-//! **Agents running OUTSIDE the IDE** — the Agent Village's view of every `claude` on
-//! this machine that the IDE did not start (a `claude` in iTerm, in VS Code's terminal,
-//! in a tmux pane). The IDE's own agents come from the supervisor's forest; this
-//! module finds the rest.
-//!
-//! ## How (passive, read-only)
-//!
-//! There is no hook to listen to: an external `claude` never has the IDE's env, so
-//! the IDE's ad-hoc hook detection is inert for it, and global hooks (a write under
-//! `~/.claude`) are ruled out. So
-//! the only sources are the ones `claude` already writes for itself:
-//!
-//! 1. **Transcripts.** Walk `~/.claude/projects/*/<session>.jsonl` (plus the
-//!    `<session>/subagents/**/agent-*.jsonl` sidecars) and keep the sessions whose
-//!    newest file was touched inside the window (default [`DEFAULT_WINDOW_MINS`]).
-//!    The mtime gate comes first — the `metrics::scan_root` discipline — so the cost is
-//!    one `stat` per file outside the window. Inside it, only a **bounded tail** is read
-//!    ([`TAIL_BOUND`]; transcripts reach 40 MB and are append-only, so the tail is
-//!    where "now" is). Nothing is ever written, cached or created under `~/.claude`.
-//! 2. **Processes.** The `claude` processes of this user, by
-//!    `procscan::os::list` + `procscan::ide::is_claude_cli` — libproc / `/proc` / Toolhelp
-//!    and the process's own command line on Windows, no permission prompt. Liveness is
-//!    **per session** ([`assign_claims`]):
-//!    a process started with `--session-id <id>` / `--resume <id>` / `-r <id>` claims
-//!    exactly that session; every other ("bare") `claude` claims the newest unclaimed
-//!    session in its cwd's project dir written no earlier than the process started
-//!    (minus [`CLAIM_SLACK_MS`]). A session no live process claims is **not reported at
-//!    all**, however fresh its mtime (a `claude` killed by a restart leaves a transcript
-//!    that looks busy for the whole window). Where the
-//!    process table is not available (`procscan::os::AVAILABLE` false) nothing is hidden
-//!    and `alive` is `null`. On Windows the project dir is matched ignoring case and the
-//!    cwd without its `\\?\` prefix ([`canonical`], [`same_project_dir`]).
-//! 3. **The host app.** macOS: the claiming process's parent chain is walked to the
-//!    first ancestor inside an app bundle (`…/iTerm.app/Contents/MacOS/…`), or iTerm2's
-//!    `iTermServer` (its shells hang off that helper, not the app): its display name goes
-//!    on the wire as `host`, the bundle stays in Rust ([`HostCache`]) so
-//!    [`focus_external_agent`] can bring that app to the front with `open` — no
-//!    AppleScript, no Automation / Accessibility prompt. Windows
-//!    ([`winhost`]): the chain is walked to the first known GUI host (Windows Terminal,
-//!    VS Code, Cursor, JetBrains…) or else the first ancestor owning a visible top-level
-//!    window; the host's pid and image path stay in Rust and the focus restores and
-//!    raises its main window with `SetForegroundWindow` — allowed because the IDE is the
-//!    foreground app at click time; no privilege, no UI Automation.
-//!
-//! ## What a transcript tail says (the status machine, from pixel-agents' notes)
-//!
-//! | last thing in the tail | activity |
-//! |---|---|
-//! | `assistant` with a `tool_use` not yet answered by a `tool_result` | `running`, tool = its name |
-//! | …and silent ≥ [`PERMISSION_SILENCE_MS`] after a tool that is neither read-only nor a sub-agent launch | `waiting` (probably a permission prompt — a heuristic: a long `Bash` looks the same) |
-//! | a pending `AskUserQuestion` / `ExitPlanMode` | `waiting` (it IS asking the user) |
-//! | a user prompt, a `tool_result`, a thinking block | `running`, no tool (thinking) |
-//! | assistant text with `stop_reason: end_turn`, `system` `turn_duration` / `stop_hook_summary`, an interrupt | `idle` |
-//! | assistant text with no stop reason, silent ≥ [`TEXT_IDLE_MS`] | `idle` |
-//! | an API error message (`isApiErrorMessage`, `system` `api_error`) | `error` |
-//!
-//! A sub-agent is `done` when a FOREGROUND launch's `tool_result` came back in the
-//! parent (a background launch answers at once, so that result means nothing there),
-//! when its parent's queue holds its `<task-notification>` (`completed`/`killed` →
-//! done, `failed` → error) and it has not written past it (a resumed agent notifies
-//! again), when its sidecar says `"finished": true`, when its transcript says the turn
-//! ended, or when it has been silent for [`SUBAGENT_STALE_MS`] — the CLI does not
-//! always write a final line. The notification and `finished` rules are the IDE
-//! fan-out's own ([`crate::agent::claude`]'s `background_end`), so both views agree.
-//!
-//! ## Privacy (the metrics.rs rules)
-//!
-//! This is an every-repo, machine-wide view — the metrics "All" scope — so it carries
-//! **no prompt text, no tool arguments, no tool results, no absolute paths**:
-//! - the title is the transcript's `slug` (a random three-word handle the CLI mints),
-//!   else the git branch, else `"claude"`; a sub-agent's is its `.meta.json`
-//!   `agentType` — never its `description`, which is prompt text;
-//! - the folder is the cwd's basename (one folder = one house);
-//! - the tool is the bare tool NAME;
-//! - the `key` is an opaque per-process SipHash of the id ([`opaque_key`]): Claude's
-//!   session id never crosses the wire, and a key is meaningless after a restart;
-//! - the `language` is a language id (`"rust"`) voted by the extensions of the files the
-//!   session's tool calls named ([`language`]) — the paths themselves stay in Rust.
-//!
-//! The IDE's own sessions are excluded by id, in-process: the command asks the
-//! supervisor ([`SupervisorHandle::owned_session_ids`]) and the ids stay in Rust.
+//! Agents running outside the IDE, for the Agent Village. Read-only: bounded transcript tails in
+//! `~/.claude/projects` plus this user's process table ([`assign_claims`] decides liveness). Never
+//! writes there; no prompt text, tool arguments, results or absolute paths cross the wire.
 
 use std::collections::hash_map::RandomState;
 use std::collections::{HashMap, HashSet};
@@ -179,11 +101,8 @@ pub struct ExternalAgentsReport {
 // Commands
 // ---------------------------------------------------------------------------
 
-/// Every Claude Code agent active on this machine OUTSIDE the IDE, in the last
-/// `activeWithinMins` (default [`DEFAULT_WINDOW_MINS`], clamped to 1..=[`MAX_WINDOW_MINS`]).
-///
-/// Frontend contract: `invoke<ExternalAgentsReport>('list_external_agents',
-/// { activeWithinMins })`. The scan runs on `spawn_blocking`.
+/// Every Claude Code agent active outside the IDE in the last `activeWithinMins` (clamped to
+/// 1..=[`MAX_WINDOW_MINS`]). Contract: `invoke<ExternalAgentsReport>('list_external_agents', …)`.
 #[tauri::command]
 pub async fn list_external_agents(
     supervisor: State<'_, SupervisorHandle>,
@@ -193,16 +112,9 @@ pub async fn list_external_agents(
     external_agents_report(exclude, active_within_mins).await
 }
 
-/// Bring the GUI app an external agent runs in to the front (the village's click on an
-/// outside character). `key` is a `key` from the LAST `list_external_agents` reply; the
-/// app's bundle was cached Rust-side by that scan ([`HostCache`]) — no path ever came
-/// from the frontend, so this cannot be pointed at an arbitrary app.
-///
-/// Frontend contract: `invoke<void>('focus_external_agent', { key })`. Errors are coded:
-/// `no-host` (unknown key, no app found for it, or — Windows — the app has
-/// exited or shows no window), `unsupported` (neither macOS nor Windows), `open-failed`.
-/// macOS: `open` on the cached bundle. Windows: the cached host pid's main window is
-/// restored and brought to the front ([`winhost::focus_window`]).
+/// Bring an external agent's host app to the front. `key` is from the last scan, whose host is
+/// cached in Rust ([`HostCache`]), so no path comes from the frontend. Errors: `no-host`,
+/// `unsupported` (not macOS/Windows), `open-failed`.
 #[tauri::command]
 pub async fn focus_external_agent(key: String) -> Result<(), String> {
     if !cfg!(any(target_os = "macos", windows)) {
@@ -361,11 +273,8 @@ pub enum HostTarget {
     Window { pid: u32, exe: Option<PathBuf> },
 }
 
-/// This user's live `claude` processes, or `None` where the OS gives no process table
-/// (`procscan::os::AVAILABLE` false) — "unknown", not "nobody". Reads the process table
-/// only (never `~/.claude`); a process whose cwd cannot be read is skipped. The host app
-/// is found per OS: the `.app` walk ([`host_of`]) on macOS/Linux, the window walk
-/// ([`winhost::host_of_windows`]) on Windows.
+/// This user's live `claude` processes, or `None` where the OS has no process table (unknown, not
+/// nobody). Never reads `~/.claude`; a process with an unreadable cwd is skipped.
 pub fn live_claudes() -> Option<Vec<LiveClaude>> {
     if !crate::procscan::os::AVAILABLE {
         return None;
@@ -424,11 +333,9 @@ pub fn live_claudes_with(
         .collect()
 }
 
-/// The host app of `pid`: the first process on its parent chain (itself included) whose
-/// executable names one ([`host_from_exe`]). A pid missing from `by_pid` (this user's
-/// processes) is asked of `outside` — iTerm2 puts a setuid-root `login` between its
-/// helper and the shell, and the user's table never lists it. Bounded, and a ppid cycle
-/// in a malformed table ends the walk.
+/// The host app of `pid`: the first process up its parent chain whose executable names one. Pids
+/// missing from `by_pid` are asked of `outside` (iTerm2's setuid-root `login`); bounded,
+/// cycle-safe.
 pub fn host_of(
     pid: u32,
     by_pid: &HashMap<u32, &crate::procscan::os::RawProc>,
@@ -452,10 +359,8 @@ pub fn host_of(
     None
 }
 
-/// The app an executable path belongs to: the OUTERMOST `X.app` followed by `Contents`
-/// (`/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper.app/…` is VS
-/// Code, not its helper), or iTerm2 for its `iTermServer-*` helper, which lives in
-/// Application Support and is the parent of every iTerm2 shell.
+/// The app an executable belongs to: the outermost `X.app/Contents` (VS Code, not its helper), or
+/// iTerm2 for its `iTermServer-*` helper, the parent of every iTerm2 shell.
 pub fn host_from_exe(exe: &str) -> Option<HostApp> {
     let path = Path::new(exe);
     let parts: Vec<_> = path.components().collect();
@@ -604,24 +509,9 @@ pub struct Candidate {
     pub mtime_ms: u64,
 }
 
-/// Which process owns which session: `session id → index into procs`.
-///
-/// 1. Every explicit id ([`Claim::Id`]) is claimed by its process (the first one, if
-///    two name the same id).
-/// 2. The bare processes then claim, **most constrained first**: newest `since` first
-///    (ties by pid), the unbounded ones (`since: None`) last. Each takes the newest
-///    unclaimed candidate in its cwd's project dir (`candidates(dir name)`, any order)
-///    written at or after `since - CLAIM_SLACK_MS`; none qualifies → it claims nothing.
-///
-/// Why newest-first: a process can only own sessions written after it started, so the
-/// sets a process may claim are NESTED — the newest process's set is inside every older
-/// one's. Serving the narrowest set first never takes a session an older process
-/// needed more (whatever is left still qualifies for the older ones), so this greedy
-/// matches as many processes as any order can. Oldest-first would let a long-lived
-/// `claude` grab the only session a just-started one could own, leaving the new one
-/// claiming nothing and a dead session looking alive in its place. Within that rule,
-/// "newest session" is the guess: one folder's bare sessions are indistinguishable by
-/// any read-only fact, so liveness is exact per id and a best match per folder.
+/// Which process owns which session (`session id → index into procs`). Explicit ids claim first;
+/// bare processes then take the newest unclaimed session in their project dir written since they
+/// started (minus `CLAIM_SLACK_MS`), newest process first: claimable sets nest, so that is optimal.
 pub fn assign_claims(
     procs: &[LiveClaude],
     mut candidates: impl FnMut(&str) -> Vec<Candidate>,
@@ -691,15 +581,9 @@ impl HostCache {
 // The scan
 // ---------------------------------------------------------------------------
 
-/// Every external agent under `projects_dir` (shaped like `~/.claude/projects`) active
-/// in `[now_ms - window_ms, now_ms]`: each session, then its sub-agents in the window.
-///
-/// Pure given its inputs — the projects dir, the clock and the process table are all
-/// injected, so every test drives it against a tempdir. Sessions in
-/// `exclude_session_ids` (the IDE's own) are skipped. `live` = this user's `claude`
-/// processes, `None` when unknown: with a list, only sessions a process claims
-/// ([`assign_claims`]) are reported; without one, every session in the window is, with
-/// `alive: null`. Roots are ordered most recent first.
+/// Every external agent under `projects_dir` active in the window, roots most recent first. Pure
+/// (dir, clock, processes injected). With `live`, only claimed sessions are reported; with `None`,
+/// all in the window with `alive: null`. `exclude_session_ids` are the IDE's own.
 pub fn scan_external(
     projects_dir: &Path,
     now_ms: u64,
@@ -863,10 +747,8 @@ struct SubFile {
     mtime_ms: u64,
 }
 
-/// The session and its in-window sub-agents, or `None` when it is outside the window
-/// or carries no cwd at all (nothing to place it with). Its language is caught up in
-/// `langs` from its root transcript and those sub-agents' sidecars — only for a session
-/// that is reported, so a dead or stale one costs no read.
+/// The session and its in-window sub-agents, or `None` when outside the window or without a cwd.
+/// Its language is updated only for reported sessions, so a stale one costs no read.
 fn scan_session(
     session_id: &str,
     files: &SessionFiles,
@@ -1036,10 +918,8 @@ impl SubMeta {
     }
 }
 
-/// A sub-agent's activity: a foreground launch's result in the parent first, then the
-/// end evidence the IDE fan-out uses too (the parent's task notification unless the
-/// sub-agent wrote past it, the sidecar's `finished`), then its own tail, then
-/// staleness.
+/// A sub-agent's activity: a foreground launch's result in the parent, then the IDE fan-out's end
+/// evidence (task notification unless written past, sidecar `finished`), its own tail, staleness.
 fn sub_activity(
     sub: &SubFile,
     meta: &SubMeta,
@@ -1357,11 +1237,8 @@ fn basename(cwd: &str) -> String {
         .unwrap_or_else(|| cwd.to_string())
 }
 
-/// Symlinks resolved (claude reports `/private/tmp`, a shell may say `/tmp`); a path
-/// that no longer exists is compared as written. Windows' `canonicalize` answers with a
-/// verbatim `\\?\C:\…` path, which the CLI never writes — its project dir for
-/// `C:\Users\me\app` is `C--Users-me-app`, not `----C--…` — so the prefix is dropped
-/// ([`strip_verbatim`]).
+/// Symlinks resolved (`/private/tmp` vs `/tmp`); a vanished path is compared as written. Windows'
+/// verbatim `\\?\` prefix is dropped: the CLI's project dir names never contain it.
 fn canonical(path: &Path) -> PathBuf {
     strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
 }
@@ -1396,10 +1273,8 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    //! Hermetic: every scan runs over a tempdir copy of `tests/fixtures/external_agents`
-    //! (or a tree built inline), with the clock and the process facts injected. Nothing
-    //! here reads or writes the real `~/.claude` — except the one `#[ignore]`d live test,
-    //! which only reads it (registered in `scripts/verify.mjs` LOCAL_INTEGRATION).
+    //! Hermetic: tempdir fixtures with an injected clock and process facts. Only the `#[ignore]`d
+    //! live test reads the real `~/.claude` (registered in `scripts/verify.mjs` LOCAL_INTEGRATION).
 
     use super::*;
     use serde_json::json;
@@ -1687,11 +1562,8 @@ mod tests {
         assert_eq!(once[0].language.as_deref(), Some("go"));
     }
 
-    /// Regression: the app restarted, its old `claude` died with it,
-    /// and the transcript (written < 10 min ago, tail mid-turn, a sub-agent busy) kept
-    /// it on screen as "Thinking" — because the IDE's two NEW `claude`s in the same
-    /// folder made the folder look alive. Per-session liveness: they claim their own ids
-    /// (the IDE's, excluded), nobody claims the old one, so it is not reported.
+    /// An old session in a folder with live IDE `claude`s: they claim their own (excluded) ids,
+    /// nobody claims the old one, so it is not reported.
     #[test]
     fn a_dead_session_in_a_folder_with_live_ide_agents_is_not_reported() {
         let base = temp_dir("restart");
@@ -1755,10 +1627,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// Three bare `claude`s in one folder (three iTerm tabs in one project),
-    /// plus one started after every write there. Most constrained first: the newest
-    /// process takes the newest session it can own, and so on down; the just-started one
-    /// claims nothing, and the one session left over is hidden.
+    /// Three bare `claude`s in one folder plus one started after every write: newest takes newest,
+    /// the last claims nothing, and the leftover session is hidden.
     #[test]
     fn bare_processes_in_one_folder_claim_newest_first() {
         let cands = vec![
@@ -2976,10 +2846,8 @@ mod tests {
         assert_eq!(live_claudes().is_some(), crate::procscan::os::AVAILABLE);
     }
 
-    /// The real thing: this machine's `~/.claude`, read through the command's own path
-    /// (`home_dir()`, `spawn_blocking`, the live process probe). Invariants only — the
-    /// set of agents changes by the second. Registered in `scripts/verify.mjs`
-    /// LOCAL_INTEGRATION.
+    /// Reads this machine's real `~/.claude` via the command's own path; invariants only (the agent
+    /// set changes). Registered in `scripts/verify.mjs` LOCAL_INTEGRATION.
     #[test]
     #[ignore = "reads the real ~/.claude — run with --ignored"]
     fn live_external_agents_scan_the_real_home() {
@@ -2988,17 +2856,11 @@ mod tests {
             .expect("a home")
             .join(".claude")
             .join("projects");
-        // Independent expectations, taken BEFORE the scan from the process table and
-        // `stat` alone (no claim logic): the live `claude`s, and those of them that are
-        // bare and have a root transcript in their folder written in the window and
-        // since they started — each of those must surface as SOME root. Without them
-        // every check below is a `for` over a possibly empty list.
+        // Expectations taken before the scan from the process table and `stat` alone (no claim
+        // logic), so the checks below are never vacuous.
         let live = live_claudes();
-        // The `due` check below only means something when a live cwd can reach the CLI's
-        // project dir. On Windows a verbatim `\\?\C:\…` cwd maps to `----C--…`, matches
-        // nothing, and every check below passes over an empty list. So:
-        // no cwd is verbatim, and — on Windows — some live
-        // `claude` (the one running this test, at least) has its project dir on disk.
+        // On Windows a verbatim `\\?\C:\…` cwd matches no project dir, making every check vacuous:
+        // assert no cwd is verbatim and that some live `claude` has its project dir on disk.
         if let Some(live) = &live {
             for p in live {
                 assert!(

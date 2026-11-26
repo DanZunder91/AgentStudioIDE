@@ -1,9 +1,6 @@
-//! One supervised log child: spawn at an absolute path (no shell), read stdout lines on
-//! tokio, parse, `LogHub::push`. Dropping the [`Running`] handle stops the reader and
-//! kills the child (`kill_on_drop`). A child that exits on its own flips `alive` off,
-//! records why (exit status + stderr tail) for `syslog_status`, and posts one `system`
-//! line — the lifecycle every stream shares (`stream.rs`). Platform-neutral — the unix
-//! tests drive it with `/bin/sh`.
+//! One supervised log child: spawned by absolute path (no shell), stdout lines parsed into
+//! `LogHub::push`. Drop kills it (`kill_on_drop`); exiting on its own flips `alive` off, keeps
+//! why for `syslog_status` and posts one `system` line (`stream.rs`).
 
 use std::collections::VecDeque;
 use std::path::PathBuf;

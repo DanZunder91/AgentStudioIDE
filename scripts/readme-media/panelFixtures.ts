@@ -1,7 +1,4 @@
-/**
- * Fictional data for the panel screenshots (API, DB, Agent Logs, Network, Metrics).
- * Shapes mirror the wire types in src/features/*; values are invented for README media.
- */
+/** Invented data for the panel screenshots; shapes mirror the wire types in src/features/*. */
 import type { DbConnection, DbNode, DbResultSet } from "../../src/features/db/types";
 import type { LogLine } from "../../src/features/agentlogs/agentLogsTypes";
 import type { DevApp, ProcsList } from "../../src/features/procs/procsTypes";

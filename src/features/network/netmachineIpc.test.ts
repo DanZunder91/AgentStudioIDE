@@ -1,8 +1,5 @@
-/**
- * The netmachine IPC seam: command and event names are the contract with the Rust side,
- * pinned literally — a rename on either side must
- * red this file, not leave the Whole-computer table silently empty.
- */
+/** Command and event names are the Rust contract, pinned literally: a rename must fail here, not
+ * leave the Whole-computer table silently empty. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

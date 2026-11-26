@@ -1,12 +1,4 @@
-/**
- * `findIpc` — the search half of the command surface, at the wire.
- *
- * A thin wrapper, and thin wrappers are exactly where the command *name* and the
- * arg *shape* are the whole contract: get either wrong and Rust rejects the call
- * at runtime with types none the wiser. `findInFiles`' real exercise is driven
- * through `<FindInFiles>` (with the module mocked); this pins the marshalling
- * against the real `invoke`.
- */
+/** Pins the marshalling against the real `invoke`: command name and arg shape are the contract. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -94,12 +86,7 @@ describe("findIpc", () => {
   });
 });
 
-/**
- * Cancellation. A slow search used to freeze the whole window; Rust moved the
- * walk off the event-loop thread, and this is the handle that stops it.
- * Marshalling only — the panels' use of it is driven through `<FindInFiles>` /
- * `<FindFiles>`.
- */
+/** Cancellation marshalling only; the panels' use is driven through their own suites. */
 describe("findIpc — cancellation", () => {
   let ipc: TauriMock;
 

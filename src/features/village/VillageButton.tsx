@@ -1,7 +1,4 @@
-/**
- * VillageButton — the titlebar affordance that opens the Agent Village. Mirrors
- * `<NetworkButton/>`: one store action, the destination is a singleton TAB.
- */
+/** Titlebar button that opens the Agent Village; like `<NetworkButton/>`, a singleton tab. */
 
 import { useAppStore } from "../../app/store";
 import { VillageIcon } from "../../components/icons";

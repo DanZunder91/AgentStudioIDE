@@ -1,8 +1,4 @@
-/**
- * Helpers for the real-service specs (e2e/specs/real-service*.e2e.ts): open more terminals,
- * read the Network and Agent logs views, capture what the app puts on the clipboard, and
- * drag a column resizer — all through hooks the product already renders (no test-only ids).
- */
+/** Helpers for the real-service specs, using only hooks the product already renders. */
 
 import { $, $$, browser } from "@wdio/globals";
 import { execFile, spawn } from "node:child_process";
@@ -32,10 +28,7 @@ async function terminalIds(): Promise<string[]> {
   );
 }
 
-/**
- * Open ANOTHER terminal with the tab bar's "New terminal tab" button (the empty-pane button
- * only exists for the first one). Returns the terminal that was not there before.
- */
+/** Via the tab bar's button (the empty-pane button exists only for the first terminal). */
 export async function openAnotherTerminal(): Promise<OpenedTerminal> {
   const before = new Set(await terminalIds());
   const plus = await $('button[aria-label="New terminal tab"]');
@@ -52,13 +45,8 @@ export async function openAnotherTerminal(): Promise<OpenedTerminal> {
   return { id, title };
 }
 
-/**
- * What a terminal printed — to see a command's own output. xterm's DOM rows when the DOM
- * renderer is active; under the WebGL renderer (the default wherever WebGL2 exists, including
- * software GL in the E2E container) the screen is a canvas, so read the same terminal's output
- * as the app itself captured it: the log hub's ring (`logstream_snapshot`, filtered to this
- * terminal id) — the PTY bytes after the tap's line split and ANSI strip.
- */
+/** xterm's DOM rows, or under WebGL (a canvas) the log hub's ring for this terminal: the PTY
+ * bytes after the line split and ANSI strip. */
 export async function terminalText(terminalId: string): Promise<string> {
   return browser.execute(async (id: string) => {
     const dom = Array.from(document.querySelectorAll(`.terminal-view[data-terminal-id="${id}"] .xterm-rows > div`))
@@ -166,11 +154,8 @@ export async function detailHeaders(): Promise<Record<string, string>> {
   });
 }
 
-/**
- * Replace `navigator.clipboard.writeText` with a recorder, so a spec can read back the EXACT
- * string a Copy button writes (the webview's real clipboard is not readable over WebDriver).
- * The app's own code path is unchanged: it still calls writeText and awaits its promise.
- */
+/** Records `navigator.clipboard.writeText` (the real clipboard isn't readable over WebDriver);
+ * the app's code path is unchanged. */
 export async function recordClipboard(): Promise<void> {
   await browser.execute(() => {
     const w = window as unknown as { __copied: string[] };
@@ -203,11 +188,7 @@ export async function copyVia(label: string): Promise<string> {
 
 /* ── the IDE's own API client ──────────────────────────────────────────── */
 
-/**
- * Open a new API request tab from the titlebar globe, send `GET url`, and wait for the status
- * pill to read `expectedStatus` — the same hooks api.e2e.ts drives (`New API request`,
- * `Request URL`, `api-send`, `api-status`).
- */
+/** Opens a new API tab from the titlebar globe, via the same hooks api.e2e.ts drives. */
 export async function sendApiGet(url: string, expectedStatus: string): Promise<void> {
   await $('[aria-label="New API request"]').click();
   await $('[data-testid="api-request"]').waitForExist({ timeout: 15_000 });
@@ -223,10 +204,7 @@ export async function sendApiGet(url: string, expectedStatus: string): Promise<v
 
 /* ── an EXTERNAL client: a process outside the app, pointed at its proxy by hand ── */
 
-/**
- * The capture proxy's port, read from the IDE-traffic header (`proxy 127.0.0.1:<port>`) — the
- * same place a user reads it before typing it into Postman. Opens Network first.
- */
+/** Read from the IDE-traffic header, where a user reads it; opens Network first. */
 export async function proxyPortFromHeader(): Promise<number> {
   await openNetwork();
   const port = await $('[data-testid="network-panel"] [data-testid="net-port"]');
@@ -241,13 +219,8 @@ export async function proxyPortFromHeader(): Promise<number> {
   return Number(text.slice(text.lastIndexOf(":") + 1));
 }
 
-/**
- * `curl -s -x http://127.0.0.1:<proxyPort> <url>` from THIS process (the wdio runner, outside
- * the app), resolving with curl's stdout. The runner's own proxy variables are stripped and
- * `--noproxy ""` overrides any NO_PROXY, so the ONLY route is the one given with `-x` — a
- * `localhost` NO_PROXY would otherwise send the request straight to the service and the test
- * would be measuring nothing. execFile (no shell), so nothing in the URL is interpreted.
- */
+/** From the runner, not the app. Proxy env stripped and `--noproxy ""` so `-x` is the only route
+ * (a localhost NO_PROXY would bypass it); execFile, so the URL is never shell-interpreted. */
 export function curlViaProxy(proxyPort: number, url: string): Promise<string> {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) if (!/^(https?|all|no)_proxy$/i.test(k)) env[k] = v;
@@ -265,11 +238,7 @@ export function curlViaProxy(proxyPort: number, url: string): Promise<string> {
 
 const NET_PICKER = (label: string): string => `[data-testid="network-panel"] .net-bar button[aria-label="${label}"]`;
 
-/**
- * "Only" one row of a Network toolbar picker (by the trigger's aria-label and the row's label).
- * The Only button is `visibility: hidden` until its row is hovered, so the pointer is moved
- * onto the row first — the same gesture a user makes.
- */
+/** The Only button is hidden until its row is hovered, so the pointer moves onto the row first. */
 export async function pickOnly(pickerLabel: string, rowLabel: string): Promise<void> {
   await $(NET_PICKER(pickerLabel)).click();
   await $('[data-testid="network-panel"] [role="listbox"]').waitForExist({ timeout: 5_000 });
@@ -365,10 +334,7 @@ export interface DevAppRowView {
   pressed: string;
 }
 
-/**
- * The Apps group's app rows (every runtime section) in the Logs Sources sidebar — scoped to it:
- * Network's IDE-traffic sidebar renders the same section.
- */
+/** Scoped to the Logs sidebar: Network's IDE-traffic sidebar renders the same section. */
 export async function devAppRows(): Promise<DevAppRowView[]> {
   return browser.execute(() =>
     Array.from(document.querySelectorAll('[data-testid="alog-sidebar"] [data-testid="procs-section"] [data-testid="procs-row"]')).map((r) => ({
@@ -407,10 +373,7 @@ export async function waitForDevApp(pred: (r: DevAppRowView) => boolean, what: s
 }
 
 export interface ExternalNodeApp {
-  /**
-   * The app's display name as procscan builds it (`classify::app_name`):
-   * `<tool> · <project>` — the script, then its cwd's basename: `probe.mjs · alog-probe-file-…`.
-   */
+  /** procscan's `classify::app_name`: `<tool> · <cwd basename>`. */
   name: string;
   /** Where its stdout goes: a file (readable → Stream), or a pty of its own (unreadable). */
   console: "file" | "terminal";
@@ -418,20 +381,9 @@ export interface ExternalNodeApp {
   stop: () => void;
 }
 
-/**
- * A Node app started OUTSIDE the IDE — by this wdio process, the way a user starts one in
- * another terminal app. It prints `probe tick <n>` every 250 ms until stopped, from a fresh
- * temp dir with a distinctive name (what its row is named after).
- *
- * - `file`: `node probe.mjs > probe.log` — its console is readable (`console: "file"`), so the
- *   card offers Stream on it.
- * - `terminal`: run under `script`, which gives it a pty of its OWN — exactly a dev server in
- *   Terminal.app / another IDE: `console: "terminal"`, which no other program may read, so the
- *   card offers Restart in the IDE. (`script` is util-linux/bsdutils on Linux, base macOS.)
- *
- * The script is named by ABSOLUTE path so `stop()` can find every process of this app with
- * `pkill -f <dir>` — `script` puts its child in a session of its own, out of our process group.
- */
+/** A Node app started outside the IDE: `file` redirects stdout (Stream-able); `terminal` runs
+ * under `script` for its own pty (Restart offered). Absolute path so `stop()` can `pkill -f <dir>`:
+ * `script` puts its child in a session of its own. */
 export function startExternalNodeApp(consoleKind: "file" | "terminal"): ExternalNodeApp {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), consoleKind === "file" ? "alog-probe-file-" : "alog-probe-tty-"));
   const script = path.join(dir, "probe.mjs");
@@ -492,17 +444,10 @@ export async function toggleColumn(scope: string, label: string): Promise<void> 
   await browser.keys("Escape");
 }
 
-/**
- * The Network columns the table hides by itself to fit a narrow pane (networkColumns.fitColumns:
- * at the 1280 px E2E window the table is ~440 px, so Process / Size / Duration / Type give way).
- */
+/** Auto-hidden to fit a narrow pane (networkColumns.fitColumns: ~440 px in the 1280 px window). */
 export const FIT_HIDDEN_COLUMNS = ["Process", "Size", "Duration", "Type"] as const;
 
-/**
- * Tick columns ON in Network's "Columns ▾" — the way a user who wants them does; an explicit show
- * is never auto-hidden again. Specs that read Process / Size / Type / Duration cells call this
- * first (after asserting anything about the default fit). Idempotent.
- */
+/** An explicit show is never auto-hidden; call it after asserting the default fit. Idempotent. */
 export async function showNetworkColumns(labels: readonly string[] = FIT_HIDDEN_COLUMNS): Promise<void> {
   const scope = '[data-testid="network-panel"]';
   const trigger = await $(`${scope} button.cols-menu__trigger`);
@@ -530,11 +475,8 @@ export async function showNetworkColumns(labels: readonly string[] = FIT_HIDDEN_
   );
 }
 
-/**
- * Empty the Logs filter box the way a user does (select all + Backspace). WebdriverIO's
- * `clearValue()` blanks the DOM value without firing React's change event under WebKitWebDriver,
- * so the store kept the old query and a later test's rows were silently filtered out.
- */
+/** Select all + Backspace: under WebKitWebDriver `clearValue()` fires no React change event, so
+ * the store would keep the old query. */
 export async function clearLogsFilter(): Promise<void> {
   const input = $('[aria-label="Filter log lines"]');
   await input.click();
@@ -551,11 +493,8 @@ export async function clearLogsFilter(): Promise<void> {
 /** The port of the service the capture-guard E2E starts with its proxy variables stripped. */
 export const NOCAP_PORT = 47821;
 
-/**
- * The shell line that starts the fixture service the way an agent often starts a service:
- * every proxy variable stripped. A copy under a distinctive name (`nocap-service.mjs`, in a fresh
- * temp dir) so its dev-app row is told apart from the captured service's by its command.
- */
+/** Starts the service with every proxy variable stripped, as agents often do; a distinctively
+ * named copy so its dev-app row is told apart by its command. */
 export function nocapServiceLine(): string {
   return (
     `D=$(mktemp -d) && cp ${SERVICE_SCRIPT} "$D/nocap-service.mjs" && ` +
@@ -589,10 +528,7 @@ export async function networkSourceRows(): Promise<{ key: string; group: string;
   );
 }
 
-/**
- * Is the element on screen — inside the window AND inside the Network panel's box? (A real
- * bug: the toolbar's pickers existed but were laid out past the pane's right edge.)
- */
+/** Inside the window AND the Network panel's box: a picker can exist yet sit past the edge. */
 export async function isInNetworkViewport(selector: string): Promise<{ ok: boolean; rect: string }> {
   return browser.execute((sel: string) => {
     const el = document.querySelector(sel);

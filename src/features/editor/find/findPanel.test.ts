@@ -1,11 +1,4 @@
-/**
- * findPanel — jsdom tests for the find bar's DOM behavior.
- *
- * These run against a REAL EditorView carrying the full bufferSearch()
- * extension (CM6 state/panel/keymap logic all work in jsdom; only geometry
- * does not — see cmTestKit.stubGeometry). What jsdom cannot verify — that the
- * selected match is scrolled into view, pixel layout — is browser-tier.
- */
+/** Real EditorView under jsdom (cmTestKit stubs geometry); scroll and layout are browser-tier. */
 
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { searchPanelOpen } from "@codemirror/search";

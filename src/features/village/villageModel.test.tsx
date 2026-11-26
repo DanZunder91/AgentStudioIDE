@@ -1,11 +1,5 @@
-/**
- * `villageModel` — the pure mappers (store / log stream / external scan → VillageAgent)
- * and the `useVillageAgents` hook that wires them to the live sources.
- *
- * The hook's two side doors are mocked at their feature-local IPC modules (the
- * `bridge.test.ts` convention): the Agent Logs stream subscription and the external scan.
- * The store is the real one.
- */
+/** The hook's side doors (log stream, external scan) are mocked at their feature-local IPC modules
+ * (the `bridge.test.ts` convention); the store is the real one. */
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

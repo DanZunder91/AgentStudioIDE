@@ -1,19 +1,6 @@
-/**
- * Agent Village — the camera: a zoom plus a screen-pixel offset of the world
- * origin. One projection shared by the canvas and any DOM overlay (the panel's
- * tooltip / hit-testing), so a label can never drift a pixel off its sprite.
- *
- * The zoom is an integer 1..8 (crisp pixel art) — or, ONLY for a scene that opts in
- * (`fitCamera`'s `minZoom`: the city, a tall one at dpr 1 being 80 world px a floor) so a
- * world bigger than the view can still be seen whole, a zoom below 1 that is a whole number of
- * SIXTEENTHS (k/16): a 16-px tile then lands on k whole screen pixels, and with smoothing off the
- * art is sampled, never blurred. Fit takes the largest k/16 that shows the world (with
- * only halvings a street a little wider than a ~720 px pane dropped straight to ½ and was
- * drawn tiny); the −/+ buttons and the wheel step through the coarse
- * rungs ¾, ½, ¼, ⅛ (`SUB_ZOOMS`). The village opts in down to ½ (VillageView): the largest k/16
- * that shows it whole, else ½, framed on its civic row so the capacity houses stay in view
- * (cropping at 1 hid half of them in a ~720 px pane).
- */
+/** One projection shared by the canvas and DOM overlays, so a label never drifts off its sprite.
+ * Zoom is an integer 1..8 (crisp pixel art); scenes opting in (`fitCamera`'s `minZoom`) also get
+ * k/16 below 1, so a 16-px tile lands on whole screen px (sampled, never blurred). */
 
 export interface Camera {
   /** Screen pixels per art pixel: an integer 1..8, or ½ / ¼ / ⅛ for an overview. */
@@ -55,10 +42,7 @@ export function screenToWorld(
   return { x: (sx - cam.ox) / cam.zoom, y: (sy - cam.oy) / cam.zoom };
 }
 
-/**
- * `zoom` moved `step` zoom steps: whole steps from 1 up to MAX_ZOOM, the `SUB_ZOOMS` rungs
- * below 1 — never below `floor` (MIN_ZOOM unless the world needs less to be seen whole).
- */
+/** Whole steps from 1 to MAX_ZOOM, the `SUB_ZOOMS` rungs below 1; never below `floor`. */
 export function stepZoom(zoom: number, step: number, floor: number = MIN_ZOOM): number {
   let z = zoom;
   for (let i = 0; i < Math.abs(step); i++) {
@@ -71,12 +55,9 @@ export function stepZoom(zoom: number, step: number, floor: number = MIN_ZOOM): 
 /** Fit's resolution below 1: whole sixteenths (a 16-px tile on whole pixels). */
 const FIT_STEPS = 16;
 
-/**
- * The largest zoom at which the whole world fits the view, centred: an integer
- * (capped at MAX_ZOOM) when it fits at 1; else the largest k/16 that fits, down to `minZoom`
- * (default MIN_ZOOM: nothing below 1 at all). A world bigger than the view even at the floor
- * overflows symmetrically.
- */
+/** Largest zoom fitting the whole world, centred: an integer (≤ MAX_ZOOM) if it fits at 1, else the
+ * largest k/16 down to `minZoom` (default MIN_ZOOM: nothing below 1). Too big even at the floor:
+ * it overflows symmetrically. */
 export function fitCamera(
   worldW: number,
   worldH: number,

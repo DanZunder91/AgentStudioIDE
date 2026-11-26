@@ -1,35 +1,6 @@
-//! `claude_metrics` — the aggregation, proved against committed fixtures.
-//!
-//! Two scopes are exercised throughout: `All` (the default — every project directory
-//! under the root) and `Project` (one cwd). The pair matters more than either alone —
-//! narrowing must **exclude** and widening must **include**, and the widening must not
-//! carry prompt text with it. `no_prompt_text_reaches_the_wire_in_all_scope` is the test
-//! that makes `All` shippable at all.
-//!
-//! ## How this suite stays hermetic
-//!
-//! Every test builds a transcript root under a **tempdir** and hands it to
-//! [`metrics::scan_with_limits`] as an injected [`ScanRoot`]. `home_dir()` is never
-//! consulted, `HOME` is never mutated (so no `HOME_LOCK` is needed and these tests
-//! run in parallel), no `claude` is spawned, no socket is opened, and the clock is a
-//! parameter. `metrics_no_home_writes.rs` proves the stronger claim: the developer's
-//! real `~/.claude` is byte-identical across a full aggregation.
-//!
-//! The committed fixtures are **copied** into the tempdir rather than scanned in
-//! place, for one reason that matters: the scan's whole performance bound is
-//! `mtime < window.from ⇒ skip the file`, so a test that depends on a checked-out
-//! file's mtime is a test whose meaning depends on when `git clone` ran. Copying and
-//! then setting the mtime explicitly (`File::set_modified` — no sleeps, no extra
-//! crates, the `tests/session_index.rs` recipe) makes the bound an *asserted*
-//! property instead of an incidental one.
-//!
-//! ## What "proved" means here
-//!
-//! Fixtures 1 and 3 get **hand-computed goldens**: the arithmetic is written out in
-//! the comment and every expectation is a **literal**. Never a snapshot, never a
-//! value a helper read back out of the fixture — that shape can only catch plumbing,
-//! never content. If you change a fixture, re-do the arithmetic by
-//! hand; do not "update" the expectation to whatever the code now prints.
+//! `claude_metrics` aggregation against committed fixtures, in `All` and `Project` scope
+//! (narrowing excludes, widening includes, never prompt text). Hermetic: tempdir root, injected
+//! clock, fixtures copied with set mtimes. Goldens are literals: redo the arithmetic by hand.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
@@ -44,10 +15,7 @@ use agent_studio_scaffold_lib::metrics::{
 /// a hard-fail pattern there).
 const CWD: &str = "/work/proj";
 
-/// "Now", injected. Every fixture's lines sit on 2026-07-29 between 08:00 and 11:01,
-/// so a 24 h window ending here contains all of them with room to spare — and the
-/// oldest (08:00) is 4 h inside the boundary, so this suite cannot start failing
-/// because a boundary case drifted.
+/// Injected "now": every fixture line sits on 2026-07-29 08:00–11:01, well inside a 24 h window.
 const NOW_MS: i64 = 1_785_326_400_000; // 2026-07-29T12:00:00.000Z
 
 fn fixtures_root() -> PathBuf {
@@ -169,26 +137,9 @@ fn assistant_line(session: &str, request: &str, ts: &str, output: u64, end: bool
 // (a) Hand-computed goldens
 // ===========================================================================
 
-/// FIXTURE 1 (`metrics-normal-turn`), computed by hand from the JSONL.
-///
-/// The file holds 8 lines: 1 human prompt (`promptId: turn-n1`, `promptSource:
-/// typed`), **4 assistant lines carrying 3 distinct `requestId`s** (`req-1` appears
-/// TWICE with the identical `usage` object — the trap), 2 `tool_result` user lines
-/// (the second `is_error: true`), and a `turn_duration` line.
-///
-/// ```text
-/// requests   = |{req-1, req-2, req-3}|            = 3     (from 4 assistant lines)
-/// freshInput =   10 +   5 +   1                   = 16
-/// output     =  100 + 250 +  40                   = 390
-/// cacheWrite =  200 +   0 +   0                   = 200
-/// cacheRead  = 3000 +4000 +5000                   = 12000
-/// avgContext = (16 + 200 + 12000) / 3 = 12216 / 3 = 4072
-/// toolCalls  = tu-1 (Read) + tu-2 (Edit)          = 2
-/// toolErrors = the one tool_result with is_error  = 1
-/// filesChg   = {/work/proj/b.ts}   (Edit only; a Read is not a change) = 1
-/// duration   = the CLI's own turn_duration line   = 20500 ms, source "cli"
-/// models     = {claude-opus-5, claude-opus-5[1m]} normalized to one = ["claude-opus-5"]
-/// ```
+/// Fixture 1 by hand: 3 requestIds over 4 assistant lines (`req-1` twice, same usage); in
+/// 10+5+1=16, out 100+250+40=390, cw 200, cr 3000+4000+5000=12000, avgCtx 12216/3=4072;
+/// tools Read+Edit=2, 1 error, 1 file changed (Edit only), 20500 ms from the CLI, 1 model.
 #[test]
 fn fixture_1_normal_turn_matches_the_hand_computed_golden() {
     let report = report_for("metrics-normal-turn");
@@ -252,19 +203,9 @@ fn fixture_1_normal_turn_matches_the_hand_computed_golden() {
     assert!(c.bytes_read > 0, "the file really was streamed");
 }
 
-/// FIXTURE 3 (`metrics-cache-heavy`) — the arithmetic in full:
-///
-/// ```text
-/// three assistant lines, one requestId       -> requests   = 1
-/// freshInput 2 · output 268 · cacheWrite 14002 · cacheRead 21098
-/// avgContextPerRequest = (2 + 14002 + 21098) / 1 = 35102
-/// ```
-///
-/// The three lines carry **disjoint** content blocks (`thinking`, `tool_use`,
-/// `text`) — the real shape — so this fixture also pins that the request dedupe does
-/// not eat the `tool_use` on the second line: `toolCalls == 1`, not 0.
-///
-/// No `turn_duration` line, so the duration is DERIVED: 11:00:03 − 11:00:00 = 3000 ms.
+/// Fixture 3 by hand: 3 lines, 1 request; in 2, out 268, cw 14002, cr 21098, avgCtx 35102.
+/// Disjoint blocks per line, so `toolCalls == 1` (dedupe must not eat line 2's `tool_use`).
+/// No `turn_duration`: derived 11:00:03 − 11:00:00 = 3000 ms.
 #[test]
 fn fixture_3_cache_heavy_matches_the_hand_computed_golden() {
     let report = report_for("metrics-cache-heavy");
@@ -298,21 +239,8 @@ fn fixture_3_cache_heavy_matches_the_hand_computed_golden() {
 // (b) The differential test
 // ===========================================================================
 
-/// The reason `Dedupe::requests` exists, stated as a test name.
-///
-/// One API request writes MANY assistant lines and every line of the group carries
-/// the SAME `usage` object (in practice, about two assistant lines per requestId, and
-/// **no** request whose lines disagree about `usage`). Summing per line therefore
-/// reports roughly twice the truth.
-///
-/// Fixture 1's naive per-line output sum is `100 + 100 + 250 + 40 = 490`; the deduped
-/// sum is `390`. The naive number is computed here by an **independent** reader — it
-/// does not call the code under test — so this is a genuine differential, not the
-/// aggregator agreeing with itself.
-///
-/// **Verified by mutation:** deleting the `if !seen.requests.insert(key) { return; }`
-/// guard in `metrics.rs` makes this test fail (`490` is not `< 490`), along with both
-/// hand-computed goldens.
+/// Fixture 1's naive per-line output sum (490, from an independent reader) exceeds the deduped
+/// 390: every line of a request repeats its `usage`. Verified by mutating the dedupe guard.
 #[test]
 fn naive_per_line_sum_overcounts_because_one_request_writes_many_lines() {
     let deduped = report_for("metrics-normal-turn").totals.tokens.output;
@@ -342,15 +270,8 @@ fn naive_per_line_sum_overcounts_because_one_request_writes_many_lines() {
     );
 }
 
-/// The other half of the dedupe rule — and why it is NOT "drop the duplicate lines".
-///
-/// The lines of one request carry **disjoint** content blocks: every `tool_use` block
-/// has its own distinct `tool_use.id`, none repeated across lines. Dropping the later
-/// lines of a request therefore *under*-counts tool calls and edited files, by a wide
-/// margin.
-///
-/// Fixture 3 is the minimal witness: three lines, one request, and the only
-/// `tool_use` sits on the SECOND line.
+/// A request's lines carry disjoint content blocks, so dedupe must not drop lines; fixture 3's
+/// only `tool_use` sits on the SECOND line.
 #[test]
 fn tool_use_blocks_are_counted_on_every_line_of_a_request() {
     let report = report_for("metrics-cache-heavy");
@@ -517,17 +438,8 @@ fn files_changed_is_a_union_of_paths_not_a_sum_of_turns() {
 // Fixture-specific behaviour
 // ===========================================================================
 
-/// FIXTURE 4 (`metrics-malformed`). Four hazards in five lines, none of them fatal:
-/// a garbage line, a `toolUseResult` that is a bare **string** rather than an object,
-/// an assistant line with **no `timestamp` field at all**, and a truncated final line
-/// with no newline (the shape of a transcript being written right now).
-///
-/// ```text
-/// linesUnparseable = the garbage line + the truncated tail = 2
-/// requests         = {req-m1, req-m2}                      = 2
-/// freshInput       = 3 + 1 = 4 · output = 7 + 2 = 9 · cacheRead = 100 + 50 = 150
-/// toolCalls        = tu-m1 (Bash)                          = 1
-/// ```
+/// Fixture 4: garbage line, string `toolUseResult`, no `timestamp`, truncated tail; none fatal.
+/// unparseable 2, requests 2, in 3+1=4, out 7+2=9, cr 100+50=150, toolCalls 1 (Bash).
 #[test]
 fn fixture_4_malformed_lines_are_counted_and_never_fatal() {
     // The fixture's whole point is a final line with no terminator — assert that
@@ -576,15 +488,8 @@ fn fixture_4_malformed_lines_are_counted_and_never_fatal() {
     assert_eq!(r.hourly.iter().map(|h| h.requests).sum::<u64>(), 2);
 }
 
-/// FIXTURE 5 (`metrics-interrupted`). Turn `turn-i1` has no terminal assistant
-/// message and carries `interruptedMessageId`; `turn-i2` completes.
-///
-/// ```text
-/// turn-i1: durationMs = null (NEVER 0), durationSource = null, interrupted = true
-/// turn-i2: derived 09:10:04 − 09:10:00                       = 4000 ms
-/// timeInTurnsMs = 4000 (turn-i1 excluded), turnsWithDuration = 1 of 2
-/// output = 60 + 30 = 90
-/// ```
+/// Fixture 5: `turn-i1` interrupted → duration null (never 0), excluded; `turn-i2` 4000 ms.
+/// timeInTurnsMs 4000, turnsWithDuration 1 of 2, output 60+30=90.
 #[test]
 fn fixture_5_an_interrupted_turn_has_a_null_duration_and_is_excluded_from_the_sum() {
     let r = report_for("metrics-interrupted");
@@ -617,10 +522,8 @@ fn fixture_5_an_interrupted_turn_has_a_null_duration_and_is_excluded_from_the_su
     assert_eq!(r.coverage.turns_without_cli_duration, 2);
 }
 
-/// FIXTURE 6 (`metrics-rate-limit-event`). The line has **no `timestamp` field**
-/// (such lines are rare, and never dateable), so it cannot be placed in
-/// a bucket and is not a source we use. It must be ignored without a panic and
-/// **without inventing a turn**.
+/// Fixture 6: a rate-limit line has no `timestamp`, so it is ignored without a panic or a
+/// phantom turn.
 #[test]
 fn fixture_6_a_rate_limit_event_is_ignored_and_makes_no_phantom_turn() {
     let r = report_for("metrics-rate-limit-event");
@@ -791,25 +694,9 @@ fn out_of_order_timestamps_do_not_truncate_or_change_the_totals() {
 // `All` scope — the default, and the privacy rules that earn it
 // ===========================================================================
 
-/// FIXTURE 7 (`metrics-all-scope`) in `All` scope, computed by hand. Two project
-/// directories, two sessions, two cwds:
-///
-/// ```text
-/// -work-alpha/sess-alpha  cwd /work/alpha  turn-a1  req-a1  in 5 out 100 cw 0  cr 1000
-/// -work-beta /sess-beta   cwd /work/beta   turn-b1  req-b1  in 7 out 200 cw 50 cr 3000
-///
-/// sessions   = |{sess-alpha, sess-beta}|                 = 2
-/// turns      = 2 · humanTurns = 2 (both promptSource typed)
-/// requests   = |{req-a1, req-b1}|                        = 2
-/// freshInput =   5 +   7                                 = 12
-/// output     = 100 + 200                                 = 300
-/// cacheWrite =   0 +  50                                 = 50
-/// cacheRead  = 1000 + 3000                               = 4000
-/// avgContext = (12 + 50 + 4000) / 2 = 4062 / 2           = 2031
-/// toolCalls  = tu-b1 (Write)                             = 1
-/// filesChg   = {/work/beta/funnel.ts}                    = 1
-/// durations  = derived 09:00:02−09:00:00 + 10:30:05−10:30:00 = 2000 + 5000 = 7000
-/// ```
+/// Fixture 7, `All` scope: alpha (in 5, out 100, cw 0, cr 1000) + beta (7, 200, 50, 3000) →
+/// sessions 2, turns 2, requests 2, in 12, out 300, cw 50, cr 4000, avgCtx 4062/2=2031,
+/// toolCalls 1, files 1, durations 2000+5000=7000.
 #[test]
 fn all_scope_aggregates_every_project_directory_under_the_root() {
     let r = all_report_for("metrics-all-scope");
@@ -871,15 +758,8 @@ fn all_scope_aggregates_every_project_directory_under_the_root() {
     assert_eq!(labels, ["alpha", "beta"]);
 }
 
-/// 🔴 **PRIVACY RULE 1, asserted on the actual JSON.**
-///
-/// A user may run agents on many private repos in one app. In `All` scope a turn's
-/// label is `None` by rule and the prompt text is never extracted — so this asserts over
-/// the serialized report, not over a struct field, because the wire is what leaks.
-///
-/// The fixture's two prompts carry deliberately recognisable strings. The same strings
-/// MUST appear in `Project` scope (proving the fixture really does contain them and that
-/// the sweep is looking at a surface that could leak) and must be absent in `All`.
+/// Privacy rule 1, on the serialized JSON (the wire is what leaks): the fixture's prompt
+/// strings appear in `Project` scope (so the sweep can see them) and never in `All`.
 #[test]
 fn no_prompt_text_reaches_the_wire_in_all_scope() {
     const ALPHA: &str = "ALPHA-PRIVATE-PROMPT";
@@ -974,11 +854,8 @@ fn project_label_is_a_basename_and_never_a_path() {
             r.top_turns[0].project_label, "orders-api",
             "the last segment only"
         );
-        // The turn rows are where a path would leak from — asserted on their own JSON,
-        // because `scope.cwd` is a DIFFERENT thing: in `Project` scope it echoes the
-        // caller's own cwd, a path the app is already rendering, and it is `None`
-        // in `All` scope precisely so a machine-wide number is never labelled with one
-        // project's path.
+        // Assert on the turn rows' JSON: `scope.cwd` is different (echoes the caller's cwd in
+        // `Project`, `None` in `All`).
         let turns_json = serde_json::to_string(&r.top_turns).expect("serializable");
         assert!(
             !turns_json.contains("/work/clients"),
@@ -1013,13 +890,8 @@ fn project_label_is_a_basename_and_never_a_path() {
         .contains("/work/clients"));
 }
 
-/// 🔴 **A project request with no cwd, end to end through the aggregation.**
-///
-/// `MetricsButton` passes the selected agent's root cwd, which is `null` when nothing is
-/// selected. An earlier version answered `Err("scan-failed: project scope requires a cwd")`,
-/// and the dashboard rendered *"Could not read your sessions — the session scan could not be run
-/// for this folder"* over a machine full of them. There is now no cwd-shaped input that
-/// can make this scan refuse: `Project` with no cwd widens to `All` and says so.
+/// `MetricsButton` passes `null` when no agent is selected; `Project` with no cwd widens to
+/// `All` and says so, rather than failing the scan.
 #[test]
 fn a_project_request_with_no_cwd_falls_back_to_all_instead_of_failing() {
     let root = root_at(stage("metrics-all-scope"));
@@ -1126,10 +998,8 @@ fn another_projects_transcript_contributes_nothing_in_project_scope() {
     assert!(!json.contains("another client"));
     assert!(!json.contains("/work/other"));
 
-    // In `All` scope both are counted — proving the filter is the scope's doing and the
-    // out-of-scope file is otherwise perfectly readable. This is the pair of assertions
-    // that keeps the two scopes honest about each other: narrowing must exclude, and
-    // widening must include.
+    // In `All` scope both count, so the out-of-scope file is readable and the filter is the
+    // scope's doing: narrowing excludes, widening includes.
     let all = metrics::scan(
         &[root_at(projects)],
         MetricsWindowKind::Last24h,
@@ -1274,10 +1144,8 @@ fn subagent_sidecars_are_not_counted_as_root_sessions() {
     );
 }
 
-/// An assistant line before any prompt line (a resumed transcript whose head fell
-/// outside the read) still contributes its tokens — via a fallback turn, counted in
-/// `turnsWithoutPromptId`. Losing real tokens silently would be worse than a
-/// degraded turn id.
+/// An assistant line before any prompt (resumed transcript) keeps its tokens via a fallback
+/// turn counted in `turnsWithoutPromptId`.
 #[test]
 fn an_assistant_line_with_no_open_turn_gets_a_fallback_turn_rather_than_vanishing() {
     let projects = temp_root("headless").join("projects");
@@ -1410,18 +1278,9 @@ fn the_high_context_share_uses_the_clis_own_150k_threshold() {
 // The live smoke — #[ignore]d so `cargo test` stays hermetic
 // ===========================================================================
 
-/// Run the real scanner against the developer's real `~/.claude` in **`All`** scope —
-/// the default, and the shape real use runs — and assert only **invariants**,
-/// never a value, because the value changes every minute.
-///
-/// `#[ignore]`d on purpose: it needs a real `~/.claude` and a real clock, both
-/// forbidden in a gate. Run it by hand with
-/// `cargo test --test metrics -- --ignored --nocapture` when the parser changes; it
-/// prints the scan time for **both** windows.
-///
-/// Note the assistant-line count is computed by an **independent** reader in this
-/// test, not by the code under test — otherwise `requests <= assistant lines` would
-/// be the aggregator agreeing with itself.
+/// Real scanner over the real `~/.claude` in `All` scope, invariants only; run by hand with
+/// `cargo test --test metrics -- --ignored --nocapture`. Assistant lines are counted by an
+/// independent reader, so `requests <= assistant lines` is not self-agreement.
 #[test]
 #[ignore = "reads the developer's real ~/.claude; run by hand"]
 fn live_smoke_over_the_real_home() {

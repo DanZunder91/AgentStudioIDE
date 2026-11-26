@@ -1,12 +1,6 @@
-/**
- * Layer 5 (testing-strategy §1) — the gRPC console, driven through the real <App/>
- * in Chromium over the mocked Tauri backend (native tonic).
- *
- * Proves the wiring the jsdom component tests can't: the protocol toggle mounts the
- * real `GrpcConsole` inside the app, Reflect populates the picker, and a unary Send
- * renders the OK status pill — with NO "install X" degrade path (native gRPC is
- * always available; that is the point of a native engine over a `grpcurl` shell-out).
- */
+/** gRPC console through the real <App/> in Chromium over the mocked backend (testing-strategy §1):
+ * the toggle mounts `GrpcConsole`, Reflect fills the picker, unary Send shows OK. No "install X"
+ * path: native tonic gRPC is always available. */
 
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

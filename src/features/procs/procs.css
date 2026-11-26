@@ -1,7 +1,5 @@
-/* Dev apps on this machine.
-   Every colour is an App.css token or a --procs-* variable declared once below; the sidebar
-   rows match the Logs Sources sidebar's metrics (11px mono rows, 10px uppercase heading) without
-   borrowing its classes, which belong to the agentlogs feature. */
+/* Dev apps. Colours are App.css tokens or --procs-* variables below; rows match the Logs Sources
+   sidebar's metrics without borrowing its classes, which belong to the agentlogs feature. */
 
 :root {
   /* One hue per runtime — the badge's TEXT carries the meaning, the colour only speeds it up. */

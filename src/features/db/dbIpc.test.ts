@@ -1,20 +1,5 @@
-/**
- * `dbIpc` — the database client's wire. Thin wrappers, so the command **name**, the
- * **argument shape**, and the **rejection passthrough** are the whole contract, and all
- * three are the kind of thing that fails as silence rather than as an error.
- *
- * Why every argument is asserted BY NAME: Tauri deserialises a command's arguments by key
- * (`connection_id` in Rust ⇄ `connectionId` in JS). A renamed or misspelled key does not
- * throw — serde fills the field from its `#[serde(default)]`, or the command rejects with a
- * message about a field the caller never mentioned. So `sessionId` vs `session_id` vs
- * `sessionID` is exactly one keystroke away from a feature that silently does nothing, and
- * the only defence is a test that spells the key out. Same reason `usageIpc.test.ts` asserts
- * its *empty* args object rather than shrugging at `undefined`.
- *
- * Every expectation here is written LITERALLY rather than derived from the wrapper's own
- * input: an assertion computed from the value under test can only catch
- * plumbing, never a wrong name.
- */
+/** Tauri deserialises args by key, and a misspelt key fails as silence (serde default), so every
+ * argument is asserted BY NAME and written literally. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -85,13 +70,7 @@ describe("dbIpc — command names and argument shapes", () => {
     ipc.reset();
   });
 
-  /**
-   * The args of the last `cmd` call, asserted to exist first.
-   *
-   * `lastCall` is `… | undefined` for a command never invoked, and an `expect(x).toEqual()`
-   * on `undefined` would pass for the wrong reason if the wrapper called nothing at all.
-   * The `toBeDefined` is the assertion that makes every `args(...)` below meaningful.
-   */
+  /** toBeDefined first: toEqual on a missing call would pass if the wrapper called nothing. */
   const args = (cmd: string): Record<string, unknown> => {
     const call = ipc.lastCall(cmd);
     expect(call).toBeDefined();
@@ -255,10 +234,8 @@ describe("dbIpc — command names and argument shapes", () => {
   });
 
   it("db_cancel PASSES A REFUSAL THROUGH — three engines have no server-side cancel", async () => {
-    // 🔴 The rejection is the informative case, not the exceptional one: MongoDB, Redis and
-    // DynamoDB answer structurally (`cancel_handle()` is `None`) with no round trip. Swallowing it
-    // here would give the console a Stop button that quietly did nothing — and the string must
-    // arrive UNMODIFIED, because the caller parses the `<code>: <detail>` wire shape out of it.
+    // Mongo, Redis and DynamoDB reject structurally (no server cancel). The string must pass
+    // through UNMODIFIED: the caller parses "<code>: <detail>" from it.
     ipc.handle("db_cancel", () => {
       throw new Error("unknown: This engine has no server-side cancel.");
     });

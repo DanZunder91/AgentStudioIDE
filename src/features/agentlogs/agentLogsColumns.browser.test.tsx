@@ -1,13 +1,5 @@
-/**
- * Agent Logs columns — real layout in Chromium.
- *
- * The bug, on the installed app: rows read `cl…`, `claude · ge…`, `c.` — the old
- * flex row let each row's text squeeze its own source label, so the column was a different
- * width on every row. jsdom has no layout, so only this tier can say a column holds its width —
- * or that a command block's nested rows (blank leading cells) keep the same grid as a raw row.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/agentlogs`
- */
+/** Logs columns in real Chromium layout: a column holds its width on every row, and a block's
+ * nested rows keep the raw row's grid. jsdom has no layout. */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

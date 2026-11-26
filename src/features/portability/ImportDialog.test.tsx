@@ -1,23 +1,5 @@
-/**
- * Tests for the import dialog (config bundles).
- *
- * ── Nothing is mocked ────────────────────────────────────────────────────────
- * Same seam as the export dialog: every action is a prop, so the doubles are plain
- * `vi.fn()`s and `portabilityFormat` runs for real. The plans come from
- * `portabilityFixtures` as **inputs**; every expected sentence is typed out here.
- *
- * ── What this file is really checking ────────────────────────────────────────
- * That the dialog is a REVIEW screen and not a confirm button. Concretely:
- *   • the provenance is reported speech, and never the word "verified";
- *   • the hosts and the variables are both on screen before anything is written;
- *   • the variables this machine already holds are marked, because that pairing is the
- *     exfiltration risk;
- *   • `overwriteExistingSecrets` is off by default;
- *   • a wrong passphrase is retryable **without re-picking the file**.
- *
- * The last one is the assertion this dialog exists for, and it was falsified: derive the
- * locked state from the error string instead of `plan.unsealed` and it goes red.
- */
+/** Nothing is mocked: actions are props, `portabilityFormat` runs for real, and plans from
+ * `portabilityFixtures` are inputs; every expected sentence is typed out here. */
 
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -199,11 +181,7 @@ describe("a sealed bundle", () => {
     expect(screen.getByTestId("pb-unlock")).toHaveTextContent("Unlocking…");
   });
 
-  /**
-   * 🔴 The assertion this dialog exists for. A wrong passphrase must cost one correction,
-   * not a trip back through the file picker — `portability_inspect` writes nothing either
-   * way, so there is no reason to make the user start over.
-   */
+  /** `portability_inspect` writes nothing, so a wrong passphrase must not cost a file re-pick. */
   it("retries a wrong passphrase IN PLACE, keeping the file and what was typed", () => {
     const { rerender } = render(
       <ImportDialog {...h.props} path={PATH} plan={LOCKED_PLAN} />,
@@ -337,10 +315,7 @@ describe("the review — per item", () => {
   });
 
   it("🔴 offers read-only as a CHECKED default rather than a forced value", () => {
-    // This used to assert a sentence
-    // saying connections arrive read-only "whatever the file says" — true while Rust forced it,
-    // and a lie the moment the importer got the decision. The default is unchanged; what changed
-    // is that it is now visible and reversible.
+    // Connections default to read-only, and the toggle makes that visible and reversible.
     open({ plan: RICH_PLAN });
     const toggle = screen.getByTestId("pb-read-only") as HTMLInputElement;
     expect(toggle.checked).toBe(true);

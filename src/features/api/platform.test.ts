@@ -1,8 +1,4 @@
-/**
- * platform — `isWindowsPlatform` decides whether "Copy as cURL" offers a shell
- * choice. It must follow WebView2's user agent, and never the machine the tests
- * happen to run on (jsdom's own agent says `win32` on a Windows dev box).
- */
+/** Must follow WebView2's user agent, never the test machine (jsdom says `win32` on Windows). */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 

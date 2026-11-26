@@ -1,9 +1,3 @@
-/**
- * The City's lifts (render/lift.ts): the shaft over its column with a landing door at each stop, the
- * car round a rider (its back behind, its frame in front), the lounge's kiosk on the far sidewalk —
- * and how the frame, the props and the night lights dispatch them.
- */
-
 import { describe, expect, it } from "vitest";
 
 import { buildCityWorld, planCity } from "../engine/city";

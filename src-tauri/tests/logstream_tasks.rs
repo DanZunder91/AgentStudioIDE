@@ -1,11 +1,6 @@
-//! Background tasks as a log source: a service an
-//! agent starts with `run_in_background` writes to a file under Claude's temp dir, and
-//! the Agent Logs view must show it as `task` lines.
-//!
-//! Hermetic: every file lives under a private temp dir standing in for `claude-<uid>`
-//! (the roots are injected), the transcript is the synthetic fixture in
-//! `fixtures/logstream/tasks/` (the shape of real CLI 2.1.x lines, none of their content),
-//! and the clock is passed in. The one test that runs a real process is `#[ignore]`d.
+//! Background tasks (`run_in_background`) as `task` lines in Agent Logs. Hermetic: injected
+//! roots under a temp dir standing in for `claude-<uid>`, a synthetic transcript fixture, an
+//! injected clock; the one real-process test is `#[ignore]`d.
 
 #![cfg(unix)]
 
@@ -1159,10 +1154,8 @@ fn growth_in_any_of_a_tasks_files_keeps_it_from_idling_out() {
     );
 }
 
-/// Local integration (`cargo test` must not spawn services): a REAL
-/// process under a temp Claude root, tailed while it runs. As an agent typically does,
-/// the command itself redirects to a log in the scratchpad, so Claude's `.output` file
-/// stays empty and every line comes from — and is named after — `svc.log`.
+/// Local integration (`cargo test` must not spawn services): a REAL process under a temp Claude
+/// root redirects to `svc.log` as agents do, so every line comes from and is named after it.
 #[test]
 #[ignore = "local integration: runs a real /bin/sh background process"]
 fn a_real_background_process_is_tailed_as_task_lines() {

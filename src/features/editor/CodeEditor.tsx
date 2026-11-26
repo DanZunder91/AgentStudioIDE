@@ -1,17 +1,6 @@
-/**
- * CodeEditor — the React surface of the editor (M4; plus the Markdown/CSV preview).
- *
- * Thin by design: it mounts a host div and hands it to the EditorRegistry (which
- * owns the CodeMirror 6 view), and renders the header — filename, the Save
- * affordance when dirty, save feedback, and (for Markdown/CSV) a Rendered↔Source
- * view toggle.
- *
- * For `.md`/`.csv` files the header carries a small toggle: the
- * default view is the RENDERED one (formatted Markdown / a CSV table), with a
- * "Source" button to drop to the raw editor. The CodeMirror host stays mounted at
- * all times (so the buffer loads and `Save`/`currentText` keep working) — it is
- * only visually hidden while the rendered preview is showing.
- */
+/** React surface of the editor; EditorRegistry owns the CM6 view. Previewable files open in the
+ * rendered view, with the CM host still mounted (hidden) so the buffer loads and Save keeps
+ * working. */
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -70,11 +59,8 @@ export function CodeEditor({ path }: { path: string }): React.JSX.Element {
   // image: `read_file` rejects a PNG as "binary file", which is what put
   // image tabs in the "Can't preview this file." state.
   const textBacked = hasTextSource(path);
-  // Rendered view is the default for previewable files (so the formatting shows); the
-  // toggle drops to raw source. It lives in the STORE, not in `useState`, because
-  // `Pane` renders only the active tab and a cross-pane drag
-  // re-parents the subtree, so a component-held toggle snapped back to Preview on
-  // every tab switch and every move.
+  // In the store, not useState: `Pane` renders only the active tab and a cross-pane drag re-parents
+  // the subtree, so component state would reset on every tab switch or move.
   const showSource = useAppStore((s) => s.editors[path]?.showSource ?? false);
   const setShowSource = useAppStore((s) => s.editorActions.setShowSource);
   // Only show a rendered preview once content is available. A raster image has no
@@ -88,17 +74,11 @@ export function CodeEditor({ path }: { path: string }): React.JSX.Element {
   const [blameNote, setBlameNote] = useState<string | null>(null);
   const blameNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // The editor's right-click "Editor tools" menu — anchored where the
-  // pointer was. Only the CM6 host suppresses the native menu; the Markdown/CSV
-  // rendered preview keeps it (text-selection niceties like Look Up stay useful
-  // on read-only prose).
+  // Only the CM6 host suppresses the native menu; the rendered preview keeps it (e.g. Look Up).
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
-  // Reload from disk: re-reads the file the way opening it does.
-  // A clean buffer reloads in one click. A DIRTY one would lose the user's edits,
-  // so its first click only arms the button ("Discard edits?") and the second does
-  // it — the inline two-step the file tree uses for delete, never a native dialog.
-  // Disarmed when the pointer leaves or the buffer stops being dirty.
+  // On a dirty buffer the first Reload click only arms it ("Discard edits?"), the file tree's
+  // inline two-step rather than a native dialog; disarmed on pointer leave or once clean.
   const [reloadArmed, setReloadArmed] = useState(false);
   if (reloadArmed && !dirty) setReloadArmed(false);
   const onReload = (): void => {
@@ -115,13 +95,8 @@ export function CodeEditor({ path }: { path: string }): React.JSX.Element {
   const editorReady = useAppStore((s) => s.editorActions.editorReady);
   useLayoutEffect(() => {
     if (!textBacked) {
-      // 🔴 A raster image must never reach `ensureEditor`, which unconditionally
-      // calls `read_file` — and `read_file` rejects binary. The tab still needs its
-      // `editors[path]` slice, because `setPreviewZoom` / `setShowSource` no-op on a
-      // path they do not know, which would leave the zoom buttons inert. Marked
-      // ready-and-not-editable by construction: there is nothing to load and nothing
-      // to save. `EditorRegistry.dispose` drops the slice on close even with no
-      // buffer to tear down (see its early-return comment).
+      // A raster image must never reach `ensureEditor` (`read_file` rejects binary), but it
+      // needs its `editors[path]` slice or the zoom actions no-op. Ready and read-only by design.
       initEditor(path);
       editorReady(path, false);
       return;
@@ -346,10 +321,8 @@ export function CodeEditor({ path }: { path: string }): React.JSX.Element {
         />
       )}
       {rendered && previewKind === "html" && (
-        // Served from DISK by the `preview://` handler, not from the buffer: the
-        // page's own <link> and <script> are real requests for real files, so there
-        // is nothing coherent to render "as edited" until the edit is on disk.
-        // `savedAt` bumps on every successful save, which reloads the frame.
+        // Served from disk, not the buffer: the page's <link>/<script> load real files. `savedAt`
+        // bumps on every save, which reloads the frame.
         <HtmlPreview path={path} reloadKey={savedAt} />
       )}
       {textBacked && (

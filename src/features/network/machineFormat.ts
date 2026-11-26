@@ -1,8 +1,4 @@
-/**
- * Pure logic of the Whole-computer table: which apps and sockets are shown, in what
- * order, and how their numbers read. Everything here is a function of a sample plus the
- * user's choices, so a test can pin one rule at a time.
- */
+/** Pure logic of the Whole-computer table: a function of a sample plus the user's choices. */
 
 import type { AppPickerItem } from "../../components/AppPicker";
 import { isMac } from "../shortcuts/shortcuts";
@@ -21,11 +17,8 @@ export function defaultDir(key: MachineSortKey): SortDir {
   return key === "name" ? "asc" : "desc";
 }
 
-/**
- * A socket that is not talking to anyone: a TCP listener, or a UDP socket with no peer.
- * Both have `remote: null` in the contract; the state check also covers a backend that
- * reports a listener's wildcard peer.
- */
+/** A TCP listener or a peerless UDP socket (`remote: null`); the state check also covers a
+ * backend that reports a listener's wildcard peer. */
 export function isListener(c: MachineConn): boolean {
   return c.remote === null || c.state.toLowerCase() === "listen";
 }
@@ -46,15 +39,9 @@ function connMatches(c: MachineConn, q: string): boolean {
   return `${c.local} ${c.remote ?? ""} ${c.remoteHost ?? ""} ${c.state} ${c.proto}`.toLowerCase().includes(q);
 }
 
-/**
- * Apply the app selection, Hide listeners and the text filter.
- *
- * - An app whose every socket is a listener disappears under Hide listeners; an app the
- *   backend reported with NO sockets stays (it is traffic without a socket list, not a
- *   listener).
- * - The filter matches an app by name or pid (all its sockets stay), else by socket
- *   (only the matching sockets stay, and the app drops out if none do).
- */
+/** App selection, Hide listeners and text filter. An app reported with no sockets survives Hide
+ * listeners. The filter matches an app by name/pid (keeps all its sockets), else by socket (keeps
+ * the matching ones; the app drops out if none match). */
 export function shownApps(sample: MachineSample | null, v: MachineView): ShownApp[] {
   if (!sample) return [];
   const q = v.filter.trim().toLowerCase();
@@ -76,11 +63,8 @@ function numberOf(s: ShownApp, key: Exclude<MachineSortKey, "name">): number | n
   return key === "conns" ? s.conns.length : s.app[key];
 }
 
-/**
- * Sort shown apps. A `null` number (the backend cannot see bytes) sorts LAST in either
- * direction — it is unknown, not zero. Ties fall back to name, then pid, so the order is
- * stable across one-second samples.
- */
+/** A `null` number (bytes unseen) sorts last in either direction: unknown, not zero.
+ * Ties fall back to name, then pid, so the order is stable across samples. */
 export function sortApps(rows: readonly ShownApp[], sort: MachineSort): ShownApp[] {
   const sign = sort.dir === "asc" ? 1 : -1;
   const byName = (a: ShownApp, b: ShownApp): number =>
@@ -97,18 +81,12 @@ export function sortApps(rows: readonly ShownApp[], sort: MachineSort): ShownApp
   });
 }
 
-/**
- * The sorts (and table columns) that read byte counts: rates and totals. A backend that cannot
- * see bytes (`MachineStatus.hasBytes = false` — Windows' connection tables carry none) would show
- * four columns of `—` forever, so the view hides them there and keeps them where bytes exist.
- */
+/** Byte-count sorts/columns. Hidden when `MachineStatus.hasBytes` is false (Windows connection
+ * tables carry no bytes), where they would only ever show `—`. */
 export const BYTE_SORTS: ReadonlySet<MachineSortKey> = new Set(["rateIn", "rateOut", "bytesIn", "bytesOut"]);
 
-/**
- * The sort actually applied: a byte sort on a backend with no bytes would order every row by
- * an unknown — its column is hidden there, so the table falls back to busiest first (connection
- * count). The user's choice is kept, so it comes back with the columns.
- */
+/** A byte sort without bytes falls back to busiest first (connection count); the user's choice
+ * is kept so it returns with the columns. */
 export function effectiveSort(sort: MachineSort, hasBytes: boolean): MachineSort {
   return hasBytes || !BYTE_SORTS.has(sort.key) ? sort : { key: "conns", dir: "desc" };
 }
@@ -149,11 +127,8 @@ export const DASH = "—";
 export const NO_BYTES_TITLE =
   "Not available: this platform's connection backend can't see byte counts for this socket or process.";
 
-/**
- * A null RATE next to a known byte count is not a blind backend: Rust sends `rateIn: null`
- * on the first sample after a start (a rate needs two) and for a socket it can't match to
- * its predecessor (`rates.rs`). Pinned by the contract goldens (a backend's first sample).
- */
+/** Null rate beside a known byte count: Rust sends `rateIn: null` on the first sample after a start
+ * and for a socket it can't match to its predecessor (`rates.rs`). See the contract goldens. */
 export const NO_RATE_TITLE = "No rate yet: a rate needs two samples (about a second) of this socket or process.";
 
 /** The title of a `—` rate cell: blind backend when the bytes are unknown too, else not yet. */
@@ -187,13 +162,8 @@ export function remoteTitle(c: MachineConn): string {
 export const OTHER_USER_TITLE =
   "Another user's process — the OS doesn't reveal which without admin rights.";
 
-/**
- * The machine view's name: "Whole Mac" on the macOS backend, "Whole computer" on every other.
- * With no status yet (or in a sentence written far from one), the platform decides — the nettop
- * backend runs exactly on macOS, so the answer is the same. Every sentence that names this view
- * goes through here: five of them used to hardcode "Whole Mac", which a Windows user reads as
- * a view that does not exist.
- */
+/** "Whole Mac" on the macOS backend, "Whole computer" elsewhere; with no status the platform
+ * decides (nettop runs exactly on macOS). Every sentence naming this view must go through here. */
 export function modeLabel(backend: MachineBackend | null | undefined): string {
   if (backend == null) return isMac() ? "Whole Mac" : "Whole computer";
   return backend === "macos-nettop" ? "Whole Mac" : "Whole computer";

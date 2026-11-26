@@ -1,14 +1,6 @@
-/**
- * "↻ Resume conversation" for a root agent whose `claude` has ended — the way back
- * into a conversation after the process died (a session macOS killed left a frozen tab
- * and no way to continue).
- *
- * Rust resolves the finished agent's saved session (`agent_resume_session`); the
- * new agent then starts through the SAME `resumeSessionId` path as "Recover
- * session…", in the same folder. The ended agent stays in the rail for inspection
- * until the user closes it. A refusal is written into that ended agent's terminal —
- * where the user is looking — not swallowed.
- */
+/** "↻ Resume conversation" for a root whose `claude` ended: Rust resolves its saved session and a
+ * new agent starts via the `resumeSessionId` path, same folder. A refusal is written into the
+ * ended agent's terminal, not swallowed. */
 import { useCallback } from "react";
 
 import { asTerminalId, type AgentId } from "../../app/types";

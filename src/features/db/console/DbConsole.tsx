@@ -1,45 +1,6 @@
-/**
- * DbConsole — the body of a `db-console` tab: a toolbar, the query
- * editor, a draggable divider, and the output.
- *
- * The original sketch, made real: a double-click opens a new tab split in
- * two — the query, and below it either a table with the response or the error output.
- *
- * ── Presentational, deliberately ─────────────────────────────────────────────
- * Every input is a prop and every action is a callback. No store, no `invoke`, no
- * `TabKind` — the store/IPC half is a separate workstream, and this is the same seam
- * that let `ConnectionDialog` be finished before the Rust side existed. It also means
- * every string a user reads is assertable without mocking a single command.
- *
- * ── The split is INTERNAL to the tab, and that is the load-bearing bit ──
- * The editor/output divider is `<ConsoleSplit>` below — the `RailResizer` pointer-drag
- * pattern, ~40 lines, session-local fraction. It is emphatically **not** the app's
- * pane tree, for reasons that outlive convenience:
- *   • Pane-tree leaves own *tab strips*, so splitting the console into two leaves
- *     would make the results grid a **tab** — closable on its own, draggable to
- *     another region. A results grid with no query editor is not a thing.
- *   • It would need the invariant "these two leaves stay adjacent and neither closes
- *     alone", which is precisely the coupling `canonicalize` exists to destroy
- *     (it collapses single-child splits, flattens same-orientation nests, drops empty
- *     leaves). That is the highest-value logic in the frontend and it is
- *     property-tested; trading it for a divider would be a bad track.
- *   • The two splits *compose*: the whole console is one tab, so the existing
- *     machinery already drags it beside a terminal. That is JetBrains' behaviour too —
- *     an internal output divider inside a separately splittable console window.
- *   • And the repo already does it three times (`ApiRequestView`, `WsConsole`,
- *     `GrpcConsole`). A DB console reaching for the pane tree would be the odd one out.
- * `allotment` is not used either: `SplitContainer` writes back into the pane tree
- * through `resizePane`, and raw `Allotment` learns its size from `ResizeObserver`
- * alone — which `src/test/setup.ts` stubs to a no-op, so under jsdom it never lays out
- * and every assertion about it is vacuously green.
- *
- * ── A failed statement is an outcome, not a crash ────────────────────────────
- * `kind: "message"` results (a syntax error, a NOTICE, a `redis-cli`-style scalar)
- * render **in the output list beside the other results**, not as a global error
- * state — because that is what makes a script's third statement failing still show
- * statements 1 and 2. The `error` prop is the other thing entirely: the *call*
- * failed (no session, TLS, timeout, cancel), so there are no results to show.
- */
+/** Presentational body of a db-console tab. The split is INTERNAL (ConsoleSplit): not the pane tree
+ * (results aren't a tab; canonicalize stays free) nor allotment (never lays out in jsdom). A failed
+ * statement is a message result in the list; the error prop means the call itself failed. */
 
 import { useRef, useState } from "react";
 
@@ -60,12 +21,7 @@ import { QueryEditor, type QueryEditorHandle } from "./QueryEditor";
 import { ResultsGrid } from "./ResultsGrid";
 import "./console.css";
 
-/**
- * A filled triangle (Run) / double triangle (Script) / square (Stop). Defined here
- * rather than in `src/components/icons.tsx`: that file belongs to nobody in
- * particular and a feature adding to it is a write race — the same
- * call `UsageLimits.tsx` made for its refresh glyph.
- */
+/** Feature-local glyphs: adding to src/components/icons.tsx is a write race. */
 function RunIcon({ double = false }: { double?: boolean }): React.JSX.Element {
   return (
     <svg width="9" height="10" viewBox="0 0 10 10" aria-hidden="true">
@@ -90,55 +46,27 @@ export interface DbConsoleProps {
   queryLanguage: "sql" | "json" | "commandline";
   text: string;
   onTextChange: (text: string) => void;
-  /**
-   * Run something. `text` is **what to run** — the selection, the statement under the cursor,
-   * or the whole buffer, decided by the editor because it is the only place the caret is known.
-   * Omitted means "the whole buffer", which is what Script means and what any caller
-   * with no editor to ask must fall back to.
-   */
+  /** text is what to run, decided by the editor (it knows the caret); omitted means the whole
+   * buffer, as Script sends. */
   onRun: (mode: DbRunMode, text?: string) => void;
   onCancel: () => void;
   running: boolean;
   /** One entry per statement, in execution order. */
   results: DbResultSet[];
-  /**
-   * The *call* failed. A failed statement is a `message` result instead.
-   *
-   * A {@link DbFailure} — code **and** the sentence to print — not a bare code. This component
-   * used to re-describe the code itself, which is how a MongoDB console came to tell the user
-   * to check a host and port that were fine: the sentence for `invalid-config` was the only thing
-   * a code could produce, and the failure was a bad *statement*. Choosing prose is the store's job
-   * (`describeDbFailure`); this file stays presentational and prints what it is given.
-   */
+  /** The call failed (a failed statement is a message result). The store picks the prose
+   * (describeDbFailure); this only prints it. */
   error: DbFailure | null;
   readOnly: boolean;
   /** `EngineSpec.serverEnforcedReadOnly` — changes what the badge may promise. */
   serverEnforcedReadOnly: boolean;
   rowLimit: number;
-  /**
-   * `DbConnection.allowMultiStatement`. Default **false**, matching the
-   * contract: ⌘⏎ runs the statement under the cursor and running the whole buffer is
-   * opt-in per connection. Added to the suggested props because the alternative — a
-   * Script button that is always live — would silently run a buffer the user was
-   * still drafting, the exact accident the flag exists to prevent.
-   */
+  /** Default false: whole-buffer runs are opt-in per connection, so Script never runs a draft. */
   allowMultiStatement?: boolean;
-  /**
-   * Initial editor share of the split. Session-only in v1: held locally here
-   * and reported through `onSplitFractionChange` so the store can keep it across a
-   * tab switch. Persisting it belongs in `layout-prefs.json` with the other durable
-   * layout state, not in a third store file.
-   */
+  /** Session-only; reported via onSplitFractionChange so the store keeps it across tab switches. */
   splitFraction?: number;
   onSplitFractionChange?: (fraction: number) => void;
-  /**
-   * Identity for the results grids' find bars: each grid keys its `findBars`
-   * record as `grid:<findScope>:<resultIndex>`, so a bar survives the unmount
-   * a tab switch/move is, and two connections — or two
-   * grids of one script — never share one. `DbConsoleTab` passes the
-   * connection id, matching its own `dbConsoles[connectionId]` keying. A
-   * plain string on purpose: this component stays presentational.
-   */
+  /** Grids key findBars as grid:<findScope>:<resultIndex>, so bars survive unmounts and never
+   * collide. DbConsoleTab passes the connection id. */
   findScope?: string;
 }
 
@@ -162,13 +90,7 @@ export function DbConsole({
 }: DbConsoleProps): React.JSX.Element {
   const [fraction, setFraction] = useState(() => clampSplit(splitFraction));
   const splitRef = useRef<HTMLDivElement>(null);
-  /**
-   * The editor, asked at click/keystroke time what ⌘⏎ would run.
-   *
-   * Non-null by construction — `<QueryEditor/>` is rendered unconditionally below, so the ref is
-   * attached before any handler here can fire — hence the assertion rather than a `?.` whose
-   * other arm no gesture can reach (the same call `splitRef` makes above).
-   */
+  /** Non-null by construction: <QueryEditor/> always renders, so the ref is set before handlers. */
   const editorRef = useRef<QueryEditorHandle>(null);
   /** What Run sends: the selection, else the statement/line/document under the cursor. */
   const runText = (): string => (editorRef.current as QueryEditorHandle).runText();
@@ -215,10 +137,7 @@ export function DbConsole({
     applyFraction(fraction + (e.key === "ArrowDown" ? SPLIT_STEP : -SPLIT_STEP));
   };
 
-  // ⌘/Ctrl+⏎ for when focus is NOT in the editor (a toolbar button, the divider).
-  // The editor's own CM6 keymap has already handled it in that case and called
-  // preventDefault, so deferring to `defaultPrevented` is what keeps one keystroke
-  // from running one statement twice.
+  // For focus outside the editor; its keymap preventDefaults first, so one ⌘⏎ runs once.
   const onContainerKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.defaultPrevented) return;
     e.preventDefault();
@@ -266,10 +185,8 @@ export function DbConsole({
           className="db-console__btn"
           data-testid="db-cancel"
           disabled={!running}
-          // Precise on purpose: the cancel is ASKED FOR, never guaranteed. PostgreSQL's
-          // `pg_cancel_backend` sends SIGINT and the backend stops at its next interruptible
-          // point, and three engines have no server-side cancel at all — in which case the
-          // console says so rather than the button pretending.
+          // A cancel is requested, never guaranteed: pg_cancel_backend is advisory,
+          // and three engines have no server-side cancel.
           title="Stop this query. The server is asked to cancel it; some engines cannot, and a cancel is always advisory."
           onClick={onCancel}
         >
@@ -310,10 +227,7 @@ export function DbConsole({
           data-testid="db-console-editor-pane"
           style={{ flexGrow: fraction }}
         >
-          {/* The grammar follows the BUFFER, not just the engine: SQL typed into a
-              MongoDB console is coloured as SQL. `QueryEditor` re-runs Shiki whenever the
-              `shikiId` prop or the text changes, so switching grammars mid-buffer needs no
-              change there. */}
+          {/* The grammar follows the buffer: SQL in a MongoDB console is coloured as SQL. */}
           <QueryEditor
             ref={editorRef}
             text={text}
@@ -385,13 +299,8 @@ export function DbConsole({
   );
 }
 
-/**
- * One statement's outcome. `rows` gets the grid; `affected` and `message` get a line
- * of prose — and `message` is styled as a *notice*, not an error, because
- * `DbResultSet` carries no severity: the text of a Postgres syntax error and the text
- * of a Postgres NOTICE arrive in the same `notice` field, and telling them apart by
- * reading the words would be value-sniffing, which the cell model forbids.
- */
+/** message is styled as a notice, not an error: DbResultSet carries no severity, and telling them
+ * apart by the words would be value-sniffing. */
 function ResultBlock({
   index,
   result,

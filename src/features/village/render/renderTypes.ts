@@ -1,11 +1,5 @@
-/**
- * Agent Village renderer — shared types (types only, erased at runtime).
- *
- * `DrawTarget` is the narrow slice of `CanvasRenderingContext2D` the renderer
- * touches, so jsdom tests can hand it a recording fake (jsdom has no canvas)
- * and the browser tier hands it the real context. A real 2D context is
- * assignable to it as-is.
- */
+/** Renderer types (erased at runtime). `DrawTarget` is the slice of `CanvasRenderingContext2D`
+ * the renderer touches: jsdom tests pass a recording fake; a real 2D context is assignable. */
 
 /** The subset of `CanvasRenderingContext2D` the renderer uses. */
 export interface DrawTarget {
@@ -77,12 +71,8 @@ export interface Hsbc {
   c: number;
 }
 
-/**
- * The decoded art. Every getter returns `null` when that sprite is unavailable
- * (bank in fallback mode, or a recolour needs a canvas the host lacks) — the
- * renderer then paints a plain coloured rectangle instead. Recoloured variants
- * are rendered lazily on first request and cached by key.
- */
+/** Decoded art. A getter returns `null` when its sprite is unavailable (fallback bank, or a
+ * recolour without a canvas): the renderer paints a plain rectangle. Recolours are lazy, cached. */
 export interface SpriteBank {
   /** true when the PNGs could not be loaded: every getter returns null. */
   readonly fallback: boolean;

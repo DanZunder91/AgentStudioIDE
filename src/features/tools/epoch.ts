@@ -1,18 +1,5 @@
-/**
- * The Tools panel's ONE input seam: a single string in, one understood reading out.
- *
- * The requirement is explicitly bidirectional and typeless — an epoch typed in
- * converts to a human-readable time, any date converts back to an epoch, and the tool
- * identifies which it was given from one string. So there is no direction toggle to get wrong: the input
- * is classified, and the classification is shown so a wrong guess is visible rather
- * than silent.
- *
- * The order matters and is the one seam worth stating (test the seam
- * explicitly): **numeric first**. Every string of digits is a valid epoch, so
- * `20260615` is 1970-08-23 in seconds, not 15 June 2026 — `dateParse` deliberately
- * declines the bare compact form for exactly this reason, and accepts it only with the
- * `T` that makes it a date (`20260615T0000Z`).
- */
+/** One string in, one classified reading out (shown, so a wrong guess is visible). Numeric
+ * first: every digit string is an epoch, so `dateParse` takes the compact form only with a `T`. */
 
 import { parseDateString, type DateParse } from "./dateParse";
 import { parseNumericEpoch, type NumericEpoch } from "./instant";
@@ -26,10 +13,7 @@ export type ParseResult =
   /** Unreadable — `message` says why, or what shapes ARE understood. */
   | { kind: "unknown"; message: string };
 
-/**
- * Said when the input is not date-shaped at all. Names real examples rather than
- * "invalid input": the useful half of a rejection is what WOULD have worked.
- */
+/** Names real examples: the useful half of a rejection is what would have worked. */
 export const UNKNOWN_MESSAGE =
   "Not a number, and not a date shape I know. Try an epoch (1700000000), an ISO timestamp (2023-11-14T22:13:20Z), a plain date (2024/01/25 or 25 Jan 2024), or “now”.";
 

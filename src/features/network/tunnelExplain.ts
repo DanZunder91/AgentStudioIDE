@@ -1,22 +1,11 @@
-/**
- * The words of the tunnel and bypass cards (FlowDetailPane) — pure, so each sentence is pinned
- * by a test one case at a time.
- *
- * The bug: `CONNECT geo.api.example.net:443 TUNNEL · 30.0s` with an empty pane read
- * as a call that never finished and showed nothing about what it was doing.
- * The row was right — a Rust app on reqwest + rustls with bundled webpki roots cannot trust the IDE's
- * CA, so the proxy tunnels it and can only see host, port, timing and bytes — but
- * the pane must say so, say why, show what IS known, and give the ways to see more.
- */
+/** The words of the tunnel and bypass cards (FlowDetailPane), pure so each sentence is pinned by
+ * a test. A tunnel shows only host, port, timing and bytes; the card must say why and how to see
+ * more. */
 
 import type { FlowClient, FlowSummary, NetcapStatus } from "./networkTypes";
 
-/**
- * Whether a client looks like a Rust binary: it runs from a Cargo `target/<profile>/` directory
- * or `~/.cargo/bin`. DECIDED: the executable path is all the proxy knows about a client, and
- * these two locations are where `cargo run` / `cargo install` put binaries; anything else is
- * not guessed at (the card then speaks about "apps that ship their own trust roots" in general).
- */
+/** Runs from a Cargo `target/<profile>/` dir or `~/.cargo/bin`: the path is all the proxy knows,
+ * and nothing else is guessed at (the card then speaks of apps shipping their own trust roots). */
 export function looksLikeRust(client: Pick<FlowClient, "path"> | null): boolean {
   const p = client?.path;
   if (p === null || p === undefined) return false;
@@ -40,11 +29,8 @@ export function noteKind(note: string | null): NoteKind {
   return "other";
 }
 
-/**
- * Why this tunnel's contents are not visible — the card's "Why" paragraph. `status` is the
- * proxy's status (null while it loads: a tunnel with no note is then explained without
- * claiming Decrypt is off).
- */
+/** The card's "Why" paragraph. `status` is null while loading: a tunnel with no note is then
+ * explained without claiming Decrypt is off. */
 export function tunnelWhy(f: Pick<FlowSummary, "client" | "note">, status: Pick<NetcapStatus, "decrypt"> | null): string {
   const app = f.client?.name ?? "The client";
   const roots = looksLikeRust(f.client) ? RUSTLS_WHY : OWN_ROOTS_WHY;
@@ -73,11 +59,8 @@ export interface TunnelGroup {
   resBytes: number;
 }
 
-/**
- * Group repeated tunnels: same host and port, and the same client pid (or, when the client is
- * unknown, the same terminal). A keep-alive HTTP client opens several over a minute; one row
- * each is correct, but the card says they are one app talking to one host.
- */
+/** Same host, port and client pid (else same terminal): a keep-alive client opens several, one row
+ * each, and the card says they are one app talking to one host. */
 export function tunnelGroup(
   flows: readonly FlowSummary[],
   f: Pick<FlowSummary, "host" | "port" | "client" | "terminalId">,
@@ -95,11 +78,8 @@ export function tunnelGroup(
   return out;
 }
 
-/**
- * The one-line Cargo change that makes a reqwest app read `SSL_CERT_FILE` (which every IDE
- * terminal sets to the IDE's CA bundle): native roots instead of the bundled webpki set.
- * reqwest 0.12's feature name (the `rustls-tls` default it replaces is that line's too).
- */
+/** Makes a reqwest app read `SSL_CERT_FILE` (every IDE terminal points it at the IDE's CA bundle):
+ * native roots instead of bundled webpki. reqwest 0.12's feature name. */
 export const RUSTLS_NATIVE_ROOTS_LINE =
   'reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }';
 
@@ -109,12 +89,8 @@ export const DECRYPT_APP_WARNING =
 export const BYPASS_EXPLAINER =
   "This command skipped the IDE proxy, so its request is not in this table. With 'Capture agent curls even with --noproxy' on, an agent's curl is captured anyway.";
 
-/**
- * What each bypass reason Rust reports means, in words (`logstream::bypass::R_*`). The card lists
- * one sentence per reason: "Bypassed with: PowerShell 5.1 web cmdlet" alone told nobody that
- * nothing in the command had asked to skip the proxy — Windows PowerShell 5.1's web stack simply
- * never reads the proxy variables.
- */
+/** Each bypass reason Rust reports (`logstream::bypass::R_*`), in words: e.g. PowerShell 5.1's web
+ * stack never reads the proxy variables, though nothing in the command asked to skip the proxy. */
 export const BYPASS_REASON_TEXT: Readonly<Record<string, string>> = {
   "--noproxy": "curl was told to use no proxy (--noproxy).",
   "-x ''": "curl was given an empty proxy (-x '').",
@@ -137,10 +113,7 @@ export function bypassReasonText(reason: string): string {
 
 export const BYPASS_NEUTRALIZED_TITLE = "Captured anyway — this command tried to skip the IDE proxy";
 
-/**
- * A neutralised bypass (strict agent capture on, every reason a curl's own): the shim
- * ran the curl through the proxy, so its request is a normal row of this table.
- */
+/** Strict agent capture ran the curl through the proxy, so its request is a normal row. */
 export function bypassNeutralizedText(reasons: readonly string[]): string {
   const how = reasons.length > 0 ? ` (${reasons.join(", ")})` : "";
   return `This command tried to skip the IDE proxy${how}. With 'Capture agent curls even with --noproxy' on, curl was run through the proxy anyway — its request is its own row in this table.`;

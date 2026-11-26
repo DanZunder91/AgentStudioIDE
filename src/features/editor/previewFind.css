@@ -1,26 +1,6 @@
-/* ── Find in the rendered Markdown preview ───────────────────────────────────
- *
- * Two parts, and they are styled by two different mechanisms on purpose:
- *
- *   1. `.preview-find` — the bar. An ordinary element, a direct child of
- *      `.markdown-preview` and therefore a SIBLING of `.markdown-preview__body`.
- *      That placement is load-bearing: the body carries the inline `zoom`, so a
- *      bar inside it would be 4x its design size at 400%.
- *   2. `::highlight(...)` — the matches. Painted by the CSS Custom Highlight
- *      API over live `Range`s, so nothing is inserted into the
- *      `innerHTML`-owned body (see previewFind.ts's header for why that is not
- *      negotiable). `::highlight()` accepts only a small property set —
- *      colour, background-color, text-decoration, text-shadow — which is all a
- *      match needs.
- *
- * Colours reuse the `--mdp-*` tokens `markdownPreview.css` declares on
- * `.markdown-preview`, with the same self-contained fallbacks, so the bar
- * follows the cockpit theme without introducing a second palette. The highlight
- * rules are document-global (highlight names are, too) and cannot inherit those
- * tokens, so they carry the literal values the other two match lists use —
- * identical to `.response-body__hit`, so a hit looks the same wherever the user
- * finds one.
- */
+/* Find in the rendered preview. The bar is a sibling of the zoomed body (inside it would scale);
+ * matches are `::highlight()` over Ranges, never inserted nodes. Highlight rules are global and
+ * cannot use the `--mdp-*` tokens, so they carry `.response-body__hit`'s literal values. */
 
 .preview-find {
   position: sticky;

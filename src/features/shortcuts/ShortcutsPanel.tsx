@@ -1,15 +1,6 @@
-/**
- * ShortcutsPanel — the keyboard-shortcuts reference overlay.
- *
- * Self-contained, like `<FindInFiles/>`: it installs its OWN global Cmd/Ctrl+/
- * toggle + Esc-to-close, so App's only wiring is mounting it (plus the titlebar
- * `<ShortcutsButton/>`). The list comes from `shortcuts.ts` — one source of truth
- * shared with nothing else, so the sheet cannot drift from the real bindings.
- *
- * Open state lives in the store (`shortcutsOpen`) so the titlebar button and the
- * hotkey drive the same overlay. The hotkey effect is always mounted (the null
- * return for the closed state happens AFTER the hooks), so Cmd/Ctrl+/ can OPEN it.
- */
+/** Installs its own global Cmd/Ctrl+/ toggle and Esc; the list comes from `shortcuts.ts`. Open
+ * state is the store's `shortcutsOpen` (shared with the titlebar button); the hotkey effect runs
+ * before the closed-state null return, so the hotkey can open it. */
 
 import { useEffect } from "react";
 

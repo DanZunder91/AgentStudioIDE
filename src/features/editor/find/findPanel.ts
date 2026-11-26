@@ -1,25 +1,6 @@
-/**
- * findPanel — the in-file find bar's DOM.
- *
- * A CM6 `Panel` (plain DOM by design — CM6 panels live outside React), docked
- * at the top of the editor, IntelliJ-style:
- *
- *   [ input ] [Cc] [W] [.*]  k/N   ↑ ↓        ✕
- *
- * The panel is a thin VIEW over `@codemirror/search`'s state: the query of
- * record lives in the editor state (set via `setSearchQuery`, read via
- * `getSearchQuery`), which is what makes the query survive close/reopen and
- * keeps the highlighter, the navigation commands, and this bar in agreement.
- * The count comes from `findModel.ts` — the same `SearchQuery` engine, run
- * headless over the whole document.
- *
- * Keyboard contract (see `bufferSearch.ts` for the editor-side keymap):
- *   - Keys pressed INSIDE the panel are first offered to the app's
- *     "search-panel"-scoped bindings via `runScopeHandlers` (so Mod-f
- *     re-seeds/re-selects, Escape closes, F3/Mod-g navigate, from within
- *     the input too).
- *   - Enter / Shift+Enter in the input = next / previous match.
- */
+/** Find bar DOM: a CM6 `Panel` (plain DOM; panels live outside React) over `@codemirror/search`.
+ * The query lives in editor state so it survives close/reopen. Keys inside the panel go first to
+ * the "search-panel"-scoped bindings via `runScopeHandlers` (keymap: `bufferSearch.ts`). */
 
 import {
   SearchQuery,

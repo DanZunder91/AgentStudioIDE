@@ -1,12 +1,5 @@
-/**
- * `<SessionPicker>` — the "Recover session" tab.
- *
- * Both seams are mocked at the module boundary:
- *   - `./sessionsIpc` — the Rust command (no Tauri in jsdom).
- *   - `../fleet/useLaunchAgent` — THE launch path. The picker's whole job is to
- *     call it with exactly `{ cwd, resumeSessionId }`; asserting on the mock is
- *     asserting the feature's contract.
- */
+/** `./sessionsIpc` and `../fleet/useLaunchAgent` are mocked: calling the launch path with exactly
+ * `{ cwd, resumeSessionId }` is the feature's contract. */
 
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,11 +1,5 @@
-/**
- * ActivityView — a sub-agent's read-only transcript in the center (M3).
- *
- * Sub-agents run in-process with no PTY, so selecting one opens this instead of
- * a terminal. It fetches `subagent_activity(agentId)` and polls while mounted
- * (the sub-agent may still be running), rendering entries chat-style. It never
- * writes: this is a window onto what the agent is doing, not a place to type.
- */
+/** A sub-agent's read-only transcript (sub-agents have no PTY), polled via `subagent_activity`
+ * while mounted, since it may still be running. */
 
 import { useEffect, useState } from "react";
 
@@ -29,10 +23,7 @@ export function ActivityView({ agentId }: { agentId: AgentId }): React.JSX.Eleme
   const status = useAppStore((s) => s.agents[agentId]?.status);
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
 
-  // No synchronous reset on agentId change: the only mount site (<Pane>) keys
-  // this view by agentId, so switching sub-agents REMOUNTS it and `entries`
-  // starts empty again — which is why `agentId` need not be a dependency-driven
-  // reset here. Keeping the dep is belt-and-braces for a future un-keyed caller.
+  // No reset on agentId change: <Pane> keys this view by agentId, so a switch remounts it.
   useEffect(() => {
     let active = true;
     const load = () => {

@@ -1,12 +1,6 @@
-//! A running log stream, whatever feeds it: a supervised child process (`child.rs` —
-//! `log stream`, `journalctl`, `simctl`) or an Event Log subscription thread (`winevt.rs`,
-//! Windows). One lifecycle for all of them, which is what `syslog_status` reads:
-//!
-//! - **Drop = stop.** Dropping a [`Running`] drops its stop guard, which ends the source
-//!   (kills the child / signals and joins the thread) — quietly: a deliberate stop posts no line.
-//! - **A stream that ends on its own** calls [`Life::die`]: `alive` flips off, the reason is kept
-//!   for `syslog_status`, and ONE `system` line says why.
-//! - **A stream that never started** is [`Running::failed`]: dead from birth, same reason + line.
+//! One lifecycle for every log stream (child or Event Log thread), read by `syslog_status`:
+//! drop = quiet stop; ending on its own ([`Life::die`]) flips `alive` off and posts ONE `system`
+//! line with the reason; a stream that never started is [`Running::failed`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

@@ -1,11 +1,5 @@
-/**
- * contextStore — per-agent readings, single-flight per agent, the idle edge.
- *
- * `contextUsage` is a `vi.fn()` handed deferreds, so WHEN a response lands is the
- * test's decision. `parseContextError` stays REAL: it is this feature's own splitter
- * (unlike `usageStore.test.ts`, which stubs another module's classifier), and the store's
- * contract is "the code the user sees", which is only observable through it.
- */
+/** contextUsage gets deferreds, so tests decide when responses land. parseContextError stays real:
+ * the store's contract is the code the user sees. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

@@ -1,7 +1,5 @@
-/**
- * The tear-off command wrappers: names and argument shapes as `tearoff.rs` declares them
- * (Tauri maps camelCase args to snake_case params), and which of them swallow failure.
- */
+/** Tear-off wrappers: names and arg shapes as `tearoff.rs` declares them (Tauri maps camelCase to
+ * snake_case), and which of them swallow failure. */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

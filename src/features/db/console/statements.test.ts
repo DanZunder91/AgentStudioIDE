@@ -1,17 +1,5 @@
-/**
- * `statements.ts` tests — the frontend mirror of `guard.rs`'s splitter.
- *
- * ── Where these cases come from ──────────────────────────────────────────────
- * The lexical cases are **`guard.rs`'s own tests, ported**, deliberately and one for one:
- * `a_semicolon_inside_a_string_literal_is_not_a_terminator`,
- * `a_semicolon_inside_a_quoted_identifier_or_dollar_quote_is_not_a_terminator`, and the
- * trailing-comment case. Two implementations of one grammar in two languages will drift, and
- * the only defence available is that they answer the same questions with the same answers. If a
- * case here is changed, change it in `src-tauri/src/db/guard.rs` too — and vice versa.
- *
- * Every expectation is a literal: nothing here computes an expected value from
- * the code under test, so a wrong answer is a red test rather than a matching pair of wrongs.
- */
+/** Lexical cases are ported one for one from guard.rs's tests: change a case in
+ * src-tauri/src/db/guard.rs too, and vice versa. Expectations are literals. */
 
 import { describe, expect, it } from "vitest";
 
@@ -26,11 +14,8 @@ import {
 /** Just the texts — for the many cases where the ranges are not the claim. */
 const texts = (input: string): string[] => splitStatements(input).map((s) => s.text);
 
-/**
- * A sample buffer with mixed keyword case.
- * Line 2's `FRom` is part of it. Lines 3 and 4 are commented out, each ending in a `;` that a
- * naive splitter counts as a terminator.
- */
+/** Mixed keyword case (FRom on line 2); lines 3 and 4 are commented out, each ending in a ";"
+ * that a naive splitter counts as a terminator. */
 const SAMPLE_BUFFER = [
   "SELECT * FROM widgets;",
   "SELECT * FRom booking;",

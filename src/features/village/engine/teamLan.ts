@@ -1,51 +1,6 @@
-/**
- * A project room's LAN (agents that communicate with each other are
- * networked, and the main agent — the boss — is the one on wireless). Every PROJECT room — a
- * village house with team tables, a city floor with a team — gets a Wi-Fi ROUTER: its team's
- * PCs / laptops are CABLED to it, and its boss (the root at its desk / the floor's leader) talks to
- * it OVER THE AIR. The Seats room's LAN (engine/lan.ts) is the precedent and shares its packet
- * model (`LanPacket`, `inFlight`: `PACKET_SPEED`, `MAX_TRIP`; the team hue).
- *
- *   - WIRING (`teamLanWiring`, per World): per room with a router — the cable runs, each TEAM
- *     seat's route to the router (its PC / laptop port first, the router's port last), and each
- *     BOSS seat's antenna point (where its Wi-Fi pulses and where an air hop ends).
- *   - TRAFFIC (`teamLanTraffic`, per frame, from `VillageSim.seating()` and the view's `LanEvent`s):
- *     packets move only on a real communication (nothing moves unless
- *     agents are communicating with each other). A TASK (a sub-agent spawned) runs from its
- *     parent's seat to its team seat through the router, a RESULT (it finished) back; a parent on a
- *     team seat is all cable, a BOSS parent's hop is over the air (antenna ↔ router, a straight
- *     line). A TOOL call is one round-trip from the caller's seat to the router and back — over the
- *     air both ways for a boss. Wi-Fi pulses ONLY while a packet is on an air hop; a router is busy
- *     while a packet is in flight in its room. No event, nothing moves.
- *
- * Geometry — the Seats LAN's star (`starWiring`), hung from the router (hub = its tile centre):
- *   - City (side view): the router hangs in the headroom row over the end of the leader's desk, the
- *     column left of the building's lift (`CityBuilding.lift`, up the door column). The floor's FIRST
- *     desk row hangs from a tray along that row at the hub's height, out to its farthest PC, a drop
- *     down to each PC's port (`pcPort`, as on the Village's Seats desks). A floor wraps its team onto
- *     more desk rows below (after every 10 tables, continue vertically): every LATER
- *     row hangs from its own bus `BRANCH_LIFT` px above its PCs' row — inside the aisle row above
- *     it, as a Seats desk row's branch does — and the buses join the router by a trunk straight down
- *     the router's column, never the lift's (it runs behind the leader's desk). Never through the
- *     back wall: the tray is one row below it. A one-row floor has no trunk at all.
- *   - Village (top-down): the router hangs at the top of the door column; a trunk runs down that
- *     always-clear column to the lowest team-table row, a branch along each table row's MIDDLE row
- *     (both tables of a row share it), and a drop from the branch to each laptop. A table is a
- *     blocking prop drawn over the cables, so the cable shows only down the door column and across
- *     the aisle, and vanishes under the table it feeds. A laptop's port is its tile's centre, raised
- *     with its art when it shows its screen (`LAPTOP_LIFT`).
- *   - Antenna: the top of a boss's PC (village) or monitor (city) art (`ANTENNA_RISE`).
- *   An air hop is straight (diagonal) from the antenna to the hub, inside the room.
- *
- * Wi-Fi rule: one pulse per ANTENNA per frame, however many packets are in the air there — a boss
- * sending three tasks at once pulses once, a router serving two bosses once. A pulse spreads and
- * fades as its packet crosses the hop (`phase` = how far across, 0 → 1), in the packet's hue; when
- * two share an antenna, the first event's packet sets it.
- *
- * Cost: the wiring is built once per World, its seat index once per wiring. Per frame,
- * `teamLanTraffic` is one Map over the seated agents, then per event a few Map lookups and a walk
- * of its way; it allocates nothing but its output. One packet per event at most.
- */
+/** A project room's LAN: team PCs/laptops CABLED to a Wi-Fi router, the boss on air. Pure, on
+ * engine/lan.ts's packet model; packets move only on a real task/result/tool event, and Wi-Fi
+ * pulses only while a packet is on an air hop (one pulse per antenna per frame). */
 
 import { TILE, type House, type LanEvent, type Prop, type PropKind, type Seat, type SeatedAgent, type World } from "../villageTypes";
 import { BRANCH_LIFT, inFlight, pcPort, starWiring, teamHue, teamRoot, type CableRun, type LanPacket, type LanPoint, type StarTap } from "./lan";
@@ -74,20 +29,12 @@ export interface WifiPulse {
   hue: number;
 }
 
-/**
- * World px a screen-facing laptop's art is lifted above its tile (render/props.ts `UP_LAPTOP_LIFT`:
- * it is raised onto the table's middle row so its sitter's head does not hide it). Its port moves
- * with it.
- */
+/** World px a screen-facing laptop's art is lifted above its tile (render/props.ts
+ * `UP_LAPTOP_LIFT`); its port moves with it. */
 export const LAPTOP_LIFT = 12;
 
-/**
- * World px a boss's screen art rises above its tile's TOP edge — where its antenna is (render/props.ts):
- * a desk PC is a 16×32 sprite, bottom-anchored and lifted `SURFACE_LIFT` (8) onto the desk top, so it
- * reaches 32 + 8 − 16 = 24 px above its tile; a city leader's monitor (the left tile of its 2-tile
- * workstation) — its back panel tops out 31 px above its tile's bottom edge, 15 px above its top. Any
- * other screen: its tile's top edge.
- */
+/** World px a boss's screen art rises above its tile's TOP edge, where its antenna sits (sprite
+ * geometry in render/props.ts); any other screen: its tile's top edge. */
 export const ANTENNA_RISE: Readonly<Partial<Record<PropKind, number>>> = { pc: 24, monitor: 15 };
 
 // ───────────────────────────── wiring ─────────────────────────────
@@ -95,10 +42,8 @@ export const ANTENNA_RISE: Readonly<Partial<Record<PropKind, number>>> = { pc: 2
 /** Cached per World object (a World never changes). */
 const wiringCache = new WeakMap<World, TeamRoomWiring[]>();
 
-/**
- * Every project room's wiring, in `world.houses` order: rooms with a router and at least one team
- * seat whose PC / laptop stands in the room. [] for none. Cached per World.
- */
+/** Wiring of every room with a router and a team seat whose PC/laptop is in it, in `world.houses`
+ * order; [] for none. Cached per World. */
 export function teamLanWiring(world: World): TeamRoomWiring[] {
   let wiring = wiringCache.get(world);
   if (!wiring) wiringCache.set(world, (wiring = wire(world)));
@@ -159,21 +104,14 @@ function covers(room: House, col: number, row: number): boolean {
   return col >= room.col && col < room.col + room.w && row >= room.row && row < room.row + room.h;
 }
 
-/**
- * A city team PC's end of the star: its port, and as its bus the tray at the router's own height
- * when it stands in the floor's first desk row (right under the router's headroom row) — else its
- * row's bus, `BRANCH_LIFT` px above it in the aisle row above, which the trunk down the router's
- * column joins to the router.
- */
+/** A city team PC's tap: in the floor's first desk row its bus is the tray at the router's height;
+ * else its row's bus `BRANCH_LIFT` px above, joined by the trunk down the router's column. */
 function cityTap(pc: Prop, router: Prop, hub: LanPoint): StarTap {
   return { port: pcPort(pc), busY: pc.row === router.row + 1 ? hub.y : pc.row * TILE - BRANCH_LIFT };
 }
 
-/**
- * A village laptop's end of the star: its port (its tile's centre, raised with its art when it shows
- * its screen) and, as its bus, the middle row of the table it stands on — so the table hides the
- * branch where it runs under it. A laptop on no table has no cable (null).
- */
+/** A village laptop's tap: its port, and its table's middle row as the bus (so the table hides
+ * the branch). A laptop on no table has no cable (null). */
 function laptopTap(laptop: Prop, tables: readonly Prop[]): StarTap | null {
   const table = tables.find((t) => laptop.col >= t.col && laptop.col < t.col + t.w && laptop.row >= t.row && laptop.row < t.row + t.h);
   if (!table) return null;
@@ -218,21 +156,16 @@ export interface TeamLanTraffic {
   busy: Set<string>;
 }
 
-/**
- * Where an event's packet runs: `head`'s way to the router, then `tail`'s walked back from it (a
- * task / result: the parent's, then the child's; a tool call: the caller's, out and back).
- */
+/** `head`'s way to the router, then `tail`'s walked back (task/result: parent's then child's;
+ * tool call: the caller's, out and back). */
 interface Way {
   agent: SeatedAgent;
   head: Role;
   tail: Role;
 }
 
-/**
- * An event's way, or null when it has none: a tool call needs its caller on a wired seat; a task or a
- * result needs the sub-agent on a TEAM seat and its parent seated on another wired seat of the SAME
- * room (another room, the plaza, unseated, or its own seat: no way).
- */
+/** null when no way: a tool call needs its caller on a wired seat; a task/result needs the
+ * sub-agent on a TEAM seat and its parent on another wired seat of the SAME room. */
 function wayOf(ev: LanEvent, byKey: ReadonlyMap<string, SeatedAgent>, roles: ReadonlyMap<string, Role>): Way | null {
   const agent = byKey.get(ev.key);
   const mine = agent && roles.get(agent.seatId);
@@ -243,17 +176,9 @@ function wayOf(ev: LanEvent, byKey: ReadonlyMap<string, SeatedAgent>, roles: Rea
   return !mine.air && theirs?.room === mine.room ? { agent, head: theirs, tail: mine } : null;
 }
 
-/**
- * The project rooms' traffic at `timeSec`, from who is seated where (`VillageSim.seating()`) and the
- * view's `LanEvent`s — one packet per event whose trip is under way (`inFlight`), in event order:
- *   - task (`key` = the sub-agent): the parent's seat → the router → the sub-agent's team seat;
- *   - result: the same way back;
- *   - tool (`key` = the caller): its seat → the router → back, an `uplink` packet.
- * A boss's leg (its antenna ↔ the router) is the AIR hop, a straight line; a team seat's is cable.
- * While a packet is on an air hop, the router and that boss's antenna pulse (`phase` = how far across
- * the hop it is), one pulse per antenna. Every packet takes its agent's team hue — its topmost seated
- * ancestor anywhere, not only in this room.
- */
+/** One packet per event whose trip is under way, in event order: task parent → router →
+ * sub-agent, result back, tool seat → router → back (`uplink`); a boss's leg is the air hop. Every
+ * packet takes its agent's team hue (topmost seated ancestor anywhere, not only this room). */
 export function teamLanTraffic(
   wiring: readonly TeamRoomWiring[],
   seated: readonly SeatedAgent[],

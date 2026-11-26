@@ -1,13 +1,4 @@
-/**
- * SettingsMenu — the titlebar gear + its "Focus follows agent" switch.
- *
- * Covers: the popover open/close (trigger toggle, Esc, outside-click, and that an
- * inside click does NOT close), the switch reflecting store state + flipping it on
- * click, and the aria wiring (role="switch" + aria-checked, aria-expanded).
- *
- * The store's `setFocusFollowsAgent` persists via `layoutPrefsIpc`; it is mocked so
- * clicking the switch never reaches Tauri (no unhandled IPC in tests).
- */
+/** `layoutPrefsIpc` is mocked so clicking the switch never reaches Tauri. */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

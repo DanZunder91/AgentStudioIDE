@@ -1,28 +1,6 @@
-/**
- * R1 — a REAL local service, driven from the IDE's own terminals, seen correctly in Network
- * and Agent logs: a real service running, the UI opened, and every view checked to show the
- * correct things.
- *
- * Everything is local (blocking in `npm run verify`): the service (e2e/fixtures/real-service.mjs)
- * listens on loopback, the calls are `curl` from another IDE terminal through the injected proxy
- * (loopback is captured too), and the service's one outbound call here is the
- * deterministic LOCAL failure `/upstream?fail=1` (curl → https://localhost:1/). The example.com
- * half lives in real-service-external.e2e.ts, which verify reports but does not block on.
- *
- * Not covered here, on purpose: a service Claude starts with `run_in_background` (its stdout
- * goes to a task file found through the Claude transcript). The E2E has no
- * signed-in `claude` (never test with real user credentials), so that path is covered by the
- * Rust tests (tests/logstream_tasks*.rs). Here the service runs in the FOREGROUND of an IDE
- * terminal, so its stdout is that terminal's PTY output.
- *
- * Dev apps on this machine (the last suite): two Node apps are started OUTSIDE the IDE by
- * this wdio process — one under `script` (a pty of its own, like a dev server in another
- * terminal app: console `terminal`, the card offers Restart in the IDE), one with stdout
- * redirected to a file (readable: Stream tails it into the Logs view as `app` lines, under its
- * app's row). The service above runs in an IDE terminal: the IDE's own process tree
- * IS listed — `origin: "ide"`, tagged `by <terminal title>`, console `ide-terminal`, no Restart
- * (it is already in the IDE) — asserted too.
- */
+/** R1: a real local service in an IDE terminal, checked in Network and Agent logs; local and
+ * blocking. `run_in_background` services need a signed-in `claude`, so Rust tests cover them
+ * (tests/logstream_tasks*.rs). Dev apps started outside the IDE are checked last. */
 
 import { $, browser, expect } from "@wdio/globals";
 
@@ -370,11 +348,8 @@ describe("real service: a local service's calls and logs, seen in the IDE", () =
     // The ERROR line gives the row an error badge (a button).
     await expect($(`[data-testid="alog-src-row"][data-source="${svcSource}"] [data-testid="alog-src-errors"]`)).toBeDisplayed();
 
-    // KNOWN GAP (not asserted here): two plain shells opened in the same
-    // folder share one source label (`bash · workspace` — logstream::source_label is
-    // "<pty title> · <cwd basename>"), so this row also counts the client terminal's lines and
-    // cannot isolate the service from them. What IS asserted: the row narrows the list to
-    // exactly its source, and the service's lines are in it.
+    // Known gap: two shells in one folder share a source label, so this row also counts the
+    // client's lines. Asserted: the row narrows to its source, and the service's lines are in it.
     await $(`[data-testid="alog-src-row"][data-source="${svcSource}"] button.alog-side__main`).click();
     await browser.waitUntil(
       async () => {
@@ -752,13 +727,8 @@ describe("real service: a local service's calls and logs, seen in the IDE", () =
       });
     });
   });
-  /*
-   * A tunnel from a client that does NOT trust the IDE's CA (`TUNNEL CONNECT api.example.net:443 —`)
-   * used to look unfinished and did not show what it was doing. Here, locally (no internet): `openssl s_server` on loopback with a throwaway
-   * self-signed cert, and `wget` (not on the decrypt list) fetching it through the injected proxy
-   * with Decrypt HTTPS ON. The request must still work (decryption must never break a client), and the row + card must say
-   * what the tunnel is: closed, bytes each way, why it was not decrypted, how to see more.
-   */
+  /* A client that does not trust the IDE's CA (wget, not on the decrypt list) against a local
+   * `openssl s_server`, Decrypt on: it must still work, and the row says what the tunnel is. */
   describe("an HTTPS client that does not trust the IDE's CA: an explained tunnel, not a blank row", () => {
     const TLS_PORT = 47823;
     const DECRYPT = '//*[@data-testid="network-panel"]//button[@role="switch"][normalize-space(.)="Decrypt HTTPS"]';

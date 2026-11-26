@@ -1,24 +1,13 @@
-// src/lib/fileIcons/IconSprite.tsx
-//
-// Injects the generated inline SVG sprite ONCE into the DOM (file-icons.md §4):
-// every `<symbol id="mi-<id>">` becomes referenceable by any number of
-// `<FileIcon>`s via `<use href="#mi-<id>">`. Mount exactly one instance,
-// app-level, before/alongside the tree.
-//
-// Sanitisation: the sprite is OUR OWN generated artifact — the generator
-// (scripts/icons) refuses script/event-handler content at build time, and the
-// string never contains user input — so there is deliberately no DOMPurify
-// pass here. If this ever injects anything not produced by our generator,
-// that reasoning is void and a sanitiser becomes mandatory.
+// Injects the generated SVG sprite once (file-icons.md §4); mount exactly one, app-level. No
+// DOMPurify on purpose: the sprite is our generator's output (scripts/icons rejects scripts and
+// handlers), never user input; inject anything else and a sanitiser becomes mandatory.
 
 import { useMemo } from 'react';
 import type * as React from 'react';
 import { FILE_ICON_SPRITE } from './sprite.generated';
 
-// Visually hidden but RENDERED: `display:none` must not be used — some engines
-// resolve `<use>` against display:none subtrees inconsistently (symbols would
-// paint blank). Zero-size + overflow-hidden keeps the sprite out of layout
-// while staying a live paint source.
+// Hidden but RENDERED: never `display:none`, where some engines paint `<use>` symbols blank.
+// Zero-size + overflow-hidden keeps it out of layout yet a live paint source.
 const HIDDEN: React.CSSProperties = {
   position: 'absolute',
   width: 0,
@@ -27,12 +16,8 @@ const HIDDEN: React.CSSProperties = {
 };
 
 export function IconSprite(): React.JSX.Element {
-  // LOAD-BEARING, not a render optimisation: React 19 re-assigns
-  // `innerHTML` whenever the `dangerouslySetInnerHTML` PROP OBJECT identity
-  // changes (a reference check, no string comparison). An inline `{ __html }`
-  // is a fresh object every render, so any parent re-render would wipe and
-  // re-parse the sprite subtree. Memoised once ([] — the sprite is a module
-  // constant), React never touches the subtree after mount.
+  // LOAD-BEARING: React 19 re-assigns innerHTML whenever the `dangerouslySetInnerHTML` object
+  // identity changes, so an inline `{ __html }` would re-parse the sprite on every parent render.
   const html = useMemo(() => ({ __html: FILE_ICON_SPRITE }), []);
   return (
     <div

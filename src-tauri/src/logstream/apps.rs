@@ -1,36 +1,6 @@
-//! Dev-app logs as a log source: a file a process on this
-//! machine writes, or a container's `docker logs -f`, tailed into the hub as
-//! [`LogKind::App`] lines.
-//!
-//! This module is the **engine** only — it tails what it is handed. Deciding *whether* a
-//! file may be tailed (the pid has it open, or the user picked it in a dialog) and naming
-//! the stream is [`crate::procscan`]'s job; by the time a [`FileTailSpec`] exists the file
-//! has been validated and opened (`O_NOFOLLOW`, a regular file).
-//!
-//! # Lines
-//!
-//! `kind: "app"`, `source` = `<name> · <file basename>` / `<container> · docker` (chosen by
-//! the caller), `terminalId`/`agentId` null, `level` from [`super::classify_level`] (the
-//! structured-logger level column wins over keywords), `detail` = where it comes from
-//! (`<path> · pid <n>`, `docker logs -f <id> · <image>`). Raw, like a service stream.
-//!
-//! One `system` line opens a tail (`app log started · <source>`) and one closes it
-//! (`app log stopped · <source> — <reason>`), both with the stream's `source` so they land
-//! in it. **Wire text** — the UI may key off these prefixes; do not reword them.
-//!
-//! # Bounded, like background tasks
-//!
-//! The last [`APP_BACKFILL_LINES`] lines are backfilled (a file: from the file, through the
-//! task tails' [`TailFile`] reader; docker: `--tail 500`), then lines are admitted at most
-//! [`super::tasks::TASK_LINES_PER_SEC`] a second per tail with the drops reported. At most
-//! [`MAX_APP_TAILS`] tails at once.
-//!
-//! # When a tail ends
-//!
-//! A file tail stops when its process exits (the caller's liveness check, polled every
-//! [`APP_ALIVE_EVERY`] — a pid whose start time changed is a different process), when the
-//! file is removed, or on `logstream_untail`. A docker tail stops when `docker logs -f`
-//! exits — the container stopped — or on `logstream_untail` (the child is killed).
+//! Tails dev-app logs (a file a process writes, or `docker logs -f`) into the hub as
+//! [`LogKind::App`]; [`crate::procscan`] validates and opens the file first. The `app log
+//! started · …` / `app log stopped · …` system lines are wire text: never reword them.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -498,11 +468,8 @@ impl DockerFeed {
 mod tests {
     use super::*;
 
-    /// Windows, the file-tail path the app uses (`procscan::open_regular` → [`AppTails`]) against
-    /// ANOTHER process that holds the file open for writing — with `FileShare.Read | Delete`,
-    /// .NET's default writer sharing plus delete: its lines arrive live; a truncation is noticed
-    /// (NTFS reports the size through our handle at once); our handle does not stop the file
-    /// from being deleted, and the deletion ends the tail with "log file removed".
+    /// Another process holds the file with .NET's default `FileShare.Read | Delete`: lines arrive
+    /// live, truncation is noticed, and deleting the file ends the tail ("log file removed").
     #[cfg(windows)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn windows_a_file_another_process_appends_to_is_tailed_through_truncation_and_removal() {

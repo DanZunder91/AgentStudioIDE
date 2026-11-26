@@ -1,25 +1,6 @@
-/**
- * ContextMenu submenus — layer 5, the real-browser tier (testing-strategy §1, §7.5).
- *
- * The claim is a PIXEL claim: "the child surface sits to the right of its parent
- * item, top-aligned with it, and flips to the item's left when it would overflow
- * the viewport". jsdom cannot make that claim at all — it has no layout engine, so
- * every `getBoundingClientRect()` there is 0×0 and both placements collapse onto
- * (0, 0), where "right of the parent" and "left of the parent" are the same point
- * and every assertion is vacuously green.
- *
- * The jsdom tier still tests the arithmetic, by stubbing the two rects
- * (`ContextMenu.test.tsx` → "submenu geometry"). This file is where the numbers
- * come from the engine instead: real CSS (`contextMenu.css`'s padding, border and
- * `min-width`), a real measured surface, and the real `window.innerWidth` of the
- * suite's fixed 1280×800 viewport.
- *
- * App.css is imported for real because the surface is painted from theme
- * variables; without `:root` defining them the `var()` fallbacks change the box.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts \
- *        src/components/contextMenuSubmenu.browser.test.tsx`
- */
+/** Submenu placement in real pixels (testing-strategy §1, §7.5): right of the parent item,
+ * top-aligned, flipped left on overflow, in the fixed 1280×800 viewport (jsdom rects are 0×0).
+ * App.css is imported because its theme variables change the surface's box. */
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";

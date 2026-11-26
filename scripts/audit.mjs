@@ -1,61 +1,7 @@
 #!/usr/bin/env node
-/**
- * The dependency-vulnerability gate (part of `npm run verify`, run on its own as `npm run audit`).
- *
- * WHY THIS FILE EXISTS
- * --------------------
- * The gate used to be `npm audit --audit-level=high && cargo audit`. That
- * command has been RED continuously since the WebDriver/E2E tier landed,
- * because of one unfixable dev-only advisory (see WAIVERS below). A gate that
- * is permanently red is not a gate: it gets waived by hand every push, and the
- * hand that waives the known-unfixable finding also waives the NEW one sitting
- * next to it. That is a worse security posture than having no gate at all — so
- * the fix is not to lower the bar, it is to make the bar precise.
- *
- * THE POLICY (mirrors what `cargo audit` already does on the Rust side, where
- * ~19 unmaintained/unsound *warnings* are allowed while any true vulnerability
- * fails the run):
- *
- *   1. PRODUCTION TREE (`npm audit --omit=dev`) — zero tolerance. Any
- *      high/critical here fails, **even if the advisory id is waived below**.
- *      Waivers are scoped to the dev tree by construction; code that ships to
- *      users never gets one. (Enforced in `classify`: the prod scan does not
- *      consult the waiver list at all.)
- *   2. FULL TREE (`npm audit`, dev included) — every high/critical advisory id
- *      must appear in the WAIVERS list. An id that is not waived fails. A
- *      waived id prints as a loud, dated WAIVED line with its justification.
- *   3. RUST (`cargo audit --file src-tauri/Cargo.lock`) — run as-is and its
- *      exit code propagated. It already fails on vulnerabilities and merely
- *      warns on the allowed unmaintained/unsound set, so no counting or
- *      pattern-matching of its output happens here (the warning count moves
- *      whenever a Tauri/git2 dependency is bumped; asserting on it would be a
- *      second permanently-red gate).
- *   4. VENDORED C (`REVIEWED_VENDORED_C` + `classifyVendoredC`) — `cargo audit`
- *      reads `Cargo.lock` and knows only about *crates*. It has no idea that on
- *      macOS we also compile **libgit2 1.9.6** and **aws-lc 5.2.0** from bundled
- *      C source, so a libgit2 CVE would pass every gate in the Definition of
- *      Done — and libgit2 parses attacker-influenced data by design (`git_blame`
- *      runs against whatever repository the user opens). This part detects the
- *      vendored C versions and fails if any of them differs from a reviewed,
- *      dated entry. See the block above `REVIEWED_VENDORED_C` for the design.
- *
- * WHY KEY ON THE ADVISORY ID, NOT THE PACKAGE OR THE SEVERITY
- * -----------------------------------------------------------
- * A waiver is a statement about ONE known finding that a human read and
- * reasoned about. `"ignore brace-expansion"` would also silently swallow a
- * future *second* brace-expansion advisory — including a genuinely exploitable
- * one — and `"ignore high in dev"` would swallow everything. Keying on the
- * GHSA id means the gate goes red the moment anything new appears anywhere,
- * which is exactly the signal we want to keep alive.
- *
- * A WAIVER IS A DATED DECISION, NOT A PERMANENT EXEMPTION. Each entry carries a
- * `reviewBy`; past that date the gate prints an OVERDUE warning on every run
- * until someone re-reads it (see `EXPIRY_POLICY` for why overdue warns rather
- * than fails).
- *
- * Zero new dependencies on purpose: `child_process` plus the tools' own `--json`
- * output. This script has to run in CI before anything is built.
- */
+/** Dependency-vulnerability gate (`npm run audit`, in verify). Prod tree: zero high/critical, no
+ * waivers. Full tree: every high/critical GHSA id must be waived (dated; overdue warns). Rust:
+ * `cargo audit` verbatim. Vendored C: must match a reviewed entry. Zero dependencies. */
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -66,53 +12,20 @@ import process from "node:process";
 
 import { spawnSpec } from "./platform.mjs";
 
-/**
- * Severities that fail a gate. Matches the historical `--audit-level=high`
- * contract: moderate/low findings are reported for information but do not
- * block. Raising this is a policy change, not a tweak.
- */
+/** Moderate/low are reported, not blocking (`--audit-level=high`); raising this is policy. */
 const BLOCKING_SEVERITIES = new Set(["high", "critical"]);
 
-/**
- * What happens when a waiver's `reviewBy` date has passed.
- *
- * DECISION: "warn". An overdue waiver is a documentation debt, not
- * a change in the security posture — nothing about the dependency tree got
- * worse on the stroke of midnight. Failing on a calendar date would recreate
- * the exact failure this script exists to remove: a red gate that no code
- * change can turn green, which trains everyone to wave it through. So an
- * overdue waiver prints OVERDUE on every single run (and appears in the
- * summary), and the run still passes on the merits of the dependency tree.
- */
+/** Overdue warns, never fails: a calendar date can't make the tree worse, and a gate no code
+ * change can turn green gets waved through. OVERDUE prints on every run. */
 export const EXPIRY_POLICY = "warn";
 
-/**
- * Accepted, dated exceptions. ONE entry per advisory id. Adding an entry here
- * is a security decision: it needs the four fields below answered honestly, a
- * `reviewBy` no more than ~3 months out, and a reviewer who actually read the
- * advisory. Deleting an entry that no longer matches anything is mandatory
- * housekeeping — the gate reports stale entries so they don't accumulate.
- */
-// EMPTY. The five entries that used to live here (extract-zip x2, deepmerge-ts,
-// basic-ftp, braces) all came in through WebdriverIO 9; the move to WebdriverIO 10 (mocha 12,
-// @puppeteer/browsers 3) removed every one of those packages or moved it to a patched major,
-// so there was nothing left to waive. Their full text is in git history. An empty list is
-// the goal state: `npm audit` reports 0 findings of any severity in the full tree.
-// (npm once reported picomatch's GHSA-fc5q-39xc-vjpf — dev-only paths, no patched release — for
-// about a day, then stopped reporting it; it was never waived. If it comes back, it needs a full
-// entry here, not a quiet re-add.)
+/** Dated exceptions, ONE per advisory id; adding one is a security decision with its four fields
+ * answered, `reviewBy` ≤ ~3 months out and a reviewer who read it. Stale entries must be deleted.
+ * Empty is the goal state; a returning advisory needs a full entry, not a quiet re-add. */
 export const WAIVERS = [];
 
-/**
- * Pull the advisory id out of one `via` entry of an `npm audit --json` report.
- *
- * `via` is a mixed array: strings name another affected package (a transitive
- * path, carrying no advisory of its own) and objects are the actual advisory.
- * Prefer the GHSA id from `url` — it is the stable, human-checkable identity;
- * fall back to npm's numeric `source` when a report has no url.
- *
- * @returns {{id: string, severity: string, name: string, title: string, url: string} | null}
- */
+/** `via` strings name other packages; objects are advisories. Prefers the GHSA id from `url`,
+ * else npm's numeric `source`. */
 export function advisoryFromVia(via) {
   if (!via || typeof via !== "object") return null;
   const url = typeof via.url === "string" ? via.url : "";
@@ -132,21 +45,8 @@ export function advisoryFromVia(via) {
   };
 }
 
-/**
- * Collect the distinct advisories of an `npm audit --json` report.
- *
- * Deduplicates by id: the 22 high entries in the full tree are 22 paths to one
- * advisory, and a gate that says "22 problems" when there is one problem is a
- * gate nobody reads.
- *
- * @returns {{advisories: Map<string, object>, unattributedBlocking: number}}
- *   `unattributedBlocking` counts packages reported at a blocking severity whose
- *   `via` chain explains nothing — neither an advisory object of their own nor a
- *   named package that is itself in the report. That must never be silently
- *   ignored: it would be a finding the waiver logic cannot even name (it has no
- *   id to key on), so `classify` treats it as a hard failure. Counted per
- *   package, so one identifiable advisory can never mask an unidentifiable one.
- */
+/** Deduplicated by id (22 paths to one advisory is one problem). `unattributedBlocking` counts
+ * blocking packages whose `via` explains nothing: no id to waive, so `classify` fails on them. */
 export function collectAdvisories(report) {
   const advisories = new Map();
   const entries = Object.entries(report.vulnerabilities ?? {});
@@ -198,21 +98,8 @@ function payloadProblem(report, label) {
   return null;
 }
 
-/**
- * THE DECISION FUNCTION — pure, so it can be tested against literal fixtures
- * instead of against today's live advisory database (which changes under us).
- *
- * @param {object} args
- * @param {object} args.prodAudit  parsed `npm audit --json --omit=dev`
- * @param {object} args.devAudit   parsed `npm audit --json` (dev included)
- * @param {Array}  args.waivers    waiver records (defaults to WAIVERS)
- * @param {Date}   args.now        clock, injectable for tests
- * @returns {{fail: boolean, reasons: string[], prodReasons: string[], devReasons: string[],
- *            waived: object[], overdue: object[], stale: object[], notes: string[],
- *            prodBlocking: object[], devBlocking: object[]}}
- *   `reasons` is `prodReasons` followed by `devReasons`; the split exists so the
- *   summary can name the tier that failed instead of blaming the wrong one.
- */
+/** Pure, so it is tested on literal fixtures, not the live advisory DB. `reasons` = `prodReasons`
+ * then `devReasons`; the split lets the summary name the tier that failed. */
 export function classify({ prodAudit, devAudit, waivers = WAIVERS, now = new Date() } = {}) {
   // Split by tier so the summary can say honestly WHICH tier failed, rather
   // than one flat list that would mislabel a prod failure as a dev one.
@@ -269,10 +156,8 @@ export function classify({ prodAudit, devAudit, waivers = WAIVERS, now = new Dat
     BLOCKING_SEVERITIES.has(a.severity),
   );
   for (const a of devBlocking) {
-    // 🔴 A **retired** waiver does not waive. It is a record of a decision about a tree that no
-    // longer exists — the advisory was gone when it was retired — so if the advisory comes back,
-    // the tree changed and a human has to look again. Silently re-applying a justification nobody
-    // has re-read is exactly the "waiver as permanent exemption" this gate was rebuilt to prevent.
+    // A retired waiver does not waive: if its advisory returns, the tree changed and a human must
+    // look again.
     const waiver = waivers.find((w) => w.id === a.id && w.retired !== true);
     if (!waiver) {
       devReasons.push(
@@ -323,95 +208,16 @@ export function isOverdue(waiver, now) {
   return now.getTime() > due;
 }
 
-// ===========================================================================
-// PART 4 — THE C WE VENDOR (the blind spot `cargo audit` cannot see)
-// ===========================================================================
-/**
- * WHY THIS EXISTS
- * ---------------
- * `cargo audit` matches RustSec advisories against *crate* versions in
- * `Cargo.lock`. Four crates in our graph compile C/C++/assembly from bundled
- * source, and a CVE in any of that C is invisible to every gate we have:
- *
- *   libgit2-sys 0.18.7+1.9.6  -> libgit2 1.9.6      (C)      ships on macOS
- *   aws-lc-sys  0.43.0        -> aws-lc  5.2.0      (C + asm) ships on macOS
- *   ring        0.17.14       -> BoringSSL-derived  (C + asm) ships on macOS
- *   libz-sys    1.1.29        -> zlib    1.3.2      (C)      *fallback only* — see below
- *
- * That is uncomfortable specifically for libgit2, which parses
- * attacker-influenced data by design: `git_blame` walks history in whatever
- * repository the user opens, and "open a repo someone sent me" is a normal user
- * action. At the last review there was no known CVE for any of these versions
- * (OSV/GHSA queried — see each entry's `checked` field), so this check is about
- * the MECHANISM, not a live finding: it makes a silent version drift impossible.
- *
- * WHAT IS THE SOURCE OF TRUTH, AND WHY
- * ------------------------------------
- * `src-tauri/Cargo.lock` — the crate name + exact version — is the authority,
- * and the unpacked crate source is only corroboration. The reason is that
- * **crates.io releases are immutable**: `libgit2-sys 0.18.7+1.9.6` is one fixed
- * set of bytes forever, so pinning the crate version pins the exact C source we
- * compile, byte for byte. The lockfile is also committed, offline-readable, and
- * shows up in the diff of any change — the same properties that make a waiver's
- * `reviewBy` work. Nothing here queries a CVE database: the gate must run
- * offline and must not phone home. It forces a HUMAN re-check on change.
- *
- * On top of that we read the C version string out of the vendored headers when
- * the crate happens to be unpacked in the local cargo registry
- * (`LIBGIT2_VERSION`, `ZLIB_VERSION`, `AWSLC_VERSION_NUMBER_STRING`). That is
- * the human-readable label a reviewer needs in order to search OSV, and it
- * catches the one thing the crate version alone cannot: a `-sys` crate whose
- * `+build.metadata` lies about the C it carries. It is corroboration, never the
- * authority — a fresh CI checkout has no unpacked registry, and failing there
- * would be a permanently-red gate.
- *
- * WHY THE WATCH LIST IS DERIVED, NOT HAND-WRITTEN
- * ----------------------------------------------
- * A hand-written list of "the C we know about" cannot notice a *new* C library
- * arriving. So the set under review is computed from the lockfile: every crate
- * that depends on `cc` or `cmake` is a crate that runs a compiler at build time.
- * At the last review exactly 9 of 538 crates qualified, and any crate that
- * appears in that set without a reviewed entry FAILS the gate. That is the part
- * which makes this a control rather than a comment.
- *
- * KNOWN HOLE, STATED RATHER THAN PAPERED OVER
- * -------------------------------------------
- * `libz-sys 1.1.29` does NOT compile its bundled zlib 1.3.2 on macOS or Linux.
- * Read its `build.rs`: unless the target is MSVC/mingw or static linking is
- * forced, it runs a `-lz` smoke-compile and, if that succeeds, links the
- * **system** zlib instead. On a macOS build host that is the SDK's zlib (**1.2.12** at review) —
- * an older library than the bundled one, whose version is a property of the
- * build host and cannot be pinned by our lockfile at all. The runner therefore
- * PRINTS the host zlib version (informational, never blocking: failing on it
- * would turn the gate red on any machine with a different Xcode) while the
- * enforced check covers the bundled fallback that MSVC/mingw builds do compile.
- */
+// ===== PART 4 — THE C WE VENDOR (the blind spot `cargo audit` cannot see) =====
+/** Lockfile version is the authority (crates.io is immutable); offline, no CVE DB. Every cc/cmake
+ * dependent needs a reviewed entry. libz-sys links host zlib on macOS/Linux (printed only). */
 
-/**
- * Build-time crates whose presence in another crate's dependency list means
- * "this crate invokes a C/C++ compiler". `cc` is the compiler driver; `cmake`
- * drives an out-of-tree build (and itself depends on `cc`).
- */
+/** A dependency on these means the crate invokes a C/C++ compiler (`cmake` itself uses `cc`). */
 export const NATIVE_BUILD_MARKERS = ["cc", "cmake"];
 
-/**
- * Reviewed, dated inventory of every crate in the lockfile that compiles native
- * code. ONE entry per crate. The gate fails on any drift from these versions,
- * and on any native-code crate that has no entry here.
- *
- * Fields:
- *   crate/crateVersion — the lockfile identity; the authority (immutable on crates.io).
- *   library            — human label for the C actually being compiled.
- *   cVersion           — the upstream C version, or `null` when the crate carries
- *                        no separate upstream version string (then the crate
- *                        version IS the identity and only it is compared).
- *   probe              — where to corroborate `cVersion` inside the unpacked
- *                        crate: `{ file, macro }`, read as a C `#define`.
- *   ships              — is this C in the shipped macOS binary?
- *   reviewedOn/By      — when a human last looked, and in which review.
- *   checked            — what was actually checked. Not decoration: this is the
- *                        text the next reviewer diffs their own findings against.
- */
+/** ONE reviewed entry per native-code crate; any drift or unlisted crate fails. `cVersion` null:
+ * the crate version is the identity. `probe` reads a C `#define`; `checked` is what the next
+ * reviewer diffs against. */
 export const REVIEWED_VENDORED_C = [
   {
     crate: "libgit2-sys",
@@ -541,17 +347,8 @@ export const REVIEWED_VENDORED_C = [
   },
 ];
 
-/**
- * Split a `Cargo.lock` into its `[[package]]` records.
- *
- * A narrow reader rather than a TOML dependency on purpose: this script must run
- * in CI before anything is installed or built, and Cargo.lock is a
- * machine-generated file with a fixed shape (`name`, `version`, `source`,
- * `checksum`, and an optional `dependencies` array of `"name"` or
- * `"name version"` strings).
- *
- * @returns {{name: string, version: string, deps: string[]}[]}
- */
+/** A narrow reader, no TOML dependency: it must run before anything is installed, and Cargo.lock's
+ * shape is fixed. */
 export function parseCargoLockPackages(text) {
   if (typeof text !== "string") return [];
   const blocks = text.split(/(?:^|\n)\[\[package\]\]\n/).slice(1);
@@ -575,18 +372,8 @@ export function parseCargoLockPackages(text) {
   return packages;
 }
 
-/**
- * The crates that run a C/C++ compiler at build time: those depending on `cc`
- * or `cmake`. Derived from the lockfile so a NEW native-code dependency shows up
- * without anyone remembering to add it.
- *
- * Deliberately an over-approximation (it does not ask whether the crate is in
- * the macOS runtime graph, nor whether the dependency is a build-dependency).
- * Over-approximating costs one reviewed line per crate; under-approximating
- * costs a missed CVE feed.
- *
- * @returns {{name: string, version: string}[]} sorted by name, for stable output
- */
+/** Derived from the lockfile so new native code shows up unasked. Over-approximates on purpose:
+ * one reviewed line per crate beats a missed CVE feed. Sorted by name. */
 export function nativeCodeCrates(packages, markers = NATIVE_BUILD_MARKERS) {
   const marker = new Set(markers);
   return (Array.isArray(packages) ? packages : [])
@@ -595,11 +382,7 @@ export function nativeCodeCrates(packages, markers = NATIVE_BUILD_MARKERS) {
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
-/**
- * Read a C string `#define` (`#define NAME "value"`) out of header source.
- * Returns null when the macro is absent or is not a string literal — never a
- * guess, because a wrong version here is worse than an honest "unknown".
- */
+/** null when absent or not a string literal: a wrong version is worse than an honest unknown. */
 export function parseCMacroString(source, macro) {
   if (typeof source !== "string" || typeof macro !== "string" || macro === "") return null;
   const escaped = macro.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -607,11 +390,7 @@ export function parseCMacroString(source, macro) {
   return match ? match[1] : null;
 }
 
-/**
- * The libgit2 version encoded in `libgit2-sys`'s own version string. The `-sys`
- * convention is `<crate semver>+<vendored C version>`, so `0.18.7+1.9.6` means
- * libgit2 1.9.6. Used as a second, header-independent reading of the same fact.
- */
+/** `-sys` crates version as `<semver>+<C version>`: a header-independent reading of the fact. */
 export function versionFromBuildMetadata(crateVersion) {
   if (typeof crateVersion !== "string") return null;
   const plus = crateVersion.indexOf("+");
@@ -619,25 +398,8 @@ export function versionFromBuildMetadata(crateVersion) {
   return crateVersion.slice(plus + 1);
 }
 
-/**
- * THE DECISION FUNCTION for part 4 — pure, so it is tested against literal
- * fixtures instead of against whatever happens to be unpacked in the local
- * cargo registry today.
- *
- * @param {object} args
- * @param {Array}  args.detected  `{crate, crateVersion, cVersion, cVersionSource}` per
- *                                native-code crate found in the lockfile.
- * @param {Array}  args.reviewed  entries from `REVIEWED_VENDORED_C`.
- * @returns {{fail: boolean, reasons: string[], matched: object[], unverified: object[],
- *            absent: object[], notes: string[]}}
- *   `matched`    — crate version and C version both agree with the review.
- *   `unverified` — crate version agrees; the C version could not be read (no
- *                  unpacked crate source). Passes, loudly noted.
- *   `absent`     — a reviewed crate that is not in the lockfile at all: not
- *                  vendored in this configuration. Passes, reported, so a
- *                  removed dependency's stale entry gets cleaned up rather than
- *                  sitting there pretending to guard something.
- */
+/** Pure (tested on literals). `unverified`: crate matches, C version unreadable (passes, noted).
+ * `absent`: reviewed but not in the lockfile (passes, reported so stale entries get removed). */
 export function classifyVendoredC({ detected, reviewed } = {}) {
   const reasons = [];
   const notes = [];
@@ -713,10 +475,7 @@ export function classifyVendoredC({ detected, reviewed } = {}) {
   return { fail: reasons.length > 0, reasons, matched, unverified, absent, notes };
 }
 
-// ---------------------------------------------------------------------------
-// Runner. Everything below is I/O; the judgement lives in `classify` and
-// `classifyVendoredC` above.
-// ---------------------------------------------------------------------------
+// ---- Runner: everything below is I/O; the judgement is in `classify` and `classifyVendoredC`.
 
 /** Every `registry/src/<index>` directory cargo might have unpacked crates into. */
 function registrySourceRoots() {
@@ -733,12 +492,7 @@ function registrySourceRoots() {
   }
 }
 
-/**
- * Locate an unpacked crate. Resolved from the EXACT `<name>-<version>` directory
- * name, never a glob: a local registry can hold aws-lc-sys 0.40.0, 0.41.0 and 0.43.0
- * unpacked side by side, and a glob would happily read the version we are not
- * building.
- */
+/** Exact `<name>-<version>` dir, never a glob: several versions can be unpacked side by side. */
 function unpackedCrateDir(name, version, roots) {
   for (const root of roots) {
     const dir = path.join(root, `${name}-${version}`);
@@ -747,11 +501,7 @@ function unpackedCrateDir(name, version, roots) {
   return null;
 }
 
-/**
- * Build the `detected` list for `classifyVendoredC` from what is actually on
- * disk: the committed lockfile (authority) plus the unpacked crate sources
- * (corroboration, when present).
- */
+/** Lockfile (authority) plus unpacked crate sources (corroboration, when present). */
 function detectVendoredC(lockPath, reviewed) {
   let lockText;
   try {
@@ -823,12 +573,8 @@ function detectVendoredC(lockPath, reviewed) {
   return { error: null, detected, lockPackages: packages.length };
 }
 
-/**
- * The zlib the linker will actually pick on macOS/Linux (see the long comment
- * above `REVIEWED_VENDORED_C`). Informational ONLY: its version is a property of
- * the build host's SDK, so making the gate depend on it would turn it red on any
- * machine with a different Xcode — a permanently-red gate.
- */
+/** Informational only: it depends on the build host's SDK, so gating on it would be red on any
+ * machine with a different Xcode. */
 function detectSystemZlib() {
   const candidates = ["/usr/include/zlib.h"];
   const sdk = spawnSync("xcrun", ["--show-sdk-path"], { encoding: "utf8" });
@@ -859,12 +605,7 @@ const NPM = "npm";
 // wrong reason). 128MB is free unless it is actually needed.
 const MAX_BUFFER = 128 * 1024 * 1024;
 
-/**
- * Run one `npm audit --json` variant. npm exits NON-ZERO whenever it finds
- * anything, so the exit code carries no information we want — the JSON does.
- * A non-zero exit is therefore normal, and only an unparseable payload is a
- * crash.
- */
+/** npm exits non-zero whenever it finds anything, so only an unparseable payload is a crash. */
 function runNpmAudit(extraArgs, label) {
   const args = ["audit", "--json", ...extraArgs];
   const spec = spawnSpec(NPM, args);
@@ -940,10 +681,8 @@ function main() {
   for (const note of result.notes) console.log(`\n  [note] ${note}`);
   for (const reason of result.reasons) console.log(`\n  [FAIL] ${reason}`);
 
-  // --- 3. Rust. cargo audit already implements this exact policy (fails on
-  // vulnerabilities, warns on the allowed unmaintained/unsound set), so it is
-  // run verbatim and its verdict propagated. Nothing here counts its warnings:
-  // that number moves with every Tauri/git2 bump.
+  // --- 3. Rust: cargo audit already implements this policy, so its verdict is propagated verbatim.
+  // Its warnings are not counted: that number moves with every Tauri/git2 bump.
   console.log("\n  cargo audit (RustSec)  : running `cargo audit --file src-tauri/Cargo.lock` ...\n");
   const cargo = spawnSync("cargo", ["audit", "--file", "src-tauri/Cargo.lock"], {
     stdio: "inherit",

@@ -1,13 +1,6 @@
-//! The database tools after `db_connect`, hermetically.
-//!
-//! Two kinds of test, both without Docker or a network:
-//! * the pure parts — which connection a name means, the tree walk and search over an in-memory
-//!   tree, the caps and the table — against fixed inputs;
-//! * the tools end to end, through the real dispatcher, the real DB client (`db::open`,
-//!   `db::query`, `db::children`) and the real Redis engine, against a small RESP server in this
-//!   process. Redis because its driver speaks raw TCP: no HTTP proxy in the environment can sit
-//!   between the test and its server. It records every command it receives, which is what lets a
-//!   refusal be proven by **absence**: the write never reached the server.
+//! Hermetic DB tool tests: pure parts on fixed inputs, and end to end against an in-process RESP
+//! server (Redis speaks raw TCP, so no env proxy can intercept). It records every command, so a
+//! refusal is proven by absence.
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

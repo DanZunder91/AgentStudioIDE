@@ -1,12 +1,6 @@
-//! Running processes for the app picker (`syslog_apps`) and for PASSIVE simulator
-//! detection (`simctl` is never run to probe). Listing is `cfg`-gated (macOS: libc
-//! `proc_listallpids` + `proc_pidpath`; Linux: `/proc`); grouping/sorting is pure and
-//! tested on every OS.
-//! Windows lists Event Log providers instead (`eventlog::group_providers`), so
-//! [`list_processes`] stays empty there.
-//!
-//! The grouping key matches what the stream filters on: macOS `process ==` compares the
-//! executable's basename, Linux `_COMM=` the kernel's (15-byte) `comm`.
+//! Running processes for the app picker and PASSIVE simulator detection (never `simctl`).
+//! Listing is `cfg`-gated, grouping pure; empty on Windows (Event Log providers instead).
+//! The grouping key matches the stream filter: macOS executable basename, Linux 15-byte `comm`.
 
 use std::collections::BTreeMap;
 

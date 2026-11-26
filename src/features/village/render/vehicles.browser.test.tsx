@@ -1,12 +1,4 @@
-/**
- * Layer 5 — the City's traffic against a REAL 2D context in Chromium (render/vehicles.ts, engine/traffic.ts):
- * the depth order on the street read back as pixels (a far-lane bus in front of a near-sidewalk lamp, a
- * near-lane bus in front of a far-lane car, the far sidewalk's kiosk in front of a near-lane car), the
- * night's light (a headlamp's beam brightens the road ahead and not behind; a bus's windows are lit after
- * the grade), and the frame cost of the reference city with its traffic, at Fit and zoomed, day and night.
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/vehicles.browser.test.tsx`
- */
+/** Browser tier: `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 

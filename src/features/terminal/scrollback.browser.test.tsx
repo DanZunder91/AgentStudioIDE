@@ -1,38 +1,6 @@
-/**
- * Layer 5 — the mouse wheel reaches the scrollback even while an app holds the
- * mouse.
- *
- * ## The bug
- *
- * The symptom: scrolling up did not work in the app's terminal, most
- * noticeably while running claude agents that produce a lot of output.
- * Diagnosed in real Chromium (jsdom has no layout or real wheel, so it
- * cannot see any of this):
- *
- *   - A plain terminal scrolls its scrollback with the wheel — always did.
- *   - The moment a TUI enables mouse tracking (`claude` sends DECSET `?1002h` +
- *     `?1006h`), xterm hands every wheel event to the application and turns its
- *     own scrollback scrolling OFF. Wheel-up then moves nothing; the earlier
- *     output is in the buffer but unreachable.
- *
- * That second case is the bug.
- *
- * ## The fix (and why it does not break claude)
- *
- * On the NORMAL buffer the scrollback belongs to the terminal, so the wheel
- * scrolls it regardless of mouse mode (what kitty/iTerm2 do). On the ALTERNATE
- * buffer — where full-screen TUIs live — the wheel still goes to the app,
- * because that viewport is the app's. Both halves are asserted below: the fix
- * restores scrollback on the normal buffer, and the app still receives the
- * wheel on the alternate buffer.
- *
- * ## Why real CDP wheel events
- *
- * `userEvent.wheel` drives a real Chromium wheel through the input pipeline. A
- * synthetic `new WheelEvent()` is NOT enough here: xterm wraps events in VS
- * Code's `StandardWheelEvent`, which reads `wheelDeltaY` — absent on synthetic
- * events, so they scroll nothing and would make this suite lie.
- */
+/** Under mouse tracking xterm gives the wheel to the app; on the normal buffer it must still scroll
+ * scrollback, while the alternate buffer keeps it the app's. Real CDP wheel events: synthetic
+ * ones lack `wheelDeltaY`, which xterm's `StandardWheelEvent` reads. */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

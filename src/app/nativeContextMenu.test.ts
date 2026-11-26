@@ -1,18 +1,6 @@
-/**
- * nativeContextMenu.test — the window-level guard that keeps the webview's
- * default right-click menu (Back/Forward/Reload on WebKitGTK) out of the app.
- *
- * The observable contract is `defaultPrevented` on the event: `true` means the
- * native menu was suppressed, `false` means the webview may show its own. Every
- * test asserts THAT bit, because it is exactly what the engine reads.
- *
- * jsdom has no layout, so the selection-rectangle tests stub
- * `Range.prototype.getClientRects` with hand-placed rects (saved/restored around
- * every test) — the same geometry-stub approach as `find/cmTestKit`. What jsdom
- * cannot prove — that WebKitGTK really builds its menu from the hit test — is
- * the documented reason the module checks the click POINT against the rects
- * rather than the selection's mere existence.
- */
+/** The window-level guard against the webview's default right-click menu. Every test asserts
+ * `defaultPrevented`, the bit the engine reads. jsdom has no layout, so selection tests stub
+ * `Range.prototype.getClientRects` (restored around each test). */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -81,10 +69,8 @@ describe("suppressNativeContextMenu", () => {
   });
 
   it("never double-handles a click a feature menu already claimed", () => {
-    // The workspace tree / editor / agent rows preventDefault in their own
-    // handlers, which run before a window bubble listener. The guard must see
-    // `defaultPrevented` and step aside — pinned by counting preventDefault
-    // calls on the event itself: exactly one (the feature's), not two.
+    // Feature handlers preventDefault before a window bubble listener; the guard must step aside,
+    // so exactly one preventDefault call (the feature's), not two.
     const container = document.createElement("div");
     const row = document.createElement("div");
     container.appendChild(row);

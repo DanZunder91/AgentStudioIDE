@@ -1,21 +1,6 @@
-/**
- * ContextMenu — the reusable right-click menu primitive.
- *
- * jsdom has no layout engine, so `getBoundingClientRect` reports a zero-sized box
- * by default (no clamping fires). The clamp test stubs it to a real size and
- * leans on jsdom's default viewport (innerWidth 1024 × innerHeight 768) to prove
- * the surface shifts back from the right/bottom edge. The submenu geometry block
- * does the same, stubbing the parent ITEM and the surface separately so the
- * right/flip/clamp arithmetic is asserted numerically; the real pixels are
- * `contextMenuSubmenu.browser.test.tsx`'s job.
- *
- * Two traps this file exists to keep shut:
- *   - A submenu is a second `role="menu"` surface. If it were rendered anywhere
- *     but INSIDE the root's subtree, the global outside-click listener would read
- *     it as "outside" and opening it would instantly dismiss the whole menu.
- *   - Only the ROOT may hold the global mousedown/contextmenu/scroll/resize
- *     listeners — a second copy fires `onClose` twice per scroll.
- */
+/** jsdom rects are 0×0, so clamp and submenu geometry tests stub rects against the 1024×768
+ * viewport (real pixels: `contextMenuSubmenu.browser.test.tsx`). Guards: submenus render INSIDE
+ * the root (else outside-click dismisses), and only the root holds global listeners. */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -219,10 +204,7 @@ describe("ContextMenu — keyboard navigation", () => {
 
 // ── Submenus ────────────────────────────────────────────────────────────────
 
-/**
- * The shape the workspace tree's Git entry uses: a parent carrying `items`
- * instead of `onSelect`, sitting between ordinary rows and a separator.
- */
+/** The workspace tree's Git entry shape: a parent with `items`, between rows and a separator. */
 function gitMenu(opts: { onCompare?: () => void; onRevert?: () => void; disabled?: boolean } = {}): ContextMenuItem[] {
   return [
     { label: "Rename", onSelect: vi.fn() },
@@ -515,10 +497,7 @@ describe("ContextMenu — submenus", () => {
 });
 
 describe("ContextMenu — submenu geometry (stubbed rects; real pixels live in the browser tier)", () => {
-  /**
-   * A `DOMRect` cannot be spread — width/height/top/… are prototype accessors,
-   * so build the literal by hand, as the root clamp test does.
-   */
+  /** A `DOMRect` can't be spread (its fields are prototype accessors), so build the literal. */
   const rect = (left: number, top: number, width: number, height: number): DOMRect =>
     ({
       x: left,

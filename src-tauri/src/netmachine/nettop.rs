@@ -1,31 +1,12 @@
-//! Pure parser for macOS `/usr/bin/nettop` logging-mode CSV (compiled and tested on every OS).
-//!
-//! Shape (verified on macOS 26, `nettop -L 1 -n -x -J bytes_in,bytes_out,state`):
-//!
-//! ```text
-//! ,state,bytes_in,bytes_out,                          <- header: the column set, NOT the -J order
-//! exampled.400,,205000,110000,                        <- process row: `name.pid`, lifetime totals
-//! tcp4 10.0.0.5:50000<->198.51.100.7:443,Established,200000,100000,
-//! tcp6 ::1.8000<->*.*,Listen,,,                       <- IPv6 puts a `.` before the port
-//! quic4 10.0.0.5:50001<->198.51.100.8:443,,5000,10000,   <- QUIC is reported on its own
-//! udp4 *:*<->*:*,,,,                                  <- an unbound UDP socket (dropped)
-//! ```
-//!
-//! * The header is re-printed before every sample in streaming mode (`-L 0 -s 1`), which is how
-//!   [`NettopSplitter`] cuts the stream. With `-m udp` it has no `state` column, so columns are
-//!   located by name, never by position.
-//! * Process names may contain spaces and dots (`Example Brows.900`) and are truncated by
-//!   nettop; the pid is after the LAST dot.
-//! * Byte counters are cumulative. An empty counter (listeners, unbound sockets) means nettop
-//!   has no traffic on it, which is 0 — nettop always sees bytes.
+//! Pure parser for macOS `nettop -L … -J bytes_in,bytes_out,state` CSV. Columns are found by
+//! header name (`-m udp` has no `state`), the pid follows the LAST dot of `name.pid`, and an
+//! empty byte counter means 0. The header repeats before every sample in streaming mode.
 
 use super::{MachineProto, RawApp, RawConn};
 use std::net::IpAddr;
 
-/// Cuts a `-L 0` stream into samples. A sample is complete only when the NEXT header arrives:
-/// nettop's stdout is block-buffered on a pipe and a flush routinely ends in the middle of the
-/// following sample (measured: the first flush carried sample 1 + 28 lines of sample 2), so a
-/// quiet-gap heuristic would cut samples in half. Cost: one sample (~1 s) of latency.
+/// Cuts a `-L 0` stream into samples, complete only when the NEXT header arrives: piped stdout
+/// is block-buffered and flushes mid-sample, so a quiet-gap heuristic would split samples.
 #[derive(Default)]
 pub struct NettopSplitter {
     current: Vec<String>,

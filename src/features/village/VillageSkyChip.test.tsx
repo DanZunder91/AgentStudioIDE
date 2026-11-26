@@ -1,8 +1,3 @@
-/**
- * `VillageSkyChip` — the chip text (live / overridden / error "time only"), the glyph per
- * weather kind, the styling hooks, and the popover's two segmented selectors.
- */
-
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

@@ -25,10 +25,8 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // Don't watch Rust (Tauri's own watcher owns it), and — crucially — don't
-      // watch generated dirs. `coverage/` is rewritten (~20 HTML files) by every
-      // `test:coverage` run; without this Vite hot-reloads the live app dozens of
-      // times per test run. `dist/` and `.git/` likewise churn for no UI reason.
+      // Tauri's own watcher owns Rust. Generated dirs churn for no UI reason: `coverage/` alone
+      // would hot-reload the live app dozens of times per `test:coverage` run.
       ignored: [
         "**/src-tauri/**",
         "**/coverage/**",

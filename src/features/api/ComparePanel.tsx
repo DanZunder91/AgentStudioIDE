@@ -1,47 +1,6 @@
-/**
- * ComparePanel — the A/B compare surface for the HTTP lane. Two exports, both
- * rendered by ApiRequestView while
- * `compare.enabled`:
- *
- * - `CompareBar` — request B's method + URL pickers, drawn under the A bar.
- *   B travels with A's headers and body (the `CompareState` docblock's rule:
- *   the comparison varies only what this bar shows), so the bar SAYS so in a
- *   muted hint instead of pretending B is a full second request. Send routing
- *   lives in ApiRequestView — this bar only calls the `onSend` it was given
- *   (Cmd/Ctrl+Enter, matching the A bar's shortcut).
- *
- * - `ComparePanel` — the side-by-side response surface that REPLACES
- *   ResponsePanel while compare is on. Each pane echoes its side's method+url
- *   (A = the request's own, B = `compare.*`) so the reader never has to
- *   remember which wire is which, then renders that side's outcome: a calm
- *   error block, a muted placeholder, or — for any body at all — a
- *   `ResponseBody`, which owns BOTH the Formatted (JSON tree) and Raw views
- *   plus the one tools row above them (Raw/Formatted, Find, Copy). All
- *   compare state (both outcomes, the selected key, the sort toggle) lives in
- *   the store, so it survives a tab switch — `Pane` unmounts inactive tabs.
- *
- * Cross-highlight: clicking a key NAME in EITHER tree writes it to
- * `compare.selectedKey`; both panes hand the same value to `JsonView`, which
- * marks every occurrence (`data-selected="true"`) — the shared store field IS
- * the sync, there is no cross-pane messaging. Clicking the same key (or the
- * toolbar chip) clears it. On a new selection each pane scrolls its first
- * occurrence into view; the call is optional-chained because jsdom has no
- * `scrollIntoView`.
- *
- * Sort: `Sort keys` runs both parsed bodies through `sortJsonKeys` at render
- * time (recursive, arrays keep order, never mutates), so the two trees align
- * structurally. The raw response strings are untouched — toggling off restores
- * the wire order exactly.
- *
- * Response HEADERS are deliberately NOT rendered here: the single-mode panel
- * already has them behind its toggle, and the panes stay focused on comparing
- * bodies — half a pane's width is too narrow to carry a header list that is
- * noise most of the time.
- *
- * Display helpers (`statusClass` / `formatBody` / `parseJsonBody` /
- * `humanizeSize`) are the SAME functions ResponsePanel uses (responseFormat.ts)
- * so the two surfaces cannot drift on what "is JSON" or how a status buckets.
- */
+/** A/B compare for the HTTP lane: `CompareBar` (B's method + URL; B reuses A's headers and body)
+ * and `ComparePanel` (replaces ResponsePanel; bodies only). Compare state lives in the store
+ * (survives tab switches); the shared `compare.selectedKey` IS the cross-highlight sync. */
 
 import { useEffect, useRef } from "react";
 
@@ -58,12 +17,8 @@ import {
 } from "./responseFormat";
 import "./compare.css";
 
-/**
- * Request B's bar: method picker + URL input, rendered by ApiRequestView under
- * the A bar. Same `api-bar` chrome as the A bar; `compare-bar` is the seam for
- * compare-only tweaks. Null for an unknown requestId (same defensive style as
- * ApiRequestView — unreachable through the UI, keeps the view total).
- */
+/** Request B's bar (same `api-bar` chrome; `compare-bar` for compare-only tweaks). Null for an
+ * unknown requestId, keeping the view total. */
 export function CompareBar({
   requestId,
   onSend,
@@ -113,10 +68,7 @@ export function CompareBar({
   );
 }
 
-/**
- * The side-by-side A/B response surface. Null for an unknown requestId (same
- * defensive style as ApiRequestView).
- */
+/** The side-by-side A/B response surface; null for an unknown requestId. */
 export function ComparePanel({
   requestId,
 }: {
@@ -190,13 +142,8 @@ export function ComparePanel({
   );
 }
 
-/**
- * One side of the split: a head (side label, method+url echo, and — once that
- * side has landed — the status pill + stats) over THE scroll box for that
- * side's body. Split out so each body state is one `if` rather than a nest of
- * ternaries (the ResponsePanel precedent), and so each pane owns its own
- * scroll-into-view effect.
- */
+/** One side: head (label, method+url echo, status once landed) over the side's scroll box. Each
+ * pane owns its scroll-into-view effect. */
 function ComparePane({
   side,
   requestId,
@@ -221,11 +168,8 @@ function ComparePane({
 }): React.JSX.Element {
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  // On a new selection, bring this pane's FIRST occurrence into view — a long
-  // response may hold the pairable row hundreds of keys down. The ref is
-  // non-null by effect time (the body div renders unconditionally; React
-  // attaches refs before effects). `el` CAN be null — an error pane, or a tree
-  // without that key — and jsdom has no `scrollIntoView`, hence both `?.`s.
+  // Bring this pane's FIRST occurrence of a new selection into view. `el` can be null (error
+  // pane, key absent) and jsdom lacks `scrollIntoView`, hence both `?.`s.
   useEffect(() => {
     if (selectedKey === null) return;
     const el = bodyRef.current!.querySelector<HTMLElement>(
@@ -249,20 +193,14 @@ function ComparePane({
     );
   } else if (response !== null) {
     const parsed = parseJsonBody(response);
-    // Same component as the ordinary response panel, for EVERY body kind: search
-    // must work in both the A/B compare and the ordinary view, search+copy in the
-    // tree view too, and a pane whose tools appeared
-    // only for non-JSON — or moved when you flipped the view — would be its own
-    // bug. `ResponseBody` owns the Raw/Formatted switch, so each pane gets one.
+    // `ResponseBody` for EVERY body kind, so search, copy and the Raw/Formatted switch match the
+    // ordinary panel in each pane.
     body = (
       <ResponseBody
         text={formatBody(response)}
         testId={`compare-raw-${side}`}
         copyLabel={`response ${side.toUpperCase()}`}
-        // requestId + side is the pane's stable identity: the panes are fixed
-        // positions of ONE compare surface (A = the request's own wire, B =
-        // `compare.*`), so `side` survives every re-render and tab move while
-        // still keeping the two bars apart.
+        // requestId + side: stable across re-renders and tab moves, distinct per pane.
         findKey={`compare:${requestId}:${side}`}
         formatted={
           parsed.isJson

@@ -1,21 +1,5 @@
-/**
- * Tests for the export dialog (config bundles).
- *
- * ── Nothing is mocked ────────────────────────────────────────────────────────
- * The component takes every action as a prop and touches no store, no `invoke` and no
- * Tauri plugin, so there is no `vi.mock` here at all — the doubles are plain `vi.fn()`s.
- * `portabilityFormat` is deliberately NOT mocked either: every assertion below is on the
- * string a user would actually read, which is the only version of this test worth having
- * (a test against a stand-in only proves the test agrees with itself).
- *
- * ── The three assertions that matter most ────────────────────────────────────
- * 1. `structure` is selected on open. A default of `sealed` would mean the common case
- *    ships live credentials to Slack.
- * 2. Export stays disabled below `MIN_PASSPHRASE_LENGTH`, and the reason is on screen.
- * 3. Structure mode names the variables it is leaving behind.
- * All three were falsified — broken in the source, watched go red, restored — before this
- * file was called done.
- */
+/** Nothing is mocked: actions are props, and `portabilityFormat` runs for real, so assertions are
+ * on the text a user reads. `structure` must be the default: `sealed` ships live credentials. */
 
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";

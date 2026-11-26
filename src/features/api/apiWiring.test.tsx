@@ -1,15 +1,5 @@
-/**
- * Pane/TabBar wiring for the api-request tab.
- *
- * The API feature added a `TabView` case (Pane) and a kind-icon branch (TabBar);
- * this gates that wiring with the feature rather than leaving it to the pane
- * suite. Rendering one `<Pane>` exercises both: the header's `<TabBar>` draws the
- * strip tab (globe icon) and the body routes to the REAL `<ApiRequestView>`.
- *
- * The pane's other tab bodies (terminal/editor/activity) are mocked at the module
- * boundary exactly as `Pane.test.tsx` does — importing the real ones would drag
- * xterm / CodeMirror / Tauri into a jsdom render. The api view itself is real.
- */
+/** Pane/TabBar wiring for the api-request tab (`TabView` case + kind icon), gated with the
+ * feature. Other tab bodies are mocked as in `Pane.test.tsx`; the api view itself is real. */
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

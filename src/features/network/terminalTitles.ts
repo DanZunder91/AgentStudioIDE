@@ -1,15 +1,6 @@
-/**
- * The last title every IDE terminal had — so a flow from a terminal that has since closed is
- * labelled `gazelle (closed)`, not `closed terminal 0000eeee`.
- *
- * A closed tab is gone from the app store, taking its title with it, so the titles have to be
- * recorded WHILE the terminal is open. {@link watchTerminalTitles} follows the app store's
- * tabs/agents and keeps the newest title per terminal id in `networkStore.terminalTitles` (the
- * Network view's own store). It is started by the titlebar's Network button, which
- * is mounted for the app's whole life, and by the panel — reference-counted, so either can stop
- * without silencing the other. Kept for the app run only: a previous run's terminal ids were
- * never seen, and fall back to the short id.
- */
+/** Last title of every IDE terminal, so a closed terminal's flows read `gazelle (closed)`. Titles
+ * must be recorded while the tab is open (the app store drops them); watchers are ref-counted
+ * (titlebar button, panel). App-run only: a previous run's ids fall back to the short id. */
 
 import { useAppStore } from "../../app/store";
 import { sourceIndex } from "./networkSource";

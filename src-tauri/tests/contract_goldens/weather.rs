@@ -1,12 +1,6 @@
-//! **Agent Village — `village_weather`** (`src/features/village/villageTypes.ts`
-//! `WeatherWire`). Same rules as the parent file: the real production path, the typed
-//! struct serialised as Tauri would.
-//!
-//! | golden | produced by |
-//! |---|---|
-//! | `weather.json` (`WeatherWire` by scenario) | `weather::locate` (the embedded city table — no system tz file, so the place is the same on every OS) + `weather::parse_forecast` over the Open-Meteo-shaped bodies hand-written in `tests/fixtures/weather/`, fetched at `T0`: rain (Vancouver), clear (Madrid), snow (Oslo), storm (New York zone, Miami body), fog (London), and a sparse body with null temperature/wind and no sunrise/sunset (Sydney) |
-//!
-//! Nothing is normalised: every value is a pure function of the fixture and `T0`.
+//! Golden `weather.json` (`WeatherWire`): `weather::locate` (embedded table, same on every
+//! OS) + `weather::parse_forecast` over hand-written Open-Meteo bodies in
+//! `tests/fixtures/weather/` at `T0`, one per sky scenario. Nothing is normalised.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

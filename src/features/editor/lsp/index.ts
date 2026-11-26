@@ -1,9 +1,4 @@
-/**
- * Code intelligence (LSP) — public surface (M5).
- *
- * `EditorRegistry` calls `ensureClient` + `definitionNavigation` to wire the LSP
- * client into a Rust editor. The rest is exported for the bridge and for tests.
- */
+/** LSP public surface; `EditorRegistry` wires `ensureClient` + `definitionNavigation`. */
 
 export { ensureClient, resetClients } from "./client";
 export { definitionNavigation, goToDefinitionAt } from "./definition";

@@ -1,14 +1,6 @@
-//! `LspSupervisor` — the actor that owns every spawned language server.
-//!
-//! A thin **transport relay**, mirroring `SessionSupervisor`: one task
-//! owns `Map<ServerId, LspServer>`, driven by an mpsc command loop; a cheap-clone
-//! [`LspHandle`] is what the `#[tauri::command]`s talk to. It spawns servers over
-//! piped stdio, frames bytes both ways, and reaps them — and **never parses a single
-//! LSP message**. The JSON-RPC protocol lives in the JS `@codemirror/lsp-client`.
-//!
-//! Server→client is a per-server `Channel<String>` captured at start (deframed bodies
-//! as JSON strings); client→server is the low-frequency `lsp_send` command — the same
-//! "Channel out, command in" shape as `terminal_open`.
+//! `LspSupervisor`: the actor owning every language server (like `SessionSupervisor`).
+//! A transport relay: spawns over stdio, frames, reaps, and NEVER parses LSP (JSON-RPC lives in
+//! JS `@codemirror/lsp-client`). Server→client: a per-server `Channel`; client→server: `lsp_send`.
 
 pub mod commands;
 mod framing;
@@ -196,10 +188,8 @@ fn start_server(
         });
     };
 
-    // NOTE: `SystemProber` may run a blocking `rustup which` here. It is rare
-    // (once per start) and fast, and the Tauri runtime is multi-threaded, so it does
-    // not stall other work — the same blocking-in-the-actor pattern the supervisor
-    // uses for hook-settings IO.
+    // `SystemProber` may block on `rustup which`: rare (once per start), fast, and the
+    // runtime is multi-threaded, so it doesn't stall other work.
     match registry::detect_with(&spec, &*lsp.prober) {
         Detection::NotInstalled => Ok(LspStartInfo {
             server_id,
@@ -247,11 +237,8 @@ fn mint_server_id() -> String {
     ulid::Ulid::new().to_string()
 }
 
-/// The cwd to spawn the server in, from the request's `rootUri`.
-///
-/// The relay only needs a *directory to run in*; full `file://` ↔ path handling
-/// (percent-encoding, symlinks) lives in the JS workspace layer. We accept a
-/// plain path or a simple `file://` URI so either is safe to pass.
+/// The server's cwd from `rootUri` (a plain path or simple `file://` URI); full URI ↔ path
+/// handling lives in the JS workspace layer.
 fn path_from_root_uri(root_uri: &str) -> PathBuf {
     let Some(rest) = root_uri.strip_prefix("file://") else {
         return PathBuf::from(root_uri);

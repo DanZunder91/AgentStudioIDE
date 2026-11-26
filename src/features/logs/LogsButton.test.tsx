@@ -1,10 +1,3 @@
-/**
- * LogsButton — the titlebar toggle for the diagnostics-log overlay.
- *
- * Covers: it toggles the store's `visible`, reflects it via `aria-pressed`, and
- * renders NO entry-count badge however full the feed gets.
- */
-
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

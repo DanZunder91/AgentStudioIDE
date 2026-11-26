@@ -1,31 +1,6 @@
-/**
- * `DbResultSet` fixtures for the query console's tests.
- *
- * Data only, and deliberately **inputs, never expectations** — the same rule
- * `dbFixtures.ts` states for the engine descriptors (a test must not read its
- * expectation from the data under test): every string a user would read is written
- * out literally in the test beside the assertion, so corrupting a fixture can never
- * corrupt the expectation with it.
- *
- * Each fixture is here because it is a shape the grid has to survive rather than a
- * shape it would like:
- *   • `TRACKS_RESULT`   — the three cases the whole text protocol exists for, in one
- *                        result: a `null`, a `""`, and a whitespace-only value.
- *   • `KINDS_RESULT`    — one column per `DbCellKind`, so "kind drives rendering" is
- *                        checked against all seven and not just the two easy ones.
- *   • `TRUNCATED_RESULT`— `rows.length === rowLimit` **and** `truncated: true`.
- *   • `AT_LIMIT_RESULT` — `rows.length === rowLimit` and `truncated: false`: a table
- *                        that honestly holds exactly 500 rows. The pair pins that
- *                        truncation is read, never inferred.
- *   • `EMPTY_RESULT`    — 0 rows with real columns (a WHERE that matched nothing).
- *   • `WIDE_RESULT`     — 200 columns, the layout stress case.
- *   • `WIDGETS_RESULT`  — ONE row of very wide values: the shape that exposed a table
- *                        drawn 56px tall with the horizontal scrollbar lying across its
- *                        only row.
- *   • `AFFECTED_RESULT` / `MESSAGE_RESULT` — the two non-grid outcomes, the second
- *                        being a syntax error, which arrives as a *normal* result
- *                        carrying its statement rather than as a rejection.
- */
+/** DbResultSet INPUTS, never expectations: tests write user-visible strings literally. TRUNCATED vs
+ * AT_LIMIT pins that truncation is read, never inferred; MESSAGE_RESULT is a syntax error, which
+ * arrives as a normal result, not a rejection. */
 
 import type { DbResultSet } from "../types";
 
@@ -129,14 +104,7 @@ export const WIDE_RESULT: DbResultSet = {
   notice: null,
 };
 
-/**
- * `SELECT * FROM widgets` — one row, three columns, two of them far wider than any
- * pane. A realistic result shape, reduced to a fixture.
- *
- * A *single* row is the whole point: it is the case where a content-sized scroll box is
- * shortest, so the horizontal scrollbar (taken out of the content box) ate the only row
- * there was. Anything with ten rows hides the bug behind the other nine.
- */
+/** One row of very wide values: the case where the horizontal scrollbar covered the only row. */
 export const WIDGETS_RESULT: DbResultSet = {
   kind: "rows",
   statement: "SELECT * FROM widgets",
@@ -171,10 +139,7 @@ export const AFFECTED_RESULT: DbResultSet = {
   notice: "1 row was skipped by a trigger.",
 };
 
-/**
- * A syntax error. It is a `message` result, not a rejection: statements 1 and 2 of a
- * script must still show their rows when statement 3 fails.
- */
+/** A message result, not a rejection: statements 1 and 2 still show rows when 3 fails. */
 export const MESSAGE_RESULT: DbResultSet = {
   kind: "message",
   statement: "SELET 1",

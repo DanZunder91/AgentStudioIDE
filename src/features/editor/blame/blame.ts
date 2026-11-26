@@ -1,25 +1,12 @@
-/**
- * Blame — the pure logic behind the IntelliJ-style annotate gutter.
- *
- * Everything here is a pure function of its arguments (no DOM, no IPC, no CM6),
- * so the label rules, the run collapsing, the line clamping, and the popover
- * model are exhaustively unit-testable under jsdom. The CM6/DOM glue in
- * `blameGutter.ts` stays thin by consuming these.
- *
- * Locale note: the `locale` parameter exists for deterministic tests (which pass
- * "en-US"); production callers omit it, so dates render in the user's locale —
- * IntelliJ's "short local date" behavior.
- */
+/** Pure logic behind the annotate gutter (`blameGutter.ts` is the DOM glue). `locale` exists only
+ * for deterministic tests; production omits it so dates use the user's locale. */
 
 import type { BlameCommit, FileBlame } from "./blameIpc";
 
 /** What an uncommitted (or beyond-blame) line shows in the gutter, dimmed. */
 export const UNCOMMITTED_LABEL = "—"; // em dash
 
-/**
- * The author's LAST name — the final whitespace-separated token, IntelliJ-style
- * ("Max Turing" → "Turing"; a single-word author is returned as-is).
- */
+/** The final whitespace-separated token ("Max Turing" → "Turing"); one word is returned as is. */
 export function lastNameOf(author: string): string {
   const parts = author.split(/\s+/).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : "";
@@ -42,33 +29,22 @@ export function fullBlameDate(timeMs: number, locale?: string): string {
   });
 }
 
-/**
- * Which lines start a run — IntelliJ only labels the FIRST line of a consecutive
- * same-commit run. `flags[i]` is true iff `lines[i]` differs from its
- * predecessor (line 0's predecessor is taken to be `null`, so `flags[0]` is true
- * exactly when line 0 is committed).
- */
+/** `flags[i]` is true iff `lines[i]` differs from its predecessor (null before line 0); only a
+ * run's first line is labeled. */
 export function firstOfRunFlags(lines: (number | null)[]): boolean[] {
   return lines.map((v, i) => v !== (i === 0 ? null : lines[i - 1]));
 }
 
-/**
- * The commit owning document line `lineNumber` (1-based), or null for an
- * uncommitted line. CLAMPS both ways: a line beyond the blame (buffer grew, or
- * blame is stale) and a commit index outside `commits` both yield null — a
- * mismatch renders as "uncommitted", never a crash.
- */
+/** Clamps both ways: a line beyond the blame or a commit index outside `commits` gives null, so a
+ * stale blame renders as uncommitted rather than crashing. */
 export function commitForLine(blame: FileBlame, lineNumber: number): BlameCommit | null {
   const idx = blame.lines[lineNumber - 1];
   if (idx === null || idx === undefined) return null;
   return blame.commits[idx] ?? null;
 }
 
-/**
- * The gutter label for one line: "5/27/26 Turing" on the first line of a
- * committed run, "" on the run's continuation lines, and a dimmed em dash for an
- * uncommitted line (every one — a dash is a placeholder, not an annotation).
- */
+/** Date + last name on a run's first line, "" on its continuation, a dimmed dash on every
+ * uncommitted line. */
 export function gutterLabel(
   commit: BlameCommit | null,
   firstOfRun: boolean,
@@ -108,11 +84,7 @@ export function popoverModel(
   };
 }
 
-/**
- * The calm inline note for a rejected `git_blame` — "No git history" for a file
- * outside any repo, a generic note otherwise. Rust rejects with a plain string
- * (see `blameIpc.ts`), but an `Error` is tolerated too.
- */
+/** Rust rejects with a plain string (see `blameIpc.ts`); an `Error` is tolerated too. */
 export function blameErrorNote(err: unknown): string {
   const msg = typeof err === "string" ? err : err instanceof Error ? err.message : String(err);
   return /not in a git repository/i.test(msg) ? "No git history" : "Blame unavailable";

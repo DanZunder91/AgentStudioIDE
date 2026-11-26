@@ -1,47 +1,6 @@
-//! Redis and Valkey — the seventh and eighth engine rows.
-//!
-//! ## What makes this engine different from the other six
-//!
-//! Everything else here speaks a query language over a connection that holds state. Redis speaks
-//! **one command line at a time**, has no schema, no rows and no columns, and its reply is a
-//! [`Value`] tree rather than a result set. So this module is mostly two translations:
-//!
-//! * **text → command** ([`tokenize`]): shell-style quoting, because `SET greeting "hello world"`
-//!   is what a person types and `redis-cli` accepts. The prior art is
-//!   `src/features/api/curlParse.ts`, which is TypeScript — its *rules* are reused, not its code.
-//! * **reply → [`DbResultSet`]** ([`shape`]): a scalar becomes a one-cell grid, an array becomes
-//!   one row per element, and a status reply (`OK`) becomes a `message` result because it is an
-//!   acknowledgement rather than data. The lossy case — a nested array, which `XRANGE` returns —
-//!   is rendered as compact text **and named in the result's notice**, never collapsed silently.
-//!
-//! ## RESP2, deliberately
-//!
-//! `redis-rs` can negotiate RESP3 (`HELLO 3`), which would return `HGETALL` as a real map and let
-//! this file build a two-column field/value grid for free. It is not used, for one reason: RESP3
-//! needs Redis ≥ 6, and a `HELLO 3` against an older server (or one of the several forks and
-//! managed proxies that answer Redis's protocol) fails the *connection*, not the command. Trading
-//! "connects everywhere" for "nicer tables on one command family" is the wrong way round for an
-//! engine whose users include ElastiCache and every embedded fork. The consequence is honest and
-//! visible: a `HGETALL` renders as the flat field, value, field, value list the server sends.
-//!
-//! ## Read-only here is OURS, and the badge says so
-//!
-//! There is no session read-only mode to ask the server for, so read-only is a default-deny
-//! **allowlist of command names**, exactly like MongoDB's. Two rules beyond the allowlist,
-//! both about the same failure:
-//!
-//! * **`KEYS` is refused in BOTH modes.** On a production Redis it is O(N) and blocks the
-//!   single-threaded server for the whole scan — a read-only command that takes the database down.
-//!   The tree browses with cursored `SCAN` for the same reason.
-//! * **A short list is refused in EVERY mode** (`FLUSHALL`, `SHUTDOWN`, `DEBUG`, `EVAL`, …). There
-//!   is no console-shaped reason to run them and a very short path from running one to a bad
-//!   afternoon.
-//!
-//! ## The catalog is not the console
-//!
-//! [`RedisSession::children`] runs `SCAN`, `TYPE` and `INFO` itself, and those are not filtered by
-//! the allowlist above — the same split MongoDB's tree already makes. The allowlist governs what
-//! the *user's text* may do; the tree is our own code asking a bounded question.
+//! Redis and Valkey: shell-style command lines ([`tokenize`]) in, replies shaped into result sets
+//! ([`shape`]). RESP2 on purpose (RESP3's `HELLO 3` fails connections to old servers and forks).
+//! Read-only is our default-deny allowlist; `KEYS` and a short dangerous list are always refused.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -58,11 +17,7 @@ use crate::db::model::{DbEngineId, SslMode};
 use crate::db::result::{DbCellKind, DbColumn, DbResultKind, DbResultSet};
 use crate::db::tree::{DbGroup, DbNode, DbNodeKind, DbNodeRef};
 
-/// How many keys one expand of the **Keys** group lists.
-///
-/// A bound rather than "all of them": a real Redis holds millions of keys, the tree is a rail and
-/// the reply has to cross the IPC boundary. The group's sub-label says how many are shown so the
-/// number is never mistaken for the database's size — the row-cap discipline applied to the tree.
+/// Keys listed per expand of the Keys group: bounded for IPC; the sub-label shows the count shown.
 const KEY_PAGE: usize = 500;
 
 /// `SCAN COUNT` per round trip. Redis's own default is 10, which would need 50 round trips to fill
@@ -70,12 +25,8 @@ const KEY_PAGE: usize = 500;
 /// on a large one (COUNT is a hint about work done, not a limit on keys returned).
 const SCAN_COUNT: usize = 500;
 
-/// The engine, carrying its preset id.
-///
-/// Two descriptor rows (`redis`, `valkey`) share one driver because Valkey is Redis's protocol
-/// under a different name. The id is **data on the struct** rather than a constant in `spec()` —
-/// the earlier bug where a zero-sized `PostgresEngine` reported Aurora connections as
-/// plain PostgreSQL and served the wrong defaults.
+/// The engine, carrying its preset id so the `redis` and `valkey` rows (one driver) each report
+/// their own spec.
 pub struct RedisEngine {
     id: DbEngineId,
 }
@@ -85,11 +36,7 @@ impl RedisEngine {
         Self { id }
     }
 
-    /// What to dial, from a [`ResolvedConfig`].
-    ///
-    /// A raw URL wins over the fields (the dialog's *"Overrides settings above"*) and is
-    /// parsed by **redis-rs**, so the string the user pasted is the string that dials — including
-    /// `rediss://` and a `/0` database suffix.
+    /// What to dial. A raw URL wins and is parsed by redis-rs as pasted (`rediss://`, `/0` suffix).
     fn connection_info(cfg: &ResolvedConfig) -> Result<ConnectionInfo, DbError> {
         if cfg.ca_pem.is_some() {
             return Err(DbError::invalid_config(
@@ -100,10 +47,8 @@ impl RedisEngine {
         }
 
         if let Some(url) = cfg.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
-            // `IntoConnectionInfo` for `&str` is redis-rs's own parser, which understands
-            // `redis://`, `rediss://`, `redis+unix://` and the `/db` suffix. Its error text can
-            // echo the string — and the string can hold the password — so it is redacted, like
-            // every other message leaving this module.
+            // redis-rs's own parser (`redis://`, `rediss://`, `redis+unix://`, `/db`); its error
+            // can echo the password, so it is redacted.
             let info = redis::IntoConnectionInfo::into_connection_info(url).map_err(|e| {
                 DbError::invalid_config(format!("That connection string is not usable: {e}"))
                     .redacted(&config_secrets(cfg))
@@ -140,14 +85,8 @@ impl RedisEngine {
         Ok(info.set_redis_settings(redis))
     }
 
-    /// TCP or TLS, and how strict the TLS is.
-    ///
-    /// The engine descriptor offers `disable | require | verify-ca | verify-full` (there is no
-    /// opportunistic mode — Redis either speaks TLS on a port or it does not). `require` maps to
-    /// redis-rs's `insecure: true`, which is the honest reading of "encrypt but do not verify",
-    /// and the two verifying modes are **identical here**: rustls always checks the hostname, so
-    /// `verify-ca` errs stricter. Same documented limitation as ClickHouse, and erring stricter is
-    /// the safe direction.
+    /// TCP or TLS. `require` = redis-rs `insecure: true` (encrypt, do not verify); both verifying
+    /// modes are identical since rustls always checks the hostname, so `verify-ca` errs stricter.
     fn addr(cfg: &ResolvedConfig, host: &str) -> ConnectionAddr {
         let port = cfg.port_or_default();
         match cfg.ssl_mode {
@@ -168,23 +107,9 @@ impl RedisEngine {
     }
 }
 
-/// Apply the User and Password **fields** to a [`ConnectionInfo`] the URL override produced — but
-/// only where the string said nothing.
-///
-/// 🔴 **Same bug as the sqlx engines had, and it was worse here**: the URL branch of
-/// [`RedisEngine::connection_info`] returned early, so a `redis://` override discarded the User and
-/// Password fields **entirely**. The dialog says the URL *"overrides settings above"*, and a string
-/// that carries no `:password@` overrides nothing about the password — it is silent on the subject.
-/// A URL that does carry one keeps it, because the string in hand is better evidence than a field
-/// beside it (and by this point `db::substitute_url` has already put the resolved secret back into
-/// any `{{VAR}}`, so a reference counts as carrying one).
-///
-/// **The question is asked of redis-rs, not of [`crate::db::url::credential_of`]**, and that is a
-/// deliberate exception to "one parser answers one question": redis-rs is the parser that will
-/// *dial*, and it accepts strings our own grammar does not (`redis+unix://` has no row in
-/// `engine_for_scheme`). Asking the dialling parser is what guarantees the two answers cannot drift
-/// — which is the same reason the sqlx engines, whose driver keeps its password private, have to
-/// use ours.
+/// Apply the User/Password fields to a URL-built [`ConnectionInfo`] only where the string said
+/// nothing. Asks redis-rs, the parser that dials (it accepts `redis+unix://`, which ours does not),
+/// rather than [`crate::db::url::credential_of`].
 fn info_with_field_gaps_filled(cfg: &ResolvedConfig, info: ConnectionInfo) -> ConnectionInfo {
     let mut settings = info.redis_settings().clone();
     // An empty user stays UNSET rather than becoming `""` — the pre-6 `requirepass` shape, same as
@@ -212,10 +137,8 @@ impl DbEngine for RedisEngine {
         crate::tls::install_crypto_provider();
 
         let info = Self::connection_info(cfg)?;
-        // Read BEFORE `Client::open` consumes it. redis-rs has already resolved the `/N` suffix of a
-        // URL override into this number, so it is the database that will actually be SELECTed —
-        // which is not necessarily the Database field (`db::engine::dialled_database`). Recorded as
-        // the tree's label so the rail cannot claim `db0` while the connection sits on `db4`.
+        // Read before `Client::open` consumes it: redis-rs resolved any `/N` URL suffix, so this is
+        // the database actually SELECTed, and the tree labels it.
         let dialled_db = info.redis_settings().db();
         let client =
             Client::open(info).map_err(|e| map_redis_error(&e).redacted(&config_secrets(cfg)))?;
@@ -374,10 +297,8 @@ impl RedisSession {
                     DbNodeKind::Key,
                     false,
                 );
-                // The server's own word for the type, shown verbatim like every other engine's
-                // type name. No size: that needs a per-type command per key (`HLEN`, `LLEN`, …),
-                // which is a second pipeline for a sub-label, so a "hash · 3 fields" label is
-                // NOT delivered yet rather than guessed at.
+                // The server's own type name, verbatim. No size: that needs a per-type command per
+                // key.
                 match types.get(i) {
                     Some(t) if !t.is_empty() => node.with_sub_label(t.clone()),
                     _ => node,
@@ -513,11 +434,8 @@ fn config_secrets(cfg: &ResolvedConfig) -> Vec<&str> {
 
 /* ────────────────────────────── the command line ────────────────────────────── */
 
-/// The non-blank, non-comment lines of a buffer, in order.
-///
-/// `#` starts a comment because that is what `redis-cli` scripts and the fixture's own seed file
-/// use. There is no `;` splitting: `SET k "a;b"` is one command with a semicolon in its value, and
-/// splitting on it would corrupt data rather than merely misparse.
+/// The non-blank, non-`#`-comment lines of a buffer. No `;` splitting: `SET k "a;b"` is one
+/// command.
 pub fn command_lines(text: &str) -> Vec<String> {
     text.lines()
         .map(str::trim)
@@ -526,12 +444,8 @@ pub fn command_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// One command line → its tokens, with shell-style quoting.
-///
-/// The rules, which are `redis-cli`'s and `curlParse.ts`'s: whitespace separates; `'…'` is
-/// literal; `"…"` allows `\\` escapes; a backslash outside quotes escapes the next character. An
-/// unterminated quote is an **error**, not a silent best effort — `SET k "value` reaching the
-/// server as `SET k value` would store something the user did not type.
+/// One command line → tokens, `redis-cli` style: `'…'` literal, `"…"` with `\\` escapes, a bare
+/// backslash escapes the next char. An unterminated quote is an error, never a best effort.
 pub fn tokenize(line: &str) -> Result<Vec<String>, DbError> {
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -624,13 +538,8 @@ fn unterminated(quote: char) -> DbError {
 
 /* ────────────────────────────── the guardrails ────────────────────────────── */
 
-/// Commands refused in **every** mode, read-write included.
-///
-/// Not a safety guarantee — a read-write connection can still overwrite every key one `SET` at a
-/// time — but there is no console-shaped reason to run any of these, and a very short path from
-/// one keystroke to a destroyed database or a stopped server. `EVAL`/`SCRIPT` are here because a
-/// Lua script would bypass every name-based rule below it: an allowlist that can be handed
-/// arbitrary code to run is not an allowlist.
+/// Commands refused in every mode: no console reason to run them and a short path to disaster.
+/// `EVAL`/`SCRIPT` because Lua would bypass every name-based rule.
 const ALWAYS_REFUSED: &[&str] = &[
     "FLUSHALL",
     "FLUSHDB",
@@ -659,11 +568,7 @@ const ALWAYS_REFUSED: &[&str] = &[
     "SELECT",
 ];
 
-/// The read-only allowlist, default-deny.
-///
-/// Written out rather than derived from a "writes" list, because a denylist of write commands is a
-/// list someone forgets to update when Redis adds a command — and the failure mode of forgetting
-/// is a write that was supposed to be impossible.
+/// The read-only allowlist, default-deny: a write denylist would miss commands Redis adds later.
 const READ_ONLY_ALLOWED: &[&str] = &[
     "GET",
     "MGET",
@@ -762,11 +667,8 @@ const READ_ONLY_ALLOWED: &[&str] = &[
     "WAIT",
 ];
 
-/// Commands whose SECOND word is part of their identity (`CONFIG GET` vs `CONFIG SET`).
-///
-/// Without this, one rule would have to cover a container command's every subcommand, and
-/// `CONFIG SET` — the one that can turn off persistence or change `maxmemory-policy` — would be
-/// indistinguishable from the harmless `CONFIG GET`.
+/// Commands whose second word is part of their identity, so `CONFIG SET` is judged apart from
+/// `CONFIG GET`.
 const CONTAINER_COMMANDS: &[&str] = &[
     "CONFIG", "CLIENT", "CLUSTER", "COMMAND", "MEMORY", "OBJECT", "SCRIPT", "FUNCTION", "ACL",
     "LATENCY", "SLOWLOG", "XINFO", "XGROUP", "PUBSUB",
@@ -787,11 +689,8 @@ pub fn command_name(tokens: &[String]) -> String {
     head
 }
 
-/// `Some(refusal)` when this command must not run, in the mode the session is in.
-///
-/// Three rules, in the order that makes the *message* most useful: the always-refused list first
-/// (it is true regardless of read-only, so saying "turn read-only off" would be wrong advice),
-/// then `KEYS` (whose reason is performance and applies to both modes), then the allowlist.
+/// `Some(refusal)` when this command must not run in this mode. Order sets the message: always
+/// refused, then `KEYS` (performance, both modes), then the read-only allowlist.
 pub fn command_refusal(tokens: &[String], read_only: bool) -> Option<DbError> {
     let name = command_name(tokens);
     // A container command with no subcommand (`CONFIG` alone) is checked against the bare head
@@ -834,25 +733,12 @@ pub fn command_refusal(tokens: &[String], read_only: bool) -> Option<DbError> {
 
 /* ────────────────────────────── the reply ────────────────────────────── */
 
-/// A [`Value`] → one [`DbResultSet`].
-///
-/// The shape rules, and each is a decision:
-///
-/// * **A status reply (`OK`, `QUEUED`) is a `message`**, not a one-cell table. It acknowledges a
-///   command rather than answering a question, and `redis-cli` prints it the same way.
-/// * **A scalar is a one-row, one-column grid**, because the requirement is that data
-///   renders as a table, and because `null` (key absent) and `""` (key present, empty value) are
-///   different answers that only a grid's NULL chip distinguishes.
-/// * **An array is one row per element.** Flat arrays cover `LRANGE`/`SMEMBERS`/`HGETALL`/`SCAN`.
-/// * **A nested array is rendered as compact text and the notice says so** — `XRANGE` returns
-///   entry → [id, [field, value, …]], which two columns cannot hold. Put the loss in
-///   the output where the person reading the data will see it.
+/// A [`Value`] → one [`DbResultSet`]: `OK` is a `message`; a scalar a one-cell grid (so nil and
+/// `""` differ); an array one row per element; a nested array (`XRANGE`) compact text, named in
+/// the notice.
 pub fn shape(statement: &str, value: Value, row_limit: u32, duration_ms: u64) -> DbResultSet {
-    // 🔴 **`+OK` and ONLY `+OK` is an acknowledgement.** An earlier version sent every RESP simple
-    // string to a `message` result, and the live tier caught what that costs: `TYPE fixture:hash`
-    // answers `+hash`, which is *data* — the answer to a question the user asked — and it was
-    // rendering as prose instead of in the grid. `+PONG` is the same shape.
-    // `+OK` is Redis's universal "I did the thing" and is the one that genuinely is not data.
+    // Only `+OK` is an acknowledgement; other simple strings (`+hash` from `TYPE`, `+PONG`) are
+    // data.
     if let Value::Okay = value {
         return DbResultSet::message(statement, "OK", row_limit);
     }
@@ -953,12 +839,8 @@ fn type_name_of(value: &Value) -> &'static str {
     }
 }
 
-/// One value → `(contained a nested collection, the cell)`.
-///
-/// `Nil` is `None` — SQL NULL's slot, and the only thing that distinguishes "no such key" from a
-/// key holding the empty string. Non-UTF-8 bytes become `\x`-hex, the spelling the sqlx engines
-/// already use for `bytea`/`BLOB`, rather than lossy U+FFFD replacement: a Redis value is a byte
-/// string and a console that silently corrupts one is worse than one that shows hex.
+/// One value → `(contained a nested collection, cell)`. `Nil` is `None` (no such key); non-UTF-8
+/// becomes `\x` hex like the sqlx engines' `bytea`, never lossy U+FFFD.
 fn render(value: &Value) -> (bool, Option<String>) {
     match value {
         Value::Nil => (false, None),
@@ -1017,11 +899,7 @@ fn bytes_cell(bytes: &[u8]) -> String {
 
 /* ────────────────────────────── odds and ends ────────────────────────────── */
 
-/// The `db` index from the connection's `database` field.
-///
-/// Redis names databases by number, so `"maestro"` is not a database here — it is a typo the user
-/// should see, not a value to coerce to 0. An empty field is index 0, which is what every Redis
-/// client defaults to.
+/// The `db` index from the `database` field; a non-number is an error, not 0. Empty means 0.
 pub fn database_index(database: &str) -> Result<i64, DbError> {
     let t = database.trim();
     if t.is_empty() {
@@ -1042,11 +920,8 @@ pub fn database_index(database: &str) -> Result<i64, DbError> {
         })
 }
 
-/// The version line out of an `INFO server` block.
-///
-/// Valkey reports **both** `valkey_version` and a compatibility `redis_version`, so the fork's own
-/// field is read first — a Valkey server reporting itself as "Redis 7.2.4" would be a small lie in
-/// the one string whose job is to say what answered.
+/// The version from `INFO server`; Valkey's own `valkey_version` is read before its compatibility
+/// `redis_version`.
 pub fn server_version(info: &str, engine: DbEngineId) -> String {
     let fields: BTreeMap<&str, &str> = info
         .lines()
@@ -1068,12 +943,8 @@ pub fn server_version(info: &str, engine: DbEngineId) -> String {
     "Redis (version not reported)".to_string()
 }
 
-/// Whether the server refused the command (so it is a RESULT) as opposed to the connection or the
-/// protocol failing (so it is an ERROR).
-///
-/// The distinction is the `http_send` contract applied to Redis: a `WRONGTYPE`, an unknown command
-/// or a bad argument count is an answer, and the console must keep the session and show it beside
-/// whatever else ran. A broken socket is not an answer.
+/// Whether the server refused the command (a result, e.g. `WRONGTYPE`) rather than the connection
+/// or protocol failing (an error); the `http_send` contract.
 fn is_server_refusal(e: &redis::RedisError) -> bool {
     use redis::ErrorKind as K;
     // redis-rs 1.5's own spellings, read from `errors/redis_error.rs` rather than guessed: there is
@@ -1085,11 +956,8 @@ fn is_server_refusal(e: &redis::RedisError) -> bool {
     )
 }
 
-/// A driver error → our code and prose.
-///
-/// `AuthenticationFailed`/`InvalidClientConfig` are the two a user can act on directly, and IO is
-/// separated from protocol so "check the host and port" is never the advice for a server that
-/// answered and said no.
+/// A driver error → our code and prose; IO is kept apart from protocol so a server that answered
+/// is never told to check its host and port.
 pub fn map_redis_error(e: &redis::RedisError) -> DbError {
     use redis::ErrorKind as K;
     let detail = e.to_string();
@@ -1125,11 +993,8 @@ pub fn map_redis_error(e: &redis::RedisError) -> DbError {
                 )
             }
         }
-        // A replica refusing a write is a guardrail-shaped answer, so it keeps `blocked` — the
-        // code whose sentence is about a statement stopped before it ran. Redis's own words
-        // (`READONLY You can't write against a read only replica.`) are dropped rather than
-        // appended: `blocked` is the code whose detail the panel renders verbatim, and that is
-        // only safe while every one of them is prose we wrote (`DbError::blocked`).
+        // A replica refusing a write is `blocked`, which renders verbatim, so Redis's own words are
+        // dropped (see `DbError::blocked`).
         K::Server(redis::ServerErrorKind::ReadOnly) => DbError::blocked(
             "This server is a replica, and a replica refuses every write. Point this connection \
              at the primary if you mean to write — no setting in this app can change a replica's \
@@ -1393,10 +1258,7 @@ mod tests {
 
     #[test]
     fn a_simple_string_that_is_not_ok_is_data_and_goes_in_the_grid() {
-        // 🔴 Found by the live tier, not by this file: `TYPE fixture:hash` answers with the RESP
-        // simple string `+hash`, and an earlier version rendered every simple string as prose — so
-        // the answer to a question the user asked appeared as a notice instead of in the table.
-        // `+OK` is the acknowledgement; `+hash` and `+PONG` are answers.
+        // `+OK` is the acknowledgement; `+hash` and `+PONG` are answers and belong in the table.
         let typed = shape(
             "TYPE fixture:hash",
             Value::SimpleString("hash".into()),
@@ -1574,13 +1436,8 @@ mod tests {
         assert_eq!(info.redis_settings().db(), 4);
     }
 
-    /// 🔴 **The dropped-password bug — and it was at its worst here.** The URL branch returned
-    /// early, so a `redis://` override discarded the Password field *entirely*: the string overrode
-    /// a setting it had said nothing about.
-    ///
-    /// Every row of the negative control matters. A URL that carries `:pw@` keeps its
-    /// own password, proved by making the field's value different and watching the URL's survive —
-    /// without that, an implementation that simply always applied the field would pass.
+    /// Negative control: a URL carrying `:pw@` keeps its own password over a different field value,
+    /// or an always-apply implementation would pass.
     #[test]
     fn a_url_that_carries_no_password_still_takes_the_one_typed_beside_it() {
         let mut c = cfg(); // password `s3cret-pw`, no user (the `requirepass` shape)
@@ -1697,13 +1554,8 @@ mod tests {
         assert!(is_server_refusal(&e), "a refusal is a RESULT, not an error");
     }
 
-    /// The sibling of the test above, and the contrast is the point: a `WRONGTYPE` keeps the
-    /// server's words because `invalid-statement` is about the command the user typed, while a
-    /// replica's `READONLY` does not, because `blocked` is a code whose detail the panel renders
-    /// and which therefore carries our prose only (`DbError::blocked`).
-    ///
-    /// Redis's own sentence is `READONLY You can't write against a read only replica.` — true, and
-    /// it names no way out. Ours does, and it is honest that the way out is not a setting here.
+    /// `WRONGTYPE` keeps the server's words (`invalid-statement`); a replica's `READONLY` does not
+    /// (`blocked` renders verbatim, so our prose only).
     #[test]
     fn a_replica_refusal_says_what_to_do_and_keeps_none_of_the_servers_text() {
         let e: redis::RedisError = (

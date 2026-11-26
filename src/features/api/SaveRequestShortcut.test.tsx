@@ -1,11 +1,3 @@
-/**
- * SaveRequestShortcut — Cmd/Ctrl+S saves the focused pane's active API request
- * into Collections. `apiStoreIpc` is mocked (persist crosses Tauri). Under test: the
- * keydown routes by active-tab kind — a renamed tab saves straight to Collections, a
- * default-titled tab opens the name dialog, a non-API (or absent) tab is a no-op, and
- * an already-handled event (a focused editor's file-save) is skipped.
- */
-
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

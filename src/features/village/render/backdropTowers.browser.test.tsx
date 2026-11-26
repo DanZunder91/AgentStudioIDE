@@ -1,27 +1,6 @@
-/**
- * Layer 5 — the City's towers, the HIGH layer of its Tokyo backdrop (the buildings behind were too
- * small, so towers and big lit buildings by night and by day; then option "E": the towers, the neon
- * canyon and the yokochō shops in front, open sky between), against a REAL 2D context in Chromium.
- *
- * The jsdom suite (backdropTowers.test.ts) proves the layout, the rects and a raster of them; only real
- * pixels can prove what the canvas and the real pipeline make of them:
- *   - the layer alone on a clear canvas: each column's first opaque pixel is `faceAt`, and the face is
- *     opaque down to the street; a pan moves every pixel by exactly the pan, a zoom keeps each world
- *     pixel's colour, and a second paint is the same paint;
- *   - in the real Tokyo backdrop (`paintCityBackdrop`), Fuji's snow cap is pixel for pixel what it is
- *     with the towers' paint stubbed out, in cities of 1–12 floors;
- *   - in the real night pass (`paintCityNight`, the real `fillLit`), nothing at noon; at night,
- *     every lit pixel on (or a beacon's glow at) a tower's face — never on the haze (but in the open sky,
- *     where there is none), the canyon or the shops in front, a landmark, or a building;
- *   - in the real frame (VillageView, Tokyo), the culling behind the world's buildings is invisible:
- *     through every building the frame is the same with the towers as with them stubbed out;
- *
- * "Without the towers" is always the SAME Tokyo frame with this layer's paint (or lights) stubbed out —
- * never another zone's frame, which would lose the landmarks, the canyon and the shops too.
- *   - and the layer's cost at Fit (logged; a loose bound so a busy machine cannot flake it).
- *
- * Run: `npx vitest run --config vitest.browser.config.ts src/features/village/render/backdropTowers.browser.test.tsx`
- */
+/** Real pixels for the towers (HIGH) layer. "Without the towers" is always the SAME Tokyo frame
+ * with this layer stubbed out, never another zone's (which would lose the landmarks too).
+ * Run with `npx vitest run --config vitest.browser.config.ts <this file>`. */
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -86,10 +65,7 @@ function sceneOf(ctx: CanvasRenderingContext2D, world: World, amb: Ambience | un
   return { ctx, cam, world, view, amb, horizon: horizonOf(world), timeMs: 0, x0: -Math.round(cam.ox) / cam.zoom, x1: (view.w - Math.round(cam.ox)) / cam.zoom };
 }
 
-/**
- * Run `f` with this layer's day pass (`paint`) and/or its lights (`paintLights`) stubbed out — the same
- * Tokyo frame without the towers — and put them back.
- */
+/** Run `f` with this layer's `paint` and/or `paintLights` stubbed out, then put them back. */
 function without<T>(parts: { paint?: boolean; lights?: boolean }, f: () => T): T {
   const { paint, paintLights } = TOWERS;
   if (parts.paint) TOWERS.paint = () => {};

@@ -1,110 +1,6 @@
-/**
- * Agent Village — the City's TOWERS: HIGH-RISES standing up out of the haze, far behind the street — the
- * Shinjuku / Marunouchi / Shiodome skyline seen from across the city.
- *
- * At Fit in Tokyo, with only a strip of pale blocks a quarter as tall as a four-floor gazelle for a far
- * skyline, the sky behind the street is almost empty; the backdrop brings towers and big lit buildings
- * by night and by day. This layer answers the size: it gives the city BIG buildings behind it — these
- * towers, then the neon canyon (render/backdropCanyon.ts), then the yokochō shops
- * (render/backdropShops.ts) in front, with open sky between their clusters. The towers are part of the
- * City's Tokyo
- * backdrop (render/city.ts `backdropOf`: the Tokyo street theme paints them, any other city the haze
- * alone). It is the HIGH layer (render/backdrop.ts): painted after the clouds and before Tokyo Tower, the
- * Skytree and the classic haze, so its feet stand in the haze — or, in the open sky between clusters
- * (`airSpans`), on the street itself — and the landmarks' towers, the canyon and the shops stand in
- * front of it.
- *
- * BIG (sized against the sky alone, every tower would stand lower than a five-floor gazelle and read as
- * clutter, not a skyline — so a few big buildings rather than many): FEW, BIG skyscrapers, sized against the world's tallest building, rising past the
- * world's top into the open sky Fit shows over it.
- *
- * THE LAYOUT is world-locked, like the haze's (`forEachSkylineBlock`): the world is cut into fixed
- * CHUNKS of `CHUNK` px, and each chunk holds one loose CLUSTER of 0–2 towers — often none, open sky —
- * placed from a hash of the chunk's index alone, at least `MARGIN` in from either end, so two clusters
- * always have sky between them and a pan or a zoom never re-rolls a tower. Inside a cluster, towers
- * stand a few px apart or overlap a little, one in front of the other (the nearer a shade darker: aerial
- * perspective), around a DISTRICT height — a Shinjuku cluster is tall, a Shiodome one lower: one of them
- * stands at the district's height, 1.3–1.8× the world's TALLEST building's height over the street in
- * whole percents, the other at 62–100 % of it:
- *   - so the tallest rise well over that roof, and every tower stays at least 2 tiles over the haze's
- *     tallest block (`skylineMax`);
- *   - widths 5–10 tiles, never wider than 0.6 of the height (a low city's would be squat warehouses).
- *
- * UNDER THE SKYTREE (no high-rise stands taller than the Skytree, Japan's tallest structure): no
- * tower — its mast or tank included — rises over `UNDER_SKYTREE` (0.9) of the city's Skytree as
- * render/landmarks.ts places it (`capOf`, read, never assumed). Where the rule's tallest would rise
- * over that cap, the whole range of heights is drawn down into it (`heightOf`), so the towers keep
- * their spread rather than all stopping at one roofline; a mast that still would is scaled under it,
- * keeping its kind. In the reference city (gazelle 416 px, the Skytree 576) that caps them at
- * 518 px; in a tall one, whose Skytree's tip stops 5 tiles over the world's top, it keeps them inside
- * Fit's frame. With no Skytree (no landmarks), the rule above alone.
- *
- * THE SIGNATURE skyscraper (a bigger building of this kind behind the tallest, such as gazelle): one per
- * World, centred behind its tallest building, 0.55 of its width (never under 5 tiles), 1.8× its height
- * or 0.9× the Skytree, the lower — so a good part of it stands over that roof (102 px over the reference
- * city's gazelle, 25 %) — a twin, a setback or a mast by a hash of where the building
- * stands, its crown band lit faintly at night; no cluster's tower stands within `SIGNATURE_SKY` of it. A
- * function of the World alone (`signatureOf`), world-locked like the rest.
- *
- * The layout is built once per World (the signature) and chunk by chunk (memoised), and read by `paint`,
- * `paintLights` and `faceAt` alike, so the face the stars hide behind is exactly what is painted.
- *
- * SIX SILHOUETTES (`TOWER_KINDS`), one per tower by hash: a flat-top glass slab (a water tank or a plant
- * room on its roof); a stepped setback crown (solid machine floors on a glass shaft); twin glass tops on
- * a shared shaft, a notch of sky between them (the Metropolitan Government Building); a slanted roof, the
- * glass running up into it; a helipad (a pale deck, a pale "H" on a dark panel); and an antenna mast
- * with a red light at its tip. Each is a few column PARTS — `[x0, x1, top]`, a rect from `top` down to
- * the horizon — merged into one disjoint outline (`envelope`): the silhouette is one fill a part, and
- * `faceAt` is a lookup in it. Its GLASS says, column by column, where the grid starts (under a solid
- * crown, a parapet, a notch of sky).
- *
- * LANDMARKS: this layer stands in front of Fuji only, so no roof — mast and tank included — rises into
- * Fuji's snow cap (`roofLimit(…, ["far"])`: landmarks are never hidden). A tower that would becomes a
- * setback (no mast, no tank) lowered under the cap, never below the haze clearance; where even that
- * would rise into it, it is not built at all. The signature skyscraper is capped the same way but
- * never left out (no clearance floor: behind its building at worst). Tokyo Tower and the Skytree
- * stand in front of this layer, so nothing of it can hide them.
- *
- * BY DAY: glass curtain walls in cool blue-grey — lighter and bluer than the world's own buildings, a
- * little darker than the sky — as a glass-coloured outline with the FRAME laid over it: a 1-px mullion
- * between every two pane columns and the floor lines across, from the tower's glass down (render/city.ts
- * `paneColumns`: columns + floors rects a tower, never a rect per window); parapets, a lighter edge on
- * the sun's side (left in the morning, right from noon), darker machine floors in the crowns. The colours
- * are the DAY colours turned as the haze's own colour is turned through the day (`paletteOf`: a dusk
- * lilac, a night navy), so the towers stand in the haze at every hour; the shared grade goes over both.
- * Nothing is painted where it cannot show: below a tower's COVER — a nearer tower of its cluster, or a
- * building of the world, which the frame paints over the backdrop (a detail a roof crosses keeps what is
- * above it; a 1–2 px floor line it crosses goes, at most a px of it) — nor its floor lines below the haze's
- * tallest block (only its mullions reach on down to the shortest's top, below which only the haze's
- * 1-px slits show) — except in the open sky between clusters (empty space left between them), where no
- * haze stands in front and all of a tower shows, its grid down to the street. Below `PANE_ZOOM` the
- * panes would be a 1-px checkerboard: the mullions stay at the walls only and every other floor line
- * goes.
- *
- * BY NIGHT (`paintLights`, after the grade, every light through `fillLit`) — CALM (zoomed ×2 into a City
- * at night, these towers' floor-wide lit bars beside the neon looked overloaded; the towers are the
- * farthest layer, the dimmest): single WINDOWS, a 2×2-px light every third pane of a
- * floor, an eighth of them lit at full night (big towers have many windows: few lit keep the night
- * calm), each at its own fixed threshold (the `windowLit` idiom) weighed by its floor's occupancy
- * (`BUSY`: some floors dark, some busy), so as `lit` rises the same windows come on first every evening;
- * a dim warm mostly, some cool white, at alpha 0.35–0.55 — under the apartments, the canyon and the shops
- * in front. One tower in four wears a faint crown band in cool white or pale blue (the signature always),
- * and red aviation lights blink on every roof and mast (`AVIATION`, `aviationOn`), each light on its own
- * phase. A light falls only on glass that shows — above the haze, or down to the street in the open sky:
- * a nearer tower or a building cuts it here; the haze, the canyon, the shops and the landmarks in
- * `fillLit`.
- *
- * WEATHER: far things fade first — the layer is painted at the alpha landmarks.ts gives its "tower"
- * layer in each weather (`SEEN`, copied: it is not exported there), its lights at least 0.6 of that.
- *
- * COST — Chromium, the reference city at Fit, 1280×800 @2x (zoom 1), ≈ 12 towers in view: by day ≈ 840
- * rects (the open sky's floor lines among them), 0.32–0.35 ms on a quiet machine — most of it the fill
- * AREA of big glass faces (≈ 380k px²), the JS 0.05 ms; at night ≈ 700 lit windows, ≈ 0.1 ms of its own
- * (a hash a window, dark floors skipped), ≈ 0.3–0.35 ms through a cutter of the haze and the canyon's and
- * shops' faces. At 1280×800 @1x (zoom 9/16) ≈ 0.17 ms by day; zoomed ×2 on the street 0.04 ms
- * (backdropTowers.browser.test.tsx measures them). A frame walks only the chunks in view; each chunk's
- * towers are built once per World.
- */
+/** The HIGH backdrop layer (render/backdrop.ts): few, BIG towers out of the haze, world-locked in
+ * fixed `CHUNK`s, capped under the Skytree (`capOf`) and Fuji's snow cap (`roofLimit`), plus one
+ * signature tower behind the tallest building. Night stays calm: sparse windows, the dimmest. */
 
 import { CITY_DAY, citySky } from "../engine/ambience";
 import { TILE, type Ambience, type CityBuilding, type CityInfo, type WeatherKind, type World } from "../villageTypes";
@@ -129,11 +25,8 @@ export interface TowerTint {
   crown: string;
 }
 
-/**
- * The DAY colours. Three tints of cool blue-grey glass, farthest (lightest, bluest — aerial perspective)
- * first: a cluster's nearer towers take the darker ones. All lighter and bluer than the world's own
- * buildings, darker than the sky they stand in; the grade turns them to dusk and night.
- */
+/** DAY colours: three blue-grey glass tints, farthest (lightest, bluest) first; nearer towers take
+ * darker ones. Lighter than the world's buildings, darker than the sky; the grade does night. */
 export const TOWER = {
   tints: [
     { frame: "#a8bace", glass: "#8ea5be", edge: "#c3d1e0", crown: "#98abc1" },
@@ -159,12 +52,8 @@ export const TOWER_LIT = {
   crown: ["#f2f7ff", "#bfe2ff"],
 } as const;
 
-/**
- * The lit windows: one window every `WINDOW` px across a floor (between the mullions: every third pane of
- * a fine grid or fins, one to a ribbon pane), a 2×2-px light in it; the share of windows lit is
- * `WINDOWS_LIT` of the far skyline's `lit` — an eighth at full night — and their alpha 0.35–0.55: the
- * towers are the farthest layer, dimmer than the apartments, the canyon and the shops in front.
- */
+/** One window every `WINDOW` px across a floor, a 2×2-px light; `WINDOWS_LIT` of the skyline's
+ * `lit` (an eighth at full night), alpha 0.35–0.55: the farthest, dimmest layer. */
 const WINDOW = 9;
 const WINDOWS_LIT = 0.3;
 /** A floor's occupancy, ×the mean share, by a hash of the floor: three floors in ten dark, the rest 0.8–2.2× (the mean is 1). */
@@ -175,15 +64,9 @@ type Palette = { tints: readonly TowerTint[] } & Record<Exclude<Ink, "crown" | "
 
 const rgbOf = (c: string): number[] => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
 
-/**
- * The colours to paint with this frame: the DAY colours, each channel scaled as the haze's own colour is
- * now against its day colour (`citySky(amb).skyline.block` / `CITY_DAY.skyline`). The haze is painted in
- * colours of its own through the day — a dusk lilac, a night navy — which the grade then goes over; the
- * towers stand in that haze, so they take the same turn, keeping their own offsets from it: lighter
- * frames, darker glass. Through the plain day the haze is its day colour, the scale 1, and the towers
- * exactly `TOWER`. (No channel ever passes 255: the haze is never more than 1.04 of its day colour in a
- * channel, the lightest ink's brightest channel (239) never past 249 — the tests sweep the clock in every weather.)
- */
+/** DAY colours scaled per channel as the haze's colour is now vs its day colour, so the towers turn
+ * with the haze they stand in (exactly `TOWER` by day). No channel passes 255; the tests sweep the
+ * clock in every weather. */
 function paletteOf(amb: Ambience | undefined): Palette {
   const look = citySky(amb);
   const day = rgbOf(CITY_DAY.skyline);
@@ -217,18 +100,13 @@ export const MARGIN = 2 * TILE;
 const COUNTS = [0, 0, 1, 1, 1, 1, 2, 2] as const;
 /** World px from one tower to the next in a cluster: negative = overlapping, one in front of the other. */
 const GAPS = [-22, -14, -8, 2, 3, 5, 8] as const;
-/**
- * Heights against the world's TALLEST building (its height over the street): a cluster's tallest stands
- * 1.3–1.8× as tall, in whole hundredths; the haze clearance every tower keeps besides.
- */
+/** Heights vs the world's TALLEST building: a cluster's tallest is 1.3–1.8× (whole hundredths);
+ * every tower also keeps the haze clearance. */
 const TALL_MIN = 130; // percent
 const TALL_STEPS = 51; // 130, 131 … 180 %
 export const CLEAR = 2 * TILE;
-/**
- * The SIGNATURE skyscraper behind the tallest building: `SIGNATURE_H` of its height, `SIGNATURE_W` of its
- * width (never under 5 tiles), centred on it, one of `SIGNATURE_KINDS`; `SIGNATURE_SKY` of sky kept
- * either side of it (a cluster's tower that would stand nearer is left out).
- */
+/** SIGNATURE skyscraper behind the tallest building: `SIGNATURE_H` of its height, `SIGNATURE_W` of
+ * its width (≥ 5 tiles), centred; a cluster tower within `SIGNATURE_SKY` of it is left out. */
 const SIGNATURE_H = 1.8;
 const SIGNATURE_W = 0.55;
 const SIGNATURE_KINDS = ["twin", "setback", "mast"] as const;
@@ -244,11 +122,8 @@ const GRIDS: readonly (readonly [col: number, floor: number, line: number])[] = 
 
 /** A column of a silhouette: x0 ≤ x < x1, from `top` down to the horizon. */
 export type Part = readonly [x0: number, x1: number, top: number];
-/**
- * A stretch of a tower's width: over x0 ≤ x < x1 its glass grid starts at y `glass` (under a solid
- * crown, a parapet, a notch of sky), what stands in front of it at y `cover` (the horizon: nothing), and
- * whether it stands in the backdrop's OPEN sky (`airSpans`), where no haze stands in front of its foot.
- */
+/** A stretch [x0, x1) of a tower: its glass grid starts at y `glass`, what stands in front at y
+ * `cover` (horizon: nothing), and `open` if in the backdrop's open sky (no haze in front). */
 export type Cell = readonly [x0: number, x1: number, glass: number, cover: number, open: boolean];
 /** What a day detail is painted in: the tower's own frame or crown tint, or one of `TOWER`'s fixed colours. */
 type Ink = "frame" | "crown" | "mast" | "tank" | "pad" | "panel";
@@ -268,11 +143,8 @@ export interface Tower {
   parts: readonly Part[];
   /** Where its glass grid starts, across its whole width (contiguous, left to right). */
   glass: readonly Part[];
-  /**
-   * What stands in front of it across its width (contiguous, left to right): a nearer tower of its
-   * cluster, a building of the world — or nothing (the horizon). Below it nothing of the tower shows, so
-   * nothing of it is painted there by day, nor lit by night.
-   */
+  /** What stands in front across its width (contiguous): a nearer cluster tower, a world building,
+   * or nothing (the horizon). Nothing of the tower below it is painted or lit. */
   cover: readonly Part[];
   /** `glass` and `cover` together: what the grid and the lights go by. */
   cells: readonly Cell[];
@@ -305,10 +177,7 @@ export function envelope(parts: readonly Part[]): Part[] {
   return out;
 }
 
-/**
- * A tower's glass and its cover — two contiguous lists over its width — cut at both's breaks and at the
- * edges of the open sky (`air`, the stretches over its width): [x0, x1, glass, cover, open] a stretch.
- */
+/** Glass and cover cut at both's breaks and the open-sky edges (`air`): one Cell per stretch. */
 function cellsOf(glass: readonly Part[], cover: readonly Part[], air: readonly (readonly [number, number])[]): Cell[] {
   const edges = air.flatMap(([a, b]) => [a, b]);
   const out: Cell[] = [];
@@ -325,10 +194,8 @@ function cellsOf(glass: readonly Part[], cover: readonly Part[], air: readonly (
 
 type Shape = Omit<Tower, "kind" | "cover" | "cells" | "tint" | "grid" | "seed" | "crowned">;
 
-/**
- * A tower of `kind`, x .. x + w, its roof `h` above the horizon: its silhouette and its glass, its day
- * marks (parapets, crowns, tank, pad, mast), its crown band and its beacons. `hh` picks the variants.
- */
+/** A tower of `kind` over x .. x + w, roof `h` above the horizon: silhouette, glass, day marks,
+ * crown band and beacons; `hh` picks variants. */
 function shape(kind: TowerKind, x: number, w: number, h: number, horizon: number, hh: number): Shape {
   const roof = horizon - h;
   const parts: Part[] = [];
@@ -460,22 +327,15 @@ function chunkTowers(world: World, amb: Ambience | undefined, horizon: number, k
   return out;
 }
 
-/**
- * The tallest a tower may stand here, its tip — a mast's, a tank's — included (no high-rise
- * stands taller than the Skytree, Japan's tallest structure): `UNDER_SKYTREE` of the city's
- * Skytree as it is placed (render/landmarks.ts sizes it; this reads it). With no Skytree, no cap.
- */
+/** Tallest tip allowed here: `UNDER_SKYTREE` of the city's Skytree as render/landmarks.ts places
+ * it (read, never assumed); no Skytree, no cap. */
 function capOf(world: World, amb: Ambience | undefined, horizon: number): number {
   const skytree = placeLandmarks(world, horizon, landmarksFor(amb?.zone)).placed.find((p) => p.spec.kind === "skytree");
   return skytree ? Math.floor(UNDER_SKYTREE * skytree.h) : Infinity;
 }
 
-/**
- * The height of a tower of `share` × the tallest building's height (`base`), under the Skytree's `cap`:
- * where the rule's tallest (1.8 × base) would rise over it, the whole range is drawn down into it — its
- * lowest as it was (or 0.85 of the cap), its tallest at the cap — so the towers keep their spread and
- * their order rather than all stopping at one roofline.
- */
+/** Height for `share` × `base` under `cap`: if the rule's tallest (1.8 × base) would exceed the
+ * cap, the whole range is scaled into it, keeping spread and order, not one flat roofline. */
 function heightOf(share: number, base: number, cap: number): number {
   const hi = ((TALL_MIN + TALL_STEPS - 1) / 100) * base;
   if (hi <= cap) return Math.round(share * base);
@@ -499,13 +359,8 @@ function covered(t: Tower, over: readonly Part[], world: World, horizon: number)
   return { ...t, cover, cells: cellsOf(t.glass, cover, airSpans(t.x, x1)) };
 }
 
-/**
- * The SIGNATURE skyscraper (a bigger tall dark high-rise with sparse windows, behind the tallest
- * building, such as gazelle): centred behind
- * the world's tallest building, `SIGNATURE_W` of its width and `SIGNATURE_H` of its height — so a good
- * part of it stands over that roof — a twin, a setback or a mast by a hash of where the building stands.
- * A function of the World alone: world-locked. Every World with a building has one.
- */
+/** SIGNATURE skyscraper centred behind the world's tallest building (`SIGNATURE_W` × `SIGNATURE_H`
+ * of it), kind by a hash of its place. World-locked; every World with a building has one. */
 function signatureOf(world: World, amb: Ambience | undefined, horizon: number, cap: number): Tower | null {
   const b = tallestOf(world);
   if (!b) return null;
@@ -566,12 +421,8 @@ function buildChunk(world: World, amb: Ambience | undefined, horizon: number, k:
   );
 }
 
-/**
- * The tower of hash `hh` at x, `w` wide, `h` tall, of `kind` (by default, by the hash) — lowered, its kind
- * kept, until its tip stands no taller than `cap` (`capOf`: under the Skytree); and where it would still
- * rise into Fuji's snow cap (`roofLimit`), a setback (no mast, no tank: its roof the top of it), lowered
- * under the cap but never below `least`; null when even that would rise into it.
- */
+/** Tower `hh` at x, lowered (kind kept) until its tip is under `cap`; if still into Fuji's snow
+ * cap (`roofLimit`), a setback lowered under it, never below `least`; null if that won't fit. */
 function fit(
   world: World,
   amb: Ambience | undefined,
@@ -645,13 +496,9 @@ export function forEachTower(s: BackdropScene, x0: number, x1: number, visit: (t
     for (const t of chunkTowers(s.world, s.amb, s.horizon, k)) if (t.x < x1 && t.x + t.w > x0) visit(t);
 }
 
-/**
- * Over [a, b), each stretch of a tower's `cells` where a row from `top` down to `bottom` shows whole —
- * nothing in front of it reaches above `bottom`; for `glass`, its glass starts at or above `top`; and a
- * row ending below `deep` (the haze's top) only in the open sky — as one `visit(x0, x1)`: a row is one
- * rect wherever nothing breaks it. (Indexed, no destructuring: a slanted crown has a cell per 2 px,
- * walked once per floor.)
- */
+/** Over [a, b), each stretch of `cells` where a row from `top` to `bottom` shows whole (nothing in
+ * front above `bottom`; for `glass`, glass from `top`; below `deep` only in open sky), as one
+ * `visit(x0, x1)`. Indexed, not destructured: a slanted crown has a cell per 2 px. */
 export function rowRuns(
   cells: readonly Cell[],
   top: number,
@@ -676,12 +523,8 @@ export function rowRuns(
   }
 }
 
-/**
- * How far down a tower's glass shows behind the haze: its mullions run to the haze's SHORTEST block's
- * top (below it only the haze's 1-px slits show), its floor lines and lit floors only to the TALLEST's —
- * a mullion costs one rect however long, a floor one rect a floor, and between the haze's blocks of all
- * heights a tower's foot reads as its mullions alone. In the open sky (no haze) all of it reaches the street.
- */
+/** How far down glass shows behind the haze: mullions to its SHORTEST block's top, floor lines and
+ * lit floors to its TALLEST's (one rect a mullion, one a floor). In open sky, all the way down. */
 function floors(horizon: number): [mullions: number, lines: number] {
   const haze = skylineMax(horizon);
   return [horizon - Math.round(haze * 0.35), horizon - haze];
@@ -733,10 +576,8 @@ function sunOnLeft(amb: Ambience | undefined): boolean {
   return !(amb?.arc?.body === "sun" && amb.arc.t >= 0.5);
 }
 
-/**
- * A light of tower `t` through `fillLit`: the parts of it in view that nothing in front of the tower
- * covers — and, for a lit floor (`glass`), that are glass, above the haze or in the open sky (`deep`).
- */
+/** A light of tower `t` through `fillLit`: only uncovered parts in view, and for a lit floor
+ * (`glass`) only glass above the haze or in open sky (`deep`). */
 function emit(s: BackdropLightScene, c: Clip, t: Tower, glass: boolean, deep: number, x: number, y: number, w: number, h: number): void {
   const top = Math.max(y, c.y0);
   const bottom = Math.min(y + h, c.y1);
@@ -744,12 +585,8 @@ function emit(s: BackdropLightScene, c: Clip, t: Tower, glass: boolean, deep: nu
   if (top < bottom) rowRuns(t.cells, y, y + h, glass, deep, Math.max(x, c.x0), Math.min(x + w, c.x1), (a, b) => s.fillLit(a, top, b - a, bottom - top));
 }
 
-/**
- * The lit windows of tower `t`: per floor, a window every `WINDOW` px, each lit when `lit` passes its own
- * threshold — a hash of its place, weighed by its floor's occupancy (`BUSY`: some floors busy, some
- * dark), so as `lit` rises the same windows come on first every evening, and an eighth are lit at full
- * night, scattered like offices, never a floor-wide bar (zoomed in at night, those look overloaded).
- */
+/** Lit windows: one every `WINDOW` px per floor, lit past its own hashed threshold weighed by floor
+ * occupancy (`BUSY`), so the same ones light first; scattered, never a floor-wide bar. */
 function paintWindows(s: BackdropLightScene, c: Clip, t: Tower, lineY: number, seen: number): void {
   const [col, floor] = GRIDS[t.grid];
   const [n, off] = columns(t.w, col);

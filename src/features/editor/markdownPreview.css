@@ -1,12 +1,5 @@
-/* ── Markdown rendered preview ─────────────────────────────────
- *
- * Theme-aware. In-app it inherits the dark cockpit palette via the shared CSS
- * custom properties (--text, --bg-app, …) declared on :root in App.css. The
- * `var(--x, fallback)` fallbacks + the `prefers-color-scheme: light` block below
- * keep it legible if the component is ever rendered outside those variables
- * (e.g. a standalone/light context). Local `--mdp-*` tokens funnel every colour
- * through one place.
- */
+/* Markdown preview. Colours bind to App.css tokens via local `--mdp-*` names, with fallbacks and a
+ * light-scheme block for use outside the app's variables. */
 .markdown-preview {
   /* Palette — bound to the app tokens, with self-contained dark fallbacks. */
   --mdp-fg: var(--text, #c9d1d9);
@@ -53,23 +46,9 @@
   font-style: italic;
 }
 
-/* The rendered body wraps everything markdown-it produced. It is the zoom
-   target: the component sets `zoom: <zoom>` inline — CSS `zoom`, deliberately,
-   NOT `transform: scale`. `transform` scales the painted raster, so at 400% the
-   compositor is blowing up a bitmap that was rasterised at 1× and every glyph
-   and diagram stroke goes soft. `zoom` is a layout property: the content is
-   laid out and painted AT the target size, so it stays sharp at any level, and
-   prose re-wraps to the pane instead of running off the right edge.
-   No `transform-origin` is needed — a zoomed box simply grows right/down from
-   its normal position, which the container's `overflow: auto` picks up as
-   scrollable overflow.
-
-   The body carries NO width rule, on purpose — `auto` is what makes prose
-   re-wrap to the pane. `width: max-content` here would size the body to its
-   widest unwrapped line and paragraphs would stop wrapping at all. A
-   natural-size diagram simply OVERFLOWS this box, and a descendant's
-   inline-end overflow is part of the scroll container's scrollable region, so
-   the pane scrolls to it regardless. */
+/* The zoom target: CSS `zoom`, not `transform: scale`, so content lays out and paints at size and
+ * stays sharp. No width rule on purpose: `auto` re-wraps prose to the pane, and an overflowing
+ * diagram still scrolls the container. */
 .markdown-preview__body > *:first-child {
   margin-top: 0;
 }
@@ -141,15 +120,8 @@
   text-decoration: underline;
 }
 
-/* 🔴 The same ceiling the rendered diagrams below use, and for the same reason
-   (the image viewer has the same rule). A plain
-   `max-width: 100%` is INERT under CSS `zoom`: under
-   `zoom: Z` the body measures `W / Z` CSS px, so `100%` resolves back to exactly
-   `W` device px at every Z. A README image wider than the pane therefore stayed
-   the SAME on-screen size at 100% and at 400%, while the % label and every
-   surrounding paragraph zoomed around it. Multiplying by the zoom gives a width
-   that is constant in CSS px, i.e. one that grows with the zoom in device px.
-   An image NARROWER than the pane is unaffected — this only caps. */
+/* `max-width: 100%` is inert under `zoom` (same device px at every zoom), so the cap is
+ * multiplied by the zoom, as for diagrams and the image viewer. */
 .markdown-preview__body img {
   max-width: calc(100% * var(--mdp-zoom, 1));
   height: auto;
@@ -235,20 +207,9 @@
   background: var(--mdp-code-bg);
   text-align: center;
 }
-/* Once hydrated, the SVG owns the box — drop the code-ish padding/mono look.
-   `overflow: visible` + `width: max-content` are load-bearing: the diagram is
-   pinned to its NATURAL size (pinDiagramToNaturalSize), so a wide schema must
-   push the body wide and let the CONTAINER scroll. Left as `overflow: auto`,
-   the <pre> would scroll internally instead — and ctrl/cmd+drag pans the
-   container, so the one element the user most wants to pan would be the one
-   element the pan gesture could not reach. */
-/* The selector carries `.markdown-preview__body pre` deliberately: the generic
-   fenced-code rule above is (0,2,1) and a bare `.markdown-preview__mermaid--
-   rendered` (0,1,0) loses to it, so `padding: 0` here was silently doing
-   nothing. That was not merely cosmetic — 16px of horizontal padding is a fixed
-   CSS length, so it costs 16 CSS px at every zoom, i.e. 16 device px at 100%
-   and 64 at 400%. It skews the `calc(100% * var(--mdp-zoom))` ceiling below by
-   exactly that much, and a diagram that should be 2x at 200% comes out 1.88x. */
+/* `overflow: visible` + `width: max-content` keep the diagram at natural size so the container
+ * scrolls and ctrl/cmd+drag can pan it. `pre` in the selector beats the (0,2,1) fenced-code rule,
+ * whose 16px padding would skew the zoom ceiling. */
 .markdown-preview__body pre.markdown-preview__mermaid--rendered {
   background: transparent;
   padding: 0;
@@ -256,15 +217,8 @@
   position: relative; /* anchors the Fit control below */
 }
 
-/* ── The per-diagram "Fit" control ────────────────────────────────────────────
-   Pinned to the diagram's top-left corner and, crucially, the SAME SIZE ON
-   SCREEN at every zoom level. Nested `zoom` MULTIPLIES, so `1 / --mdp-zoom`
-   cancels the body's zoom exactly: without it the control would be 4x its
-   design size at 400% — a button the size of a table cell, sitting on top of
-   the diagram the user zoomed in to read.
-   `top`/`left: 0` rather than a small inset, because a length here would be
-   divided by the zoom along with everything else; the breathing room is the
-   control's own margin, which lives in its own (unzoomed) coordinate space. */
+/* Fit control. Nested `zoom` multiplies, so `1 / --mdp-zoom` keeps it the same size on screen;
+ * `top`/`left: 0` because any inset would be divided by the zoom too. */
 .markdown-preview__fit {
   position: absolute;
   top: 0;
@@ -294,14 +248,8 @@
   color: var(--mdp-fg);
   border-color: var(--mdp-accent);
 }
-/* The fit-the-pane ceiling, written so that `zoom` can scale it.
-   `100%` is the body's width in CSS px, which under `zoom: Z` is `W / Z`;
-   multiplying by Z gives a constant `W` CSS px. A used width that is CONSTANT in
-   CSS pixels is a used width that grows exactly with the zoom in DEVICE pixels —
-   which is the whole trick. Plain `max-width: 100%` would instead pin the
-   diagram to the same on-screen size at every zoom level.
-   The natural width itself is set inline (sizeDiagramForZoom); this only caps
-   it, so a diagram narrower than the pane is never stretched. */
+/* Multiplying 100% by the zoom lets the cap grow with it; the natural width is set inline
+ * (sizeDiagramForZoom), so this only caps and never stretches. */
 .markdown-preview__mermaid--rendered svg {
   display: block;
   max-width: calc(100% * var(--mdp-zoom, 1));

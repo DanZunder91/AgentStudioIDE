@@ -1,15 +1,6 @@
-/**
- * NetworkPanel — every HTTP, WebSocket and gRPC call the IDE's terminals make, as a
- * Proxelar-style flow table.
- *
- * The panel is a TAB, so it remounts on every switch; all of its state that must survive
- * that (selection, filter, chips, detail) lives in `networkStore`. Only
- * scroll geometry is local — a remount starts following the newest row again.
- *
- * Rows are windowed (`visibleWindow`, the DB grid's arithmetic): a 5 000-flow ring must
- * not put 5 000 `<tr>`s in the DOM. Selection reveal is index arithmetic against the
- * scroll box, because a row off-screen is not in the DOM to `scrollIntoView`.
- */
+/** Every HTTP, WebSocket and gRPC call the IDE's terminals make. State that must survive the tab's
+ * remount lives in `networkStore`; only scroll geometry is local. Rows are windowed (5 000-flow
+ * ring); selection reveal is index arithmetic, as an off-screen row is not in the DOM. */
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -145,10 +136,7 @@ export function NetworkPanel(): React.JSX.Element {
 
 /* ── mode switch ────────────────────────────────────────────────────────────── */
 
-/**
- * `IDE traffic | Whole Mac`. Never disabled: an unavailable backend is explained
- * inside the Whole-computer pane, not by a dead switch.
- */
+/** Never disabled: an unavailable backend is explained inside the Whole-computer pane. */
 function ModeSwitch(): React.JSX.Element {
   const mode = useNetworkStore((s) => s.mode);
   const backend = useMachineStore((s) => s.status?.backend);
@@ -246,10 +234,7 @@ function NetworkHeader(): React.JSX.Element {
   );
 }
 
-/**
- * "Hide AI providers", in the header's right corner: a checkbox, with how many of the table's flows
- * it matches — the number it hides while checked, so nothing disappears unannounced.
- */
+/** Shows how many of the table's flows it matches, so nothing disappears unannounced. */
 function HideAiProvidersCheckbox({ flows }: { flows: readonly FlowSummary[] }): React.JSX.Element {
   const hide = useNetworkStore((s) => s.hideAiProviders);
   const n = useMemo(() => flows.reduce((k, f) => (isAiProviderCall(f) ? k + 1 : k), 0), [flows]);
@@ -264,10 +249,8 @@ function HideAiProvidersCheckbox({ flows }: { flows: readonly FlowSummary[] }): 
   );
 }
 
-/**
- * The toolbar + the table. Owns the fit-to-width (`fitColumns`): the table reports its scroll
- * box's width, the fit decides the columns, and Columns ▾ lists the ones it hid (unticked).
- */
+/** Toolbar + table. Owns the fit-to-width (`fitColumns`): the table reports its scroll box's
+ * width, the fit decides the columns, and Columns ▾ lists the ones it hid (unticked). */
 function IdeMain(): React.JSX.Element {
   const [tableWidth, setTableWidth] = useState(0);
   const layout = useColumnLayout(IDE_VIEW_KEY);
@@ -720,11 +703,8 @@ const CHIP_NAME: Record<ProtoChip, string> = Object.fromEntries(PROTO_CHIPS.map(
   string
 >;
 
-/**
- * The table is empty but the capture is not: say which control hides the flows and how many,
- * with one button back (a bare "No flows match the filter." over 158 flows, with a flow open
- * in the detail pane, read as a broken view).
- */
+/** Empty table over a non-empty capture: name the control hiding the flows and how many, with one
+ * button back, so it does not read as a broken view. */
 function FilteredEmpty({
   flows,
   chips,

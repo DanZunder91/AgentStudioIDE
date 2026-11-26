@@ -1,8 +1,4 @@
-/**
- * The capacity art: racks lit bottom-up (agents bright, the rest of the used RAM amber, free dark),
- * gauges lit in their severity colour, the desks' context bar — and every "no reading" drawn as
- * missing, never as empty.
- */
+/** Capacity art: every "no reading" must be drawn as missing, never as empty. */
 
 import { describe, expect, it } from "vitest";
 

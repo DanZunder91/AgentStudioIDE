@@ -1,8 +1,5 @@
-/**
- * The Agent Logs store: the ingest rule (snapshot, then events with `id > lastId`),
- * the cap, pause/resume, clear, and the ref-counted subscription. Only the IPC seam
- * (`./logstreamIpc`) is mocked.
- */
+/** Agent Logs store: ingest (snapshot, then `id > lastId`), cap, pause/resume, clear and the
+ * ref-counted subscription; only `./logstreamIpc` is mocked. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

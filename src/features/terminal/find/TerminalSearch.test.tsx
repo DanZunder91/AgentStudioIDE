@@ -1,16 +1,5 @@
-/**
- * TerminalSearch — the overlay's full behavior against a mocked
- * SearchAddon + registry, jsdom tier.
- *
- * Mock altitude: the registry module boundary, same as the pane suite mocks
- * `features/terminal` (`vitest.config.ts` note) — the terminal feature's
- * rendering is browser-tier, so jsdom asserts the LOGIC: which addon calls a
- * given interaction produces, and where focus lands (keyboard bugs in this
- * app are usually focus).
- *
- * Fake timers + `fireEvent` (as in `FindInFiles.test.tsx`) make the 100 ms
- * debounce deterministic.
- */
+/** The registry is mocked at the module boundary (rendering is browser-tier), so this asserts
+ * addon calls and where focus lands. Fake timers make the 100 ms debounce deterministic. */
 
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,24 +1,6 @@
-//! Saved queries — `db-queries.json`.
-//!
-//! Queries must be saved: after the app has been closed and reopened,
-//! double-clicking the database must show its list of queries. That is a durability requirement,
-//! so this file is a sibling of `db-connections.json` and takes the same crash-safe write path
-//! (temp → `fsync` → atomic `rename` → `0600`); a half-written file of someone's saved SQL is a
-//! mystery bug, and losing it is worse than losing a connection record you can retype.
-//!
-//! ## Keyed by `connection_id`, and deleted with it
-//!
-//! A query belongs to the connection it was written against — its SQL names that server's tables.
-//! An orphan is a query you cannot run, so `db_connection_delete` cascades, and it **reports the
-//! count** so the confirm dialog can say "and its 12 saved queries" instead of quietly discarding
-//! work.
-//!
-//! ## No secrets, deliberately
-//!
-//! Unlike `db-connections.json` this file has no credential handling at all, because SQL text is
-//! not a credential and pretending otherwise would invite someone to put one here. It still gets
-//! `0600`: a saved query can name internal tables, and that is nobody else's business on a shared
-//! machine. What it is NOT is encrypted, and nothing here pretends otherwise.
+//! Saved queries in `db-queries.json`, written crash-safe like `db-connections.json`. Keyed by
+//! `connection_id` and cascaded on delete (the count is reported). No credentials; `0600` but not
+//! encrypted.
 
 use std::path::Path;
 
@@ -91,10 +73,8 @@ pub fn save(path: &Path, store: &SavedQueryStore) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(&stamped).unwrap_or_else(|_| "{}".to_string());
-    // The temp name is the target's file name + a fresh ULID, so it can never collide with
-    // `db-connections.json`'s (same directory) or with a concurrent save of this same file.
-    // `store_file`: locked, a unique temp per write (born 0600 on unix), the temp
-    // removed on failure, and on Windows a retried rename over a briefly-held file.
+    // `store_file`: locked, a unique 0600 temp per write (removed on failure), retried rename on
+    // Windows.
     let _guard = crate::store_file::lock(path);
     crate::store_file::write_atomic(path, json.as_bytes(), true)?;
     restrict_permissions(path);
@@ -110,10 +90,7 @@ fn restrict_permissions(path: &Path) {
 #[cfg(not(unix))]
 fn restrict_permissions(_path: &Path) {}
 
-/// The queries for one connection, **newest-updated first**.
-///
-/// Sorted here rather than in the UI so every surface that lists them agrees, and by
-/// `updated_at_ms` rather than name because the one you just edited is the one you want next.
+/// One connection's queries, newest-updated first; sorted here so every surface agrees.
 pub fn for_connection(store: &SavedQueryStore, connection_id: &str) -> Vec<SavedQuery> {
     let mut out: Vec<SavedQuery> = store
         .queries
@@ -131,10 +108,8 @@ pub fn for_connection(store: &SavedQueryStore, connection_id: &str) -> Vec<Saved
     out
 }
 
-/// Insert or update. Pure over the list so the whole decision is testable without a filesystem.
-///
-/// Returns the stored record. `now_ms` is injected rather than read here, so a test can assert
-/// that `created_at_ms` is preserved across an update instead of trusting the clock.
+/// Insert or update, pure over the list; `now_ms` is injected so tests can check `created_at_ms`
+/// survives an update. Returns the stored record.
 pub fn upsert(
     store: &mut SavedQueryStore,
     input: SavedQueryInput,
@@ -195,10 +170,7 @@ pub fn remove(store: &mut SavedQueryStore, id: &str) -> bool {
     store.queries.len() != before
 }
 
-/// Drop every query belonging to `connection_id`, returning how many went.
-///
-/// The count is the point: `db_connection_delete` names it in its report so the confirm dialog can
-/// say what is about to be discarded.
+/// Drop every query of `connection_id`, returning the count for the delete confirmation.
 pub fn remove_for_connection(store: &mut SavedQueryStore, connection_id: &str) -> usize {
     let before = store.queries.len();
     store.queries.retain(|q| q.connection_id != connection_id);

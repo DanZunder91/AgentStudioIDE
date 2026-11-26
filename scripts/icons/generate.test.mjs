@@ -1,19 +1,5 @@
-/**
- * Tests for the file-icon generation pipeline (`scripts/icons/generate.mjs`).
- *
- * The most important test here is DRIFT: the committed
- * `src/lib/fileIcons/*.generated.ts` must be byte-identical to what the
- * generator produces from `scripts/icons/mapping.mjs` + the vendored SVGs.
- * A generated artifact that can drift from its sources silently is a lie in
- * the repo — this suite makes that a red test instead.
- *
- * Second most important: the generator is the SANITIZATION GATE. The sprite
- * string is injected into the DOM as raw HTML at runtime, so hostile SVG
- * content (scripts, event handlers, external references) must fail generation
- * — asserted here with hand-written hostile fixtures.
- *
- * Runs under `npm test` — vitest.config.ts includes `scripts/**\/*.test.mjs`.
- */
+/** Drift: the committed *.generated.ts must match the generator byte for byte. Sanitization: the
+ * sprite is injected as raw HTML, so hostile SVG (scripts, handlers, external refs) must fail. */
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";

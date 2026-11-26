@@ -1,13 +1,6 @@
-/**
- * The tear-off command surface (`src-tauri/src/tearoff.rs`) — typed `invoke()` wrappers
- * and the event names, nothing else.
- *
- * Two of these NEVER throw, on purpose: a holdings read or a report that fails must not
- * take the window down with it — the holdings cache simply stays as it was, and the next
- * report re-sends everything. The moves (`tearoffOpen`, `tearoffSend`) DO reject: the
- * caller has already released the tab locally and must take it back on failure, so a
- * swallowed error there would be a tab shown nowhere.
- */
+/** Typed `invoke()` wrappers and event names for `src-tauri/src/tearoff.rs`. Holdings reads and
+ * reports never throw (the cache stays; the next report resends all); the moves DO reject, since
+ * the caller already released the tab and must take it back. */
 
 import { invoke } from "@tauri-apps/api/core";
 

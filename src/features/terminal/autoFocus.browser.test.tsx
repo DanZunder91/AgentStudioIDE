@@ -1,21 +1,6 @@
-/**
- * Layer 5 — a terminal focuses itself on activation, so the first key lands.
- *
- * ## The real bug (confirmed from a PTY capture of claude's startup)
- *
- * Nothing in the app focused a terminal when it opened or its tab became active;
- * `focusTerminal()` was called only from tests. So the user's FIRST keystroke
- * after opening/switching to a terminal went to the webview `<body>`, not xterm's
- * hidden textarea — the real-app log's first line was literally
- * `focus=body · onData=NOT fired`. Every later press worked because focus had
- * settled. That lost first keystroke was the whole "arrows do not work inside
- * claude" symptom (claude uses legacy CSI arrows — the SS3/DECCKM theory was a red
- * herring; there is no `ESC[?1h` in claude's startup).
- *
- * The fix: `useTerminal` focuses the terminal on mount, and a pane renders only
- * its active tab, so mounting == activation. These tests prove a key reaches the
- * PTY with NO manual click — which fails before the fix.
- */
+/** Without focus on activation the first keystroke goes to `<body>`, not xterm. `useTerminal`
+ * focuses on mount and a pane renders only its active tab (mounting == activation), so a key
+ * must reach the PTY with no manual click. */
 
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

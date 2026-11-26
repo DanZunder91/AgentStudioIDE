@@ -1,12 +1,6 @@
-/**
- * `releaseTab` — taking a tab out of this window WITHOUT closing it (tab tear-off) — and
- * `onAgentSelected`, the gesture hook tear-off forwards rail clicks through.
- *
- * `releaseTab` must do to the LAYOUT exactly what `closeTab` does (one emptiness rule, one
- * focus repair, inactive views swept) and to the THING nothing at all: no dispose, no buffer
- * disposal, no agent dismissal, no unpin. Both halves are asserted, because a release that
- * quietly closed would kill the agent the user was only moving.
- */
+/** `releaseTab` (tear-off moves a tab out without closing it) and `onAgentSelected`. A release
+ * must change the layout exactly like `closeTab` and touch nothing else (no dispose, dismissal or
+ * unpin): a release that quietly closed would kill the agent the user was only moving. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

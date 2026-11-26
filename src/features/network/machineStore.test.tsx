@@ -1,7 +1,3 @@
-/**
- * The Whole-computer store over a mocked IPC seam: samples replace, choices persist, and
- * sampling starts/stops exactly once per visit of the mode — StrictMode included.
- */
 
 import { act, render } from "@testing-library/react";
 import { StrictMode, useEffect } from "react";

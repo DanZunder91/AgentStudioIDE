@@ -1,11 +1,6 @@
-//! Agent Logs through the **real supervisor and real PTYs**: terminal output becomes
-//! lines, lifecycle becomes `system` lines, and a terminal with a bound runtime session
-//! is not line-logged — then is again once the session ends.
-//!
-//! Hermetic: every shell is the config-free `/bin/sh`, never the
-//! developer's login shell. The binding is driven by `deliver_hook` with the stub
-//! adapter's payload shape (as `adhoc_detection.rs` does) — no real `claude`, no hook
-//! listener, no settings file written anywhere.
+//! Agent Logs through the real supervisor and PTYs: output → lines, lifecycle → `system` lines,
+//! and a terminal with a bound session is not line-logged until it ends. Hermetic: config-free
+//! `/bin/sh`, bindings via `deliver_hook`, no real `claude`, no settings written.
 
 #![cfg(unix)]
 

@@ -1,18 +1,6 @@
-//! Windows Event Log glue — the only `cfg(windows)` code in `syslog/`. Everything that decides
-//! something (the query, the escaping, the XML fields, the level map, the line's shape, the
-//! provider list's order) is in `eventlog.rs`, compiled and tested on every OS; this file is
-//! only the API calls.
-//!
-//! - **Stream:** `EvtSubscribe(EvtSubscribeToFutureEvents)` over the structured query, pull
-//!   model on one dedicated thread: wait on {stop, signal} → `EvtNext` until empty →
-//!   `EvtRender(EvtRenderEventXml)` → `EvtFormatMessage(EvtFormatMessageEvent)` with a
-//!   per-provider cached `EvtOpenPublisherMetadata` → `LogHub::push` (a `try_send`; the hub
-//!   is never waited on). No child process, no shell, no elevation.
-//! - **Stop:** dropping the [`Running`] sets the stop event and JOINS the thread, which checks
-//!   the stop event between events — so the drop returns within one event's work, and every
-//!   handle (subscription, events, publisher metadata, kernel events) is closed by then.
-//! - **`syslog_apps`:** [`recent_providers`] reads the newest events of each channel backwards
-//!   (`EvtQueryReverseDirection`), bounded by age, count and wall time.
+//! Windows Event Log API glue only; every decision is in `eventlog.rs`. One pull thread per
+//! subscription (no child, no shell, no elevation); dropping [`Running`] signals and JOINS it,
+//! so every handle is closed on return. The hub is only `try_send`-ed.
 
 use std::collections::HashMap;
 use std::ptr::null;
@@ -350,11 +338,9 @@ impl Render {
     }
 }
 
-/// `syslog_apps` on Windows: the providers that wrote to `channels` (Application, System and
-/// the filter's extra channel — `Syslog::apps_channels`) in the last
-/// [`eventlog::RECENT_MAX_AGE_MS`], newest [`eventlog::RECENT_MAX_EVENTS`] per channel at
-/// most, within [`RECENT_BUDGET`], each channel stopping at the end of its share
-/// ([`eventlog::channel_share_end`]). A channel that cannot be read is skipped.
+/// `syslog_apps` on Windows: providers that wrote to `channels` recently, bounded by
+/// [`eventlog::RECENT_MAX_AGE_MS`], [`eventlog::RECENT_MAX_EVENTS`] and [`RECENT_BUDGET`]
+/// (split per [`eventlog::channel_share_end`]). An unreadable channel is skipped.
 pub fn recent_providers(channels: &[String]) -> Vec<RunningApp> {
     let start = Instant::now();
     let mut names: Vec<String> = Vec::new();
@@ -405,10 +391,8 @@ pub fn recent_providers(channels: &[String]) -> Vec<RunningApp> {
     eventlog::group_providers(names)
 }
 
-/// Write one event to the Application log as `source` — what the live test (and nothing in
-/// the app) uses to prove the pipeline end to end. A source that was never registered is
-/// accepted for a standard user and lands in Application with no message table, so its text
-/// is the inserted string.
+/// Test-only: write one event to Application as `source`. An unregistered source is accepted
+/// for a standard user, with no message table, so its text is the inserted string.
 #[cfg(test)]
 pub(crate) fn write_test_event(source: &str, kind: u16, event_id: u32, text: &str) -> bool {
     use std::ptr::null_mut;
@@ -552,11 +536,8 @@ mod tests {
         assert!(took < RECENT_BUDGET + Duration::from_secs(2), "{took:?}");
     }
 
-    /// The extra channel's providers are offered (they used to be streamable but never
-    /// pickable). Windows PowerShell 5.1 writes events from provider `PowerShell` to the
-    /// classic `Windows PowerShell` log — never to Application or System — every time it
-    /// starts, so starting one makes this machine's answer known; two-sided: absent without
-    /// the channel, present with it.
+    /// PowerShell 5.1 writes provider `PowerShell` to the `Windows PowerShell` log (never
+    /// Application or System) on every start, so starting one makes the answer known.
     #[test]
     fn the_extra_channels_providers_are_offered_only_when_it_is_named() {
         use crate::spawn::NoWindow;
@@ -683,10 +664,8 @@ mod tests {
         panic!("no line with {token} arrived");
     }
 
-    /// 🔴 Writes real records to this machine's Application event log (a source named
-    /// `AgentStudio-test-<ulid>`, which leaves a trace in Event Viewer), so it is never part of
-    /// a default `cargo test`. Run it explicitly:
-    /// `cargo test --manifest-path src-tauri/Cargo.toml --lib syslog::winevt::tests::a_real_event_arrives_through_the_whole_pipeline -- --ignored`
+    /// Writes real records (source `AgentStudio-test-<ulid>`) to this machine's Application log,
+    /// leaving a trace in Event Viewer; run it explicitly with `-- --ignored`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "writes records to the real Windows Application event log; run explicitly"]
     async fn a_real_event_arrives_through_the_whole_pipeline() {

@@ -1,47 +1,6 @@
-//! `db_query`: run a query on a saved connection, the way the console runs it — and tighter where
-//! an agent needs it.
-//!
-//! # The console's path, plus what an agent needs on top
-//!
-//! [`crate::db::open`] then [`crate::db::query`] — the two calls the console tab makes — so every
-//! guardrail the user sees in the console holds for an agent without a second copy of it: a
-//! read-only connection's writes are refused by the engine (the server setting, the access-mode
-//! filter, Redis's and MongoDB's allowlists), one statement per run unless the connection allows
-//! multiple statements (then the run is a script, as the console's Script button sends it), and
-//! the connection's own timeout bounds the statement.
-//!
-//! Those guardrails are written against a user's mistakes. An agent can be prompt-injected, so
-//! two of them are not enough on their own, and this path adds:
-//!
-//! * **A read-only PostgreSQL or MySQL connection runs each of the agent's statements in a
-//!   `READ ONLY` transaction of its own, ended with a rollback before the next one starts**
-//!   ([`crate::db::query_strict`]).
-//!   The session setting alone is a default a `DO` block or a `set_config` + `COMMIT` can turn
-//!   off; inside the transaction a write is refused by the server, and nothing one statement does
-//!   to the session reaches the next statement's transaction.
-//! * **What acts on the server rather than its data is refused on every PostgreSQL and MySQL
-//!   connection** ([`super::db_refuse`]): a read-only transaction does not stop `COPY … TO
-//!   PROGRAM` or `pg_read_file` on a privileged account. A text check, so a speed bump; the
-//!   boundary is a least-privileged account, and the help says so.
-//! * **Redis and Valkey commands that read credentials or the server's auth set-up are refused**
-//!   ([`redis_refusal`]): `CONFIG GET requirepass` returns the very password Agent Studio dialled
-//!   with, read from the Vault.
-//! * **Whatever comes back has the connection's password masked** ([`target::secrets_of`]) where
-//!   it appears as written or URL-encoded, before anything is cut, so no cut can leave half of it
-//!   behind. Only those two forms: a server that can read it can return it in another.
-//!
-//! Query text is never resolved against the Vault: the DB client has no `{{VAR}}` substitution in
-//! statements, so a `{{…}}` in a query is sent to the database as the characters it is and can
-//! carry no saved secret anywhere.
-//!
-//! # Bounded, and says so
-//!
-//! Rows: [`DEFAULT_LIMIT`] unless the agent asks, never more than [`MAX_LIMIT`] (the engine reads
-//! one more to *measure* truncation). Then two byte budgets, because a thousand rows of JSON
-//! documents is megabytes: the structured data carries cells up to [`TEXT_BUDGET`] — each value
-//! cut at [`CELL_CHARS`], and every cell, NULL and empty included, costing at least
-//! [`CELL_COST`] — and the readable table is cut at [`TEXT_BUDGET`] too. Every cut is a sentence in
-//! the reply.
+//! `db_query` via the console's path, tightened against prompt injection: on read-only PG/MySQL
+//! each statement runs in its own READ ONLY transaction, rolled back (a session setting can be
+//! undone); the password is masked before any cut. Query text is never Vault-resolved; bounded.
 
 use std::time::{Duration, Instant};
 
@@ -71,15 +30,8 @@ pub const MAX_QUERY_BYTES: usize = 256 * 1024;
 /// nothing, and a thousand rows of hundreds of empty columns went out whole.
 pub const CELL_COST: usize = 8;
 
-/// The Redis and Valkey commands an agent may not run, whatever the connection allows: each one
-/// reads a credential or the server's auth set-up, or acts with one.
-///
-/// * `CONFIG` (every subcommand): `CONFIG GET requirepass` / `masterauth` / `*` return the server's
-///   passwords — the one Agent Studio dialled with, read from the Vault, among them.
-/// * `ACL` (every subcommand): users, their rules and their password hashes.
-/// * `AUTH`, and `HELLO … AUTH`: log in as someone, with a password the agent supplies.
-/// * `MONITOR`: every other client's commands, as they arrive.
-/// * `SENTINEL`: a sentinel's view of the servers it watches, auth settings included.
+/// Each reads a credential or the auth set-up, or acts with one, whatever the connection allows
+/// (`CONFIG GET requirepass` returns the very password Agent Studio dialled with).
 const REDIS_REFUSED: &[(&str, &str)] = &[
     (
         "CONFIG",
@@ -100,13 +52,8 @@ const REDIS_REFUSED: &[(&str, &str)] = &[
     ),
 ];
 
-/// `Some(reason)` when a Redis/Valkey command in `text` reads a credential or the server's auth
-/// set-up (see [`REDIS_REFUSED`]).
-///
-/// Read with the engine's own line splitter and tokenizer ([`db::redis::command_lines`],
-/// [`db::redis::tokenize`]), so the words checked here are exactly the words the engine sends:
-/// quoting, escaping or case cannot make the two disagree. A line the tokenizer cannot read is
-/// refused by the engine before anything runs.
+/// Uses the engine's own splitter and tokenizer, so quoting, escaping or case cannot make the words
+/// checked differ from the words sent; a line it cannot read is refused by the engine.
 pub fn redis_refusal(text: &str) -> Option<String> {
     for line in db::redis::command_lines(text) {
         let Ok(tokens) = db::redis::tokenize(&line) else {
@@ -177,12 +124,8 @@ pub fn mode_for(c: &DbConnection) -> DbRunMode {
     }
 }
 
-/// Run `query` on the connection `connection` names. `Err` is a refusal (unknown connection,
-/// bad arguments, the connection failed, Agent Studio's guard refused the statement, the
-/// deadline passed); a database error is a `message` result inside `Ok`, as in the console.
-///
-/// The returned connection is `Some` once the connection was resolved, so the caller can show
-/// the user a refused run too.
+/// `Err` is a refusal; a database error is a `message` inside `Ok`, as in the console. The returned
+/// connection is `Some` once resolved, so a refused run can be shown to the user too.
 pub async fn run(
     paths: &Paths,
     connection: &str,

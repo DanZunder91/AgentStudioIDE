@@ -1,8 +1,4 @@
-/**
- * `VillageView` — the panel's imperative core (sim + world + camera + paint) and the
- * HUD's pure helpers. No React, no DOM canvas: the paint goes to the renderer's
- * recording fake.
- */
+/** No React, no DOM canvas: the paint goes to the renderer's recording fake. */
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -153,10 +149,7 @@ describe("VillageView", () => {
       v.resize(1200, 700, 1);
       return v;
     }
-    /**
-     * Every building, its sign and the street lie inside the view (Fit frames `fitTarget`; the
-     * empty ground either side may be cropped).
-     */
+    /** Buildings, signs and the street are in view; empty ground either side may be cropped. */
     function showsAll(v: VillageView): void {
       const { zoom, ox, oy } = v.camera;
       const t = v.fitTarget();
@@ -376,11 +369,8 @@ describe("VillageView", () => {
 const wholeWorld = (v: VillageView) => ({ x: 0, y: 0, w: v.world.cols * TILE, h: v.world.rows * TILE });
 
 describe("VillageView — the camera follows the stage until the user moves it (the blank-village bug)", () => {
-  // The Village tab used to show nothing but the dark
-  // backdrop and the − + Fit buttons. The tab had mounted while its pane was still being
-  // laid out (a fresh split hands its new pane a sliver first), the camera was fitted to
-  // THAT size, and a larger stage never re-fitted it — so the village sat in the top-left
-  // corner at zoom 1, entirely behind the HUD.
+  // A fresh split hands its new pane a sliver first: the camera fitted to that must re-fit when the
+  // stage grows, or the village sits top-left at zoom 1, behind the HUD.
   it("re-fits when the stage grows after a tiny first measure", () => {
     const v = new VillageView();
     v.resize(2, 2, 2);
@@ -1250,11 +1240,9 @@ describe("VillageView — capacity", () => {
 describe("VillageView — the LANs' traffic: events from the agents it is handed", () => {
   const sub = (key: string, parentKey: string, extra: Partial<VillageAgent> = {}) => agent(key, { parentKey, ...extra });
 
-  /**
-   * A view on screen showing `agents` (handed BEFORE its first frame, as the panel does), run for
-   * `seconds`. One frame clock: `step` runs frames 100 ms apart (the sim's largest tick), and `sent`
-   * paints one more (the draw list is only built with a canvas) and returns the events it was handed.
-   */
+  /** A view on screen showing `agents` (handed before its first frame, as the panel does), run for
+   * `seconds`. `step` runs frames 100 ms apart (the sim's largest tick); `sent` paints one more
+   * (the draw list is only built with a canvas) and returns the events it was handed. */
   function onScreen(agents: VillageAgent[], seconds = 1) {
     const v = new VillageView(1, () => null);
     v.resize(800, 600, 1);
