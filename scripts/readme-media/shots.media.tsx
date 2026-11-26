@@ -426,3 +426,174 @@ it("exited agent — Resume and a copyable tab", async () => {
   await settle(500);
   await shot("08-agent-exited");
 });
+
+/*
+ * Agents drive Agent Studio: a Claude Code session uses the API-client tools through the
+ * `agent-studio` command, and the app shows it. Imports are dynamic so these blocks stay
+ * self-contained at the end of the file.
+ */
+
+it("agent api tools — Claude Code runs agent-studio api/http, the app shows the results", async () => {
+  const F = await import("./agentApiFixtures");
+  const { dispatchAgentCtl } = await import("../../src/features/agentctl/dispatch");
+  // The history file the tools append to (`history_store.rs`): the user's earlier sends, then
+  // each agent send as it happens. `apiHistory` makes the rail re-read it.
+  const t0 = Date.now();
+  const history = F.earlierHistory(t0);
+  h.ipc.handle("api_store_load", () => F.AGENT_API_STORE);
+  h.ipc.handle("api_history_load", () => ({ entries: [...history] }));
+
+  const ids = await boot({ noSession: true });
+  const terminalId = String(ids.rate);
+  // The agent's terminal on top, the pane its request tab opens in below. (Side by side, the
+  // request bar has no room left for the URL.)
+  let below!: PaneId;
+  act(() => {
+    const L = useAppStore.getState().layoutActions;
+    below = L.splitPane((useAppStore.getState() as unknown as { focusedPaneId: PaneId }).focusedPaneId, "column");
+    L.resizePane((useAppStore.getState() as unknown as { layout: { id: PaneId } }).layout.id, [0.555, 0.445]);
+  });
+  await settle(500);
+  const resize = h.ipc.calls("terminal_resize").filter((c) => String(c.args.terminalId) === terminalId);
+  const size = resize[resize.length - 1]?.args ?? {};
+  console.log(`[media] agent terminal: ${String(size.cols)}x${String(size.rows)}`);
+  const s = F.agentApiSession(Number(size.cols ?? 100), Number(size.rows ?? 24));
+  const pty = ptyById.get(terminalId);
+  const write = async (text: string) => {
+    pty?.send(text);
+    await settle(150);
+  };
+  const ctl = (kind: string, fields: Record<string, unknown>) =>
+    act(() => dispatchAgentCtl({ kind, terminalId, ...fields }));
+
+  await write(s.prompt);
+  history.push(F.listEntry(t0 - 40_000));
+  await write(s.list);
+  ctl("apiHistory", { historyIds: [history[history.length - 1].id] });
+  history.push(F.burstEntry(t0 - 25_000));
+  await write(s.burst);
+  ctl("apiHistory", { historyIds: [history[history.length - 1].id] });
+  await write(s.open);
+  act(() => useAppStore.getState().layoutActions.focusPane(below));
+  ctl("httpOpen", F.OPEN_EVENT);
+  await write(s.summary);
+  await settle(300);
+
+  // The user presses Send in the tab the agent opened.
+  const user = userEvent.setup();
+  h.setHttpResponse(F.BURST_RESPONSE);
+  await user.click(screen.getByTestId("api-send"));
+  await screen.findByTestId("api-status");
+  await shot("10-agent-api-tools");
+});
+
+it("settings — Claude Code has Agent Studio's tools", async () => {
+  const F = await import("./agentApiFixtures");
+  const { forgetClaudeMcpRuns } = await import("../../src/features/settings/claudeMcpRuns");
+  // The real mouse (Playwright): a click with it leaves no keyboard-focus ring on the gear.
+  const { userEvent: mouse } = await import("vitest/browser");
+  forgetClaudeMcpRuns();
+  h.ipc.handle("claude_mcp_status", () => F.MCP_INSTALLED);
+  await boot({ hideRight: true, noSession: true });
+  await mouse.click(screen.getByRole("button", { name: "Settings" }));
+  const item = await screen.findByTestId("settings-claude-mcp");
+  await settle(300);
+  if (item.getAttribute("data-state") !== "installed") throw new Error("the Claude MCP item is not in its added state");
+  // Crop: the popover under the titlebar, with a little of the titlebar to its left.
+  const box = screen.getByTestId("settings-popover").getBoundingClientRect();
+  const left = Math.round(box.left - 48);
+  const frame = document.createElement("div");
+  Object.assign(frame.style, {
+    position: "fixed",
+    left: `${left}px`,
+    top: "0px",
+    width: `${window.innerWidth - left}px`,
+    height: `${Math.round(box.bottom + 24)}px`,
+    pointerEvents: "none",
+    zIndex: "9999",
+  });
+  document.body.appendChild(frame);
+  await settle(300);
+  await page.screenshot({ path: `${OUT}/11-claude-code-setting.png`, element: frame });
+  frame.remove();
+});
+
+/**
+ * "Agents drive Agent Studio": a Claude Code agent used the `agent-studio db …` tools from its
+ * terminal (left), and the app shows what it did — the DB panel's notice naming the agent, and
+ * the connection's console tab with the query and what it returned (right).
+ *
+ * The DB side goes through the app's own path: each command's `agent-ctl://event` payload (as
+ * Rust emits it) is handed to the real dispatcher (`src/features/agentctl/dispatch.ts`). Imports
+ * are local so this block stays self-contained at the end of the file.
+ *
+ * Rendered in Docker (the Playwright image): there, Liberation Mono is hidden from fontconfig and
+ * DejaVu Sans Mono installed, so the mono font is close to the SF Mono of the macOS-made shots.
+ */
+it("agent db tools — an agent's database work, shown in the app", async () => {
+  const { dispatchAgentCtl } = await import("../../src/features/agentctl/dispatch");
+  const A = await import("./agentToolsFixtures");
+  const ids = await boot({ noSession: true });
+
+  // The connection store before and after `db connect` writes it (Rust saves, then emits).
+  let saved: unknown[] = [];
+  h.ipc.handle("db_connections_load", () => ({ connections: saved, version: 1 }));
+  // The size each terminal was fitted to, so the transcript wraps where the terminal does.
+  const size = new Map<string, { cols: number; rows: number }>();
+  h.ipc.handle("terminal_resize", (args) => {
+    size.set(String(args.terminalId), { cols: Number(args.cols), rows: Number(args.rows) });
+    return null;
+  });
+
+  // A connection the agent just added has no saved queries yet; its tree is the todo-api one.
+  h.ipc.handle("db_saved_queries", () => []);
+  h.ipc.handle("db_children", (args) => {
+    const n = args.node as { kind: string; name?: string };
+    return n.kind === "table" && n.name === "rate_limit_events" ? A.RATE_LIMIT_EVENTS_COLUMNS : X.dbChildren(n);
+  });
+
+  // The agent's tab dragged to the front of its pane (its name shows in the narrower strip), the
+  // pane split, and the user's click into the empty right half: the console tab the agent's run
+  // opens lands in the focused pane.
+  let right!: PaneId;
+  act(() => {
+    const L = useAppStore.getState().layoutActions;
+    const left = (useAppStore.getState() as unknown as { focusedPaneId: PaneId }).focusedPaneId;
+    const tabs = Object.values(useAppStore.getState().tabs) as unknown as { id: string; ref: { kind: string; agentId?: string } }[];
+    const rateTab = tabs.find((t) => t.ref.kind === "agent-terminal" && t.ref.agentId === ids.rate);
+    if (rateTab) L.moveTab(rateTab.id as never, left, 0);
+    right = L.splitPane(left, "row");
+    L.resizePane((useAppStore.getState() as unknown as { layout: { id: PaneId } }).layout.id, [0.515, 0.485]);
+  });
+  await settle(300);
+  act(() => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    useAppStore.getState().layoutActions.focusPane(right);
+  });
+
+  const emit = async (event: { kind: string } & Record<string, unknown>) => {
+    await act(async () => dispatchAgentCtl({ ...event, terminalId: ids.rate }));
+    await settle(300);
+  };
+  const connectionId = A.AGENT_DB_CONN.id;
+  // agent-studio db connect 'postgres://dev@localhost:5432/todo_api' --name 'todo-api (local)'
+  saved = [A.AGENT_DB_CONN];
+  await emit({ kind: "dbConnection", connectionId, created: true, open: true });
+  // agent-studio db schema … emits nothing; agent-studio db query 'todo-api (local)' "SELECT …"
+  await emit({ kind: "dbQueryRun", connectionId, query: A.AGENT_SQL, results: [A.AGENT_RESULT], error: null, notes: [] });
+
+  // The panel's tree opened down to the table the agent read (the clicks a user makes), and the
+  // empty Saved queries folder closed.
+  const eventsTable = { kind: "table", database: "todo_api", schema: "public", name: "rate_limit_events" };
+  await act(async () => {
+    for (const ref of [...X.DB_EXPAND.slice(0, 4), eventsTable, { kind: "savedQueries" }]) {
+      useAppStore.getState().dbActions.toggleDbNode(connectionId, "sess-1", ref as never);
+      await new Promise((r) => setTimeout(r, 80));
+    }
+  });
+  await settle(300);
+
+  const { cols, rows } = size.get(ids.rate) ?? { cols: 80, rows: 40 };
+  ptyById.get(ids.rate)?.send(A.agentDbSession(cols, rows));
+  await shot("09-agent-db-tools");
+});

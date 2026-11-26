@@ -95,16 +95,67 @@ needs you raises a badge through every parent, so you see it even when the tree 
 | **Platforms** | ✅ **macOS**: tested and used every day<br>🟡 **Linux** and **Windows**: supported, with installers in every release; still being tested in everyday use<br>🟡 Code signing and auto-update |
 
 The images above are the real UI rendered with a scripted backend and fictional sample projects,
-so they contain no real data. Regenerate them with `node scripts/readme-media.mjs`.
+so they contain no real data. Regenerate them with `node scripts/readme-media.mjs`, or in Docker
+with `scripts/readme-media/docker.sh`.
 
 **Agent Studio never writes to `~/.claude`.** Hooks go only into a project's own
 `.claude/settings.local.json`, and Claude's transcripts are read, never modified.
+
+## Agents use the IDE's tools
+
+Ask Claude Code in plain words, such as *"connect to the todo-api database and show which API keys
+hit the rate limit most"* or *"run my saved 'List open todos' request and open the 429 case in a
+tab"*. It uses Agent Studio's own database client and API client to do it, and you watch it happen
+in the app. The database panel names the agent, query consoles and request tabs open, and every
+request lands in History.
+
+| | |
+|---|---|
+| <img src="docs/media/09-agent-db-tools.png" alt="A Claude Code agent connects to the todo-api database with agent-studio db connect, reads the schema and runs a query; the console beside it shows the same results, and the DB panel names the agent"><br><b>Databases</b>: connect, browse and search the schema, run read-only queries and open them in a console. | <img src="docs/media/10-agent-api-tools.png" alt="A Claude Code agent runs the user's saved requests with agent-studio api run and opens the 429 case in a request tab; the History rail lists its requests"><br><b>API client</b>: send HTTP, WebSocket and gRPC requests, run your saved requests, read the history and compare two responses. |
+
+**Nothing to set up.** Every Agent Studio terminal has an `agent-studio` command, and Claude Code is
+told about it when a session starts. Any other agent in that terminal can call it too.
+`agent-studio help` lists every command.
+
+**Optional: as MCP tools.** In Settings, choose **Add Agent Studio to Claude Code**, or run
+`agent-studio mcp install` yourself in a terminal. This gives Claude Code the same tools through MCP.
+The item then reads **Remove Agent Studio from Claude Code**, which undoes it.
+- It runs Claude's own `claude mcp add --scope user`, so Agent Studio still doesn't edit your Claude
+  config itself.
+- Only you can install it. An agent that tries is refused.
+- The tools only work for agents started in an Agent Studio terminal.
+
+<p align="center">
+  <img src="docs/media/11-claude-code-setting.png" alt="Agent Studio Settings menu with the item Remove Agent Studio from Claude Code and its hint: Added: Claude Code sessions in Agent Studio's terminals can use its database and API tools." width="328">
+</p>
+
+| Area | Commands |
+|---|---|
+| Databases | `db connect`, `list`, `test`, `open`, `schema`, `search`, `query`, `console`, `queries`, `save query` |
+| HTTP | `http send` (or `--curl`), `http open` |
+| API client | `api collections`, `envs`, `history`, `run`, `compare` |
+| WebSocket | `ws exchange`, `ws open` |
+| gRPC | `grpc services`, `describe`, `call`, `open` |
+
+**What an agent can't do.** The Rust core enforces these limits, and tests cover them:
+- **Secrets:**
+  - An agent never receives a vault value, a password or a URL with credentials in it.
+  - A request an agent writes that names a `{{VAR}}` is refused. Only requests you saved can use
+    your variables.
+- **Read-only:** a read-only connection stays read-only. Each statement runs in its own read-only
+  transaction, which is always rolled back. Connections an agent adds start read-only.
+- **Your work:** an agent never edits what you typed in a console, and never edits or deletes your
+  saved connections.
+- **Output:** rows, bytes, messages and time are capped, and every cut says so.
+
+Not yet: tools for request sequences. On Windows the command works in Git Bash, but not yet in
+PowerShell.
 
 ## Supported agents
 
 | Agent | What works |
 |---|---|
-| **Claude Code** (`claude` CLI) | Launch, live status, sub-agent tree, session resume, usage limits, metrics |
+| **Claude Code** (`claude` CLI) | Launch, live status, sub-agent tree, session resume, usage limits, metrics, the [IDE's database and API tools](#agents-use-the-ides-tools) |
 
 Agents plug in through one `AgentAdapter` interface; the next ones are on the [roadmap](#roadmap).
 
